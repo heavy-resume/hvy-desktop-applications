@@ -311,10 +311,26 @@ button:disabled {
   padding: 18px;
 }
 
+.wide-dialog {
+  width: min(480px, 100%);
+}
+
 .dialog h2 {
   margin: 0;
   color: #152223;
   font-size: 18px;
+}
+
+.dialog-note {
+  margin: -4px 0 2px;
+  color: #5f6a66;
+  line-height: 1.4;
+}
+
+.provider-docs-link {
+  width: fit-content;
+  color: #2f6968;
+  font-weight: 600;
 }
 
 .dialog label {
@@ -332,6 +348,10 @@ button:disabled {
 .hvy-document-host {
   display: block;
   overflow: hidden;
+}
+
+.hvy-document-host .link-inline-modal:not(.is-open) {
+  display: none;
 }
 
 .hvy-document-host > .hvy-embed-layout {

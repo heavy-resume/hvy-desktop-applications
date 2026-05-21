@@ -70,6 +70,13 @@ export interface CreateDocumentRequest {
   template: string;
 }
 
+export interface AiSettings {
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -86,6 +93,26 @@ export function loadRecentState(): Promise<RecentState> {
     return Promise.resolve({ galaxies: [], files: [] });
   }
   return invokeDesktop('load_recent_state');
+}
+
+export function loadAiSettings(): Promise<AiSettings> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(defaultAiSettings());
+  }
+  return invokeDesktop('load_ai_settings');
+}
+
+export function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
+  return invokeDesktop('save_ai_settings', { settings });
+}
+
+export function defaultAiSettings(): AiSettings {
+  return {
+    provider: 'ollama',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    apiKey: '',
+    model: '',
+  };
 }
 
 export function loadDefaultGuide(): Promise<DocumentFile> {

@@ -1,3 +1,4 @@
+import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import type { Galaxy, GalaxyTreeNode, RecentState } from './backend';
 import type { AppState } from './state';
 import { hvyTemplates } from './templates';
@@ -9,6 +10,9 @@ export interface UiHandlers {
   newDocumentInGalaxy(galaxyPath: string): void;
   createDocumentInGalaxy(name: string, templateId: string): void;
   cancelNewDocument(): void;
+  openAiSettings(): void;
+  saveAiSettings(provider: string, baseUrl: string, apiKey: string, model: string): void;
+  cancelAiSettings(): void;
   openGalaxy(): void;
   openFile(): void;
   openRecentGalaxy(path: string): void;
@@ -58,6 +62,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
       </section>
       ${renderNewGalaxyDialog(state)}
       ${renderNewDocumentDialog(state)}
+      ${renderAiSettingsDialog(state)}
     </main>`;
 
   bind(appRoot, handlers);
@@ -70,12 +75,15 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   root.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) return;
+    if (target.closest('#hvyMount')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'new-galaxy') handlers.newGalaxy();
     if (action === 'cancel-new-galaxy') handlers.cancelNewGalaxy();
     if (action === 'new-document-in-galaxy' && target.dataset.galaxyPath) handlers.newDocumentInGalaxy(target.dataset.galaxyPath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
+    if (action === 'ai-settings') handlers.openAiSettings();
+    if (action === 'cancel-ai-settings') handlers.cancelAiSettings();
     if (action === 'open-galaxy') handlers.openGalaxy();
     if (action === 'open-file') handlers.openFile();
     if (action === 'toggle-mode') handlers.toggleMode();
@@ -89,6 +97,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
     if (!form) return;
+    if (form.closest('#hvyMount')) return;
     event.preventDefault();
     if (form.dataset.form === 'new-galaxy') {
       const data = new FormData(form);
@@ -101,6 +110,30 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         String(data.get('templateId') ?? '')
       );
     }
+    if (form.dataset.form === 'ai-settings') {
+      const data = new FormData(form);
+      handlers.saveAiSettings(
+        String(data.get('provider') ?? ''),
+        String(data.get('baseUrl') ?? ''),
+        String(data.get('apiKey') ?? ''),
+        String(data.get('model') ?? '')
+      );
+    }
+  }, { signal: bindController.signal });
+  root.addEventListener('change', (event) => {
+    const select = (event.target as HTMLElement).closest<HTMLSelectElement>('select[data-provider-select]');
+    if (!select) return;
+    if (select.closest('#hvyMount')) return;
+    const form = select.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+    const baseUrl = form?.querySelector<HTMLInputElement>('input[name="baseUrl"]');
+    const apiKey = form?.querySelector<HTMLInputElement>('input[name="apiKey"]');
+    const model = form?.querySelector<HTMLInputElement>('input[name="model"]');
+    const docsLink = form?.querySelector<HTMLAnchorElement>('[data-provider-docs]');
+    const preset = aiProviderPreset(select.value);
+    if (baseUrl && preset.baseUrl) baseUrl.value = preset.baseUrl;
+    if (apiKey) apiKey.placeholder = preset.apiKeyPlaceholder;
+    if (model) model.placeholder = preset.modelPlaceholder;
+    if (docsLink) docsLink.href = preset.docsUrl;
   }, { signal: bindController.signal });
 }
 
@@ -110,6 +143,7 @@ function renderToolbar(state: AppState): string {
     return `
       <div class="toolbar-title">No document selected</div>
       <div class="toolbar-actions">
+        <button type="button" data-action="ai-settings">AI Settings</button>
         <button type="button" data-action="create-file">New HVY</button>
       </div>`;
   }
@@ -126,6 +160,7 @@ function renderToolbar(state: AppState): string {
       <button type="button" data-action="toggle-mode" ${canEdit ? '' : 'disabled'}>${document.mode === 'viewer' ? 'Edit' : 'View'}</button>
       <button type="button" data-action="save" ${document.dirty && canEdit ? '' : 'disabled'}>Save</button>
       <button type="button" data-action="save-as" ${canEdit ? '' : 'disabled'}>Save As</button>
+      <button type="button" data-action="ai-settings">AI Settings</button>
       <button type="button" data-action="create-file">New HVY</button>
     </div>`;
 }
@@ -236,6 +271,43 @@ function renderNewDocumentDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" data-action="cancel-new-document">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderAiSettingsDialog(state: AppState): string {
+  if (!state.aiSettingsDialogOpen) {
+    return '';
+  }
+  const preset = aiProviderPreset(state.aiSettings.provider);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog wide-dialog" data-form="ai-settings">
+        <h2>AI Settings</h2>
+        <p class="dialog-note">Use any OpenAI-compatible endpoint, including local routers and hosted providers.</p>
+        <a class="provider-docs-link" data-provider-docs href="${escapeAttr(preset.docsUrl)}" target="_blank" rel="noreferrer">Setup instructions</a>
+        <label>
+          <span>Provider</span>
+          <select name="provider" data-provider-select>
+            ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === state.aiSettings.provider ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
+          </select>
+        </label>
+        <label>
+          <span>Base URL</span>
+          <input name="baseUrl" type="url" value="${escapeAttr(state.aiSettings.baseUrl)}" placeholder="${escapeAttr(preset.baseUrl || 'http://127.0.0.1:8000/v1')}" required>
+        </label>
+        <label>
+          <span>API Key</span>
+          <input name="apiKey" type="password" value="${escapeAttr(state.aiSettings.apiKey)}" placeholder="${escapeAttr(preset.apiKeyPlaceholder)}">
+        </label>
+        <label>
+          <span>Model</span>
+          <input name="model" type="text" value="${escapeAttr(state.aiSettings.model)}" placeholder="${escapeAttr(preset.modelPlaceholder)}">
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-ai-settings">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
     </div>`;

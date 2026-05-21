@@ -11,3 +11,8 @@ declare module 'virtual:hvy-brython-minimal-vfs' {
   const source: string;
   export default source;
 }
+
+interface Window {
+  HVY?: any;
+  HVY_CHAT_CLIENT?: any;
+}

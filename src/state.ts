@@ -1,4 +1,4 @@
-import type { DocumentExtension, Galaxy, GalaxyFileNode, GalaxyTreeNode, RecentState } from './backend';
+import type { AiSettings, DocumentExtension, Galaxy, GalaxyFileNode, GalaxyTreeNode, RecentState } from './backend';
 import type { HvyMode, MountedDocument } from './hvy';
 
 export interface OpenDocument {
@@ -17,12 +17,14 @@ export interface AppState {
   selectedGalaxyPath: string | null;
   selectedFilePath: string | null;
   recent: RecentState;
+  aiSettings: AiSettings;
   document: OpenDocument | null;
   status: string;
   error: string | null;
   busy: boolean;
   newGalaxyDialogOpen: boolean;
   newDocumentGalaxyPath: string | null;
+  aiSettingsDialogOpen: boolean;
 }
 
 export const state: AppState = {
@@ -30,12 +32,19 @@ export const state: AppState = {
   selectedGalaxyPath: null,
   selectedFilePath: null,
   recent: { galaxies: [], files: [] },
+  aiSettings: {
+    provider: 'ollama',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    apiKey: '',
+    model: '',
+  },
   document: null,
   status: 'Ready',
   error: null,
   busy: false,
   newGalaxyDialogOpen: false,
   newDocumentGalaxyPath: null,
+  aiSettingsDialogOpen: false,
 };
 
 export function findFileInGalaxy(galaxy: Galaxy, path: string): GalaxyFileNode | null {

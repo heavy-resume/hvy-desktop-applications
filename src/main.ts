@@ -5,12 +5,14 @@ import {
   createGalaxy,
   initializeGalaxyPath,
   isTauriRuntime,
+  loadAiSettings,
   loadDefaultGuide,
   loadGalaxy,
   loadRecentState,
   onMenuEvent,
   openFileDialog,
   readDocumentFile,
+  saveAiSettings,
   saveDocumentAsDialog,
   saveDocumentFile,
   type DocumentFile,
@@ -82,6 +84,21 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender();
   },
+  openAiSettings: () => {
+    state.aiSettingsDialogOpen = true;
+    state.status = 'Ready';
+    rerender();
+  },
+  saveAiSettings: (provider, baseUrl, apiKey, model) => void runBusy('Saving AI settings...', async () => {
+    state.aiSettings = await saveAiSettings({ provider, baseUrl, apiKey, model });
+    state.aiSettingsDialogOpen = false;
+    state.status = 'Saved AI settings';
+  }),
+  cancelAiSettings: () => {
+    state.aiSettingsDialogOpen = false;
+    state.status = 'Ready';
+    rerender();
+  },
   openGalaxy: () => void runBusy('Opening galaxy...', async () => {
     const candidate = await chooseGalaxyFolder();
     if (!candidate) return;
@@ -142,6 +159,7 @@ async function boot(): Promise<void> {
   mountRoot = render(state, handlers);
   try {
     await refreshRecents();
+    state.aiSettings = await loadAiSettings();
     await loadRecentGalaxies();
     mountRoot = render(state, handlers);
     await openDefaultGuide();
@@ -212,6 +230,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   state.document.mounted?.mount.destroy();
   const generation = ++mountGeneration;
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
+    storageKey: documentStorageKey(state.document.path || state.document.name),
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);
@@ -386,6 +405,10 @@ function documentTitle(fileName: string): string {
 
 function applyTemplateTitle(template: string, title: string): string {
   return template.replace(/^title:.*$/m, `title: ${JSON.stringify(title)}`);
+}
+
+function documentStorageKey(identifier: string): string {
+  return `hvy-galaxy:document:${identifier}`;
 }
 
 async function confirmGalaxyInitialization(path: string, defaultName: string) {

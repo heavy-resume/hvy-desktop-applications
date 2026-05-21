@@ -10,6 +10,7 @@ use thiserror::Error;
 
 const GALAXY_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
+const AI_SETTINGS: &str = "ai-settings.json";
 const RECENT_LIMIT: usize = 12;
 
 #[derive(Debug, Error)]
@@ -97,9 +98,41 @@ struct DocumentFile {
     bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AiSettings {
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            provider: "ollama".into(),
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: String::new(),
+            model: String::new(),
+        }
+    }
+}
+
 #[tauri::command]
 fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
     read_recent_state(&recent_state_path(&app)?)
+}
+
+#[tauri::command]
+fn load_ai_settings(app: AppHandle) -> AppResult<AiSettings> {
+    read_ai_settings(&ai_settings_path(&app)?)
+}
+
+#[tauri::command]
+fn save_ai_settings(app: AppHandle, settings: AiSettings) -> AppResult<AiSettings> {
+    let settings = normalize_ai_settings(settings)?;
+    write_json_atomically(&ai_settings_path(&app)?, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -272,6 +305,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_recent_state,
+            load_ai_settings,
+            save_ai_settings,
             load_default_guide,
             open_galaxy_dialog,
             choose_galaxy_folder,
@@ -606,6 +641,31 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
     })
 }
 
+fn read_ai_settings(path: &Path) -> AppResult<AiSettings> {
+    if !path.exists() {
+        return Ok(AiSettings::default());
+    }
+    normalize_ai_settings(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
+    let provider = settings.provider.trim();
+    let base_url = settings.base_url.trim().trim_end_matches('/');
+    let model = settings.model.trim();
+    if provider.is_empty() {
+        return Err(AppError::Message("AI provider is required.".into()));
+    }
+    if base_url.is_empty() {
+        return Err(AppError::Message("AI base URL is required.".into()));
+    }
+    Ok(AiSettings {
+        provider: provider.into(),
+        base_url: base_url.into(),
+        api_key: settings.api_key.trim().into(),
+        model: model.into(),
+    })
+}
+
 fn recent_state_path(app: &AppHandle) -> AppResult<PathBuf> {
     let directory = app
         .path()
@@ -613,6 +673,15 @@ fn recent_state_path(app: &AppHandle) -> AppResult<PathBuf> {
         .map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     Ok(directory.join(RECENT_STATE))
+}
+
+fn ai_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(AI_SETTINGS))
 }
 
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
@@ -740,5 +809,21 @@ mod tests {
 
         assert_eq!(recent.len(), RECENT_LIMIT);
         assert_eq!(recent[0], path_to_string(&dir.path().join("7.hvy")));
+    }
+
+    #[test]
+    fn normalizes_ai_settings() {
+        let settings = normalize_ai_settings(AiSettings {
+            provider: " openai-compatible ".into(),
+            base_url: " http://127.0.0.1:11434/v1/ ".into(),
+            api_key: " local ".into(),
+            model: " llama3.2 ".into(),
+        })
+        .unwrap();
+
+        assert_eq!(settings.provider, "openai-compatible");
+        assert_eq!(settings.base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(settings.api_key, "local");
+        assert_eq!(settings.model, "llama3.2");
     }
 }

@@ -1,7 +1,7 @@
 import type { DocumentExtension } from './backend';
 
 export type HvyMode = 'viewer' | 'editor';
-type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed');
+type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
 type HvyMount = ReturnType<HvyEmbedModule['mountHvy']>;
 type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 type HvyDocumentChangeCallback = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['onDocumentChange']>;
@@ -13,12 +13,13 @@ export interface MountedDocument {
 
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
+  storageKey?: string;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
 
 function loadHvyEmbed(): Promise<HvyEmbedModule> {
-  hvyEmbedModule ??= import('../../heavy-file-format/src/embed');
+  hvyEmbedModule ??= import('../../heavy-file-format/src/embed-full');
   return hvyEmbedModule;
 }
 
@@ -37,8 +38,8 @@ export async function mountHvyDocument(
   root.replaceChildren();
   root.classList.add('hvy-document-host');
   const mount = mode === 'viewer'
-    ? mountHvyViewer({ root, document, plugins: builtInPlugins, controls: false, onDocumentChange: options.onDocumentChange })
-    : mountHvy({ root, document, mode: 'editor', plugins: builtInPlugins, controls: false, onDocumentChange: options.onDocumentChange });
+    ? mountHvyViewer({ root, document, plugins: builtInPlugins, storageKey: options.storageKey, onDocumentChange: options.onDocumentChange })
+    : mountHvy({ root, document, mode: 'editor', plugins: builtInPlugins, storageKey: options.storageKey, onDocumentChange: options.onDocumentChange });
   return { mount, document };
 }
 
