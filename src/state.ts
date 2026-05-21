@@ -1,4 +1,4 @@
-import type { AiSettings, DocumentExtension, Galaxy, GalaxyFileNode, GalaxyTreeNode, RecentState } from './backend';
+import { defaultAiSettings, type AiSettings, type DocumentExtension, type Galaxy, type GalaxyFileNode, type GalaxyTreeNode, type RecentState } from './backend';
 import type { HvyMode, MountedDocument } from './hvy';
 
 export interface OpenDocument {
@@ -32,12 +32,7 @@ export const state: AppState = {
   selectedGalaxyPath: null,
   selectedFilePath: null,
   recent: { galaxies: [], files: [] },
-  aiSettings: {
-    provider: 'ollama',
-    baseUrl: 'http://127.0.0.1:11434/v1',
-    apiKey: '',
-    model: '',
-  },
+  aiSettings: defaultAiSettings(),
   document: null,
   status: 'Ready',
   error: null,

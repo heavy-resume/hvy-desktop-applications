@@ -70,11 +70,27 @@ export interface CreateDocumentRequest {
   template: string;
 }
 
-export interface AiSettings {
+export interface AiTaskModels {
+  chat: string;
+  edit: string;
+  importPlanning: string;
+  importWriting: string;
+  importCleanup: string;
+  compaction: string;
+}
+
+export interface AiConnectionPreset {
+  id: string;
+  name: string;
   provider: string;
   baseUrl: string;
   apiKey: string;
-  model: string;
+  models: AiTaskModels;
+}
+
+export interface AiSettings {
+  activePresetId: string;
+  presets: AiConnectionPreset[];
 }
 
 export function isTauriRuntime(): boolean {
@@ -107,11 +123,28 @@ export function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
 }
 
 export function defaultAiSettings(): AiSettings {
+  const preset = defaultAiConnectionPreset();
   return {
+    activePresetId: preset.id,
+    presets: [preset],
+  };
+}
+
+export function defaultAiConnectionPreset(): AiConnectionPreset {
+  return {
+    id: 'local',
+    name: 'Local',
     provider: 'ollama',
     baseUrl: 'http://127.0.0.1:11434/v1',
     apiKey: '',
-    model: '',
+    models: {
+      chat: 'llama3.2',
+      edit: 'llama3.2',
+      importPlanning: 'llama3.2',
+      importWriting: 'llama3.2',
+      importCleanup: 'llama3.2',
+      compaction: 'llama3.2',
+    },
   };
 }
 
@@ -165,6 +198,10 @@ export function createDocumentFile(request: CreateDocumentRequest): Promise<Docu
     relativePath: request.relativePath,
     template: request.template,
   });
+}
+
+export function openExternalUrl(url: string): Promise<void> {
+  return invokeDesktop('open_external_url', { url });
 }
 
 export function onMenuEvent(handler: (event: string) => void): Promise<() => void> {

@@ -272,6 +272,83 @@ button:disabled {
   background: #8a9490;
 }
 
+.mode-controls {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 8;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 3px;
+  border: 1px solid #b8c2bd;
+  border-radius: 8px;
+  background: rgba(248, 250, 248, 0.9);
+  box-shadow: 0 8px 24px rgba(20, 28, 29, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.mode-controls-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+}
+
+.mode-editor-stack {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.mode-button {
+  display: inline-flex;
+  min-width: 32px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #33413f;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.mode-button[data-mode="advanced"] {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 0;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  background: rgba(248, 250, 248, 0.96);
+  box-shadow: 0 4px 14px rgba(20, 28, 29, 0.16);
+  padding: 0 3px;
+  font-size: 10px;
+}
+
+.mode-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.mode-button.is-active {
+  border-color: #477d7c;
+  background: #ffffff;
+  color: #163635;
+  font-weight: 650;
+}
+
 .error-slot {
   min-height: 0;
 }
@@ -283,11 +360,26 @@ button:disabled {
   padding: 10px 14px;
 }
 
+.document-stage {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .document-host {
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.hvy-document-host.hvy-vscode-has-mode-controls .viewer-shell .reader-document {
+  padding-top: 44px;
+}
+
+.hvy-document-host.hvy-vscode-has-mode-controls .editor-shell .editor-tree {
+  padding-top: max(2rem, 44px);
 }
 
 .modal-backdrop {
@@ -312,7 +404,7 @@ button:disabled {
 }
 
 .wide-dialog {
-  width: min(480px, 100%);
+  width: min(640px, 100%);
 }
 
 .dialog h2 {
@@ -329,8 +421,22 @@ button:disabled {
 
 .provider-docs-link {
   width: fit-content;
+  border: 0;
+  background: transparent;
   color: #2f6968;
   font-weight: 600;
+  padding: 0;
+}
+
+.ai-provider-fields,
+.ai-task-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.secondary-action {
+  width: fit-content;
 }
 
 .dialog label {

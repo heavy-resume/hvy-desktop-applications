@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
@@ -100,22 +101,84 @@ struct DocumentFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct AiSettings {
+struct AiTaskModels {
+    chat: String,
+    edit: String,
+    import_planning: String,
+    import_writing: String,
+    import_cleanup: String,
+    compaction: String,
+}
+
+impl Default for AiTaskModels {
+    fn default() -> Self {
+        Self {
+            chat: "llama3.2".into(),
+            edit: "llama3.2".into(),
+            import_planning: "llama3.2".into(),
+            import_writing: "llama3.2".into(),
+            import_cleanup: "llama3.2".into(),
+            compaction: "llama3.2".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AiConnectionPreset {
+    id: String,
+    name: String,
     provider: String,
     base_url: String,
     api_key: String,
-    model: String,
+    #[serde(default)]
+    models: AiTaskModels,
+}
+
+impl Default for AiConnectionPreset {
+    fn default() -> Self {
+        Self {
+            id: "local".into(),
+            name: "Local".into(),
+            provider: "ollama".into(),
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: String::new(),
+            models: AiTaskModels::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AiSettings {
+    active_preset_id: String,
+    presets: Vec<AiConnectionPreset>,
 }
 
 impl Default for AiSettings {
     fn default() -> Self {
+        let preset = AiConnectionPreset::default();
         Self {
-            provider: "ollama".into(),
-            base_url: "http://127.0.0.1:11434/v1".into(),
-            api_key: String::new(),
-            model: String::new(),
+            active_preset_id: preset.id.clone(),
+            presets: vec![preset],
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum AiSettingsFile {
+    Preset(AiSettings),
+    Legacy(AiSettingsLegacy),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiSettingsLegacy {
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
 }
 
 #[tauri::command]
@@ -212,7 +275,9 @@ fn load_galaxy(app: AppHandle, path: String) -> AppResult<Galaxy> {
 #[tauri::command]
 fn open_file_dialog(app: AppHandle) -> AppResult<Option<DocumentFile>> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("HVY documents", &["hvy", "thvy", "md"])
+        .add_filter("Supported documents", &["hvy", "thvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy"])
+        .add_filter("Markdown", &["md"])
         .pick_file()
     else {
         return Ok(None);
@@ -245,7 +310,9 @@ fn save_document_as_dialog(
     bytes: Vec<u8>,
 ) -> AppResult<Option<DocumentFile>> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("HVY documents", &["hvy", "thvy", "md"])
+        .add_filter("Supported documents", &["hvy", "thvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy"])
+        .add_filter("Markdown", &["md"])
         .set_file_name(suggested_name)
         .save_file()
     else {
@@ -284,6 +351,34 @@ fn create_document_file(
     Ok(read_document_at(&path)?)
 }
 
+#[tauri::command]
+fn open_external_url(url: String) -> AppResult<()> {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(AppError::Message("Only http and https links can be opened.".into()));
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    command.spawn()?;
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -293,7 +388,7 @@ pub fn run() {
                 let id = event.id().as_ref();
                 if matches!(
                     id,
-                    "new-galaxy" | "open-galaxy" | "open-file" | "open-guide" | "save" | "save-as"
+                    "new-galaxy" | "open-galaxy" | "open-file" | "open-guide" | "ai-settings" | "save" | "save-as"
                 )
                     || id.starts_with("recent-file:")
                     || id.starts_with("recent-galaxy:")
@@ -318,7 +413,8 @@ pub fn run() {
             read_document_file,
             save_document_file,
             save_document_as_dialog,
-            create_document_file
+            create_document_file,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running HVY Galaxy");
@@ -331,6 +427,19 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_galaxies = build_recent_galaxies_menu(app, &recent)?;
+    let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
+        .item(&PredefinedMenuItem::about(app, Some("About HVY Galaxy"), None)?)
+        .separator()
+        .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
+        .separator()
+        .item(&PredefinedMenuItem::services(app, Some("Services"))?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Galaxy"))?)
+        .item(&PredefinedMenuItem::hide_others(app, Some("Hide Others"))?)
+        .item(&PredefinedMenuItem::show_all(app, Some("Show All"))?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
+        .build()?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&MenuItemBuilder::new("New Galaxy").id("new-galaxy").accelerator("CmdOrCtrl+N").build(app)?)
         .item(&MenuItemBuilder::new("Open Galaxy").id("open-galaxy").accelerator("CmdOrCtrl+O").build(app)?)
@@ -340,8 +449,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
-        .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("Quit"))?)
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
@@ -362,7 +469,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         )
         .build()?;
 
-    MenuBuilder::new(app).item(&file).item(&edit).item(&help).build()
+    MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&help).build()
 }
 
 fn build_recent_files_menu(
@@ -645,25 +752,91 @@ fn read_ai_settings(path: &Path) -> AppResult<AiSettings> {
     if !path.exists() {
         return Ok(AiSettings::default());
     }
-    normalize_ai_settings(serde_json::from_slice(&fs::read(path)?)?)
+    match serde_json::from_slice(&fs::read(path)?)? {
+        AiSettingsFile::Preset(settings) => normalize_ai_settings(settings),
+        AiSettingsFile::Legacy(settings) => normalize_ai_settings(legacy_ai_settings(settings)),
+    }
 }
 
 fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
-    let provider = settings.provider.trim();
-    let base_url = settings.base_url.trim().trim_end_matches('/');
-    let model = settings.model.trim();
+    let mut presets = Vec::new();
+    for preset in settings.presets {
+        presets.push(normalize_ai_preset(preset)?);
+    }
+    if presets.is_empty() {
+        presets.push(AiConnectionPreset::default());
+    }
+    let active_preset_id = settings.active_preset_id.trim();
+    let active_preset_id = if active_preset_id.is_empty() || !presets.iter().any(|preset| preset.id == active_preset_id) {
+        presets[0].id.clone()
+    } else {
+        active_preset_id.into()
+    };
+    Ok(AiSettings {
+        active_preset_id,
+        presets,
+    })
+}
+
+fn normalize_ai_preset(preset: AiConnectionPreset) -> AppResult<AiConnectionPreset> {
+    let id = preset.id.trim();
+    let name = preset.name.trim();
+    let provider = preset.provider.trim();
+    let base_url = preset.base_url.trim().trim_end_matches('/');
+    if id.is_empty() {
+        return Err(AppError::Message("AI preset id is required.".into()));
+    }
+    if name.is_empty() {
+        return Err(AppError::Message("AI preset name is required.".into()));
+    }
     if provider.is_empty() {
         return Err(AppError::Message("AI provider is required.".into()));
     }
     if base_url.is_empty() {
         return Err(AppError::Message("AI base URL is required.".into()));
     }
-    Ok(AiSettings {
+    Ok(AiConnectionPreset {
+        id: id.into(),
+        name: name.into(),
         provider: provider.into(),
         base_url: base_url.into(),
-        api_key: settings.api_key.trim().into(),
-        model: model.into(),
+        api_key: preset.api_key.trim().into(),
+        models: normalize_ai_task_models(preset.models),
     })
+}
+
+fn normalize_ai_task_models(models: AiTaskModels) -> AiTaskModels {
+    AiTaskModels {
+        chat: models.chat.trim().into(),
+        edit: models.edit.trim().into(),
+        import_planning: models.import_planning.trim().into(),
+        import_writing: models.import_writing.trim().into(),
+        import_cleanup: models.import_cleanup.trim().into(),
+        compaction: models.compaction.trim().into(),
+    }
+}
+
+fn legacy_ai_settings(settings: AiSettingsLegacy) -> AiSettings {
+    let model = settings.model.trim().to_string();
+    let preset = AiConnectionPreset {
+        id: "local".into(),
+        name: "Local".into(),
+        provider: settings.provider,
+        base_url: settings.base_url,
+        api_key: settings.api_key,
+        models: AiTaskModels {
+            chat: model.clone(),
+            edit: model.clone(),
+            import_planning: model.clone(),
+            import_writing: model.clone(),
+            import_cleanup: model.clone(),
+            compaction: model,
+        },
+    };
+    AiSettings {
+        active_preset_id: preset.id.clone(),
+        presets: vec![preset],
+    }
 }
 
 fn recent_state_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -814,16 +987,29 @@ mod tests {
     #[test]
     fn normalizes_ai_settings() {
         let settings = normalize_ai_settings(AiSettings {
-            provider: " openai-compatible ".into(),
-            base_url: " http://127.0.0.1:11434/v1/ ".into(),
-            api_key: " local ".into(),
-            model: " llama3.2 ".into(),
+            active_preset_id: " local ".into(),
+            presets: vec![AiConnectionPreset {
+                id: " local ".into(),
+                name: " Local ".into(),
+                provider: " openai-compatible ".into(),
+                base_url: " http://127.0.0.1:11434/v1/ ".into(),
+                api_key: " local ".into(),
+                models: AiTaskModels {
+                    chat: " llama3.2 ".into(),
+                    edit: " llama3.2 ".into(),
+                    import_planning: " llama3.2 ".into(),
+                    import_writing: " llama3.2 ".into(),
+                    import_cleanup: " llama3.2 ".into(),
+                    compaction: " llama3.2 ".into(),
+                },
+            }],
         })
         .unwrap();
 
-        assert_eq!(settings.provider, "openai-compatible");
-        assert_eq!(settings.base_url, "http://127.0.0.1:11434/v1");
-        assert_eq!(settings.api_key, "local");
-        assert_eq!(settings.model, "llama3.2");
+        assert_eq!(settings.active_preset_id, "local");
+        assert_eq!(settings.presets[0].provider, "openai-compatible");
+        assert_eq!(settings.presets[0].base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(settings.presets[0].api_key, "local");
+        assert_eq!(settings.presets[0].models.chat, "llama3.2");
     }
 }

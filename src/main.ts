@@ -1,4 +1,5 @@
 import './styles.css';
+import { installAiChatClient } from './aiClient';
 import {
   chooseGalaxyFolder,
   createDocumentFile,
@@ -10,20 +11,23 @@ import {
   loadGalaxy,
   loadRecentState,
   onMenuEvent,
+  openExternalUrl,
   openFileDialog,
   readDocumentFile,
   saveAiSettings,
   saveDocumentAsDialog,
   saveDocumentFile,
+  type AiSettings,
   type DocumentFile,
 } from './backend';
-import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument } from './hvy';
+import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type VisualDocument } from './hvy';
 import { state } from './state';
 import { getHvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
+let pendingMountDocument: VisualDocument | null = null;
 
 const handlers: UiHandlers = {
   newGalaxy: () => {
@@ -76,7 +80,7 @@ const handlers: UiHandlers = {
     });
     upsertGalaxy(await loadGalaxy(galaxyPath));
     state.selectedGalaxyPath = galaxyPath;
-    await openDocument(file, { isNew: true });
+    await openDocument(file, { isNew: true, deferMount: true });
     await refreshRecents();
   }),
   cancelNewDocument: () => {
@@ -89,8 +93,33 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender();
   },
-  saveAiSettings: (provider, baseUrl, apiKey, model) => void runBusy('Saving AI settings...', async () => {
-    state.aiSettings = await saveAiSettings({ provider, baseUrl, apiKey, model });
+  selectAiPreset: (presetId) => {
+    state.aiSettings.activePresetId = presetId;
+    rerender();
+  },
+  addAiPreset: () => {
+    const preset = createLocalAiPreset(state.aiSettings);
+    state.aiSettings = {
+      activePresetId: preset.id,
+      presets: [...state.aiSettings.presets, preset],
+    };
+    rerender();
+  },
+  openProviderDocs: (url) => {
+    void openExternalUrl(url)
+      .then(() => {
+        state.status = 'Opened setup instructions';
+      })
+      .catch((error) => {
+        state.error = error instanceof Error ? error.message : String(error);
+        state.status = 'Ready';
+        rerender();
+        void mountCurrentDocument();
+      });
+  },
+  saveAiSettings: (settings) => void runBusy('Saving AI settings...', async () => {
+    state.aiSettings = await saveAiSettings(settings);
+    installAiChatClient(state.aiSettings);
     state.aiSettingsDialogOpen = false;
     state.status = 'Saved AI settings';
   }),
@@ -117,7 +146,7 @@ const handlers: UiHandlers = {
   openFile: () => void runBusy('Opening file...', async () => {
     const file = await openFileDialog();
     if (!file) return;
-    await openDocument(file);
+    await openDocument(file, { deferMount: true });
     await refreshRecents();
   }),
   openRecentGalaxy: (path) => void runBusy('Opening recent galaxy...', async () => {
@@ -127,23 +156,23 @@ const handlers: UiHandlers = {
     rerender();
   }),
   openRecentFile: (path) => void runBusy('Opening recent file...', async () => {
-    await openDocument(await readDocumentFile(path));
+    await openDocument(await readDocumentFile(path), { deferMount: true });
     await refreshRecents();
   }),
   selectFile: (path) => void runBusy('Opening file...', async () => {
-    await openDocument(await readDocumentFile(path));
+    await openDocument(await readDocumentFile(path), { deferMount: true });
     await refreshRecents();
   }),
-  toggleMode: () => {
+  setMode: (mode) => {
     if (!state.document) return;
-    if (state.document.readOnly) {
+    if (state.document.readOnly && mode !== 'viewer') {
       state.status = 'The HVY guide is read-only';
       rerender();
       void mountCurrentDocument();
       return;
     }
     const document = state.document.mounted?.document;
-    state.document.mode = state.document.mode === 'viewer' ? 'editor' : 'viewer';
+    state.document.mode = mode;
     rerender();
     void mountCurrentDocument(document);
   },
@@ -160,6 +189,7 @@ async function boot(): Promise<void> {
   try {
     await refreshRecents();
     state.aiSettings = await loadAiSettings();
+    installAiChatClient(state.aiSettings);
     await loadRecentGalaxies();
     mountRoot = render(state, handlers);
     await openDefaultGuide();
@@ -168,6 +198,7 @@ async function boot(): Promise<void> {
       if (event === 'open-galaxy') handlers.openGalaxy();
       if (event === 'open-file') handlers.openFile();
       if (event === 'open-guide') void openDefaultGuide({ force: true });
+      if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
       if (event.startsWith('recent-galaxy:')) handlers.openRecentGalaxy(event.slice('recent-galaxy:'.length));
@@ -205,7 +236,7 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
   }
 }
 
-async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean } = {}): Promise<void> {
+async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; deferMount?: boolean } = {}): Promise<void> {
   state.document?.mounted?.mount.destroy();
   const bytes = new Uint8Array(file.bytes);
   const document = await deserializeHvy(bytes, file.extension);
@@ -221,6 +252,10 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   };
   state.selectedFilePath = options.defaultDocument ? null : file.path;
   state.status = options.defaultDocument ? 'Opened HVY guide' : options.isNew ? 'Created blank HVY document' : `Opened ${file.name}`;
+  if (options.deferMount) {
+    pendingMountDocument = document;
+    return;
+  }
   rerender();
   await mountCurrentDocument(document);
 }
@@ -334,7 +369,7 @@ async function createBlankDocument(): Promise<void> {
       name: 'Untitled.hvy',
       extension: '.hvy',
       bytes,
-    }, { isNew: true });
+    }, { isNew: true, deferMount: true });
   });
 }
 
@@ -379,7 +414,8 @@ async function runBusy(label: string, task: () => Promise<void>): Promise<void> 
     state.status = 'Ready';
   } finally {
     state.busy = false;
-    const documentToMount = state.document?.mounted?.document ?? document;
+    const documentToMount = pendingMountDocument ?? state.document?.mounted?.document ?? document;
+    pendingMountDocument = null;
     rerender();
     await mountCurrentDocument(documentToMount);
   }
@@ -409,6 +445,36 @@ function applyTemplateTitle(template: string, title: string): string {
 
 function documentStorageKey(identifier: string): string {
   return `hvy-galaxy:document:${identifier}`;
+}
+
+function createLocalAiPreset(settings: AiSettings): AiSettings['presets'][number] {
+  const baseName = 'New Preset';
+  const existing = new Set(settings.presets.map((preset) => preset.name));
+  const name = uniqueName(baseName, existing);
+  return {
+    id: crypto.randomUUID(),
+    name,
+    provider: settings.presets.find((preset) => preset.id === settings.activePresetId)?.provider ?? 'ollama',
+    baseUrl: settings.presets.find((preset) => preset.id === settings.activePresetId)?.baseUrl ?? 'http://127.0.0.1:11434/v1',
+    apiKey: '',
+    models: {
+      chat: '',
+      edit: '',
+      importPlanning: '',
+      importWriting: '',
+      importCleanup: '',
+      compaction: '',
+    },
+  };
+}
+
+function uniqueName(baseName: string, existing: Set<string>): string {
+  if (!existing.has(baseName)) return baseName;
+  let index = 2;
+  while (existing.has(`${baseName} ${index}`)) {
+    index += 1;
+  }
+  return `${baseName} ${index}`;
 }
 
 async function confirmGalaxyInitialization(path: string, defaultName: string) {

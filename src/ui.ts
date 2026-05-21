@@ -1,5 +1,6 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import type { Galaxy, GalaxyTreeNode, RecentState } from './backend';
+import { defaultAiConnectionPreset, type AiConnectionPreset, type AiSettings, type AiTaskModels, type Galaxy, type GalaxyTreeNode } from './backend';
+import type { HvyMode } from './hvy';
 import type { AppState } from './state';
 import { hvyTemplates } from './templates';
 
@@ -11,14 +12,17 @@ export interface UiHandlers {
   createDocumentInGalaxy(name: string, templateId: string): void;
   cancelNewDocument(): void;
   openAiSettings(): void;
-  saveAiSettings(provider: string, baseUrl: string, apiKey: string, model: string): void;
+  selectAiPreset(presetId: string): void;
+  addAiPreset(): void;
+  openProviderDocs(url: string): void;
+  saveAiSettings(settings: AiSettings): void;
   cancelAiSettings(): void;
   openGalaxy(): void;
   openFile(): void;
   openRecentGalaxy(path: string): void;
   openRecentFile(path: string): void;
   selectFile(path: string): void;
-  toggleMode(): void;
+  setMode(mode: HvyMode): void;
   save(): void;
   saveAs(): void;
   createFile(): void;
@@ -49,15 +53,17 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
           <button type="button" data-action="open-file">Open File</button>
         </div>
         ${renderGalaxies(state)}
-        ${renderRecents(state.recent)}
       </aside>
       <section class="document-shell">
         <header class="document-toolbar">
           ${renderToolbar(state)}
         </header>
         <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>
-        <div id="hvyMount" class="document-host">
-          ${renderEmptyState(state)}
+        <div class="document-stage">
+          ${state.document ? renderModeControls(state.document.mode, state.document.readOnly) : ''}
+          <div id="hvyMount" class="document-host${state.document ? ' hvy-vscode-has-mode-controls' : ''}">
+            ${renderEmptyState(state)}
+          </div>
         </div>
       </section>
       ${renderNewGalaxyDialog(state)}
@@ -83,16 +89,19 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'new-document-in-galaxy' && target.dataset.galaxyPath) handlers.newDocumentInGalaxy(target.dataset.galaxyPath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'ai-settings') handlers.openAiSettings();
+    if (action === 'add-ai-preset') handlers.addAiPreset();
+    if (action === 'provider-docs') {
+      const url = target.dataset.url;
+      if (url) handlers.openProviderDocs(url);
+    }
     if (action === 'cancel-ai-settings') handlers.cancelAiSettings();
     if (action === 'open-galaxy') handlers.openGalaxy();
     if (action === 'open-file') handlers.openFile();
-    if (action === 'toggle-mode') handlers.toggleMode();
+    if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
-    if (action === 'recent-galaxy' && target.dataset.path) handlers.openRecentGalaxy(target.dataset.path);
-    if (action === 'recent-file' && target.dataset.path) handlers.openRecentFile(target.dataset.path);
   }, { signal: bindController.signal });
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
@@ -112,28 +121,20 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
-      handlers.saveAiSettings(
-        String(data.get('provider') ?? ''),
-        String(data.get('baseUrl') ?? ''),
-        String(data.get('apiKey') ?? ''),
-        String(data.get('model') ?? '')
-      );
+      handlers.saveAiSettings(readAiSettingsForm(data));
     }
   }, { signal: bindController.signal });
   root.addEventListener('change', (event) => {
-    const select = (event.target as HTMLElement).closest<HTMLSelectElement>('select[data-provider-select]');
-    if (!select) return;
-    if (select.closest('#hvyMount')) return;
-    const form = select.closest<HTMLFormElement>('form[data-form="ai-settings"]');
-    const baseUrl = form?.querySelector<HTMLInputElement>('input[name="baseUrl"]');
-    const apiKey = form?.querySelector<HTMLInputElement>('input[name="apiKey"]');
-    const model = form?.querySelector<HTMLInputElement>('input[name="model"]');
-    const docsLink = form?.querySelector<HTMLAnchorElement>('[data-provider-docs]');
-    const preset = aiProviderPreset(select.value);
-    if (baseUrl && preset.baseUrl) baseUrl.value = preset.baseUrl;
-    if (apiKey) apiKey.placeholder = preset.apiKeyPlaceholder;
-    if (model) model.placeholder = preset.modelPlaceholder;
-    if (docsLink) docsLink.href = preset.docsUrl;
+    const target = event.target as HTMLElement;
+    const presetSelect = target.closest<HTMLSelectElement>('select[data-ai-preset-select]');
+    if (presetSelect && !presetSelect.closest('#hvyMount')) {
+      handlers.selectAiPreset(presetSelect.value);
+      return;
+    }
+    const providerSelect = target.closest<HTMLSelectElement>('select[data-provider-select]');
+    if (!providerSelect) return;
+    if (providerSelect.closest('#hvyMount')) return;
+    syncProviderFields(providerSelect);
   }, { signal: bindController.signal });
 }
 
@@ -143,11 +144,9 @@ function renderToolbar(state: AppState): string {
     return `
       <div class="toolbar-title">No document selected</div>
       <div class="toolbar-actions">
-        <button type="button" data-action="ai-settings">AI Settings</button>
         <button type="button" data-action="create-file">New HVY</button>
       </div>`;
   }
-  const canEdit = !document.readOnly;
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   return `
@@ -157,12 +156,50 @@ function renderToolbar(state: AppState): string {
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
-      <button type="button" data-action="toggle-mode" ${canEdit ? '' : 'disabled'}>${document.mode === 'viewer' ? 'Edit' : 'View'}</button>
-      <button type="button" data-action="save" ${document.dirty && canEdit ? '' : 'disabled'}>Save</button>
-      <button type="button" data-action="save-as" ${canEdit ? '' : 'disabled'}>Save As</button>
-      <button type="button" data-action="ai-settings">AI Settings</button>
       <button type="button" data-action="create-file">New HVY</button>
     </div>`;
+}
+
+function renderModeControls(activeMode: HvyMode, readOnly: boolean): string {
+  const modes: Array<{ mode: HvyMode; label: string }> = [
+    { mode: 'viewer', label: 'Viewer' },
+    { mode: 'ai', label: 'AI' },
+    { mode: 'editor', label: 'Editor' },
+    { mode: 'advanced', label: 'Advanced' },
+  ];
+  const showAdvanced = activeMode === 'editor' || activeMode === 'advanced';
+  const buttonHtml = ({ mode, label }: { mode: HvyMode; label: string }) => {
+    const active = mode === activeMode ? ' is-active' : '';
+    const disabled = readOnly && mode !== 'viewer' ? ' disabled' : '';
+    const contents = mode === 'advanced'
+      ? '<span>ADV</span>'
+      : `${modeIcon(mode)}<span>${escapeHtml(label)}</span>`;
+    return `<button type="button" class="mode-button${active}" data-action="set-mode" data-mode="${mode}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" aria-pressed="${mode === activeMode ? 'true' : 'false'}"${disabled}>${contents}</button>`;
+  };
+  return `
+    <nav class="mode-controls${activeMode === 'editor' || activeMode === 'advanced' ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
+      <div class="mode-controls-top">
+        ${buttonHtml(modes[0])}
+        ${buttonHtml(modes[1])}
+        <span class="mode-editor-stack">
+          ${buttonHtml(modes[2])}
+          ${showAdvanced ? buttonHtml(modes[3]) : ''}
+        </span>
+      </div>
+    </nav>`;
+}
+
+function modeIcon(mode: HvyMode): string {
+  if (mode === 'viewer') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+  }
+  if (mode === 'ai') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></svg>';
+  }
+  if (mode === 'editor') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>';
+  }
+  return '';
 }
 
 function renderGalaxies(state: AppState): string {
@@ -202,17 +239,6 @@ function renderNode(node: GalaxyTreeNode, selectedFilePath: string | null): stri
         <small>${escapeHtml(node.extension)}</small>
       </button>
     </li>`;
-}
-
-function renderRecents(recent: RecentState): string {
-  if (recent.files.length === 0) {
-    return '';
-  }
-  return `
-    <section class="recents">
-      <h2>Recent</h2>
-      ${recent.files.map((path) => `<button type="button" data-action="recent-file" data-path="${escapeAttr(path)}">${escapeHtml(lastPathPart(path))}</button>`).join('')}
-    </section>`;
 }
 
 function renderEmptyState(state: AppState): string {
@@ -280,31 +306,51 @@ function renderAiSettingsDialog(state: AppState): string {
   if (!state.aiSettingsDialogOpen) {
     return '';
   }
-  const preset = aiProviderPreset(state.aiSettings.provider);
+  const connection = activeConnectionPreset(state.aiSettings);
+  const provider = aiProviderPreset(connection.provider);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
         <h2>AI Settings</h2>
-        <p class="dialog-note">Use any OpenAI-compatible endpoint, including local routers and hosted providers.</p>
-        <a class="provider-docs-link" data-provider-docs href="${escapeAttr(preset.docsUrl)}" target="_blank" rel="noreferrer">Setup instructions</a>
+        <p class="dialog-note">Create connection presets for OpenAI-compatible local servers, routers, and hosted providers. HVY can use different models for different jobs.</p>
+        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(state.aiSettings))}</textarea>
         <label>
           <span>Provider</span>
           <select name="provider" data-provider-select>
-            ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === state.aiSettings.provider ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
+            ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === connection.provider ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
           </select>
         </label>
+        <button type="button" class="provider-docs-link" data-action="provider-docs" data-provider-docs data-url="${escapeAttr(provider.docsUrl)}">Setup instructions</button>
         <label>
-          <span>Base URL</span>
-          <input name="baseUrl" type="url" value="${escapeAttr(state.aiSettings.baseUrl)}" placeholder="${escapeAttr(preset.baseUrl || 'http://127.0.0.1:8000/v1')}" required>
+          <span>Preset</span>
+          <select name="activePresetId" data-ai-preset-select>
+            ${state.aiSettings.presets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === state.aiSettings.activePresetId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
+          </select>
         </label>
+        <button type="button" class="secondary-action" data-action="add-ai-preset">+ New Preset</button>
+        <input name="presetId" type="hidden" value="${escapeAttr(connection.id)}">
+        <div class="ai-provider-fields">
+          <label>
+            <span>Preset name</span>
+            <input name="presetName" type="text" value="${escapeAttr(connection.name)}" autocomplete="off" required>
+          </label>
+          <label>
+            <span>Base URL</span>
+            <input name="baseUrl" type="url" value="${escapeAttr(connection.baseUrl)}" placeholder="${escapeAttr(provider.baseUrl || 'http://127.0.0.1:8000/v1')}" required>
+          </label>
+        </div>
         <label>
           <span>API Key</span>
-          <input name="apiKey" type="password" value="${escapeAttr(state.aiSettings.apiKey)}" placeholder="${escapeAttr(preset.apiKeyPlaceholder)}">
+          <input name="apiKey" type="password" value="${escapeAttr(connection.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
         </label>
-        <label>
-          <span>Model</span>
-          <input name="model" type="text" value="${escapeAttr(state.aiSettings.model)}" placeholder="${escapeAttr(preset.modelPlaceholder)}">
-        </label>
+        <div class="ai-task-grid">
+          ${renderTaskModelField('chat', 'Chat / Q&A', connection.models.chat, provider.modelPlaceholder)}
+          ${renderTaskModelField('edit', 'Document and component edit', connection.models.edit, provider.modelPlaceholder)}
+          ${renderTaskModelField('importPlanning', 'Import planning', connection.models.importPlanning, provider.modelPlaceholder)}
+          ${renderTaskModelField('importWriting', 'Import writing', connection.models.importWriting, provider.modelPlaceholder)}
+          ${renderTaskModelField('importCleanup', 'Import cleanup', connection.models.importCleanup, provider.modelPlaceholder)}
+          ${renderTaskModelField('compaction', 'Compaction', connection.models.compaction, provider.modelPlaceholder)}
+        </div>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-ai-settings">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
@@ -313,14 +359,74 @@ function renderAiSettingsDialog(state: AppState): string {
     </div>`;
 }
 
+function renderTaskModelField(name: keyof AiTaskModels, label: string, value: string, placeholder: string): string {
+  return `
+    <label>
+      <span>${escapeHtml(label)}</span>
+      <input name="${name}" type="text" value="${escapeAttr(value)}" placeholder="${escapeAttr(placeholder)}" autocomplete="off" spellcheck="false">
+    </label>`;
+}
+
+function readAiSettingsForm(data: FormData): AiSettings {
+  const activePresetId = String(data.get('activePresetId') ?? '').trim();
+  const presetId = String(data.get('presetId') ?? activePresetId).trim() || crypto.randomUUID();
+  const current = {
+    id: presetId,
+    name: String(data.get('presetName') ?? '').trim() || 'AI Preset',
+    provider: String(data.get('provider') ?? '').trim(),
+    baseUrl: String(data.get('baseUrl') ?? '').trim(),
+    apiKey: String(data.get('apiKey') ?? '').trim(),
+    models: {
+      chat: String(data.get('chat') ?? '').trim(),
+      edit: String(data.get('edit') ?? '').trim(),
+      importPlanning: String(data.get('importPlanning') ?? '').trim(),
+      importWriting: String(data.get('importWriting') ?? '').trim(),
+      importCleanup: String(data.get('importCleanup') ?? '').trim(),
+      compaction: String(data.get('compaction') ?? '').trim(),
+    },
+  };
+  const settings = parseAiSettings(String(data.get('settingsJson') ?? '')) ?? { activePresetId: presetId, presets: [] };
+  const presets = settings.presets.filter((preset) => preset.id !== presetId);
+  return { activePresetId: presetId, presets: [...presets, current] };
+}
+
+function parseAiSettings(value: string): AiSettings | null {
+  try {
+    const parsed = JSON.parse(value) as AiSettings;
+    return Array.isArray(parsed.presets) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function syncProviderFields(select: HTMLSelectElement): void {
+  const form = select.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+  const baseUrl = form?.querySelector<HTMLInputElement>('input[name="baseUrl"]');
+  const apiKey = form?.querySelector<HTMLInputElement>('input[name="apiKey"]');
+  const models = form?.querySelectorAll<HTMLInputElement>('.ai-task-grid input');
+  const docsLink = form?.querySelector<HTMLElement>('[data-provider-docs]');
+  const preset = aiProviderPreset(select.value);
+  if (baseUrl && preset.baseUrl) baseUrl.value = preset.baseUrl;
+  if (apiKey) apiKey.placeholder = preset.apiKeyPlaceholder;
+  models?.forEach((model) => {
+    model.placeholder = preset.modelPlaceholder;
+    if (!model.value.trim()) model.value = preset.modelPlaceholder;
+  });
+  if (docsLink) docsLink.dataset.url = preset.docsUrl;
+}
+
+function activeConnectionPreset(settings: AiSettings): AiConnectionPreset {
+  return settings.presets.find((preset) => preset.id === settings.activePresetId) ?? settings.presets[0] ?? defaultAiConnectionPreset();
+}
+
+function isHvyMode(value: string | undefined): value is HvyMode {
+  return value === 'viewer' || value === 'ai' || value === 'editor' || value === 'advanced';
+}
+
 function sidebarSummary(state: AppState): string {
   if (state.busy) return 'Working...';
   if (state.galaxies.length === 1) return '1 galaxy open';
   return `${state.galaxies.length} galaxies open`;
-}
-
-function lastPathPart(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }
 
 function escapeHtml(value: string): string {
