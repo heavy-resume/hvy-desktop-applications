@@ -1,12 +1,13 @@
 import type { Galaxy, GalaxyTreeNode, RecentState } from './backend';
 import type { AppState } from './state';
+import { hvyTemplates } from './templates';
 
 export interface UiHandlers {
   newGalaxy(): void;
   createGalaxy(name: string): void;
   cancelNewGalaxy(): void;
   newDocumentInGalaxy(galaxyPath: string): void;
-  createDocumentInGalaxy(name: string): void;
+  createDocumentInGalaxy(name: string, templateId: string): void;
   cancelNewDocument(): void;
   openGalaxy(): void;
   openFile(): void;
@@ -95,7 +96,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     }
     if (form.dataset.form === 'new-document') {
       const data = new FormData(form);
-      handlers.createDocumentInGalaxy(String(data.get('documentName') ?? ''));
+      handlers.createDocumentInGalaxy(
+        String(data.get('documentName') ?? ''),
+        String(data.get('templateId') ?? '')
+      );
     }
   }, { signal: bindController.signal });
 }
@@ -222,6 +226,12 @@ function renderNewDocumentDialog(state: AppState): string {
         <label>
           <span>Name</span>
           <input name="documentName" type="text" autocomplete="off" autofocus required>
+        </label>
+        <label>
+          <span>Template</span>
+          <select name="templateId">
+            ${hvyTemplates.map((template) => `<option value="${escapeAttr(template.id)}">${escapeHtml(template.name)}</option>`).join('')}
+          </select>
         </label>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-new-document">Cancel</button>

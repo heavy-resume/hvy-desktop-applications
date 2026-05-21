@@ -32,7 +32,8 @@ button {
   padding: 7px 10px;
 }
 
-input {
+input,
+select {
   width: 100%;
   border: 1px solid #aeb9b3;
   border-radius: 6px;

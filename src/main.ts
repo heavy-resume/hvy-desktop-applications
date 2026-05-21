@@ -17,6 +17,7 @@ import {
 } from './backend';
 import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument } from './hvy';
 import { state } from './state';
+import { getHvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
@@ -57,7 +58,7 @@ const handlers: UiHandlers = {
       document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
     });
   },
-  createDocumentInGalaxy: (name) => void runBusy('Creating HVY document...', async () => {
+  createDocumentInGalaxy: (name, templateId) => void runBusy('Creating HVY document...', async () => {
     const galaxyPath = state.newDocumentGalaxyPath;
     const fileName = documentFileName(name);
     if (!galaxyPath) return;
@@ -69,11 +70,11 @@ const handlers: UiHandlers = {
     const file = await createDocumentFile({
       galaxyPath,
       relativePath: fileName,
-      template: defaultHvyDocument(documentTitle(fileName)),
+      template: applyTemplateTitle(getHvyTemplate(templateId).content, documentTitle(fileName)),
     });
     upsertGalaxy(await loadGalaxy(galaxyPath));
     state.selectedGalaxyPath = galaxyPath;
-    await openDocument(file);
+    await openDocument(file, { isNew: true });
     await refreshRecents();
   }),
   cancelNewDocument: () => {
@@ -381,6 +382,10 @@ function documentFileName(name: string): string | null {
 
 function documentTitle(fileName: string): string {
   return fileName.replace(/\.hvy$/i, '');
+}
+
+function applyTemplateTitle(template: string, title: string): string {
+  return template.replace(/^title:.*$/m, `title: ${JSON.stringify(title)}`);
 }
 
 async function confirmGalaxyInitialization(path: string, defaultName: string) {
