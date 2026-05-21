@@ -6,7 +6,25 @@
     <title>HVY Galaxy</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main style="display:grid;min-height:100vh;place-items:center;font:14px system-ui;color:#334;background:#f4f1eb">
+        Loading HVY Galaxy...
+      </main>
+    </div>
+    <script>
+      function showStartupError(error) {
+        const root = document.getElementById('app');
+        if (!root) return;
+        root.innerHTML = '<main style="padding:24px;font:14px system-ui;color:#8c291d;background:#fff0ec;min-height:100vh"><h1>Startup error</h1><pre style="white-space:pre-wrap"></pre></main>';
+        root.querySelector('pre').textContent = error && error.stack ? error.stack : String(error);
+      }
+      window.addEventListener('error', (event) => {
+        showStartupError(event.error || event.message);
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        showStartupError(event.reason);
+      });
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

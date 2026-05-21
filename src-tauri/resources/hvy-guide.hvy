@@ -1,0 +1,514 @@
+---
+hvy_version: 0.1
+title: HVY Guide
+reader_max_width: 64rem
+section_defaults:
+  css: "margin: 0 0 0.75rem;"
+theme:
+  colors: {}
+text_line_styles:
+  callout:
+    label: Callout
+    css: "margin: 0.75rem 0; padding: 0.75rem 0.9rem; border-left: 0.22rem solid
+      var(--hvy-accent); background: var(--hvy-surface-muted);"
+  compact:
+    label: Compact
+    css: "margin: 0.15rem 0;"
+  indented:
+    label: Indented
+    css: "margin: 0.25rem 0; padding-left: 1rem;"
+---
+
+<!--hvy: {"id":"welcome","lock":false,"expanded":true,"highlight":false,"contained":false}-->
+#! Welcome To HVY
+
+ <!--hvy:text {}-->
+  # Introducing the HVY File Format
+
+ <!--hvy:text {}-->
+  HVY is a versatile file built for information consumption. It additionally doubles as a workspace with scripting and plugin capabilities. You can use three different modes to edit the document.
+
+ <!--hvy:grid {"css":"gap: 0.75rem; margin: 1rem 0; align-items: stretch; grid-auto-rows: 1fr;","gridColumns":3}-->
+  <!--hvy:grid:0 {"id":"griditem-ls4xsf"}-->
+
+   <!--hvy:container {"css":"display: flex; padding: 0.85rem; border: 1px solid var(--hvy-border); border-radius: 0.5rem; height: 100%;"}-->
+    <!--hvy:text {"css":"margin: 0.5rem 0; flex-grow: 1;"}-->
+     ## Viewer
+     
+     Shows the document without any editing features.
+
+    <!--hvy:xref-card {"xrefTitle":"Viewer Mode","xrefDetail":"Learn more about viewer mode","xrefTarget":"viewer-mode"}-->
+
+  <!--hvy:grid:1 {"id":"griditem-keuvq0"}-->
+
+   <!--hvy:container {"css":"display: grid; padding: 0.85rem; border: 1px solid var(--hvy-border); border-radius: 0.5rem; height: 100%;"}-->
+    <!--hvy:text {}-->
+     ## AI Assisted
+     
+     Lets you see the page like in viewer but also edit it. Double <!--hvy:alt {"compact":"tap or tap and hold"}-->click or right click<!--/hvy:alt--> to enter edit mode for a component. You can also request changes via the chat.
+
+    <!--hvy:xref-card {"xrefTitle":"AI Mode","xrefDetail":"Learn more about AI mode","xrefTarget":"ai-mode"}-->
+
+  <!--hvy:grid:2 {"id":"griditem-kw907x"}-->
+
+   <!--hvy:container {"css":"display: grid; padding: 0.85rem; border: 1px solid var(--hvy-border); border-radius: 0.5rem; height: 100%;"}-->
+    <!--hvy:text {}-->
+     ## Editor
+     
+     For many changes, use editor mode. Can be either the basic or advanced view, which enables more editing.
+
+    <!--hvy:xref-card {"xrefTitle":"Editor Mode","xrefDetail":"Learn more about editor mode","xrefTarget":"editor-mode"}-->
+<!--hvy: {"id":"section-mcd0l4","lock":false,"expanded":true,"highlight":false}-->
+#! Basics
+
+ <!--hvy:text {}-->
+  # Basics
+
+ <!--hvy:text {}-->
+  HVY files are structured as a main viewing pane with a companion sidebar. Sections can be moved between the main pane and the sidebar. Components populate sections with content. Subsections can also be created within a section.
+  
+  The application that displays the HVY is in charge of presenting the information. Unlike a standard DOCX or PDF where documents must map back to a page structure typically used for physical, printed pages, a HVY is about providing information that the client can choose how to display.
+  
+  Additionally, HVY supports attaching files, and with the DB Table plugin can support data storage and sandboxed scripting without risk of unauthorized network calls. Note that chat AI often involves network calls.
+  
+  HVY files include robust templating features, including the ability to provide AI guidance, templated sections, and more.
+<!--hvy: {"id":"core-ideas","lock":false,"expanded":true,"highlight":false}-->
+#! Core Ideas
+
+ <!--hvy:text {}-->
+  # Core Ideas
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Sections are major topics
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:text {}-->
+    Sections are the main building blocks of a document. Use them for topics a reader might want to jump to, collapse, expand, or understand as a complete thought.
+    
+    Sections are named but to add a proper title a leading text element should be added.
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Components are content inside a topic
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:text {}-->
+    Components hold the actual content inside sections. A component might be text, an image, a table, a list, a reference card, an expandable detail panel, or an interactive plugin.
+    
+    When you add something with the component picker, you are choosing what kind of content belongs in that spot.
+
+   <!--hvy:xref-card {"xrefTitle":"Component Guide","xrefTarget":"component-guide"}-->
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Sidebars are for navigation and supporting material
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:text {}-->
+    The sidebar can hold navigation, quick reference material, or supporting sections that should stay available while the reader focuses on the main document.
+    
+    Put a section in the sidebar when it helps people move around, compare notes, or keep context nearby.
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## References connect related ideas
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:text {}-->
+    Reference cards are visible links to another part of the document. Use them when a reader should be able to jump from one topic to a related section or item. This includes navigating between the main pane and the sidebar.
+    
+    References are better than repeating the same information in several places.
+    
+    Components and sections can be assigned IDs, which are used for setting targets for navigation.
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Plugins and scripting create expandability
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:text {}-->
+    Plugins allow for extending functionality. Sandboxed scripting allows for advanced logic and even editor exclusive helpers, which can be used for templates.
+<!--hvy: {"id":"ai-mode","lock":false,"expanded":true,"highlight":false}-->
+#! AI Mode
+
+ <!--hvy:text {}-->
+  # AI Mode
+
+ <!--hvy:text {}-->
+  AI mode is a document editing mode. It lets you read the document visually, select the part you want to change, and request an edit in plain language. AI mode is the best choice when you're reviewing the document.
+
+ <!--hvy:container {"css":"margin: 0.5rem 0;\nborder: 1px solid var(--hvy-border);\nborder-radius: 8px;\npadding: 0.75rem;","containerTitle":"Note"}-->
+  <!--hvy:text {}-->
+   AI mode is not the same thing as the chat panel. AI mode changes how the document surface behaves. The chat panel is a conversation area that may answer questions or help make broader document edits.
+
+ <!--hvy:text {}-->
+  ## Use Chat For Broader Help
+  
+  Use chat to ask questions or request changes. AI capabilities can vary.
+
+ <!--hvy:text {}-->
+  ## Request A Targeted Change or Enter Edit Mode
+  
+  You can right click or double click (tap and hold on mobile) an item and either enter edit mode or ask for changes.
+
+ <!--hvy:text {}-->
+  ## Undo
+  
+  If you don't like the change AI made you can press ctrl / cmd + z for undo.
+<!--hvy: {"id":"editor-mode","lock":false,"expanded":true,"highlight":false}-->
+#! Editor Mode
+
+ <!--hvy:text {}-->
+  # Editor Mode
+
+ <!--hvy:text {}-->
+  Use Editor mode to change the document directly. This is where you create sections, add components, edit text, adjust settings, and decide how information is organized. Note that while editor mode deviates the most from "what you see is what you get."
+  
+  Edit mode is the best choice for adding new content.
+
+ <!--hvy:text {}-->
+  ## Insert, Move, Copy, And Delete
+  
+  You can move sections between the sidebar and the main panel using the "Sidebar" and "Main" buttons respectively. You can move and copy components via the button, then around existing components press where you want it to move to or be copied to. Use the X in the corner to delete a component.
+
+ <!--hvy:text {}-->
+  ## Use Advanced Mode When Needed
+  
+  Advanced mode enables editing reusable templates, custom styling, extra labels, or deeper component options.
+  
+  If you are not sure whether a setting matters, leave it alone and keep editing in the simpler mode.
+
+ <!--hvy:xref-card {"xrefTitle":"Advanced Editing","xrefTarget":"advanced-editing"}-->
+<!--hvy: {"id":"viewer-mode","lock":false,"expanded":true,"highlight":false}-->
+#! Viewer Mode
+
+ <!--hvy:text {}-->
+  # Viewer Mode
+
+ <!--hvy:text {}-->
+  Use Viewer mode to read and navigate the document. Viewer mode shows the document as an interactive reading surface, with editing controls out of the way.
+<!--hvy: {"id":"component-guide","lock":false,"expanded":true,"highlight":false}-->
+#! Component Guide
+
+ <!--hvy:text {}-->
+  # Component Guide
+
+ <!--hvy:text {}-->
+  ^indented^ Components are the things you place inside sections. Choose the component that matches the job you want that content to do.
+
+ <!--hvy:component-list {"id":"component-cards","componentListComponent":"expandable","componentListItemLabel":"component","componentListDefaultSortKey":"name","componentListDefaultGroupKey":"Kind"}-->
+  <!--hvy:component-list:0 {}-->
+
+   <!--hvy:expandable {"id":"component-text","sortKeys":{"Name":"Text"},"groupKeys":{"Kind":"Text"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Text
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Text for normal writing: paragraphs, headings, lists, notes, quotes, and code samples. If you are explaining something in words, start here.
+
+  <!--hvy:component-list:1 {}-->
+
+   <!--hvy:expandable {"id":"component-image","sortKeys":{"Name":"Image"},"groupKeys":{"Kind":"Images"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Image
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Image for a single picture or visual. Add clear alternate text so the image still has meaning when someone cannot see it.
+
+  <!--hvy:component-list:2 {}-->
+
+   <!--hvy:expandable {"id":"component-carousel","sortKeys":{"Name":"Carousel"},"groupKeys":{"Kind":"Images"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Carousel
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Carousel when several images belong together and should be browsed as a set.
+
+  <!--hvy:component-list:3 {}-->
+
+   <!--hvy:expandable {"id":"component-table","sortKeys":{"Name":"Table"},"groupKeys":{"Kind":"Data"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Table
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Table for structured information with rows and columns. Tables are best for facts that readers may compare across categories.
+
+  <!--hvy:component-list:4 {}-->
+
+   <!--hvy:expandable {"id":"component-reference","sortKeys":{"Name":"Reference"},"groupKeys":{"Kind":"Navigation"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Reference
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Reference to send the reader to another section or item in the document. It is useful when related material should stay connected without being duplicated. This is a large, easy to see card that works best for lists.
+      
+      ^indented^ Also sometimes called the "Xref" for "cross-reference."
+      
+      ^indented^ In order to reference something it needs an ID first. You can either ask one to be assigned using the AI mode, or use the advanced editor and press the "Meta" button to configure it.
+
+  <!--hvy:component-list:5 {}-->
+
+   <!--hvy:expandable {"id":"component-container","sortKeys":{"Name":"Container"},"groupKeys":{"Kind":"Containers"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Container
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Container to group several components together. Containers are useful for panels, grouped notes, or content that should travel as one unit.
+
+  <!--hvy:component-list:6 {}-->
+
+   <!--hvy:expandable {"id":"component-list","sortKeys":{"Name":"List"},"groupKeys":{"Kind":"Containers"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## List
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use List for repeated items that share the same shape, such as projects, tasks, skills, contacts, or resources.
+
+  <!--hvy:component-list:7 {}-->
+
+   <!--hvy:expandable {"id":"component-grid","sortKeys":{"Name":"Grid"},"groupKeys":{"Kind":"Containers"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Grid
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Grid when layout matters, such as side-by-side comparisons or paired labels and values. Avoid using grids just to make ordinary lists.
+
+  <!--hvy:component-list:8 {}-->
+
+   <!--hvy:expandable {"id":"component-expandable","sortKeys":{"Name":"Expandable"},"groupKeys":{"Kind":"Containers"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Expandable
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Expandable when a short summary should be visible first and details should open on demand.
+
+  <!--hvy:component-list:9 {}-->
+
+   <!--hvy:expandable {"id":"component-plugin","sortKeys":{"Name":"Plugin"},"groupKeys":{"Kind":"Advanced"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Plugin
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Plugin when the document includes a special interactive tool, such as a graph, form, progress meter, script, or data-backed table.
+
+  <!--hvy:component-list:10 {}-->
+
+   <!--hvy:expandable {"id":"component-custom","sortKeys":{"Name":"Custom"},"groupKeys":{"Kind":"Advanced"}}-->
+    <!--hvy:expandable:stub {}-->
+
+     <!--hvy:text {}-->
+      ## Custom
+
+    <!--hvy:expandable:content {}-->
+
+     <!--hvy:text {}-->
+      ^indented^ Use Custom for reusable templates. Use it when you want a component pattern that can be reused across the document or adapted as a starting point for new content.
+<!--hvy: {"id":"choosing-structure","lock":false,"expanded":true,"highlight":false}-->
+#! Structural Tips
+
+ <!--hvy:text {}-->
+  # Structural Tips
+
+ <!--hvy:text {}-->
+  ## Use Sections For Major Topics
+  
+  If a reader might want to jump directly to it, make it a section. Sections are also the best place for content that should move together as a complete idea.
+
+ <!--hvy:text {}-->
+  ## Use Components Inside Each Topic
+  
+  Components make the inside of a section easier to edit and scan. Instead of making one huge text block, split content into the component types that match the information.
+
+ <!--hvy:text {}-->
+  ## Use Expandables For Summary And Detail
+  
+  Put the most useful short version in the visible summary. Put background, examples, caveats, or supporting details in the expanded area.
+
+ <!--hvy:text {}-->
+  ## Use Lists For Repeated Items
+  
+  If the same pattern repeats, use a List. A list keeps repeated content consistent and makes it easier to sort, group, or review.
+
+ <!--hvy:text {}-->
+  ## Use Grids For Intentional Layout
+  
+  Use a Grid when side-by-side placement adds meaning. Do not use a Grid just because the page feels empty.
+
+ <!--hvy:text {}-->
+  ## Use References Instead Of Repeating Yourself
+  
+  When another part of the document already explains something, use a Reference card. That keeps the document easier to maintain and gives readers a clear path to related content.
+<!--hvy: {"id":"quick-reference","lock":false,"expanded":true,"highlight":false,"location":"sidebar"}-->
+#! Quick Reference
+
+ <!--hvy:text {}-->
+  # Quick Reference
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Editing Modes
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Editor Mode","xrefDetail":"Best for new content and advanced editing","xrefTarget":"editor-mode"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"AI Mode","xrefDetail":"Best for making small changes without clutter","xrefTarget":"ai-mode"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Viewer Mode","xrefDetail":"See the document like someone else might","xrefTarget":"viewer-mode"}-->
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Components
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Text","xrefDetail":"Multipurpose text component","xrefTarget":"component-text"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Image","xrefDetail":"Add an image","xrefTarget":"component-image"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Carousel","xrefDetail":"Add many images","xrefTarget":"component-carousel"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Container","xrefDetail":"Group components","xrefTarget":"component-container"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Grid","xrefDetail":"Arrange in a grid or have text both left and right aligned on the same line","xrefTarget":"component-grid"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Expandable","xrefDetail":"Show a preview or provide a stub that expands to deeper content","xrefTarget":"component-expandable"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"List","xrefDetail":"Provide a list of components (often references)","xrefTarget":"component-list"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Table","xrefDetail":"Create a static table. DB tables are a plugin.","xrefTarget":"component-table"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Reference (or Xref)","xrefDetail":"This is a reference / xref (cross-reference)","xrefTarget":"component-reference"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Plugin","xrefDetail":"Add advanced controls that are outside the standard","xrefTarget":"component-plugin"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Custom","xrefDetail":"Custom components / templates","xrefTarget":"component-custom"}-->
+
+ <!--hvy:expandable {}-->
+  <!--hvy:expandable:stub {}-->
+
+   <!--hvy:text {}-->
+    ## Search / Filtering
+
+  <!--hvy:expandable:content {}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Search","xrefDetail":"Use search to highlight terms and navigate to them. Search results include a description provided by the containing components or sections.","xrefTarget":"search"}-->
+
+   <!--hvy:xref-card {"css":"margin: 0.5rem 0; padding-left: 0.5rem;","xrefTitle":"Filtering","xrefDetail":"Filter to rearrange the document and show matching sections and components first.","xrefTarget":"filtering"}-->
+<!--hvy: {"id":"section-4brwub","lock":false,"expanded":true,"highlight":false}-->
+#! Styling
+
+ <!--hvy:text {}-->
+  # Styling
+
+ <!--hvy:text {}-->
+  Styling is done through CSS properties attached a component. You can edit this in advanced mode or by asking the AI to make styling changes.
+<!--hvy: {"id":"advanced-editing","lock":false,"expanded":true,"highlight":false}-->
+#! Advanced Editing
+
+ <!--hvy:text {}-->
+  # Advanced Editing
+
+ <!--hvy:text {}-->
+  You can choose between basic and advanced editing mode.
+  
+  Advanced editing mode reveals "Make Template" and "Meta" editing information.
+
+ <!--hvy:text {}-->
+  ### Templating and Fill-ins
+  
+  You can set up a template components and sections with the "Make Template" button. This makes a reproducible copy that will show up under the "Custom" section when adding components. You can select text and convert it to a fill-in, meaning in an edit mode one can simply click on the spot and enter text.
+  
+  ### Meta Information
+  
+  The document, sections, and components all have meta information. This includes placeholders for empty text, tags, a description for search, and more.
+  
+  ### Editor Only Components
+  
+  You can a component to be editor only. For example, you may want to display helpful hints on how to use a template, or run a script in editing mode only.
+<!--hvy: {"id":"search","lock":false,"expanded":true,"highlight":false}-->
+#! Search
+
+ <!--hvy:text {}-->
+  # Search
+
+ <!--hvy:text {}-->
+  You can search by word(s) by pressing the magnifying glass button or `cmd / ctrl + f.`
+  
+  The search term is highlighted and you can click results to get navigate to the entry.
+  
+  The description you see is provided by components via meta information.
+<!--hvy: {"id":"filtering","lock":false,"expanded":true,"highlight":false}-->
+#! Filtering
+
+ <!--hvy:text {}-->
+  # Filtering
+
+ <!--hvy:text {}-->
+  You can filter by word(s) by pressing the magnifying glass button or `cmd / ctrl + f.`
+  
+  There's two filter techniques.
+  
+  If shade is selected, sections / components without the term are shaded and may be displayed lower in the document.
+  
+  If hide is selected, then sections / components that do not match the term are not displayed.

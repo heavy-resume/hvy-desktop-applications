@@ -28,6 +28,9 @@
     "targets": "all",
     "category": "Productivity",
     "shortDescription": "HVY galaxy workspace",
-    "longDescription": "Cross-platform desktop workspace for viewing and editing HVY files."
+    "longDescription": "Cross-platform desktop workspace for viewing and editing HVY files.",
+    "resources": [
+      "resources/hvy-guide.hvy"
+    ]
   }
 }

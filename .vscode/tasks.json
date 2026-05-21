@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "HVY Galaxy: Tauri Dev (Hot Reload)",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && npm run tauri -- dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build App Bundle",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && npm run tauri -- build --bundles app",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

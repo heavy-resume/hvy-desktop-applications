@@ -13,6 +13,7 @@ body {
   margin: 0;
   min-width: 920px;
   min-height: 640px;
+  user-select: text;
 }
 
 button {
@@ -196,8 +197,36 @@ button:disabled {
 }
 
 .dirty-indicator {
+  display: inline-flex;
+  align-items: center;
+  min-width: 74px;
+  gap: 6px;
   color: #5f6a66;
   font-size: 12px;
+}
+
+.dirty-indicator::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7c8782;
+  content: "";
+}
+
+.dirty-indicator[data-state="clean"]::before {
+  background: #258f67;
+}
+
+.dirty-indicator[data-state="dirty"] {
+  color: #8a4d00;
+}
+
+.dirty-indicator[data-state="dirty"]::before {
+  background: #d47a00;
+}
+
+.dirty-indicator[data-state="read-only"]::before {
+  background: #8a9490;
 }
 
 .error-banner {

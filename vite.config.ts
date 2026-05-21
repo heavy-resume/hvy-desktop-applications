@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
 const require = createRequire(import.meta.url);
@@ -6,43 +7,45 @@ const BUILT_IN_PLUGINS_ID = 'virtual:hvy-built-in-plugins';
 const BUILT_IN_PLUGINS_RESOLVED_ID = `\0${BUILT_IN_PLUGINS_ID}`;
 const BRYTHON_MINIMAL_VFS_ID = 'virtual:hvy-brython-minimal-vfs';
 const BRYTHON_MINIMAL_VFS_RESOLVED_ID = `\0${BRYTHON_MINIMAL_VFS_ID}`;
+const HVY_REFERENCE_ROOT = resolve('../heavy-file-format');
 
 const builtInDefinitions = [
   {
     id: 'hvy.db-table',
     key: 'dbTable',
     exportName: 'dbTablePlugin',
-    modulePath: 'heavy-file-format-ref-impl/src/plugins/db-table-plugin.ts',
+    modulePath: 'src/plugins/db-table-plugin.ts',
   },
   {
     id: 'hvy.form',
     key: 'form',
     exportName: 'formPlugin',
-    modulePath: 'heavy-file-format-ref-impl/src/plugins/form.ts',
+    modulePath: 'src/plugins/form.ts',
   },
   {
     id: 'hvy.progress-bar',
     key: 'progressBar',
     exportName: 'progressBarPlugin',
-    modulePath: 'heavy-file-format-ref-impl/src/plugins/progress-bar.ts',
+    modulePath: 'src/plugins/progress-bar.ts',
   },
   {
     id: 'hvy.scripting',
     key: 'scripting',
     exportName: 'scriptingPlugin',
-    modulePath: 'heavy-file-format-ref-impl/src/plugins/scripting/scripting.ts',
+    modulePath: 'src/plugins/scripting/scripting.ts',
   },
   {
     id: 'hvy.graph',
     key: 'graph',
     exportName: 'graphPlugin',
-    modulePath: 'heavy-file-format-ref-impl/src/plugins/graph.ts',
+    modulePath: 'src/plugins/graph.ts',
   },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
   const imports = builtInDefinitions.map((definition, index) => {
-    return `import { ${definition.exportName} as plugin${index} } from ${JSON.stringify(definition.modulePath)};`;
+    const modulePath = `/@fs/${resolve(HVY_REFERENCE_ROOT, definition.modulePath)}`;
+    return `import { ${definition.exportName} as plugin${index} } from ${JSON.stringify(modulePath)};`;
   });
 
   return {

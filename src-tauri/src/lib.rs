@@ -103,6 +103,15 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
 }
 
 #[tauri::command]
+fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
+    let resource_path = app
+        .path()
+        .resolve("resources/hvy-guide.hvy", tauri::path::BaseDirectory::Resource)
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    read_document_at(&resource_path)
+}
+
+#[tauri::command]
 fn open_galaxy_dialog(app: AppHandle) -> AppResult<Option<Galaxy>> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);
@@ -236,7 +245,10 @@ pub fn run() {
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
                 let id = event.id().as_ref();
-                if matches!(id, "new-galaxy" | "open-galaxy" | "open-file" | "save" | "save-as")
+                if matches!(
+                    id,
+                    "new-galaxy" | "open-galaxy" | "open-file" | "open-guide" | "save" | "save-as"
+                )
                     || id.starts_with("recent-file:")
                     || id.starts_with("recent-galaxy:")
                 {
@@ -247,6 +259,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_recent_state,
+            load_default_guide,
             open_galaxy_dialog,
             choose_galaxy_folder,
             new_galaxy_dialog,
@@ -281,8 +294,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::quit(app, Some("Quit"))?)
         .build()?;
+    let help = SubmenuBuilder::new(app, "Help")
+        .item(
+            &MenuItemBuilder::new("HVY Guide")
+                .id("open-guide")
+                .accelerator("F1")
+                .build(app)?,
+        )
+        .build()?;
 
-    MenuBuilder::new(app).item(&file).build()
+    MenuBuilder::new(app).item(&file).item(&help).build()
 }
 
 fn build_recent_files_menu(

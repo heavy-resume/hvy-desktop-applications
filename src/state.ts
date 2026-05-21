@@ -7,6 +7,7 @@ export interface OpenDocument {
   extension: DocumentExtension;
   mode: HvyMode;
   dirty: boolean;
+  readOnly: boolean;
   mounted: MountedDocument | null;
 }
 

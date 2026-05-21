@@ -83,16 +83,19 @@ function renderToolbar(state: AppState): string {
         <button type="button" data-action="create-file" ${state.selectedGalaxyPath ? '' : 'disabled'}>New HVY</button>
       </div>`;
   }
+  const canEdit = !document.readOnly;
+  const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
+  const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   return `
     <div class="toolbar-title">
       <strong>${escapeHtml(document.name)}</strong>
-      <span>${escapeHtml(document.path)}</span>
+      <span>${document.readOnly ? 'Read-only guide' : escapeHtml(document.path)}</span>
     </div>
     <div class="toolbar-actions">
-      <span class="dirty-indicator">${document.dirty ? 'Unsaved' : 'Saved'}</span>
-      <button type="button" data-action="toggle-mode">${document.mode === 'viewer' ? 'Edit' : 'View'}</button>
-      <button type="button" data-action="save" ${document.dirty ? '' : 'disabled'}>Save</button>
-      <button type="button" data-action="save-as">Save As</button>
+      <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
+      <button type="button" data-action="toggle-mode" ${canEdit ? '' : 'disabled'}>${document.mode === 'viewer' ? 'Edit' : 'View'}</button>
+      <button type="button" data-action="save" ${document.dirty && canEdit ? '' : 'disabled'}>Save</button>
+      <button type="button" data-action="save-as" ${canEdit ? '' : 'disabled'}>Save As</button>
       <button type="button" data-action="create-file" ${state.selectedGalaxyPath ? '' : 'disabled'}>New HVY</button>
     </div>`;
 }
