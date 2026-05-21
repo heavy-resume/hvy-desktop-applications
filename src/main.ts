@@ -1,12 +1,13 @@
 import './styles.css';
 import {
   chooseGalaxyFolder,
+  createDocumentFile,
+  createGalaxy,
   initializeGalaxyPath,
   isTauriRuntime,
   loadDefaultGuide,
   loadGalaxy,
   loadRecentState,
-  newGalaxyDialog,
   onMenuEvent,
   openFileDialog,
   readDocumentFile,
@@ -22,14 +23,64 @@ let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
 
 const handlers: UiHandlers = {
-  newGalaxy: () => void runBusy('Creating galaxy...', async () => {
-    const galaxy = await newGalaxyDialog();
-    if (!galaxy) return;
+  newGalaxy: () => {
+    state.newGalaxyDialogOpen = true;
+    state.status = 'Ready';
+    rerender();
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>('input[name="galaxyName"]')?.focus();
+    });
+  },
+  createGalaxy: (name) => void runBusy('Creating galaxy...', async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      state.newGalaxyDialogOpen = true;
+      state.status = 'Galaxy name is required';
+      return;
+    }
+    state.newGalaxyDialogOpen = false;
+    const galaxy = await createGalaxy(trimmed);
     upsertGalaxy(galaxy);
     state.selectedGalaxyPath = galaxy.path;
     await refreshRecents();
-    rerender();
   }),
+  cancelNewGalaxy: () => {
+    state.newGalaxyDialogOpen = false;
+    state.status = 'Ready';
+    rerender();
+  },
+  newDocumentInGalaxy: (galaxyPath) => {
+    state.newDocumentGalaxyPath = galaxyPath;
+    state.status = 'Ready';
+    rerender();
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
+    });
+  },
+  createDocumentInGalaxy: (name) => void runBusy('Creating HVY document...', async () => {
+    const galaxyPath = state.newDocumentGalaxyPath;
+    const fileName = documentFileName(name);
+    if (!galaxyPath) return;
+    if (!fileName) {
+      state.status = 'Document name is required';
+      return;
+    }
+    state.newDocumentGalaxyPath = null;
+    const file = await createDocumentFile({
+      galaxyPath,
+      relativePath: fileName,
+      template: defaultHvyDocument(documentTitle(fileName)),
+    });
+    upsertGalaxy(await loadGalaxy(galaxyPath));
+    state.selectedGalaxyPath = galaxyPath;
+    await openDocument(file);
+    await refreshRecents();
+  }),
+  cancelNewDocument: () => {
+    state.newDocumentGalaxyPath = null;
+    state.status = 'Ready';
+    rerender();
+  },
   openGalaxy: () => void runBusy('Opening galaxy...', async () => {
     const candidate = await chooseGalaxyFolder();
     if (!candidate) return;
@@ -280,6 +331,11 @@ function upsertGalaxy(galaxy: Awaited<ReturnType<typeof loadGalaxy>>): void {
   } else {
     state.galaxies.push(galaxy);
   }
+  sortGalaxies();
+}
+
+function sortGalaxies(): void {
+  state.galaxies.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
 }
 
 function rerender(): void {
@@ -292,6 +348,7 @@ function rerender(): void {
 
 async function runBusy(label: string, task: () => Promise<void>): Promise<void> {
   if (state.busy) return;
+  const document = state.document?.mounted?.document;
   state.busy = true;
   state.error = null;
   state.status = label;
@@ -302,18 +359,28 @@ async function runBusy(label: string, task: () => Promise<void>): Promise<void> 
     state.status = 'Ready';
   } finally {
     state.busy = false;
-    const document = state.document?.mounted?.document;
+    const documentToMount = state.document?.mounted?.document ?? document;
     rerender();
-    await mountCurrentDocument(document);
+    await mountCurrentDocument(documentToMount);
   }
 }
 
-function defaultHvyDocument(): string {
+function defaultHvyDocument(title = 'Untitled'): string {
   return `---
 hvy_version: 0.1
-title: Untitled
+title: ${JSON.stringify(title)}
 ---
 `;
+}
+
+function documentFileName(name: string): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  return trimmed.toLowerCase().endsWith('.hvy') ? trimmed : `${trimmed}.hvy`;
+}
+
+function documentTitle(fileName: string): string {
+  return fileName.replace(/\.hvy$/i, '');
 }
 
 async function confirmGalaxyInitialization(path: string, defaultName: string) {

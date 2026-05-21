@@ -21,6 +21,8 @@ export interface AppState {
   status: string;
   error: string | null;
   busy: boolean;
+  newGalaxyDialogOpen: boolean;
+  newDocumentGalaxyPath: string | null;
 }
 
 export const state: AppState = {
@@ -32,6 +34,8 @@ export const state: AppState = {
   status: 'Ready',
   error: null,
   busy: false,
+  newGalaxyDialogOpen: false,
+  newDocumentGalaxyPath: null,
 };
 
 export function findFileInGalaxy(galaxy: Galaxy, path: string): GalaxyFileNode | null {

@@ -138,6 +138,19 @@ fn choose_galaxy_folder() -> AppResult<Option<GalaxyOpenCandidate>> {
 }
 
 #[tauri::command]
+fn create_galaxy(app: AppHandle, name: String) -> AppResult<Galaxy> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Message("Galaxy name is required.".into()));
+    }
+    let path = unique_managed_galaxy_path(&app, name)?;
+    fs::create_dir_all(&path)?;
+    let galaxy = initialize_galaxy_with_name(&path, Some(name))?;
+    add_recent_galaxy(&app, &path)?;
+    Ok(galaxy)
+}
+
+#[tauri::command]
 fn new_galaxy_dialog(app: AppHandle) -> AppResult<Option<Galaxy>> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);
@@ -262,6 +275,7 @@ pub fn run() {
             load_default_guide,
             open_galaxy_dialog,
             choose_galaxy_folder,
+            create_galaxy,
             new_galaxy_dialog,
             initialize_galaxy_path,
             load_galaxy,
@@ -363,6 +377,10 @@ fn ensure_galaxy(path: &Path) -> AppResult<Galaxy> {
 }
 
 fn initialize_galaxy(path: &Path) -> AppResult<Galaxy> {
+    initialize_galaxy_with_name(path, None)
+}
+
+fn initialize_galaxy_with_name(path: &Path, name: Option<&str>) -> AppResult<Galaxy> {
     if !path.is_dir() {
         return Err(AppError::Message("Galaxy path must be a folder.".into()));
     }
@@ -373,11 +391,14 @@ fn initialize_galaxy(path: &Path) -> AppResult<Galaxy> {
     } else {
         GalaxyManifest {
             schema_version: 1,
-            name: path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Untitled Galaxy")
-                .to_string(),
+            name: name
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(ToOwned::to_owned)
+                })
+                .unwrap_or_else(|| "Untitled Galaxy".into()),
             created_at: now.clone(),
             updated_at: now,
             root_files: Vec::new(),
@@ -386,6 +407,46 @@ fn initialize_galaxy(path: &Path) -> AppResult<Galaxy> {
     };
     write_json_atomically(&manifest_path, &manifest)?;
     load_galaxy_from_path(path)
+}
+
+fn unique_managed_galaxy_path(app: &AppHandle, name: &str) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("galaxies");
+    fs::create_dir_all(&directory)?;
+
+    let slug = galaxy_folder_name(name);
+    let mut candidate = directory.join(&slug);
+    let mut suffix = 2;
+    while candidate.exists() {
+        candidate = directory.join(format!("{slug}-{suffix}"));
+        suffix += 1;
+    }
+    Ok(candidate)
+}
+
+fn galaxy_folder_name(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = false;
+    for character in name.trim().chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator && !slug.is_empty() {
+            slug.push('-');
+            last_was_separator = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "galaxy".into()
+    } else {
+        slug
+    }
 }
 
 fn load_galaxy_from_path(path: &Path) -> AppResult<Galaxy> {
@@ -619,6 +680,25 @@ mod tests {
 
         let loaded = load_galaxy_from_path(dir.path()).unwrap();
         assert_eq!(loaded.manifest.name, galaxy.manifest.name);
+    }
+
+    #[test]
+    fn initializes_galaxy_with_user_facing_name() {
+        let dir = tempdir().unwrap();
+        let galaxy = initialize_galaxy_with_name(dir.path(), Some("Nebula Drafts")).unwrap();
+
+        assert_eq!(galaxy.manifest.name, "Nebula Drafts");
+        assert_eq!(
+            load_galaxy_from_path(dir.path()).unwrap().manifest.name,
+            "Nebula Drafts"
+        );
+    }
+
+    #[test]
+    fn galaxy_folder_name_is_filesystem_safe() {
+        assert_eq!(galaxy_folder_name("Nebula Drafts"), "nebula-drafts");
+        assert_eq!(galaxy_folder_name("  alpha/beta:  "), "alpha-beta");
+        assert_eq!(galaxy_folder_name("***"), "galaxy");
     }
 
     #[test]

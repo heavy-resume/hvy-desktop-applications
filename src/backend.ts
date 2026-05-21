@@ -100,6 +100,10 @@ export function chooseGalaxyFolder(): Promise<GalaxyOpenCandidate | null> {
   return invokeDesktop('choose_galaxy_folder');
 }
 
+export function createGalaxy(name: string): Promise<Galaxy> {
+  return invokeDesktop('create_galaxy', { name });
+}
+
 export function newGalaxyDialog(): Promise<Galaxy | null> {
   return invokeDesktop('new_galaxy_dialog');
 }

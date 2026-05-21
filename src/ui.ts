@@ -3,6 +3,11 @@ import type { AppState } from './state';
 
 export interface UiHandlers {
   newGalaxy(): void;
+  createGalaxy(name: string): void;
+  cancelNewGalaxy(): void;
+  newDocumentInGalaxy(galaxyPath: string): void;
+  createDocumentInGalaxy(name: string): void;
+  cancelNewDocument(): void;
   openGalaxy(): void;
   openFile(): void;
   openRecentGalaxy(path: string): void;
@@ -35,7 +40,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
           <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
         </div>
         <div class="sidebar-actions">
-          <button type="button" data-action="open-galaxy">Open Galaxy</button>
+          <button type="button" data-action="new-galaxy">New Galaxy</button>
           <button type="button" data-action="open-file">Open File</button>
         </div>
         ${renderGalaxies(state)}
@@ -50,6 +55,8 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
           ${renderEmptyState(state)}
         </div>
       </section>
+      ${renderNewGalaxyDialog(state)}
+      ${renderNewDocumentDialog(state)}
     </main>`;
 
   bind(appRoot, handlers);
@@ -65,6 +72,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'new-galaxy') handlers.newGalaxy();
+    if (action === 'cancel-new-galaxy') handlers.cancelNewGalaxy();
+    if (action === 'new-document-in-galaxy' && target.dataset.galaxyPath) handlers.newDocumentInGalaxy(target.dataset.galaxyPath);
+    if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'open-galaxy') handlers.openGalaxy();
     if (action === 'open-file') handlers.openFile();
     if (action === 'toggle-mode') handlers.toggleMode();
@@ -74,6 +84,19 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
     if (action === 'recent-galaxy' && target.dataset.path) handlers.openRecentGalaxy(target.dataset.path);
     if (action === 'recent-file' && target.dataset.path) handlers.openRecentFile(target.dataset.path);
+  }, { signal: bindController.signal });
+  root.addEventListener('submit', (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
+    if (!form) return;
+    event.preventDefault();
+    if (form.dataset.form === 'new-galaxy') {
+      const data = new FormData(form);
+      handlers.createGalaxy(String(data.get('galaxyName') ?? ''));
+    }
+    if (form.dataset.form === 'new-document') {
+      const data = new FormData(form);
+      handlers.createDocumentInGalaxy(String(data.get('documentName') ?? ''));
+    }
   }, { signal: bindController.signal });
 }
 
@@ -112,12 +135,14 @@ function renderGalaxies(state: AppState): string {
 
 function renderGalaxy(galaxy: Galaxy, selectedFilePath: string | null): string {
   return `
-    <section class="galaxy-group">
-      <h2 title="${escapeAttr(galaxy.path)}">${escapeHtml(galaxy.manifest.name)}</h2>
+    <details class="galaxy-root" open>
+      <summary title="${escapeAttr(galaxy.path)}">
+        <span>${escapeHtml(galaxy.manifest.name)}</span>
+      </summary>
       ${galaxy.files.length === 0
-        ? '<div class="empty-panel compact">No HVY files yet.</div>'
+        ? `<button type="button" class="empty-action" data-action="new-document-in-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}"><span aria-hidden="true">+</span> New HVY</button>`
         : `<ul class="tree">${galaxy.files.map((node) => renderNode(node, selectedFilePath)).join('')}</ul>`}
-    </section>`;
+    </details>`;
 }
 
 function renderNode(node: GalaxyTreeNode, selectedFilePath: string | null): string {
@@ -141,14 +166,12 @@ function renderNode(node: GalaxyTreeNode, selectedFilePath: string | null): stri
 }
 
 function renderRecents(recent: RecentState): string {
-  const hasRecents = recent.galaxies.length > 0 || recent.files.length > 0;
-  if (!hasRecents) {
+  if (recent.files.length === 0) {
     return '';
   }
   return `
     <section class="recents">
       <h2>Recent</h2>
-      ${recent.galaxies.map((path) => `<button type="button" data-action="recent-galaxy" data-path="${escapeAttr(path)}">${escapeHtml(lastPathPart(path))}</button>`).join('')}
       ${recent.files.map((path) => `<button type="button" data-action="recent-file" data-path="${escapeAttr(path)}">${escapeHtml(lastPathPart(path))}</button>`).join('')}
     </section>`;
 }
@@ -165,6 +188,46 @@ function renderEmptyState(state: AppState): string {
         <button type="button" data-action="open-galaxy">Open Galaxy</button>
         <button type="button" data-action="new-galaxy">New Galaxy</button>
       </div>
+    </div>`;
+}
+
+function renderNewGalaxyDialog(state: AppState): string {
+  if (!state.newGalaxyDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="new-galaxy">
+        <h2>New Galaxy</h2>
+        <label>
+          <span>Name</span>
+          <input name="galaxyName" type="text" autocomplete="off" autofocus required>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-new-galaxy">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderNewDocumentDialog(state: AppState): string {
+  if (!state.newDocumentGalaxyPath) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="new-document">
+        <h2>New HVY</h2>
+        <label>
+          <span>Name</span>
+          <input name="documentName" type="text" autocomplete="off" autofocus required>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-new-document">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+        </div>
+      </form>
     </div>`;
 }
 

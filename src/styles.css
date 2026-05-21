@@ -32,6 +32,16 @@ button {
   padding: 7px 10px;
 }
 
+input {
+  width: 100%;
+  border: 1px solid #aeb9b3;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #20242a;
+  font: inherit;
+  padding: 8px 10px;
+}
+
 button:not(:disabled) {
   cursor: pointer;
 }
@@ -68,7 +78,7 @@ button:disabled {
 }
 
 .sidebar-header h1,
-.galaxy-group h2,
+.galaxy-root summary,
 .recents h2 {
   margin: 0;
   color: #152223;
@@ -93,23 +103,33 @@ button:disabled {
 
 .sidebar-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
-.galaxy-group,
+.tree-list,
+.galaxy-root,
 .recents {
   display: grid;
   gap: 8px;
 }
 
-.galaxy-group h2,
+.galaxy-root summary,
 .recents h2 {
   overflow: hidden;
   font-size: 13px;
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.galaxy-root summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.galaxy-root summary span {
+  vertical-align: middle;
 }
 
 .tree,
@@ -143,6 +163,19 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.empty-action {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+}
+
+.empty-action span {
+  font-size: 16px;
+  line-height: 1;
 }
 
 .tree-file small {
@@ -254,6 +287,45 @@ button:disabled {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 28, 29, 0.38);
+  padding: 20px;
+  z-index: 10;
+}
+
+.dialog {
+  display: grid;
+  width: min(360px, 100%);
+  gap: 14px;
+  border: 1px solid #c5cec8;
+  border-radius: 8px;
+  background: #fbfaf7;
+  box-shadow: 0 18px 45px rgba(20, 28, 29, 0.22);
+  padding: 18px;
+}
+
+.dialog h2 {
+  margin: 0;
+  color: #152223;
+  font-size: 18px;
+}
+
+.dialog label {
+  display: grid;
+  gap: 6px;
+  color: #4f5d59;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: end;
+  gap: 8px;
 }
 
 .hvy-document-host {
