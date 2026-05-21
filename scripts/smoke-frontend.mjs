@@ -20,7 +20,35 @@ try {
     page.locator('.error-banner').waitFor({ timeout: 10_000 }),
     page.getByText('Startup error').waitFor({ timeout: 10_000 }),
   ]);
+  await page.getByTitle('New HVY document').click();
+  await page.getByText('Untitled.hvy').waitFor({ timeout: 10_000 });
+  await page.locator('.dirty-indicator', { hasText: 'Unsaved' }).waitFor({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'View' }).waitFor({ timeout: 10_000 });
   const text = await page.locator('body').innerText({ timeout: 5_000 });
+  const layout = await page.evaluate(() => {
+    const host = document.querySelector('#hvyMount');
+    const shell = document.querySelector('.document-shell');
+    if (!(host instanceof HTMLElement) || !(shell instanceof HTMLElement)) {
+      return null;
+    }
+    const hostRect = host.getBoundingClientRect();
+    const shellRect = shell.getBoundingClientRect();
+    return {
+      hostBottom: hostRect.bottom,
+      shellBottom: shellRect.bottom,
+      hostHeight: hostRect.height,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  if (!layout || layout.hostHeight <= 0 || Math.abs(layout.hostBottom - layout.shellBottom) > 1 || layout.shellBottom > layout.viewportHeight + 1) {
+    throw new Error(`Document host does not fit shell: ${JSON.stringify(layout)}`);
+  }
+  if (/Start writing here|#! Start/.test(text)) {
+    throw new Error('New HVY document still contains starter section content.');
+  }
+  if (/Created blank HVY document/.test(text)) {
+    throw new Error('Status text is leaking below the document.');
+  }
   const hasErrorBanner = await page.locator('.error-banner').count() > 0;
   const failed = messages.some((message) => message.startsWith('pageerror:'))
     || hasErrorBanner

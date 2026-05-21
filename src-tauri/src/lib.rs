@@ -294,6 +294,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::quit(app, Some("Quit"))?)
         .build()?;
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
+        .item(&PredefinedMenuItem::redo(app, Some("Redo"))?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, Some("Cut"))?)
+        .item(&PredefinedMenuItem::copy(app, Some("Copy"))?)
+        .item(&PredefinedMenuItem::paste(app, Some("Paste"))?)
+        .separator()
+        .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
+        .build()?;
     let help = SubmenuBuilder::new(app, "Help")
         .item(
             &MenuItemBuilder::new("HVY Guide")
@@ -303,7 +313,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         )
         .build()?;
 
-    MenuBuilder::new(app).item(&file).item(&help).build()
+    MenuBuilder::new(app).item(&file).item(&edit).item(&help).build()
 }
 
 fn build_recent_files_menu(

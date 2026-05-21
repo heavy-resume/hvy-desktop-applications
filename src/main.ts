@@ -1,7 +1,6 @@
 import './styles.css';
 import {
   chooseGalaxyFolder,
-  createDocumentFile,
   initializeGalaxyPath,
   isTauriRuntime,
   loadDefaultGuide,
@@ -81,7 +80,7 @@ const handlers: UiHandlers = {
   },
   save: () => void saveCurrentDocument(),
   saveAs: () => void saveCurrentDocumentAs(),
-  createFile: () => void createFileInSelectedGalaxy(),
+  createFile: () => void createBlankDocument(),
 };
 
 void boot();
@@ -136,7 +135,7 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
   }
 }
 
-async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean } = {}): Promise<void> {
+async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean } = {}): Promise<void> {
   state.document?.mounted?.mount.destroy();
   const bytes = new Uint8Array(file.bytes);
   const document = await deserializeHvy(bytes, file.extension);
@@ -144,13 +143,14 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     path: file.path,
     name: file.name,
     extension: file.extension,
-    mode: 'viewer',
-    dirty: false,
+    mode: options.isNew ? 'editor' : 'viewer',
+    dirty: options.isNew === true,
     readOnly: options.defaultDocument === true,
+    isNew: options.isNew === true,
     mounted: null,
   };
   state.selectedFilePath = options.defaultDocument ? null : file.path;
-  state.status = options.defaultDocument ? 'Opened HVY guide' : `Opened ${file.name}`;
+  state.status = options.defaultDocument ? 'Opened HVY guide' : options.isNew ? 'Created blank HVY document' : `Opened ${file.name}`;
   rerender();
   await mountCurrentDocument(document);
 }
@@ -166,7 +166,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
     },
   });
   state.document.mounted = mounted;
-  setDocumentDirty(isMountedDocumentDirty(mounted), { preserveStatus: true });
+  setDocumentDirty(state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
 }
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {
@@ -203,6 +203,10 @@ async function saveCurrentDocument(): Promise<void> {
       rerender();
       return;
     }
+    if (state.document.isNew || !state.document.path) {
+      await performSaveCurrentDocumentAs();
+      return;
+    }
     const bytes = Array.from(serializeMountedDocument(state.document.mounted));
     await saveDocumentFile({ path: state.document.path, bytes });
     markMountedDocumentSaved(state.document.mounted);
@@ -218,45 +222,48 @@ async function saveCurrentDocument(): Promise<void> {
 
 async function saveCurrentDocumentAs(): Promise<void> {
   await runBusy('Saving as...', async () => {
-    if (!state.document?.mounted) return;
-    if (state.document.readOnly) {
-      state.status = 'The HVY guide is read-only';
-      rerender();
-      return;
-    }
-    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
-    const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
-    if (!file) return;
-    const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
-    state.document = {
-      path: file.path,
-      name: file.name,
-      extension: file.extension,
-      mode: state.document.mode,
-      dirty: false,
-      readOnly: false,
-      mounted: null,
-    };
-    state.selectedFilePath = file.path;
-    state.status = `Saved ${file.name}`;
-    await refreshOpenGalaxyForFile(file.path);
-    await refreshRecents();
-    rerender();
-    await mountCurrentDocument(document);
+    await performSaveCurrentDocumentAs();
   });
 }
 
-async function createFileInSelectedGalaxy(): Promise<void> {
-  await runBusy('Creating file...', async () => {
-    if (!state.selectedGalaxyPath) return;
-    const name = `untitled-${new Date().toISOString().replace(/[:.]/g, '-')}.hvy`;
-    const file = await createDocumentFile({
-      galaxyPath: state.selectedGalaxyPath,
-      relativePath: name,
-      template: defaultHvyDocument(),
-    });
-    await refreshOpenGalaxyForFile(file.path);
-    await openDocument(file);
+async function performSaveCurrentDocumentAs(): Promise<void> {
+  if (!state.document?.mounted) return;
+  if (state.document.readOnly) {
+    state.status = 'The HVY guide is read-only';
+    rerender();
+    return;
+  }
+  const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
+  if (!file) return;
+  const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
+  state.document = {
+    path: file.path,
+    name: file.name,
+    extension: file.extension,
+    mode: state.document.mode,
+    dirty: false,
+    readOnly: false,
+    isNew: false,
+    mounted: null,
+  };
+  state.selectedFilePath = file.path;
+  state.status = `Saved ${file.name}`;
+  await refreshOpenGalaxyForFile(file.path);
+  await refreshRecents();
+  rerender();
+  await mountCurrentDocument(document);
+}
+
+async function createBlankDocument(): Promise<void> {
+  await runBusy('Creating blank document...', async () => {
+    const bytes = Array.from(new TextEncoder().encode(defaultHvyDocument()));
+    await openDocument({
+      path: '',
+      name: 'Untitled.hvy',
+      extension: '.hvy',
+      bytes,
+    }, { isNew: true });
   });
 }
 
@@ -284,6 +291,7 @@ function rerender(): void {
 }
 
 async function runBusy(label: string, task: () => Promise<void>): Promise<void> {
+  if (state.busy) return;
   state.busy = true;
   state.error = null;
   state.status = label;
@@ -305,11 +313,6 @@ function defaultHvyDocument(): string {
 hvy_version: 0.1
 title: Untitled
 ---
-
-<!--hvy: {"id":"start"}-->
-#! Start
-
-Start writing here.
 `;
 }
 

@@ -21,6 +21,7 @@ if (!app) {
 }
 
 const appRoot = app;
+let bindController: AbortController | null = null;
 
 export function render(state: AppState, handlers: UiHandlers): HTMLElement {
   appRoot.innerHTML = `
@@ -31,7 +32,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
             <h1>HVY Galaxy</h1>
             <p>${escapeHtml(sidebarSummary(state))}</p>
           </div>
-          <button type="button" class="icon-button" data-action="new-galaxy" title="New galaxy">+</button>
+          <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
         </div>
         <div class="sidebar-actions">
           <button type="button" data-action="open-galaxy">Open Galaxy</button>
@@ -44,11 +45,10 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
         <header class="document-toolbar">
           ${renderToolbar(state)}
         </header>
-        ${state.error ? `<div class="error-banner">${escapeHtml(state.error)}</div>` : ''}
+        <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>
         <div id="hvyMount" class="document-host">
           ${renderEmptyState(state)}
         </div>
-        <footer class="status-bar">${escapeHtml(state.status)}</footer>
       </section>
     </main>`;
 
@@ -57,9 +57,12 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
 }
 
 function bind(root: HTMLElement, handlers: UiHandlers): void {
+  bindController?.abort();
+  bindController = new AbortController();
   root.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) return;
+    if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'new-galaxy') handlers.newGalaxy();
     if (action === 'open-galaxy') handlers.openGalaxy();
@@ -71,7 +74,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
     if (action === 'recent-galaxy' && target.dataset.path) handlers.openRecentGalaxy(target.dataset.path);
     if (action === 'recent-file' && target.dataset.path) handlers.openRecentFile(target.dataset.path);
-  });
+  }, { signal: bindController.signal });
 }
 
 function renderToolbar(state: AppState): string {
@@ -80,7 +83,7 @@ function renderToolbar(state: AppState): string {
     return `
       <div class="toolbar-title">No document selected</div>
       <div class="toolbar-actions">
-        <button type="button" data-action="create-file" ${state.selectedGalaxyPath ? '' : 'disabled'}>New HVY</button>
+        <button type="button" data-action="create-file">New HVY</button>
       </div>`;
   }
   const canEdit = !document.readOnly;
@@ -89,14 +92,14 @@ function renderToolbar(state: AppState): string {
   return `
     <div class="toolbar-title">
       <strong>${escapeHtml(document.name)}</strong>
-      <span>${document.readOnly ? 'Read-only guide' : escapeHtml(document.path)}</span>
+      <span>${document.readOnly ? 'Read-only guide' : document.isNew ? 'Unsaved document' : escapeHtml(document.path)}</span>
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       <button type="button" data-action="toggle-mode" ${canEdit ? '' : 'disabled'}>${document.mode === 'viewer' ? 'Edit' : 'View'}</button>
       <button type="button" data-action="save" ${document.dirty && canEdit ? '' : 'disabled'}>Save</button>
       <button type="button" data-action="save-as" ${canEdit ? '' : 'disabled'}>Save As</button>
-      <button type="button" data-action="create-file" ${state.selectedGalaxyPath ? '' : 'disabled'}>New HVY</button>
+      <button type="button" data-action="create-file">New HVY</button>
     </div>`;
 }
 
