@@ -282,7 +282,7 @@ button:disabled {
 .mode-controls {
   position: absolute;
   top: 10px;
-  right: 14px;
+  right: calc(14px + 1rem);
   z-index: 8;
   display: inline-flex;
   align-items: flex-start;
@@ -337,6 +337,11 @@ button:disabled {
   box-shadow: 0 4px 14px rgba(20, 28, 29, 0.16);
   padding: 0 3px;
   font-size: 10px;
+}
+
+.mode-button-hvy {
+  color: #164843;
+  letter-spacing: 0;
 }
 
 .mode-button svg {

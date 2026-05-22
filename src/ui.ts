@@ -171,6 +171,7 @@ function renderModeControls(activeMode: HvyMode, readOnly: boolean): string {
   return `
     <nav class="mode-controls${activeMode === 'editor' || activeMode === 'advanced' ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
       <div class="mode-controls-top">
+        <button type="button" class="mode-button mode-button-hvy" data-action="create-file" title="New HVY document" aria-label="New HVY document"><span>HVY</span></button>
         ${buttonHtml(modes[0])}
         ${buttonHtml(modes[1])}
         <span class="mode-editor-stack">
