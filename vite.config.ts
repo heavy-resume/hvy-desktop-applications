@@ -107,6 +107,9 @@ function createBrythonMinimalVfsPlugin(): Plugin {
 
 export default defineConfig({
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
+  build: {
+    target: ['safari13'],
+  },
   server: {
     host: '127.0.0.1',
     port: 1420,
