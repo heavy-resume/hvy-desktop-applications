@@ -23,76 +23,47 @@ component_defs:
       source_title:
         label: Source section title
     schema:
+      css: "border: 1px solid var(--hvy-border); border-radius: 8px; min-height: 8rem;
+        padding: 0.85rem 0.95rem; margin: 0.8rem 0; background:
+        var(--hvy-surface); box-shadow: 0 1px 0 var(--hvy-border-alt), 0 10px
+        22px var(--hvy-shadow-sm);"
       tags: generated-flashcard
-      css: "border: 1px solid var(--hvy-border); border-radius: 8px; min-height: 8rem; padding: 0.85rem 0.95rem; margin: 0.8rem 0; background: var(--hvy-surface); box-shadow: 0 1px 0 var(--hvy-border-alt), 0 10px 22px var(--hvy-shadow-sm);"
-      expandableAlwaysShowStub: true
-      expandableExpanded: false
-      expandableStubCss: "padding: 0;"
-      expandableContentCss: "padding-top: 0.75rem; border-top: 1px solid var(--hvy-border-alt);"
       expandableStubBlocks:
-        description: Generated flashcard question
         children:
           - text: "{% question | block %}"
             schema:
               component: text
               css: "font-weight: 700; margin: 0;"
+        css: "padding: 0;"
+        description: Generated flashcard question
       expandableContentBlocks:
-        description: Generated flashcard answer
         children:
           - text: "{% answer | block %}"
             schema:
               component: text
               css: "margin: 0;"
-          - schema:
+          - text: ""
+            schema:
               component: xref-card
-              xrefTitle: "Source: {% source_title %}"
-              xrefDetail: "Open referenced section"
-              xrefTarget: "{% source_id %}"
               css: "margin: 0.75rem 0 0;"
+              xrefTitle: "Source: {% source_title %}"
+              xrefDetail: Open referenced section
+              xrefTarget: "{% source_id %}"
+        css: "padding-top: 0.75rem; border-top: 1px solid var(--hvy-border-alt);"
+        description: Generated flashcard answer
 theme:
   colors: {}
 ---
 
-<!--hvy: {"id":"concept-model","expanded":true,"highlight":true,"tags":"flashcard-source"}-->
-#! Concept Model
-
- <!--hvy:text {"id":"concept-model-notes"}-->
-  A Heavy document is composed from sections and reusable components. Sections are containers with identity, presentation hints, and child content. Components hold the smallest editable chunks, such as text, tables, cross-reference cards, grids, containers, and plugin blocks.
-
-  This example treats each main section as source material. Forms prepare source text, the host sends it to the configured LLM, and the returned study material is applied back into the document.
-
-<!--hvy: {"id":"scripting-runtime","expanded":true,"highlight":false,"tags":"flashcard-source"}-->
-#! Scripting Runtime
-
- <!--hvy:text {"id":"scripting-runtime-notes"}-->
-  HVY scripting runs sandboxed Brython/Python through a plugin or form submit handler. Scripts receive a `doc` object that can inspect the virtual document filesystem, call supported document tools, and mutate the current document.
-
-  For AI-backed form submit, a source script returns the model input. After the model responds, the submit script receives injected `response` and `source` values and applies the generated output back to the document.
-
-<!--hvy: {"id":"form-driven-authoring","expanded":true,"highlight":false,"tags":"flashcard-source"}-->
-#! Form-Driven Authoring
-
- <!--hvy:text {"id":"form-driven-authoring-notes"}-->
-  The form plugin stores field definitions and named scripts in its plugin body. Form-level behavior, including `submitAction`, `submitSourceScript`, `submitScript`, and `submitLabel`, lives in `pluginConfig`.
-
-  In this document, the form lets a user tune the generation request. The LLM writes only structured card data, while the submit target script instantiates reusable HVY components from the local template.
-
-<!--hvy: {"id":"standard-shortcomings","expanded":true,"highlight":false,"tags":"flashcard-source"}-->
-#! Standard Shortcomings
-
- <!--hvy:text {"id":"standard-shortcomings-notes"}-->
-  This stress test presses on a few standard edges: generated sidebar content, repeated regeneration, expandable blocks created from model output, and form-driven mutation of structural document content.
-
-  A mature standard may need clearer conventions for model-generated component ownership, safe output validation, and structured generation schemas. This example uses tags and stable IDs to keep those concerns visible.
-
-<!--hvy: {"id":"flashcards-sidebar","location":"sidebar","expanded":false,"highlight":true,"contained":true}-->
+<!--hvy: {"id":"flashcards-sidebar","lock":false,"expanded":false,"highlight":true,"location":"sidebar"}-->
 #! Flashcards
 
  <!--hvy:text {"id":"flashcards-title","css":"margin-bottom: 0.4rem;"}-->
   # Flashcards
 
  <!--hvy:text {"id":"flashcards-overview","css":"margin-bottom: 0.75rem;"}-->
-  Generate flashcards from the main sections. The form submit goes through the chat model, and each returned card record is converted into a templated sidebar card.
+  Generate flashcards from the main sections. The form submit goes through the chat model, and each returned card record
+  is converted into a templated sidebar card.
 
  <!--hvy:plugin {"id":"flashcard-generator-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"ai-generate","submitSourceScript":"prepare","submitScript":"apply","submitPrompt":"Generate study flashcards from the provided section source. Return exactly one JSON array and no prose. Each array item must be an object with source_id, question, and answer string fields. Return exactly the requested number of cards unless there is not enough source-backed material. Use only facts present in the source input. Do not return HVY, XML, Markdown fences, comments, labels, or explanations.","submitInputCharLimit":50000,"submitOutputCharLimit":50000,"submitLabel":"Generate flashcards","showSubmit":true,"scriptStepBudget":250000}}-->
   fields:
@@ -178,7 +149,7 @@ theme:
           while value_start < len(source) and source[value_start].isspace():
               value_start += 1
           return source[value_start:value_start + 4] == "true"
-
+  
       def parse_card_count(value):
           try:
               count = int(float(str(value or "4")))
@@ -189,7 +160,7 @@ theme:
           if count > 20:
               count = 20
           return count
-
+  
       def read_first_text(component_id):
           for path in doc.cli.run("find /id/" + component_id + " -maxdepth 4").splitlines():
               if path.endswith("/text.txt"):
@@ -349,7 +320,7 @@ theme:
                       objects.append(text[start:index + 1])
                       start = -1
           return objects
-
+  
       def find_requested_card_count(value):
           marker = "NUMBER OF FLASHCARDS:"
           start = value.find(marker)
@@ -370,7 +341,7 @@ theme:
           if count > 20:
               return 20
           return count
-
+  
       def find_generation_mode(value):
           marker = "CARD GENERATION MODE:"
           start = value.find(marker)
@@ -380,7 +351,7 @@ theme:
           if line == "more":
               return "more"
           return "new"
-
+  
       def find_existing_questions(value):
           marker = "EXISTING QUESTIONS TO AVOID:"
           start = value.find(marker)
@@ -398,7 +369,7 @@ theme:
               if len(item) > 0:
                   questions.append(item.lower())
           return questions
-
+  
       def find_source_title(value, source_id):
           marker = "SOURCE ID: " + source_id + "\nTITLE: "
           start = value.find(marker)
@@ -531,15 +502,15 @@ theme:
           card_id = "flashcard-shuffled-" + normalize_id(card["id"]) + "-" + str(index)
           doc.cli.run("hvy insert -1 flashcard-card /body/flashcards-sidebar --id " + card_id + " --using-template " + shell_quote(values_json))
           index += 1
-
-<!--hvy: {"id":"quiz-sidebar","location":"sidebar","expanded":false,"highlight":false,"contained":true}-->
+<!--hvy: {"id":"quiz-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar"}-->
 #! Generate Quiz
 
  <!--hvy:text {"id":"quiz-tool-title","css":"margin-bottom: 0.4rem;"}-->
   # Generate Quiz
 
  <!--hvy:text {"id":"quiz-tool-overview","css":"margin-bottom: 0.75rem;"}-->
-  Create a multiple-choice quiz from the main sections. The generated quiz is converted into radio-button questions with a comparison button.
+  Create a multiple-choice quiz from the main sections. The generated quiz is converted into radio-button questions with
+  a comparison button.
 
  <!--hvy:plugin {"id":"quiz-generator-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"ai-generate","submitSourceScript":"prepare","submitScript":"apply","submitPrompt":"Create a multiple-choice quiz from the provided source material. Return exactly one JSON array and no prose. Include exactly the requested number of questions unless there is not enough source-backed material. Each array item must be an object with source_id, question, correct_option_letter, and option_1 through option_N string fields, where N is the requested options per question. correct_option_letter must be A for option_1, B for option_2, C for option_3, and so on. Use only facts present in the source input. Do not return an answer key, HVY, XML, Markdown fences, comments, labels, or explanations.","submitInputCharLimit":50000,"submitOutputCharLimit":50000,"submitLabel":"Generate quiz","showSubmit":true,"scriptStepBudget":250000}}-->
   fields:
@@ -581,7 +552,7 @@ theme:
                   value += char
               index += 1
           return default_value
-
+  
       def parse_order(source):
           entries = []
           in_string = False
@@ -603,7 +574,7 @@ theme:
               elif char == '"':
                   in_string = True
           return entries
-
+  
       def has_json_true(source, key):
           marker = '"' + key + '":'
           start = source.find(marker)
@@ -613,7 +584,7 @@ theme:
           while value_start < len(source) and source[value_start].isspace():
               value_start += 1
           return source[value_start:value_start + 4] == "true"
-
+  
       def parse_count(value, default_value, min_value, max_value):
           try:
               count = int(float(str(value or str(default_value))))
@@ -624,7 +595,7 @@ theme:
           if count > max_value:
               count = max_value
           return count
-
+  
       instructions = str(doc.form.get_value("Quiz instructions") or "").strip()
       if len(instructions) == 0:
           doc.form.set_error("Quiz instructions", "Add quiz instructions before generating.")
@@ -666,7 +637,7 @@ theme:
           if end >= 0:
               text = text[:end]
           return text.strip()
-
+  
       def read_json_string(source, key, default_value=""):
           marker = '"' + key + '"'
           start = source.find(marker)
@@ -701,7 +672,7 @@ theme:
                   value += char
               index += 1
           return default_value
-
+  
       def split_json_objects(value):
           text = strip_code_fence(value)
           objects = []
@@ -730,7 +701,7 @@ theme:
                       objects.append(text[start:index + 1])
                       start = -1
           return objects
-
+  
       def find_requested_count(value, marker, default_value, max_value):
           start = value.find(marker)
           if start < 0:
@@ -750,7 +721,7 @@ theme:
           if count > max_value:
               return max_value
           return count
-
+  
       def yaml_escape(value):
           output = ""
           for char in value:
@@ -767,7 +738,7 @@ theme:
               else:
                   output += char
           return '"' + output + '"'
-
+  
       def script_escape(value):
           output = ""
           for char in value:
@@ -784,7 +755,7 @@ theme:
               else:
                   output += char
           return '"' + output + '"'
-
+  
       letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
       requested_questions = find_requested_count(source, "NUMBER OF QUESTIONS:", 10, 50)
       requested_options = find_requested_count(source, "OPTIONS PER QUESTION:", 4, 8)
@@ -855,8 +826,7 @@ theme:
   scripts:
     grade: |
       doc.form.set_error("Quiz result", "Generate a quiz first.")
-
-<!--hvy: {"id":"podcast-transcript-sidebar","location":"sidebar","expanded":false,"highlight":false,"contained":true}-->
+<!--hvy: {"id":"podcast-transcript-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar"}-->
 #! Podcast Transcript
 
  <!--hvy:text {"id":"podcast-tool-title","css":"margin-bottom: 0.4rem;"}-->
@@ -888,7 +858,7 @@ theme:
       def field_enabled(label):
           value = doc.form.get_value(label)
           return value == True or str(value).lower() == "true"
-
+  
       def collect_section(section_id, title):
           text_parts = []
           for path in doc.cli.run("find /body/" + section_id + " -maxdepth 2").splitlines():
@@ -899,7 +869,7 @@ theme:
           if len(text_parts) == 0:
               return ""
           return "SECTION ID: " + section_id + "\nTITLE: " + title + "\nTEXT:\n" + "\n\n".join(text_parts)
-
+  
       instructions = str(doc.form.get_value("Podcast instructions") or "").strip()
       if len(instructions) == 0:
           doc.form.set_error("Podcast instructions", "Add podcast instructions before generating.")
@@ -935,7 +905,7 @@ theme:
           if end >= 0:
               text = text[:end]
           return text.strip()
-
+  
       clean = strip_code_fence(response)
       clean_lines = []
       last_blank = False
@@ -955,5 +925,5 @@ theme:
       doc.form.clear_error("Podcast instructions")
       doc.component.set_text("podcast-transcript-output", clean)
 
- <!--hvy:text {"id":"podcast-transcript-output","showCopy":true,"css":"border: 1px solid var(--hvy-border); border-radius: 8px; min-height: 16rem; padding: 0.85rem 0.95rem; margin: 0.8rem 0; background: var(--hvy-surface); white-space: pre-wrap;"}-->
+ <!--hvy:text {"id":"podcast-transcript-output","css":"border: 1px solid var(--hvy-border); border-radius: 8px; min-height: 16rem; padding: 0.85rem 0.95rem; margin: 0.8rem 0; background: var(--hvy-surface); white-space: pre-wrap;"}-->
   Podcast transcript output will appear here.
