@@ -6,7 +6,9 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{
+    AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+};
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 
@@ -477,6 +479,61 @@ fn create_document_file(
 }
 
 #[tauri::command]
+fn reveal_document_file(path: String) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err(AppError::Message("File does not exist.".into()));
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(&path);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(format!("/select,{}", path_to_string(&path)));
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path.parent().unwrap_or_else(|| Path::new(".")));
+        command
+    };
+    command.spawn()?;
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult<DocumentFile> {
+    let path = PathBuf::from(path);
+    let extension = document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents can be renamed.".into()))?;
+    if !path.is_file() {
+        return Err(AppError::Message("Document file does not exist.".into()));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let name = normalized_rename_stem(&name)?;
+    let destination = parent.join(format!("{name}{extension}"));
+    if destination == path {
+        return Ok(read_document_at(&path)?);
+    }
+    if destination.exists() {
+        return Err(AppError::Message("A document with that name already exists.".into()));
+    }
+    fs::rename(&path, &destination)?;
+    if let Some(workspace_path) = workspace_root_for_document(parent) {
+        touch_workspace_manifest(&workspace_path)?;
+    }
+    add_recent_file(&app, &destination)?;
+    Ok(read_document_at(&destination)?)
+}
+
+#[tauri::command]
 fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
     if document_extension(Path::new(&request.name)).is_none() {
         return Err(AppError::Message("Backup document name must end in .hvy, .thvy, or .md.".into()));
@@ -593,13 +650,15 @@ pub fn run() {
             save_document_file,
             save_document_as_dialog,
             create_document_file,
+            reveal_document_file,
+            rename_document_file,
             create_document_backup,
             list_document_backups,
             restore_document_backup,
             open_external_url
         ])
         .run(tauri::generate_context!())
-        .expect("error while running HVY Workspace");
+        .expect("error while running HVY Galaxy");
 }
 
 #[cfg(target_os = "macos")]
@@ -607,11 +666,11 @@ fn set_native_process_name() {
     use objc2_foundation::{NSProcessInfo, NSString};
     use std::ffi::CStr;
 
-    let app_name = CStr::from_bytes_with_nul(b"HVY Workspace\0").expect("static app name is nul-terminated");
+    let app_name = CStr::from_bytes_with_nul(b"HVY Galaxy\0").expect("static app name is nul-terminated");
     unsafe {
         libc::setprogname(app_name.as_ptr());
     }
-    let process_name = NSString::from_str("HVY Workspace");
+    let process_name = NSString::from_str("HVY Galaxy");
     NSProcessInfo::processInfo().setProcessName(&process_name);
 }
 
@@ -625,18 +684,25 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
-    let app_menu = SubmenuBuilder::new(app, "HVY Workspace")
-        .item(&PredefinedMenuItem::about(app, Some("About HVY Workspace"), None)?)
+    let about_metadata = AboutMetadataBuilder::new()
+        .name(Some("HVY Galaxy"))
+        .version(Some(env!("CARGO_PKG_VERSION")))
+        .comments(Some("Desktop workspace for HVY files"))
+        .authors(Some(vec!["HVY".into()]))
+        .icon(app.default_window_icon().cloned())
+        .build();
+    let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
+        .item(&PredefinedMenuItem::about(app, Some("About HVY Galaxy"), Some(about_metadata))?)
         .separator()
         .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Workspace"))?)
+        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Galaxy"))?)
         .item(&PredefinedMenuItem::hide_others(app, Some("Hide Others"))?)
         .item(&PredefinedMenuItem::show_all(app, Some("Show All"))?)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Workspace"))?)
+        .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
         .build()?;
     let file = SubmenuBuilder::new(app, "File")
         .item(&MenuItemBuilder::new("New Workspace").id("new-workspace").accelerator("CmdOrCtrl+N").build(app)?)
@@ -885,6 +951,43 @@ fn document_extension(path: &Path) -> Option<String> {
         "md" => Some(".md".into()),
         _ => None,
     }
+}
+
+fn normalized_rename_stem(name: &str) -> AppResult<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Message("Document name is required.".into()));
+    }
+    let path = Path::new(trimmed);
+    if trimmed.contains('/')
+        || trimmed.contains('\\')
+        || path.components().count() != 1
+        || path.file_name().and_then(|name| name.to_str()) != Some(trimmed)
+    {
+        return Err(AppError::Message("Document name cannot include folders.".into()));
+    }
+    if trimmed == "." || trimmed == ".." || trimmed.starts_with('.') {
+        return Err(AppError::Message("Document name is not valid.".into()));
+    }
+    let stem = if document_extension(path).is_some() {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(trimmed)
+            .trim()
+    } else {
+        trimmed
+    };
+    if stem.is_empty() {
+        return Err(AppError::Message("Document name is required.".into()));
+    }
+    Ok(stem.into())
+}
+
+fn workspace_root_for_document(parent: &Path) -> Option<PathBuf> {
+    parent
+        .ancestors()
+        .find(|candidate| candidate.join(WORKSPACE_MANIFEST).is_file() || candidate.join(LEGACY_WORKSPACE_MANIFEST).is_file())
+        .map(Path::to_path_buf)
 }
 
 fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
@@ -1352,6 +1455,22 @@ mod tests {
             unique_copy_path(dir.path(), std::ffi::OsStr::new("draft.hvy")),
             dir.path().join("draft 3.hvy")
         );
+    }
+
+    #[test]
+    fn rename_stem_strips_supported_extensions() {
+        assert_eq!(normalized_rename_stem("Draft").unwrap(), "Draft");
+        assert_eq!(normalized_rename_stem("Draft.hvy").unwrap(), "Draft");
+        assert_eq!(normalized_rename_stem("Draft.thvy").unwrap(), "Draft");
+        assert_eq!(normalized_rename_stem("Draft.md").unwrap(), "Draft");
+    }
+
+    #[test]
+    fn rename_stem_rejects_folders_and_hidden_names() {
+        assert!(normalized_rename_stem("../Draft").is_err());
+        assert!(normalized_rename_stem("folder/Draft").is_err());
+        assert!(normalized_rename_stem(".Draft").is_err());
+        assert!(normalized_rename_stem("   ").is_err());
     }
 
     #[test]

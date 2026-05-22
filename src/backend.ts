@@ -70,6 +70,11 @@ export interface CreateDocumentRequest {
   template: string;
 }
 
+export interface RenameDocumentRequest {
+  path: string;
+  name: string;
+}
+
 export interface DocumentBackupRequest {
   documentPath: string;
   name: string;
@@ -218,6 +223,14 @@ export function createDocumentFile(request: CreateDocumentRequest): Promise<Docu
     relativePath: request.relativePath,
     template: request.template,
   });
+}
+
+export function revealDocumentFile(path: string): Promise<void> {
+  return invokeDesktop('reveal_document_file', { path });
+}
+
+export function renameDocumentFile(request: RenameDocumentRequest): Promise<DocumentFile> {
+  return invokeDesktop('rename_document_file', { path: request.path, name: request.name });
 }
 
 export function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {

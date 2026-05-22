@@ -17,6 +17,8 @@ import {
   openExternalUrl,
   openFileDialog,
   readDocumentFile,
+  renameDocumentFile,
+  revealDocumentFile,
   restoreDocumentBackup,
   saveAiSettings,
   saveDocumentAsDialog,
@@ -25,7 +27,7 @@ import {
 } from './backend';
 import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
 import { state } from './state';
-import { getHvyTemplate, type HvyTemplate } from './templates';
+import { getHvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
@@ -53,7 +55,7 @@ const handlers: UiHandlers = {
     state.newWorkspaceDialogOpen = true;
     state.newWorkspaceLocation = 'managed';
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="workspaceName"]')?.focus();
     });
@@ -99,18 +101,18 @@ const handlers: UiHandlers = {
   setNewWorkspaceLocation: (location) => {
     state.newWorkspaceLocation = location;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
   },
   cancelNewWorkspace: () => {
     state.newWorkspaceDialogOpen = false;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
   },
   newDocumentInWorkspace: (workspacePath) => {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = workspacePath;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
     });
@@ -118,7 +120,7 @@ const handlers: UiHandlers = {
   createDocumentInWorkspace: (name, templateId) => void runBusy('Creating HVY document...', async () => {
     const workspacePath = state.newDocumentWorkspacePath;
     const template = getHvyTemplate(templateId);
-    const fileName = documentFileName(name, template);
+    const fileName = documentFileName(name);
     if (!workspacePath) return;
     if (!fileName) {
       state.status = 'Document name is required';
@@ -138,7 +140,7 @@ const handlers: UiHandlers = {
   cancelNewDocument: () => {
     state.newDocumentWorkspacePath = null;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
   },
   addFilesToWorkspace: (workspacePath) => void runBusy('Adding files...', async () => {
     state.openWorkspaceActionsPath = null;
@@ -201,7 +203,7 @@ const handlers: UiHandlers = {
   cancelRecovery: () => {
     state.recoveryDialogOpen = false;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
   },
   openWorkspace: () => void runBusy('Opening workspace...', async () => {
     const candidate = await chooseWorkspaceFolder();
@@ -238,6 +240,60 @@ const handlers: UiHandlers = {
     await openDocument(await readDocumentFile(path), { deferMount: true });
     await refreshRecents();
   }),
+  refreshWorkspace: (path) => void runBusy('Refreshing workspace...', async () => {
+    upsertWorkspace(await loadWorkspace(path));
+    state.selectedWorkspacePath = path;
+    await refreshRecents();
+  }),
+  showFileInFolder: (path) => void runBusy('Showing file...', async () => {
+    await revealDocumentFile(path);
+    state.status = revealStatusLabel();
+  }),
+  renameFile: (path, currentName) => {
+    const currentStem = documentTitle(currentName);
+    const nextName = window.prompt('Rename', currentStem);
+    if (nextName === null) return;
+    const trimmed = nextName.trim();
+    if (!trimmed) {
+      state.status = 'Document name is required';
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    if (trimmed === currentStem) return;
+    void runBusy('Renaming file...', async () => {
+      const workspacePath = workspacePathForFile(path);
+      const currentDocument = state.document?.path === path ? state.document : null;
+      const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
+      const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
+      const file = await renameDocumentFile({ path, name: trimmed });
+      documentSessions.delete(path);
+      if (state.selectedFilePath === path) {
+        state.selectedFilePath = file.path;
+      }
+      if (currentDocument) {
+        currentDocument.path = file.path;
+        currentDocument.name = file.name;
+        currentDocument.extension = file.extension;
+        if (mountedDocument) {
+          updateCurrentDocumentSession(mountedDocument);
+        }
+        if (oldBackupKey) {
+          const backup = backupSnapshots.get(oldBackupKey);
+          if (backup) {
+            backupSnapshots.delete(oldBackupKey);
+            backupSnapshots.set(backupDocumentKey(file.path, file.name), backup);
+          }
+        }
+      }
+      if (workspacePath) {
+        upsertWorkspace(await loadWorkspace(workspacePath));
+      } else {
+        await refreshOpenWorkspaceForFile(file.path);
+      }
+      await refreshRecents();
+      state.status = `Renamed to ${file.name}`;
+    });
+  },
   setMode: (mode) => {
     if (!state.document) return;
     if (state.document.readOnly && mode !== 'viewer') {
@@ -589,6 +645,10 @@ async function refreshOpenWorkspaceForFile(filePath: string): Promise<void> {
   upsertWorkspace(await loadWorkspace(workspace.path));
 }
 
+function workspacePathForFile(filePath: string): string | null {
+  return state.workspaces.find((workspace) => filePath.startsWith(workspace.path))?.path ?? null;
+}
+
 function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): void {
   const index = state.workspaces.findIndex((candidate) => candidate.path === workspace.path);
   if (index >= 0) {
@@ -647,18 +707,26 @@ title: ${JSON.stringify(title)}
 `;
 }
 
-function documentFileName(name: string, template: HvyTemplate): string | null {
+function documentFileName(name: string): string | null {
   const trimmed = name.trim();
   if (!trimmed) return null;
-  return hasDocumentExtension(trimmed) ? trimmed : `${trimmed}${template.extension}`;
+  if (/\.thvy$/i.test(trimmed)) return trimmed.replace(/\.thvy$/i, '.hvy');
+  return hasDocumentExtension(trimmed) ? trimmed : `${trimmed}.hvy`;
 }
 
 function documentTitle(fileName: string): string {
-  return fileName.replace(/\.(t?hvy)$/i, '');
+  return fileName.replace(/\.(t?hvy|md)$/i, '');
 }
 
 function hasDocumentExtension(fileName: string): boolean {
   return /\.(t?hvy)$/i.test(fileName);
+}
+
+function revealStatusLabel(): string {
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes('mac')) return 'Shown in Finder';
+  if (platform.includes('win')) return 'Opened in Explorer';
+  return 'Opened containing folder';
 }
 
 function applyTemplateTitle(template: string, title: string): string {

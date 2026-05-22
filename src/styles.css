@@ -231,6 +231,32 @@ button:disabled {
   white-space: nowrap;
 }
 
+.file-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 164px;
+  padding: 4px;
+  border: 1px solid #c9d3cf;
+  border-radius: 6px;
+  background: #fffdf8;
+  box-shadow: 0 10px 24px rgba(30, 42, 38, 0.18);
+}
+
+.file-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border-color: transparent;
+  background: transparent;
+  color: #273330;
+  text-align: left;
+}
+
+.file-context-menu button:hover,
+.file-context-menu button:focus-visible {
+  background: #edf4f1;
+}
+
 .empty-action {
   display: inline-flex;
   width: fit-content;

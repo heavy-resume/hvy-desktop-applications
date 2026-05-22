@@ -27,6 +27,9 @@ export interface UiHandlers {
   openRecentWorkspace(path: string): void;
   openRecentFile(path: string): void;
   selectFile(path: string): void;
+  refreshWorkspace(path: string): void;
+  showFileInFolder(path: string): void;
+  renameFile(path: string, currentName: string): void;
   setMode(mode: HvyMode): void;
   save(): void;
   saveAs(): void;
@@ -41,6 +44,7 @@ if (!app) {
 
 const appRoot = app;
 let bindController: AbortController | null = null;
+let activeFileContextMenuCleanup: (() => void) | null = null;
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   appRoot.innerHTML = `
@@ -48,7 +52,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       <aside class="workspace-sidebar">
         <div class="sidebar-header">
           <div>
-            <h1>HVY Workspace</h1>
+            <h1>HVY Galaxy</h1>
           </div>
           <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
         </div>
@@ -149,6 +153,24 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
+  root.addEventListener('contextmenu', (event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const fileButton = target?.closest<HTMLButtonElement>('.tree-file');
+    const path = fileButton?.dataset.path;
+    const name = fileButton?.dataset.name;
+    if (!fileButton || !path || !name) return;
+    event.preventDefault();
+    showFileContextMenu(event, path, name, handlers);
+  }, { signal });
+  root.addEventListener('click', (event) => {
+    const summary = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root > summary') : null;
+    const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
+    const workspacePath = details?.dataset.workspacePath;
+    if (!details || !workspacePath || details.open) return;
+    window.setTimeout(() => {
+      if (details.open) handlers.refreshWorkspace(workspacePath);
+    }, 0);
+  }, { signal, capture: true });
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
     if (!form) return;
@@ -187,6 +209,60 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     updateNewWorkspaceSubmit(form);
     form.addEventListener('input', () => updateNewWorkspaceSubmit(form), { signal });
   });
+}
+
+function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers): void {
+  closeFileContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'file-context-menu';
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.innerHTML = `
+    <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
+    <button type="button" data-menu-action="rename">Rename</button>
+  `;
+  const cleanup = () => {
+    menu.remove();
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    if (activeFileContextMenuCleanup === cleanup) activeFileContextMenuCleanup = null;
+  };
+  const onPointerDown = (pointerEvent: PointerEvent) => {
+    if (!menu.contains(pointerEvent.target as Node)) cleanup();
+  };
+  const onKeyDown = (keyEvent: KeyboardEvent) => {
+    if (keyEvent.key === 'Escape') cleanup();
+  };
+  menu.addEventListener('click', (clickEvent) => {
+    const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
+    if (!button) return;
+    cleanup();
+    if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
+    if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
+  });
+  document.body.append(menu);
+  activeFileContextMenuCleanup = cleanup;
+  requestAnimationFrame(() => {
+    const rect = menu.getBoundingClientRect();
+    const left = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+    const top = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+  });
+}
+
+function closeFileContextMenu(): void {
+  activeFileContextMenuCleanup?.();
+  document.querySelector('.file-context-menu')?.remove();
+}
+
+function revealMenuLabel(): string {
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes('mac')) return 'Show in Finder';
+  if (platform.includes('win')) return 'Open in Explorer';
+  return 'Open Containing Folder';
 }
 
 function renderToolbar(state: AppState): string {
@@ -264,7 +340,7 @@ function renderWorkspaces(state: AppState): string {
 function renderWorkspace(workspace: Workspace, selectedFilePath: string | null, openWorkspaceActionsPath: string | null): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   return `
-    <details class="workspace-root" open>
+    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}" open>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
@@ -292,10 +368,14 @@ function renderNode(node: WorkspaceTreeNode, selectedFilePath: string | null): s
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}" data-action="select-file" data-path="${escapeAttr(node.path)}">
-        <span>${escapeHtml(node.name)}</span>
+      <button type="button" class="tree-file${selected}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}">
+        <span>${escapeHtml(displayDocumentName(node.name))}</span>
       </button>
     </li>`;
+}
+
+function displayDocumentName(name: string): string {
+  return name.replace(/\.(t?hvy|md)$/i, '');
 }
 
 function renderEmptyState(state: AppState): string {
