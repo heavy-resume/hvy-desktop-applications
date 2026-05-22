@@ -43,6 +43,13 @@ Run the frontend build:
 npm run build
 ```
 
+Build a universal macOS app for Apple Silicon and Intel Macs:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+npm run build:universal
+```
+
 Run the desktop app:
 
 ```bash

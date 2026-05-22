@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
+    "build:universal": "tauri build --target universal-apple-darwin",
     "preview": "vite preview",
     "tauri": "tauri",
     "smoke:frontend": "node scripts/smoke-frontend.mjs",

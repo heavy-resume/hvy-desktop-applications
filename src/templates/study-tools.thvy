@@ -1,0 +1,959 @@
+---
+hvy_version: 0.1
+title: Study Tools Example
+reader_max_width: 62rem
+sidebar_label: Study Tools
+plugins:
+  - id: hvy.form
+    source: builtin://form
+    version: 0.1
+section_defaults:
+  css: "margin: 0.5rem 0;"
+component_defs:
+  - name: flashcard-card
+    baseType: expandable
+    description: Generated flashcard from model-provided question and answer data
+    templateVariables:
+      question:
+        label: Question
+      answer:
+        label: Answer
+      source_id:
+        label: Source section id
+      source_title:
+        label: Source section title
+    schema:
+      tags: generated-flashcard
+      css: "border: 1px solid var(--hvy-border); border-radius: 8px; min-height: 8rem; padding: 0.85rem 0.95rem; margin: 0.8rem 0; background: var(--hvy-surface); box-shadow: 0 1px 0 var(--hvy-border-alt), 0 10px 22px var(--hvy-shadow-sm);"
+      expandableAlwaysShowStub: true
+      expandableExpanded: false
+      expandableStubCss: "padding: 0;"
+      expandableContentCss: "padding-top: 0.75rem; border-top: 1px solid var(--hvy-border-alt);"
+      expandableStubBlocks:
+        description: Generated flashcard question
+        children:
+          - text: "{% question | block %}"
+            schema:
+              component: text
+              css: "font-weight: 700; margin: 0;"
+      expandableContentBlocks:
+        description: Generated flashcard answer
+        children:
+          - text: "{% answer | block %}"
+            schema:
+              component: text
+              css: "margin: 0;"
+          - schema:
+              component: xref-card
+              xrefTitle: "Source: {% source_title %}"
+              xrefDetail: "Open referenced section"
+              xrefTarget: "{% source_id %}"
+              css: "margin: 0.75rem 0 0;"
+theme:
+  colors: {}
+---
+
+<!--hvy: {"id":"concept-model","expanded":true,"highlight":true,"tags":"flashcard-source"}-->
+#! Concept Model
+
+ <!--hvy:text {"id":"concept-model-notes"}-->
+  A Heavy document is composed from sections and reusable components. Sections are containers with identity, presentation hints, and child content. Components hold the smallest editable chunks, such as text, tables, cross-reference cards, grids, containers, and plugin blocks.
+
+  This example treats each main section as source material. Forms prepare source text, the host sends it to the configured LLM, and the returned study material is applied back into the document.
+
+<!--hvy: {"id":"scripting-runtime","expanded":true,"highlight":false,"tags":"flashcard-source"}-->
+#! Scripting Runtime
+
+ <!--hvy:text {"id":"scripting-runtime-notes"}-->
+  HVY scripting runs sandboxed Brython/Python through a plugin or form submit handler. Scripts receive a `doc` object that can inspect the virtual document filesystem, call supported document tools, and mutate the current document.
+
+  For AI-backed form submit, a source script returns the model input. After the model responds, the submit script receives injected `response` and `source` values and applies the generated output back to the document.
+
+<!--hvy: {"id":"form-driven-authoring","expanded":true,"highlight":false,"tags":"flashcard-source"}-->
+#! Form-Driven Authoring
+
+ <!--hvy:text {"id":"form-driven-authoring-notes"}-->
+  The form plugin stores field definitions and named scripts in its plugin body. Form-level behavior, including `submitAction`, `submitSourceScript`, `submitScript`, and `submitLabel`, lives in `pluginConfig`.
+
+  In this document, the form lets a user tune the generation request. The LLM writes only structured card data, while the submit target script instantiates reusable HVY components from the local template.
+
+<!--hvy: {"id":"standard-shortcomings","expanded":true,"highlight":false,"tags":"flashcard-source"}-->
+#! Standard Shortcomings
+
+ <!--hvy:text {"id":"standard-shortcomings-notes"}-->
+  This stress test presses on a few standard edges: generated sidebar content, repeated regeneration, expandable blocks created from model output, and form-driven mutation of structural document content.
+
+  A mature standard may need clearer conventions for model-generated component ownership, safe output validation, and structured generation schemas. This example uses tags and stable IDs to keep those concerns visible.
+
+<!--hvy: {"id":"flashcards-sidebar","location":"sidebar","expanded":false,"highlight":true,"contained":true}-->
+#! Flashcards
+
+ <!--hvy:text {"id":"flashcards-title","css":"margin-bottom: 0.4rem;"}-->
+  # Flashcards
+
+ <!--hvy:text {"id":"flashcards-overview","css":"margin-bottom: 0.75rem;"}-->
+  Generate flashcards from the main sections. The form submit goes through the chat model, and each returned card record is converted into a templated sidebar card.
+
+ <!--hvy:plugin {"id":"flashcard-generator-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"ai-generate","submitSourceScript":"prepare","submitScript":"apply","submitPrompt":"Generate study flashcards from the provided section source. Return exactly one JSON array and no prose. Each array item must be an object with source_id, question, and answer string fields. Return exactly the requested number of cards unless there is not enough source-backed material. Use only facts present in the source input. Do not return HVY, XML, Markdown fences, comments, labels, or explanations.","submitInputCharLimit":50000,"submitOutputCharLimit":50000,"submitLabel":"Generate flashcards","showSubmit":true,"scriptStepBudget":250000}}-->
+  fields:
+    - label: Generation instructions
+      type: textarea
+      value: "Create one or two flashcards for each source section. Prefer questions that test understanding rather than wording recall."
+      required: true
+    - label: Number of flashcards
+      type: number
+      value: 4
+      required: true
+    - label: Card generation mode
+      type: select
+      value: new
+      options:
+        - label: New cards
+          value: new
+        - label: More cards
+          value: more
+    - label: Answer style
+      type: select
+      value: concise
+      options:
+        - label: Concise
+          value: concise
+        - label: Detailed
+          value: detailed
+  scripts:
+    prepare: |
+      def read_json_string(source, key, default_value=""):
+          marker = '"' + key + '":'
+          start = source.find(marker)
+          if start < 0:
+              return default_value
+          start = source.find('"', start + len(marker))
+          if start < 0:
+              return default_value
+          index = start + 1
+          value = ""
+          escaped = False
+          while index < len(source):
+              char = source[index]
+              if escaped:
+                  value += char
+                  escaped = False
+              elif char == "\\":
+                  escaped = True
+              elif char == '"':
+                  return value
+              else:
+                  value += char
+              index += 1
+          return default_value
+      
+      def parse_order(source):
+          entries = []
+          in_string = False
+          escaped = False
+          current = ""
+          for char in source:
+              if in_string:
+                  if escaped:
+                      current += char
+                      escaped = False
+                  elif char == "\\":
+                      escaped = True
+                  elif char == '"':
+                      entries.append(current)
+                      current = ""
+                      in_string = False
+                  else:
+                      current += char
+              elif char == '"':
+                  in_string = True
+          return entries
+      
+      def has_json_true(source, key):
+          marker = '"' + key + '":'
+          start = source.find(marker)
+          if start < 0:
+              return False
+          value_start = start + len(marker)
+          while value_start < len(source) and source[value_start].isspace():
+              value_start += 1
+          return source[value_start:value_start + 4] == "true"
+
+      def parse_card_count(value):
+          try:
+              count = int(float(str(value or "4")))
+          except:
+              count = 4
+          if count < 1:
+              count = 1
+          if count > 20:
+              count = 20
+          return count
+
+      def read_first_text(component_id):
+          for path in doc.cli.run("find /id/" + component_id + " -maxdepth 4").splitlines():
+              if path.endswith("/text.txt"):
+                  text = doc.cli.run("cat " + path).strip()
+                  if len(text) > 0:
+                      return text
+          return ""
+      
+      instructions = str(doc.form.get_value("Generation instructions") or "").strip()
+      if len(instructions) == 0:
+          doc.form.set_error("Generation instructions", "Add generation instructions before creating cards.")
+          return ""
+      doc.form.clear_error("Generation instructions")
+      card_count = parse_card_count(doc.form.get_value("Number of flashcards"))
+      doc.form.clear_error("Number of flashcards")
+      generation_mode = str(doc.form.get_value("Card generation mode") or "new")
+      if generation_mode != "more":
+          generation_mode = "new"
+      answer_style = str(doc.form.get_value("Answer style") or "concise")
+      existing_questions = []
+      if generation_mode == "more":
+          for component in doc.tool.get_components("flashcard-card"):
+              if component.section_id == "flashcards-sidebar" and component.has_tag("generated-flashcard"):
+                  question = read_first_text(component.id)
+                  if len(question) > 0:
+                      existing_questions.append(question)
+      sections = []
+      for section_id in parse_order(doc.cli.run("cat /body/children-order.json")):
+          section_path = "/body/" + section_id
+          section_json = doc.cli.run("cat " + section_path + "/section.json")
+          if read_json_string(section_json, "location", "main") != "main":
+              continue
+          if has_json_true(section_json, "editorOnly"):
+              continue
+          title = read_json_string(section_json, "title", section_id)
+          text_parts = []
+          for path in doc.cli.run("find " + section_path + " -maxdepth 2").splitlines():
+              if not path.endswith("/text.txt"):
+                  continue
+              text = doc.cli.run("cat " + path).strip()
+              if len(text) > 0:
+                  text_parts.append(text)
+          if len(text_parts) == 0:
+              continue
+          sections.append("SOURCE ID: " + section_id + "\nTITLE: " + title + "\nTEXT:\n" + "\n\n".join(text_parts))
+      if len(sections) == 0:
+          doc.form.set_error("Generation instructions", "No main-section source text was found.")
+          return ""
+      existing_question_text = "\n".join(["- " + question for question in existing_questions])
+      return "USER INSTRUCTIONS:\n" + instructions + "\n\nCARD GENERATION MODE: " + generation_mode + "\n\nNUMBER OF FLASHCARDS: " + str(card_count) + "\n\nANSWER STYLE: " + answer_style + "\n\nEXISTING QUESTIONS TO AVOID:\n" + existing_question_text + "\n\n" + "\n\n---\n\n".join(sections)
+    apply: |
+      def strip_code_fence(value):
+          text = value.strip()
+          if not text.startswith("```"):
+              return text
+          first_newline = text.find("\n")
+          if first_newline < 0:
+              return text
+          text = text[first_newline + 1:]
+          end = text.rfind("```")
+          if end >= 0:
+              text = text[:end]
+          return text.strip()
+      
+      def normalize_id(value):
+          output = ""
+          previous_dash = False
+          for char in value.lower():
+              if char.isalnum():
+                  output += char
+                  previous_dash = False
+              elif not previous_dash:
+                  output += "-"
+                  previous_dash = True
+          return output.strip("-") or "section"
+      
+      def json_escape(value):
+          output = ""
+          for char in value:
+              if char == "\\":
+                  output += "\\\\"
+              elif char == '"':
+                  output += '\\"'
+              elif char == "\n":
+                  output += "\\n"
+              elif char == "\r":
+                  output += "\\r"
+              elif char == "\t":
+                  output += "\\t"
+              else:
+                  output += char
+          return output
+      
+      def shell_quote(value):
+          return "'" + value.replace("'", "'\\''") + "'"
+      
+      def read_json_string(source, key, default_value=""):
+          marker = '"' + key + '"'
+          start = source.find(marker)
+          if start < 0:
+              return default_value
+          colon = source.find(":", start + len(marker))
+          if colon < 0:
+              return default_value
+          quote = source.find('"', colon + 1)
+          if quote < 0:
+              return default_value
+          index = quote + 1
+          value = ""
+          escaped = False
+          while index < len(source):
+              char = source[index]
+              if escaped:
+                  if char == "n":
+                      value += "\n"
+                  elif char == "r":
+                      value += "\r"
+                  elif char == "t":
+                      value += "\t"
+                  else:
+                      value += char
+                  escaped = False
+              elif char == "\\":
+                  escaped = True
+              elif char == '"':
+                  return value
+              else:
+                  value += char
+              index += 1
+          return default_value
+      
+      def split_json_objects(value):
+          text = strip_code_fence(value)
+          objects = []
+          depth = 0
+          start = -1
+          in_string = False
+          escaped = False
+          for index in range(len(text)):
+              char = text[index]
+              if in_string:
+                  if escaped:
+                      escaped = False
+                  elif char == "\\":
+                      escaped = True
+                  elif char == '"':
+                      in_string = False
+              elif char == '"':
+                  in_string = True
+              elif char == "{":
+                  if depth == 0:
+                      start = index
+                  depth += 1
+              elif char == "}":
+                  depth -= 1
+                  if depth == 0 and start >= 0:
+                      objects.append(text[start:index + 1])
+                      start = -1
+          return objects
+
+      def find_requested_card_count(value):
+          marker = "NUMBER OF FLASHCARDS:"
+          start = value.find(marker)
+          if start < 0:
+              return 20
+          index = start + len(marker)
+          digits = ""
+          while index < len(value) and value[index].isspace():
+              index += 1
+          while index < len(value) and value[index].isdigit():
+              digits += value[index]
+              index += 1
+          if len(digits) == 0:
+              return 20
+          count = int(digits)
+          if count < 1:
+              return 1
+          if count > 20:
+              return 20
+          return count
+
+      def find_generation_mode(value):
+          marker = "CARD GENERATION MODE:"
+          start = value.find(marker)
+          if start < 0:
+              return "new"
+          line = value[start + len(marker):].strip().splitlines()[0].strip().lower()
+          if line == "more":
+              return "more"
+          return "new"
+
+      def find_existing_questions(value):
+          marker = "EXISTING QUESTIONS TO AVOID:"
+          start = value.find(marker)
+          if start < 0:
+              return []
+          remainder = value[start + len(marker):]
+          end = remainder.find("\n\n---")
+          if end >= 0:
+              remainder = remainder[:end]
+          questions = []
+          for line in remainder.splitlines():
+              item = line.strip()
+              if item.startswith("- "):
+                  item = item[2:].strip()
+              if len(item) > 0:
+                  questions.append(item.lower())
+          return questions
+
+      def find_source_title(value, source_id):
+          marker = "SOURCE ID: " + source_id + "\nTITLE: "
+          start = value.find(marker)
+          if start < 0:
+              return source_id
+          title_start = start + len(marker)
+          title_end = value.find("\n", title_start)
+          if title_end < 0:
+              title_end = len(value)
+          title = value[title_start:title_end].strip()
+          return title or source_id
+      
+      cards = []
+      requested_card_count = find_requested_card_count(source)
+      generation_mode = find_generation_mode(source)
+      existing_questions = find_existing_questions(source)
+      for item in split_json_objects(response):
+          if len(cards) >= requested_card_count:
+              break
+          source_id = read_json_string(item, "source_id", "card")
+          question = read_json_string(item, "question", "")
+          answer = read_json_string(item, "answer", "")
+          if len(question.strip()) > 0 and len(answer.strip()) > 0:
+              if question.strip().lower() in existing_questions:
+                  continue
+              cards.append({
+                  "source_id": source_id,
+                  "source_title": find_source_title(source, source_id),
+                  "question": question.strip(),
+                  "answer": answer.strip(),
+              })
+      if len(cards) == 0:
+          doc.form.set_error("Generation instructions", "The model did not return JSON card records with question and answer fields.")
+          return
+      doc.form.clear_error("Generation instructions")
+      existing_count = 0
+      for component in doc.tool.get_components("flashcard-card"):
+          if component.section_id == "flashcards-sidebar" and component.has_tag("generated-flashcard"):
+              existing_count += 1
+              if generation_mode == "new":
+                  doc.tool.remove_component(component_ref=component.id, reason="Regenerate model-created flashcards.")
+      index = existing_count + 1 if generation_mode == "more" else 1
+      for card in cards:
+          values_json = '{"question":"' + json_escape(card["question"]) + '","answer":"' + json_escape(card["answer"]) + '","source_id":"' + json_escape(card["source_id"]) + '","source_title":"' + json_escape(card["source_title"]) + '"}'
+          card_id = "flashcard-" + normalize_id(card["source_id"]) + "-" + str(index)
+          doc.cli.run("hvy insert -1 flashcard-card /body/flashcards-sidebar --id " + card_id + " --using-template " + shell_quote(values_json))
+          index += 1
+
+ <!--hvy:plugin {"id":"flashcard-shuffle-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"script","submitScript":"shuffle","submitLabel":"Shuffle cards","showSubmit":true,"scriptLibraries":["random"],"scriptStepBudget":250000}}-->
+  fields: []
+  scripts:
+    shuffle: |
+      import random
+      
+      def json_escape(value):
+          output = ""
+          for char in value:
+              if char == "\\":
+                  output += "\\\\"
+              elif char == '"':
+                  output += '\\"'
+              elif char == "\n":
+                  output += "\\n"
+              elif char == "\r":
+                  output += "\\r"
+              elif char == "\t":
+                  output += "\\t"
+              else:
+                  output += char
+          return output
+      
+      def shell_quote(value):
+          return "'" + value.replace("'", "'\\''") + "'"
+      
+      def normalize_id(value):
+          output = ""
+          previous_dash = False
+          for char in value.lower():
+              if char.isalnum():
+                  output += char
+                  previous_dash = False
+              elif not previous_dash:
+                  output += "-"
+                  previous_dash = True
+          return output.strip("-") or "card"
+      
+      def read_card_text(component_id):
+          question = ""
+          answer = ""
+          source_id = ""
+          source_title = ""
+          for path in doc.cli.run("find /id/" + component_id + " -maxdepth 4").splitlines():
+              if path.endswith("/text.txt"):
+                  text = doc.cli.run("cat " + path).strip()
+                  if "/expandable-stub/" in path and len(text) > 0:
+                      question = text
+                  if "/expandable-content/" in path and len(text) > 0:
+                      answer = text
+          for xref in doc.tool.get_components("xref"):
+              parent = xref.get_parent_by_tag("generated-flashcard")
+              if parent and parent.id == component_id:
+                  source_id = str(xref.get("xrefTarget") or "")
+                  source_title = str(xref.get("xrefTitle") or "").replace("Source: ", "").strip()
+          return {
+              "id": component_id,
+              "question": question,
+              "answer": answer,
+              "source_id": source_id or component_id,
+              "source_title": source_title or source_id or component_id,
+          }
+      
+      cards = []
+      for component in doc.tool.get_components("flashcard-card"):
+          if component.section_id == "flashcards-sidebar" and component.has_tag("generated-flashcard"):
+              card = read_card_text(component.id)
+              if len(card["question"]) > 0 and len(card["answer"]) > 0:
+                  cards.append(card)
+      if len(cards) < 2:
+          return
+      
+      shuffled = cards[:]
+      random.shuffle(shuffled)
+      if [card["id"] for card in shuffled] == [card["id"] for card in cards]:
+          shuffled = shuffled[1:] + shuffled[:1]
+      for card in cards:
+          doc.tool.remove_component(component_ref=card["id"], reason="Shuffle generated flashcards.")
+      index = 1
+      for card in shuffled:
+          values_json = '{"question":"' + json_escape(card["question"]) + '","answer":"' + json_escape(card["answer"]) + '","source_id":"' + json_escape(card["source_id"]) + '","source_title":"' + json_escape(card["source_title"]) + '"}'
+          card_id = "flashcard-shuffled-" + normalize_id(card["id"]) + "-" + str(index)
+          doc.cli.run("hvy insert -1 flashcard-card /body/flashcards-sidebar --id " + card_id + " --using-template " + shell_quote(values_json))
+          index += 1
+
+<!--hvy: {"id":"quiz-sidebar","location":"sidebar","expanded":false,"highlight":false,"contained":true}-->
+#! Generate Quiz
+
+ <!--hvy:text {"id":"quiz-tool-title","css":"margin-bottom: 0.4rem;"}-->
+  # Generate Quiz
+
+ <!--hvy:text {"id":"quiz-tool-overview","css":"margin-bottom: 0.75rem;"}-->
+  Create a multiple-choice quiz from the main sections. The generated quiz is converted into radio-button questions with a comparison button.
+
+ <!--hvy:plugin {"id":"quiz-generator-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"ai-generate","submitSourceScript":"prepare","submitScript":"apply","submitPrompt":"Create a multiple-choice quiz from the provided source material. Return exactly one JSON array and no prose. Include exactly the requested number of questions unless there is not enough source-backed material. Each array item must be an object with source_id, question, correct_option_letter, and option_1 through option_N string fields, where N is the requested options per question. correct_option_letter must be A for option_1, B for option_2, C for option_3, and so on. Use only facts present in the source input. Do not return an answer key, HVY, XML, Markdown fences, comments, labels, or explanations.","submitInputCharLimit":50000,"submitOutputCharLimit":50000,"submitLabel":"Generate quiz","showSubmit":true,"scriptStepBudget":250000}}-->
+  fields:
+    - label: Quiz instructions
+      type: textarea
+      value: "Create a focused multiple-choice quiz that tests understanding of the source sections."
+      required: true
+    - label: Number of questions
+      type: number
+      value: 10
+      required: true
+    - label: Options per question
+      type: number
+      value: 4
+      required: true
+  scripts:
+    prepare: |
+      def read_json_string(source, key, default_value=""):
+          marker = '"' + key + '":'
+          start = source.find(marker)
+          if start < 0:
+              return default_value
+          start = source.find('"', start + len(marker))
+          if start < 0:
+              return default_value
+          index = start + 1
+          value = ""
+          escaped = False
+          while index < len(source):
+              char = source[index]
+              if escaped:
+                  value += char
+                  escaped = False
+              elif char == "\\":
+                  escaped = True
+              elif char == '"':
+                  return value
+              else:
+                  value += char
+              index += 1
+          return default_value
+
+      def parse_order(source):
+          entries = []
+          in_string = False
+          escaped = False
+          current = ""
+          for char in source:
+              if in_string:
+                  if escaped:
+                      current += char
+                      escaped = False
+                  elif char == "\\":
+                      escaped = True
+                  elif char == '"':
+                      entries.append(current)
+                      current = ""
+                      in_string = False
+                  else:
+                      current += char
+              elif char == '"':
+                  in_string = True
+          return entries
+
+      def has_json_true(source, key):
+          marker = '"' + key + '":'
+          start = source.find(marker)
+          if start < 0:
+              return False
+          value_start = start + len(marker)
+          while value_start < len(source) and source[value_start].isspace():
+              value_start += 1
+          return source[value_start:value_start + 4] == "true"
+
+      def parse_count(value, default_value, min_value, max_value):
+          try:
+              count = int(float(str(value or str(default_value))))
+          except:
+              count = default_value
+          if count < min_value:
+              count = min_value
+          if count > max_value:
+              count = max_value
+          return count
+
+      instructions = str(doc.form.get_value("Quiz instructions") or "").strip()
+      if len(instructions) == 0:
+          doc.form.set_error("Quiz instructions", "Add quiz instructions before generating.")
+          return ""
+      doc.form.clear_error("Quiz instructions")
+      question_count = parse_count(doc.form.get_value("Number of questions"), 10, 1, 50)
+      option_count = parse_count(doc.form.get_value("Options per question"), 4, 2, 8)
+      sections = []
+      for section_id in parse_order(doc.cli.run("cat /body/children-order.json")):
+          section_path = "/body/" + section_id
+          section_json = doc.cli.run("cat " + section_path + "/section.json")
+          if read_json_string(section_json, "location", "main") != "main":
+              continue
+          if has_json_true(section_json, "editorOnly"):
+              continue
+          title = read_json_string(section_json, "title", section_id)
+          text_parts = []
+          for path in doc.cli.run("find " + section_path + " -maxdepth 2").splitlines():
+              if path.endswith("/text.txt"):
+                  text = doc.cli.run("cat " + path).strip()
+                  if len(text) > 0:
+                      text_parts.append(text)
+          if len(text_parts) > 0:
+              sections.append("SECTION ID: " + section_id + "\nTITLE: " + title + "\nTEXT:\n" + "\n\n".join(text_parts))
+      if len(sections) == 0:
+          doc.form.set_error("Quiz instructions", "No main-section source text was found.")
+          return ""
+      return "QUIZ INSTRUCTIONS:\n" + instructions + "\n\nNUMBER OF QUESTIONS: " + str(question_count) + "\nOPTIONS PER QUESTION: " + str(option_count) + "\n\n" + "\n\n---\n\n".join(sections)
+    apply: |
+      def strip_code_fence(value):
+          text = value.strip()
+          if not text.startswith("```"):
+              return text
+          first_newline = text.find("\n")
+          if first_newline < 0:
+              return text
+          text = text[first_newline + 1:]
+          end = text.rfind("```")
+          if end >= 0:
+              text = text[:end]
+          return text.strip()
+
+      def read_json_string(source, key, default_value=""):
+          marker = '"' + key + '"'
+          start = source.find(marker)
+          if start < 0:
+              return default_value
+          colon = source.find(":", start + len(marker))
+          if colon < 0:
+              return default_value
+          quote = source.find('"', colon + 1)
+          if quote < 0:
+              return default_value
+          index = quote + 1
+          value = ""
+          escaped = False
+          while index < len(source):
+              char = source[index]
+              if escaped:
+                  if char == "n":
+                      value += "\n"
+                  elif char == "r":
+                      value += "\r"
+                  elif char == "t":
+                      value += "\t"
+                  else:
+                      value += char
+                  escaped = False
+              elif char == "\\":
+                  escaped = True
+              elif char == '"':
+                  return value
+              else:
+                  value += char
+              index += 1
+          return default_value
+
+      def split_json_objects(value):
+          text = strip_code_fence(value)
+          objects = []
+          depth = 0
+          start = -1
+          in_string = False
+          escaped = False
+          for index in range(len(text)):
+              char = text[index]
+              if in_string:
+                  if escaped:
+                      escaped = False
+                  elif char == "\\":
+                      escaped = True
+                  elif char == '"':
+                      in_string = False
+              elif char == '"':
+                  in_string = True
+              elif char == "{":
+                  if depth == 0:
+                      start = index
+                  depth += 1
+              elif char == "}":
+                  depth -= 1
+                  if depth == 0 and start >= 0:
+                      objects.append(text[start:index + 1])
+                      start = -1
+          return objects
+
+      def find_requested_count(value, marker, default_value, max_value):
+          start = value.find(marker)
+          if start < 0:
+              return default_value
+          index = start + len(marker)
+          digits = ""
+          while index < len(value) and value[index].isspace():
+              index += 1
+          while index < len(value) and value[index].isdigit():
+              digits += value[index]
+              index += 1
+          if len(digits) == 0:
+              return default_value
+          count = int(digits)
+          if count < 1:
+              return 1
+          if count > max_value:
+              return max_value
+          return count
+
+      def yaml_escape(value):
+          output = ""
+          for char in value:
+              if char == "\\":
+                  output += "\\\\"
+              elif char == '"':
+                  output += '\\"'
+              elif char == "\n":
+                  output += "\\n"
+              elif char == "\r":
+                  output += "\\r"
+              elif char == "\t":
+                  output += "\\t"
+              else:
+                  output += char
+          return '"' + output + '"'
+
+      def script_escape(value):
+          output = ""
+          for char in value:
+              if char == "\\":
+                  output += "\\\\"
+              elif char == '"':
+                  output += '\\"'
+              elif char == "\n":
+                  output += "\\n"
+              elif char == "\r":
+                  output += "\\r"
+              elif char == "\t":
+                  output += "\\t"
+              else:
+                  output += char
+          return '"' + output + '"'
+
+      letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+      requested_questions = find_requested_count(source, "NUMBER OF QUESTIONS:", 10, 50)
+      requested_options = find_requested_count(source, "OPTIONS PER QUESTION:", 4, 8)
+      quiz_items = []
+      for item in split_json_objects(response):
+          if len(quiz_items) >= requested_questions:
+              break
+          question = read_json_string(item, "question", "").strip()
+          correct = read_json_string(item, "correct_option_letter", "").strip().upper()
+          options = []
+          for option_index in range(requested_options):
+              option = read_json_string(item, "option_" + str(option_index + 1), "").strip()
+              if len(option) > 0:
+                  options.append(option)
+          if len(question) > 0 and len(options) == requested_options and correct in letters[:requested_options]:
+              quiz_items.append({
+                  "question": question,
+                  "options": options,
+                  "correct": correct,
+              })
+      if len(quiz_items) == 0:
+          doc.form.set_error("Quiz instructions", "The model did not return JSON quiz records with question, option, and correct_option_letter fields.")
+          return
+      doc.form.clear_error("Quiz instructions")
+      lines = ["fields:"]
+      labels = []
+      answers = []
+      for index in range(len(quiz_items)):
+          item = quiz_items[index]
+          label = str(index + 1) + ". " + item["question"]
+          labels.append(label)
+          answers.append(item["correct"])
+          lines.append("  - label: " + yaml_escape(label))
+          lines.append("    type: radio")
+          lines.append("    options:")
+          for option_index in range(len(item["options"])):
+              letter = letters[option_index]
+              lines.append("      - label: " + yaml_escape(letter + ". " + item["options"][option_index]))
+              lines.append("        value: " + yaml_escape(letter))
+      lines.append("  - label: " + yaml_escape("Quiz result"))
+      lines.append("    type: textarea")
+      lines.append("    value: " + yaml_escape(""))
+      lines.append("scripts:")
+      lines.append("  grade: |")
+      lines.append("    score = 0")
+      lines.append("    skipped = 0")
+      lines.append("    total = " + str(len(labels)))
+      for index in range(len(labels)):
+          label = labels[index]
+          answer = answers[index]
+          lines.append("    doc.form.clear_error(" + script_escape(label) + ")")
+          lines.append("    selected = doc.form.get_value(" + script_escape(label) + ")")
+          lines.append("    if selected == " + script_escape(answer) + ":")
+          lines.append("        score += 1")
+          lines.append("    elif str(selected or \"\").strip() == \"\":")
+          lines.append("        skipped += 1")
+          lines.append("        doc.form.set_error(" + script_escape(label) + ", " + script_escape("Skipped. Correct answer: " + answer) + ")")
+          lines.append("    else:")
+          lines.append("        doc.form.set_error(" + script_escape(label) + ", " + script_escape("Correct answer: " + answer) + ")")
+      lines.append("    result = " + script_escape("Score: ") + " + str(score) + " + script_escape("/") + " + str(total)")
+      lines.append("    if skipped > 0:")
+      lines.append("        result += " + script_escape(" (") + " + str(skipped) + " + script_escape(" skipped)") )
+      lines.append("    doc.form.set_value(" + script_escape("Quiz result") + ", result)")
+      doc.component.set_text("quiz-answer-form", "\n".join(lines))
+
+ <!--hvy:plugin {"id":"quiz-answer-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"script","submitScript":"grade","submitLabel":"Compare results","showSubmit":true,"scriptStepBudget":250000}}-->
+  fields: []
+  scripts:
+    grade: |
+      doc.form.set_error("Quiz result", "Generate a quiz first.")
+
+<!--hvy: {"id":"podcast-transcript-sidebar","location":"sidebar","expanded":false,"highlight":false,"contained":true}-->
+#! Podcast Transcript
+
+ <!--hvy:text {"id":"podcast-tool-title","css":"margin-bottom: 0.4rem;"}-->
+  # Podcast Transcript
+
+ <!--hvy:text {"id":"podcast-tool-overview","css":"margin-bottom: 0.75rem;"}-->
+  Generate a two-expert transcript from selected sections. The transcript is written into one text element.
+
+ <!--hvy:plugin {"id":"podcast-transcript-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitAction":"ai-generate","submitSourceScript":"prepare","submitScript":"apply","submitPrompt":"Write a podcast transcript from the provided source material. Return only the transcript text. Use two expert speakers talking back and forth. One expert should ask clarifying questions whenever something may be confusing, and the other expert should answer clearly. Keep the transcript grounded only in the source input. Do not return HVY, XML, Markdown fences, timestamps, stage directions, or commentary about the task.","submitInputCharLimit":50000,"submitOutputCharLimit":50000,"submitLabel":"Generate podcast transcript","showSubmit":true,"scriptStepBudget":250000}}-->
+  fields:
+    - label: Podcast instructions
+      type: textarea
+      value: "Create a clear study-oriented transcript that explains the selected sections in a conversational way."
+      required: true
+    - label: Include Concept Model
+      type: checkbox
+      value: true
+    - label: Include Scripting Runtime
+      type: checkbox
+      value: true
+    - label: Include Form-Driven Authoring
+      type: checkbox
+      value: true
+    - label: Include Standard Shortcomings
+      type: checkbox
+      value: true
+  scripts:
+    prepare: |
+      def field_enabled(label):
+          value = doc.form.get_value(label)
+          return value == True or str(value).lower() == "true"
+
+      def collect_section(section_id, title):
+          text_parts = []
+          for path in doc.cli.run("find /body/" + section_id + " -maxdepth 2").splitlines():
+              if path.endswith("/text.txt"):
+                  text = doc.cli.run("cat " + path).strip()
+                  if len(text) > 0:
+                      text_parts.append(text)
+          if len(text_parts) == 0:
+              return ""
+          return "SECTION ID: " + section_id + "\nTITLE: " + title + "\nTEXT:\n" + "\n\n".join(text_parts)
+
+      instructions = str(doc.form.get_value("Podcast instructions") or "").strip()
+      if len(instructions) == 0:
+          doc.form.set_error("Podcast instructions", "Add podcast instructions before generating.")
+          return ""
+      doc.form.clear_error("Podcast instructions")
+      sources = []
+      if field_enabled("Include Concept Model"):
+          sources.append(collect_section("concept-model", "Concept Model"))
+      if field_enabled("Include Scripting Runtime"):
+          sources.append(collect_section("scripting-runtime", "Scripting Runtime"))
+      if field_enabled("Include Form-Driven Authoring"):
+          sources.append(collect_section("form-driven-authoring", "Form-Driven Authoring"))
+      if field_enabled("Include Standard Shortcomings"):
+          sources.append(collect_section("standard-shortcomings", "Standard Shortcomings"))
+      compact_sources = []
+      for source_item in sources:
+          if len(source_item.strip()) > 0:
+              compact_sources.append(source_item)
+      if len(compact_sources) == 0:
+          doc.form.set_error("Podcast instructions", "Select at least one section with source text.")
+          return ""
+      return "PODCAST INSTRUCTIONS:\n" + instructions + "\n\nSELECTED SOURCE SECTIONS:\n\n" + "\n\n---\n\n".join(compact_sources)
+    apply: |
+      def strip_code_fence(value):
+          text = value.strip()
+          if not text.startswith("```"):
+              return text
+          first_newline = text.find("\n")
+          if first_newline < 0:
+              return text
+          text = text[first_newline + 1:]
+          end = text.rfind("```")
+          if end >= 0:
+              text = text[:end]
+          return text.strip()
+
+      clean = strip_code_fence(response)
+      clean_lines = []
+      last_blank = False
+      for line in clean.splitlines():
+          compact_line = line.strip()
+          if len(compact_line) == 0:
+              if not last_blank and len(clean_lines) > 0:
+                  clean_lines.append("")
+              last_blank = True
+          else:
+              clean_lines.append(compact_line)
+              last_blank = False
+      clean = "\n".join(clean_lines).strip()
+      if len(clean) == 0:
+          doc.form.set_error("Podcast instructions", "The model returned no transcript text.")
+          return
+      doc.form.clear_error("Podcast instructions")
+      doc.component.set_text("podcast-transcript-output", clean)
+
+ <!--hvy:text {"id":"podcast-transcript-output","showCopy":true,"css":"border: 1px solid var(--hvy-border); border-radius: 8px; min-height: 16rem; padding: 0.85rem 0.95rem; margin: 0.8rem 0; background: var(--hvy-surface); white-space: pre-wrap;"}-->
+  Podcast transcript output will appear here.
