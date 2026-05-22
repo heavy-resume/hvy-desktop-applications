@@ -70,28 +70,27 @@ export interface CreateDocumentRequest {
   template: string;
 }
 
-export interface AiTaskModels {
-  chat: string;
-  edit: string;
-  importPlanning: string;
-  importWriting: string;
-  importCleanup: string;
-  compaction: string;
-}
+export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'compaction';
 
-export interface AiConnectionPreset {
-  id: string;
-  name: string;
+export interface AiProviderConfig {
   provider: string;
   baseUrl: string;
   apiKey: string;
-  models: AiTaskModels;
 }
 
-export interface AiSettings {
-  activePresetId: string;
-  presets: AiConnectionPreset[];
+export interface AiActionConfig {
+  providerId: string;
+  model: string;
 }
+
+export type AiActionSettings = Record<AiActionKey, AiActionConfig>;
+
+export interface AiSettings {
+  activeProviderId: string;
+  providers: AiProviderConfig[];
+  actions: AiActionSettings;
+}
+
 
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -123,28 +122,30 @@ export function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
 }
 
 export function defaultAiSettings(): AiSettings {
-  const preset = defaultAiConnectionPreset();
+  const provider = defaultAiProviderConfig();
   return {
-    activePresetId: preset.id,
-    presets: [preset],
+    activeProviderId: provider.provider,
+    providers: [provider],
+    actions: defaultAiActionSettings(),
   };
 }
 
-export function defaultAiConnectionPreset(): AiConnectionPreset {
+export function defaultAiProviderConfig(): AiProviderConfig {
   return {
-    id: 'local',
-    name: 'Local',
-    provider: 'ollama',
-    baseUrl: 'http://127.0.0.1:11434/v1',
+    provider: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
     apiKey: '',
-    models: {
-      chat: 'llama3.2',
-      edit: 'llama3.2',
-      importPlanning: 'llama3.2',
-      importWriting: 'llama3.2',
-      importCleanup: 'llama3.2',
-      compaction: 'llama3.2',
-    },
+  };
+}
+
+export function defaultAiActionSettings(providerId = 'default'): AiActionSettings {
+  return {
+    chat: { providerId, model: 'gpt-5.4-nano' },
+    edit: { providerId, model: 'gpt-5.4-mini' },
+    importPlanning: { providerId, model: 'gpt-5.4-mini' },
+    importWriting: { providerId, model: 'gpt-5.4-mini' },
+    importCleanup: { providerId, model: 'gpt-5.4-mini' },
+    compaction: { providerId, model: 'gpt-5.4-nano' },
   };
 }
 

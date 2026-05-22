@@ -101,49 +101,73 @@ struct DocumentFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct AiTaskModels {
-    chat: String,
-    edit: String,
-    import_planning: String,
-    import_writing: String,
-    import_cleanup: String,
-    compaction: String,
+struct AiActionConfig {
+    provider_id: String,
+    model: String,
 }
 
-impl Default for AiTaskModels {
-    fn default() -> Self {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AiActionSettings {
+    chat: AiActionConfig,
+    edit: AiActionConfig,
+    import_planning: AiActionConfig,
+    import_writing: AiActionConfig,
+    import_cleanup: AiActionConfig,
+    compaction: AiActionConfig,
+}
+
+impl AiActionConfig {
+    fn new(provider_id: &str, model: &str) -> Self {
         Self {
-            chat: "llama3.2".into(),
-            edit: "llama3.2".into(),
-            import_planning: "llama3.2".into(),
-            import_writing: "llama3.2".into(),
-            import_cleanup: "llama3.2".into(),
-            compaction: "llama3.2".into(),
+            provider_id: provider_id.into(),
+            model: model.into(),
         }
+    }
+}
+
+impl Default for AiActionSettings {
+    fn default() -> Self {
+        default_ai_action_settings()
+    }
+}
+
+fn default_ai_action_settings() -> AiActionSettings {
+    AiActionSettings {
+        chat: AiActionConfig::new("default", "gpt-5.4-nano"),
+        edit: AiActionConfig::new("default", "gpt-5.4-mini"),
+        import_planning: AiActionConfig::new("default", "gpt-5.4-mini"),
+        import_writing: AiActionConfig::new("default", "gpt-5.4-mini"),
+        import_cleanup: AiActionConfig::new("default", "gpt-5.4-mini"),
+        compaction: AiActionConfig::new("default", "gpt-5.4-nano"),
+    }
+}
+
+fn same_model_ai_action_settings(provider_id: &str, model: &str) -> AiActionSettings {
+    AiActionSettings {
+        chat: AiActionConfig::new(provider_id, model),
+        edit: AiActionConfig::new(provider_id, model),
+        import_planning: AiActionConfig::new(provider_id, model),
+        import_writing: AiActionConfig::new(provider_id, model),
+        import_cleanup: AiActionConfig::new(provider_id, model),
+        compaction: AiActionConfig::new(provider_id, model),
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct AiConnectionPreset {
-    id: String,
-    name: String,
+struct AiProviderConfig {
     provider: String,
     base_url: String,
     api_key: String,
-    #[serde(default)]
-    models: AiTaskModels,
 }
 
-impl Default for AiConnectionPreset {
+impl Default for AiProviderConfig {
     fn default() -> Self {
         Self {
-            id: "local".into(),
-            name: "Local".into(),
-            provider: "ollama".into(),
-            base_url: "http://127.0.0.1:11434/v1".into(),
+            provider: "openai".into(),
+            base_url: "https://api.openai.com/v1".into(),
             api_key: String::new(),
-            models: AiTaskModels::default(),
         }
     }
 }
@@ -151,16 +175,18 @@ impl Default for AiConnectionPreset {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct AiSettings {
-    active_preset_id: String,
-    presets: Vec<AiConnectionPreset>,
+    active_provider_id: String,
+    providers: Vec<AiProviderConfig>,
+    actions: AiActionSettings,
 }
 
 impl Default for AiSettings {
     fn default() -> Self {
-        let preset = AiConnectionPreset::default();
+        let provider = AiProviderConfig::default();
         Self {
-            active_preset_id: preset.id.clone(),
-            presets: vec![preset],
+            active_provider_id: provider.provider.clone(),
+            providers: vec![provider],
+            actions: AiActionSettings::default(),
         }
     }
 }
@@ -168,8 +194,38 @@ impl Default for AiSettings {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum AiSettingsFile {
-    Preset(AiSettings),
+    Current(AiSettings),
+    Preset(AiSettingsPresetFile),
     Legacy(AiSettingsLegacy),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiSettingsPresetFile {
+    active_preset_id: String,
+    presets: Vec<AiConnectionPresetLegacy>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiConnectionPresetLegacy {
+    id: String,
+    provider: String,
+    base_url: String,
+    api_key: String,
+    #[serde(default)]
+    models: AiTaskModelsLegacy,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AiTaskModelsLegacy {
+    chat: String,
+    edit: String,
+    import_planning: String,
+    import_writing: String,
+    import_cleanup: String,
+    compaction: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -380,8 +436,11 @@ fn open_external_url(url: String) -> AppResult<()> {
 }
 
 pub fn run() {
+    set_native_process_name();
+
     tauri::Builder::default()
         .setup(|app| {
+            set_native_process_name();
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
@@ -419,6 +478,22 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running HVY Galaxy");
 }
+
+#[cfg(target_os = "macos")]
+fn set_native_process_name() {
+    use objc2_foundation::{NSProcessInfo, NSString};
+    use std::ffi::CStr;
+
+    let app_name = CStr::from_bytes_with_nul(b"HVY Galaxy\0").expect("static app name is nul-terminated");
+    unsafe {
+        libc::setprogname(app_name.as_ptr());
+    }
+    let process_name = NSString::from_str("HVY Galaxy");
+    NSProcessInfo::processInfo().setProcessName(&process_name);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_native_process_name() {}
 
 fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let recent = recent_state_path(app)
@@ -753,89 +828,131 @@ fn read_ai_settings(path: &Path) -> AppResult<AiSettings> {
         return Ok(AiSettings::default());
     }
     match serde_json::from_slice(&fs::read(path)?)? {
-        AiSettingsFile::Preset(settings) => normalize_ai_settings(settings),
+        AiSettingsFile::Current(settings) => normalize_ai_settings(settings),
+        AiSettingsFile::Preset(settings) => normalize_ai_settings(preset_ai_settings(settings)),
         AiSettingsFile::Legacy(settings) => normalize_ai_settings(legacy_ai_settings(settings)),
     }
 }
 
 fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
-    let mut presets = Vec::new();
-    for preset in settings.presets {
-        presets.push(normalize_ai_preset(preset)?);
+    let mut providers = Vec::new();
+    for provider in settings.providers {
+        providers.push(normalize_ai_provider(provider)?);
     }
-    if presets.is_empty() {
-        presets.push(AiConnectionPreset::default());
+    if providers.is_empty() {
+        providers.push(AiProviderConfig::default());
     }
-    let active_preset_id = settings.active_preset_id.trim();
-    let active_preset_id = if active_preset_id.is_empty() || !presets.iter().any(|preset| preset.id == active_preset_id) {
-        presets[0].id.clone()
+    let active_provider_id = settings.active_provider_id.trim();
+    let active_provider_id = if active_provider_id.is_empty() || !providers.iter().any(|provider| provider.provider == active_provider_id) {
+        providers[0].provider.clone()
     } else {
-        active_preset_id.into()
+        active_provider_id.into()
     };
+    let actions = normalize_ai_actions(settings.actions, &providers, &active_provider_id);
     Ok(AiSettings {
-        active_preset_id,
-        presets,
+        active_provider_id,
+        providers,
+        actions,
     })
 }
 
-fn normalize_ai_preset(preset: AiConnectionPreset) -> AppResult<AiConnectionPreset> {
-    let id = preset.id.trim();
-    let name = preset.name.trim();
-    let provider = preset.provider.trim();
-    let base_url = preset.base_url.trim().trim_end_matches('/');
-    if id.is_empty() {
-        return Err(AppError::Message("AI preset id is required.".into()));
-    }
-    if name.is_empty() {
-        return Err(AppError::Message("AI preset name is required.".into()));
-    }
+fn normalize_ai_provider(provider_config: AiProviderConfig) -> AppResult<AiProviderConfig> {
+    let provider = provider_config.provider.trim();
+    let base_url = provider_config.base_url.trim().trim_end_matches('/');
     if provider.is_empty() {
         return Err(AppError::Message("AI provider is required.".into()));
     }
     if base_url.is_empty() {
         return Err(AppError::Message("AI base URL is required.".into()));
     }
-    Ok(AiConnectionPreset {
-        id: id.into(),
-        name: name.into(),
+    Ok(AiProviderConfig {
         provider: provider.into(),
         base_url: base_url.into(),
-        api_key: preset.api_key.trim().into(),
-        models: normalize_ai_task_models(preset.models),
+        api_key: provider_config.api_key.trim().into(),
     })
 }
 
-fn normalize_ai_task_models(models: AiTaskModels) -> AiTaskModels {
-    AiTaskModels {
-        chat: models.chat.trim().into(),
-        edit: models.edit.trim().into(),
-        import_planning: models.import_planning.trim().into(),
-        import_writing: models.import_writing.trim().into(),
-        import_cleanup: models.import_cleanup.trim().into(),
-        compaction: models.compaction.trim().into(),
+fn normalize_ai_actions(
+    actions: AiActionSettings,
+    providers: &[AiProviderConfig],
+    active_provider_id: &str,
+) -> AiActionSettings {
+    AiActionSettings {
+        chat: normalize_ai_action(actions.chat, providers, active_provider_id),
+        edit: normalize_ai_action(actions.edit, providers, active_provider_id),
+        import_planning: normalize_ai_action(actions.import_planning, providers, active_provider_id),
+        import_writing: normalize_ai_action(actions.import_writing, providers, active_provider_id),
+        import_cleanup: normalize_ai_action(actions.import_cleanup, providers, active_provider_id),
+        compaction: normalize_ai_action(actions.compaction, providers, active_provider_id),
+    }
+}
+
+fn normalize_ai_action(
+    action: AiActionConfig,
+    providers: &[AiProviderConfig],
+    active_provider_id: &str,
+) -> AiActionConfig {
+    let provider_id = action.provider_id.trim();
+    let provider_id = if provider_id == "default" {
+        "default"
+    } else if provider_id.is_empty() || !providers.iter().any(|provider| provider.provider == provider_id) {
+        active_provider_id
+    } else {
+        provider_id
+    };
+    AiActionConfig {
+        provider_id: provider_id.into(),
+        model: action.model.trim().into(),
+    }
+}
+
+fn preset_ai_settings(settings: AiSettingsPresetFile) -> AiSettings {
+    let requested_provider_id = settings.active_preset_id.trim().to_string();
+    let mut providers = Vec::new();
+    let mut active_models = AiTaskModelsLegacy::default();
+    for preset in settings.presets {
+        if preset.id.trim() == requested_provider_id || preset.provider.trim() == requested_provider_id {
+            active_models = preset.models.clone();
+        }
+        providers.push(AiProviderConfig {
+            provider: preset.provider,
+            base_url: preset.base_url,
+            api_key: preset.api_key,
+        });
+    }
+    let provider_id = if requested_provider_id.is_empty() {
+        providers.first().map(|provider| provider.provider.clone()).unwrap_or_else(|| "openai".into())
+    } else if providers.iter().any(|provider| provider.provider == requested_provider_id) {
+        requested_provider_id
+    } else {
+        providers.first().map(|provider| provider.provider.clone()).unwrap_or_else(|| "openai".into())
+    };
+    AiSettings {
+        active_provider_id: provider_id.clone(),
+        providers,
+        actions: AiActionSettings {
+            chat: AiActionConfig::new(&provider_id, active_models.chat.trim()),
+            edit: AiActionConfig::new(&provider_id, active_models.edit.trim()),
+            import_planning: AiActionConfig::new(&provider_id, active_models.import_planning.trim()),
+            import_writing: AiActionConfig::new(&provider_id, active_models.import_writing.trim()),
+            import_cleanup: AiActionConfig::new(&provider_id, active_models.import_cleanup.trim()),
+            compaction: AiActionConfig::new(&provider_id, active_models.compaction.trim()),
+        },
     }
 }
 
 fn legacy_ai_settings(settings: AiSettingsLegacy) -> AiSettings {
     let model = settings.model.trim().to_string();
-    let preset = AiConnectionPreset {
-        id: "local".into(),
-        name: "Local".into(),
+    let provider = AiProviderConfig {
         provider: settings.provider,
         base_url: settings.base_url,
         api_key: settings.api_key,
-        models: AiTaskModels {
-            chat: model.clone(),
-            edit: model.clone(),
-            import_planning: model.clone(),
-            import_writing: model.clone(),
-            import_cleanup: model.clone(),
-            compaction: model,
-        },
     };
+    let provider_id = provider.provider.clone();
     AiSettings {
-        active_preset_id: preset.id.clone(),
-        presets: vec![preset],
+        active_provider_id: provider_id.clone(),
+        providers: vec![provider],
+        actions: same_model_ai_action_settings(&provider_id, &model),
     }
 }
 
@@ -987,29 +1104,29 @@ mod tests {
     #[test]
     fn normalizes_ai_settings() {
         let settings = normalize_ai_settings(AiSettings {
-            active_preset_id: " local ".into(),
-            presets: vec![AiConnectionPreset {
-                id: " local ".into(),
-                name: " Local ".into(),
+            active_provider_id: " local ".into(),
+            providers: vec![AiProviderConfig {
                 provider: " openai-compatible ".into(),
                 base_url: " http://127.0.0.1:11434/v1/ ".into(),
                 api_key: " local ".into(),
-                models: AiTaskModels {
-                    chat: " llama3.2 ".into(),
-                    edit: " llama3.2 ".into(),
-                    import_planning: " llama3.2 ".into(),
-                    import_writing: " llama3.2 ".into(),
-                    import_cleanup: " llama3.2 ".into(),
-                    compaction: " llama3.2 ".into(),
-                },
             }],
+            actions: AiActionSettings {
+                chat: AiActionConfig::new(" openai-compatible ", " llama3.2 "),
+                edit: AiActionConfig::new(" missing ", " qwen "),
+                import_planning: AiActionConfig::new(" openai-compatible ", " planner "),
+                import_writing: AiActionConfig::new(" openai-compatible ", " writer "),
+                import_cleanup: AiActionConfig::new(" openai-compatible ", " cleanup "),
+                compaction: AiActionConfig::new(" openai-compatible ", " compact "),
+            },
         })
         .unwrap();
 
-        assert_eq!(settings.active_preset_id, "local");
-        assert_eq!(settings.presets[0].provider, "openai-compatible");
-        assert_eq!(settings.presets[0].base_url, "http://127.0.0.1:11434/v1");
-        assert_eq!(settings.presets[0].api_key, "local");
-        assert_eq!(settings.presets[0].models.chat, "llama3.2");
+        assert_eq!(settings.active_provider_id, "openai-compatible");
+        assert_eq!(settings.providers[0].provider, "openai-compatible");
+        assert_eq!(settings.providers[0].base_url, "http://127.0.0.1:11434/v1");
+        assert_eq!(settings.providers[0].api_key, "local");
+        assert_eq!(settings.actions.chat.provider_id, "openai-compatible");
+        assert_eq!(settings.actions.chat.model, "llama3.2");
+        assert_eq!(settings.actions.edit.provider_id, "openai-compatible");
     }
 }

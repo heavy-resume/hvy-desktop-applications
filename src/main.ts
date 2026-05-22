@@ -17,7 +17,6 @@ import {
   saveAiSettings,
   saveDocumentAsDialog,
   saveDocumentFile,
-  type AiSettings,
   type DocumentFile,
 } from './backend';
 import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type VisualDocument } from './hvy';
@@ -93,16 +92,8 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender();
   },
-  selectAiPreset: (presetId) => {
-    state.aiSettings.activePresetId = presetId;
-    rerender();
-  },
-  addAiPreset: () => {
-    const preset = createLocalAiPreset(state.aiSettings);
-    state.aiSettings = {
-      activePresetId: preset.id,
-      presets: [...state.aiSettings.presets, preset],
-    };
+  selectAiProvider: (providerId) => {
+    state.aiSettings.activeProviderId = providerId;
     rerender();
   },
   openProviderDocs: (url) => {
@@ -445,36 +436,6 @@ function applyTemplateTitle(template: string, title: string): string {
 
 function documentStorageKey(identifier: string): string {
   return `hvy-galaxy:document:${identifier}`;
-}
-
-function createLocalAiPreset(settings: AiSettings): AiSettings['presets'][number] {
-  const baseName = 'New Preset';
-  const existing = new Set(settings.presets.map((preset) => preset.name));
-  const name = uniqueName(baseName, existing);
-  return {
-    id: crypto.randomUUID(),
-    name,
-    provider: settings.presets.find((preset) => preset.id === settings.activePresetId)?.provider ?? 'ollama',
-    baseUrl: settings.presets.find((preset) => preset.id === settings.activePresetId)?.baseUrl ?? 'http://127.0.0.1:11434/v1',
-    apiKey: '',
-    models: {
-      chat: '',
-      edit: '',
-      importPlanning: '',
-      importWriting: '',
-      importCleanup: '',
-      compaction: '',
-    },
-  };
-}
-
-function uniqueName(baseName: string, existing: Set<string>): string {
-  if (!existing.has(baseName)) return baseName;
-  let index = 2;
-  while (existing.has(`${baseName} ${index}`)) {
-    index += 1;
-  }
-  return `${baseName} ${index}`;
 }
 
 async function confirmGalaxyInitialization(path: string, defaultName: string) {

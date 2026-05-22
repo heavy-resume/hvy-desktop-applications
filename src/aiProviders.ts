@@ -45,7 +45,7 @@ export const aiProviderPresets: AiProviderPreset[] = [
     name: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
     apiKeyPlaceholder: 'sk-...',
-    modelPlaceholder: 'gpt-4.1-mini',
+    modelPlaceholder: 'gpt-5.4-mini',
     docsUrl: 'https://developers.openai.com/api/reference/overview',
   },
   {
@@ -53,7 +53,7 @@ export const aiProviderPresets: AiProviderPreset[] = [
     name: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKeyPlaceholder: 'sk-or-...',
-    modelPlaceholder: 'openai/gpt-4.1-mini',
+    modelPlaceholder: 'openai/gpt-5.4-mini',
     docsUrl: 'https://openrouter.ai/docs/api-reference/overview',
   },
   {

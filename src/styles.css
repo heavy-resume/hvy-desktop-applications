@@ -79,8 +79,8 @@ button:disabled {
 }
 
 .sidebar-header h1,
-.galaxy-root summary,
-.recents h2 {
+.sidebar-section-heading h2,
+.galaxy-root summary {
   margin: 0;
   color: #152223;
 }
@@ -108,15 +108,20 @@ button:disabled {
   gap: 8px;
 }
 
+.galaxies-section,
 .tree-list,
-.galaxy-root,
-.recents {
+.galaxy-root {
   display: grid;
   gap: 8px;
 }
 
-.galaxy-root summary,
-.recents h2 {
+.sidebar-section-heading {
+  border-bottom: 1px solid #c5cec8;
+  padding-bottom: 7px;
+}
+
+.sidebar-section-heading h2,
+.galaxy-root summary {
   overflow: hidden;
   font-size: 13px;
   text-overflow: ellipsis;
@@ -146,8 +151,7 @@ button:disabled {
   padding: 4px 0;
 }
 
-.tree-file,
-.recents button {
+.tree-file {
   display: flex;
   width: 100%;
   align-items: center;
@@ -159,8 +163,7 @@ button:disabled {
   text-align: left;
 }
 
-.tree-file span,
-.recents button {
+.tree-file span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -177,6 +180,10 @@ button:disabled {
 .empty-action span {
   font-size: 16px;
   line-height: 1;
+}
+
+.galaxy-new-file {
+  margin-bottom: 2px;
 }
 
 .tree-file small {
@@ -390,12 +397,15 @@ button:disabled {
   background: rgba(20, 28, 29, 0.38);
   padding: 20px;
   z-index: 10;
+  overflow: hidden;
 }
 
 .dialog {
   display: grid;
   width: min(360px, 100%);
+  max-height: calc(100vh - 40px);
   gap: 14px;
+  overflow: auto;
   border: 1px solid #c5cec8;
   border-radius: 8px;
   background: #fbfaf7;
@@ -428,11 +438,48 @@ button:disabled {
   padding: 0;
 }
 
+.ai-provider-picker {
+  display: grid;
+  gap: 7px;
+}
+
+.ai-provider-picker > span {
+  color: #4f5d59;
+}
+
+.ai-provider-picker > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-provider-picker button.is-active {
+  border-color: #2f6968;
+  background: #e4f0ed;
+  color: #173a39;
+}
+
 .ai-provider-fields,
 .ai-task-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.ai-action-config {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #d1d8d3;
+  border-radius: 7px;
+  margin: 0;
+  padding: 10px;
+}
+
+.ai-action-config legend {
+  color: #2c3a38;
+  font-weight: 650;
+  padding: 0 4px;
 }
 
 .secondary-action {
