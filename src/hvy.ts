@@ -1,8 +1,9 @@
 import type { DocumentExtension } from './backend';
 
-export type HvyMode = 'viewer' | 'ai' | 'editor' | 'advanced';
+export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
-type HvyMount = ReturnType<HvyEmbedModule['mountHvy']>;
+type HvyEmbedMount = ReturnType<HvyEmbedModule['mountHvy']>;
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty'>;
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 type HvyDocumentChangeCallback = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['onDocumentChange']>;
 
@@ -38,16 +39,76 @@ export async function mountHvyDocument(
   root.replaceChildren();
   root.classList.add('hvy-document-host');
   void mountHvyViewer;
+  if (mode === 'hvy') {
+    return mountRawHvyDocument(root, document, options);
+  }
+  const embedMode = mode === 'advanced' ? 'editor' : mode;
   const mount = mountHvy({
     root,
     document,
-    mode: mode === 'advanced' ? 'editor' : mode,
+    mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
-    storageKey: options.storageKey,
+    storageKey: mode === 'editor' || mode === 'advanced' ? null : options.storageKey,
     onDocumentChange: options.onDocumentChange,
   });
   return { mount, document };
+}
+
+async function mountRawHvyDocument(
+  root: HTMLElement,
+  document: VisualDocument,
+  options: MountHvyDocumentOptions,
+): Promise<MountedDocument> {
+  const { deserializeDocumentBytes, serializeDocument, serializeDocumentBytes } = await loadHvyEmbed();
+  let currentDocument = document;
+  let lastSavedText = serializeDocument(document);
+  let dirty = false;
+  const shell = documentOwner().createElement('div');
+  shell.className = 'raw-hvy-shell';
+  const textarea = documentOwner().createElement('textarea');
+  textarea.className = 'raw-hvy-textarea';
+  textarea.spellcheck = false;
+  textarea.value = lastSavedText;
+  shell.append(textarea);
+  root.replaceChildren(shell);
+
+  const notifyDirty = (nextDirty: boolean) => {
+    dirty = nextDirty;
+    options.onDocumentChange?.({ dirty, source: 'editor', reason: 'raw-hvy-input' });
+  };
+  textarea.addEventListener('input', () => {
+    notifyDirty(textarea.value !== lastSavedText);
+    try {
+      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    } catch {
+      // Invalid raw drafts stay editable; Save will surface the parse error.
+    }
+  });
+
+  const mount: HvyMount = {
+    destroy() {
+      root.replaceChildren();
+    },
+    serializeDocumentBytes() {
+      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      return serializeDocumentBytes(currentDocument);
+    },
+    markSaved() {
+      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      lastSavedText = serializeDocument(currentDocument);
+      textarea.value = lastSavedText;
+      notifyDirty(false);
+    },
+    isDirty() {
+      return dirty || textarea.value !== lastSavedText;
+    },
+  };
+  return { mount, get document() { return currentDocument; } };
+}
+
+function documentOwner(): Document {
+  return globalThis.document;
 }
 
 export function serializeMountedDocument(mounted: MountedDocument): Uint8Array {

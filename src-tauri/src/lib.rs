@@ -1,7 +1,8 @@
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,6 +14,7 @@ const GALAXY_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const AI_SETTINGS: &str = "ai-settings.json";
 const RECENT_LIMIT: usize = 12;
+const BACKUP_RETENTION_HOURS: i64 = 2;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -96,6 +98,36 @@ struct DocumentFile {
     path: String,
     name: String,
     extension: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentBackupRequest {
+    document_path: String,
+    name: String,
+    extension: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentBackup {
+    id: String,
+    document_path: String,
+    name: String,
+    extension: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentBackupSnapshot {
+    id: String,
+    document_path: String,
+    name: String,
+    extension: String,
+    created_at: String,
     bytes: Vec<u8>,
 }
 
@@ -444,6 +476,49 @@ fn create_document_file(
 }
 
 #[tauri::command]
+fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
+    if document_extension(Path::new(&request.name)).is_none() {
+        return Err(AppError::Message("Backup document name must end in .hvy, .thvy, or .md.".into()));
+    }
+    prune_document_backups(&app)?;
+    let created_at = Utc::now().to_rfc3339();
+    let id = document_backup_id(&request, &created_at);
+    let snapshot = DocumentBackupSnapshot {
+        id: id.clone(),
+        document_path: request.document_path,
+        name: request.name,
+        extension: request.extension,
+        created_at,
+        bytes: request.bytes,
+    };
+    write_json_atomically(&document_backup_path(&app, &id)?, &snapshot)?;
+    Ok(Some(snapshot_metadata(&snapshot)))
+}
+
+#[tauri::command]
+fn list_document_backups(app: AppHandle) -> AppResult<Vec<DocumentBackup>> {
+    prune_document_backups(&app)?;
+    let mut backups = Vec::new();
+    for snapshot in read_document_backup_snapshots(&app)? {
+        backups.push(snapshot_metadata(&snapshot));
+    }
+    backups.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(backups)
+}
+
+#[tauri::command]
+fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile> {
+    prune_document_backups(&app)?;
+    let snapshot = read_document_backup_snapshot(&document_backup_path(&app, &id)?)?;
+    Ok(DocumentFile {
+        path: snapshot.document_path,
+        name: snapshot.name,
+        extension: snapshot.extension,
+        bytes: snapshot.bytes,
+    })
+}
+
+#[tauri::command]
 fn open_external_url(url: String) -> AppResult<()> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -483,7 +558,14 @@ pub fn run() {
                 let id = event.id().as_ref();
                 if matches!(
                     id,
-                    "new-galaxy" | "open-galaxy" | "open-file" | "open-guide" | "ai-settings" | "save" | "save-as"
+                    "new-galaxy"
+                        | "open-galaxy"
+                        | "open-file"
+                        | "open-guide"
+                        | "ai-settings"
+                        | "save"
+                        | "save-as"
+                        | "recover-backup"
                 )
                     || id.starts_with("recent-file:")
                     || id.starts_with("recent-galaxy:")
@@ -510,6 +592,9 @@ pub fn run() {
             save_document_file,
             save_document_as_dialog,
             create_document_file,
+            create_document_backup,
+            list_document_backups,
+            restore_document_backup,
             open_external_url
         ])
         .run(tauri::generate_context!())
@@ -561,6 +646,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Recover Backup...").id("recover-backup").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
@@ -842,6 +929,94 @@ fn add_recent_file(app: &AppHandle, path: &Path) -> AppResult<()> {
     state.files.retain(|entry| Path::new(entry).is_file());
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
+}
+
+fn snapshot_metadata(snapshot: &DocumentBackupSnapshot) -> DocumentBackup {
+    DocumentBackup {
+        id: snapshot.id.clone(),
+        document_path: snapshot.document_path.clone(),
+        name: snapshot.name.clone(),
+        extension: snapshot.extension.clone(),
+        created_at: snapshot.created_at.clone(),
+    }
+}
+
+fn read_document_backup_snapshots(app: &AppHandle) -> AppResult<Vec<DocumentBackupSnapshot>> {
+    let directory = document_backups_dir(app)?;
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut snapshots = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(snapshot) = read_document_backup_snapshot(&path) {
+            snapshots.push(snapshot);
+        }
+    }
+    Ok(snapshots)
+}
+
+fn read_document_backup_snapshot(path: &Path) -> AppResult<DocumentBackupSnapshot> {
+    Ok(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+fn prune_document_backups(app: &AppHandle) -> AppResult<()> {
+    let directory = document_backups_dir(app)?;
+    if !directory.exists() {
+        return Ok(());
+    }
+    let cutoff = Utc::now() - Duration::hours(BACKUP_RETENTION_HOURS);
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let should_remove = read_document_backup_snapshot(&path)
+            .ok()
+            .and_then(|snapshot| DateTime::parse_from_rfc3339(&snapshot.created_at).ok())
+            .map(|created_at| created_at.with_timezone(&Utc) < cutoff)
+            .unwrap_or(true);
+        if should_remove {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
+}
+
+fn document_backup_id(request: &DocumentBackupRequest, created_at: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    request.document_path.hash(&mut hasher);
+    request.name.hash(&mut hasher);
+    request.bytes.hash(&mut hasher);
+    created_at.hash(&mut hasher);
+    format!(
+        "{}-{:016x}",
+        created_at
+            .chars()
+            .map(|character| if character.is_ascii_alphanumeric() { character } else { '-' })
+            .collect::<String>(),
+        hasher.finish()
+    )
+}
+
+fn document_backup_path(app: &AppHandle, id: &str) -> AppResult<PathBuf> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") || id.trim().is_empty() {
+        return Err(AppError::Message("Invalid backup id.".into()));
+    }
+    Ok(document_backups_dir(app)?.join(format!("{id}.json")))
+}
+
+fn document_backups_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("backups");
+    fs::create_dir_all(&directory)?;
+    Ok(directory)
 }
 
 fn refresh_menu(app: &AppHandle) -> AppResult<()> {

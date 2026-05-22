@@ -3,6 +3,7 @@ import { installAiChatClient } from './aiClient';
 import {
   addFilesToGalaxy,
   chooseGalaxyFolder,
+  createDocumentBackup,
   createDocumentFile,
   createGalaxy,
   initializeGalaxyPath,
@@ -10,11 +11,13 @@ import {
   loadAiSettings,
   loadDefaultGuide,
   loadGalaxy,
+  listDocumentBackups,
   loadRecentState,
   onMenuEvent,
   openExternalUrl,
   openFileDialog,
   readDocumentFile,
+  restoreDocumentBackup,
   saveAiSettings,
   saveDocumentAsDialog,
   saveDocumentFile,
@@ -28,6 +31,8 @@ import { render, type UiHandlers } from './ui';
 let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
+let backupTimer: number | null = null;
+const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 
 const handlers: UiHandlers = {
   newGalaxy: () => {
@@ -147,6 +152,17 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender();
   },
+  restoreBackup: (id) => void runBusy('Restoring backup...', async () => {
+    const file = await restoreDocumentBackup(id);
+    state.recoveryDialogOpen = false;
+    state.recoveryBackups = [];
+    await openDocument(file, { recovered: true, deferMount: true });
+  }),
+  cancelRecovery: () => {
+    state.recoveryDialogOpen = false;
+    state.status = 'Ready';
+    rerender();
+  },
   openGalaxy: () => void runBusy('Opening galaxy...', async () => {
     const candidate = await chooseGalaxyFolder();
     if (!candidate) return;
@@ -212,12 +228,14 @@ async function boot(): Promise<void> {
     await loadRecentGalaxies();
     mountRoot = render(state, handlers);
     await openDefaultGuide();
+    startBackupTimer();
     await onMenuEvent((event) => {
       if (event === 'new-galaxy') handlers.newGalaxy();
       if (event === 'open-galaxy') handlers.openGalaxy();
       if (event === 'open-file') handlers.openFile();
       if (event === 'open-guide') void openDefaultGuide({ force: true });
       if (event === 'ai-settings') handlers.openAiSettings();
+      if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
       if (event.startsWith('recent-galaxy:')) handlers.openRecentGalaxy(event.slice('recent-galaxy:'.length));
@@ -255,7 +273,7 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
   }
 }
 
-async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; deferMount?: boolean } = {}): Promise<void> {
+async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean } = {}): Promise<void> {
   state.document?.mounted?.mount.destroy();
   const bytes = new Uint8Array(file.bytes);
   const document = await deserializeHvy(bytes, file.extension);
@@ -264,13 +282,19 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     name: file.name,
     extension: file.extension,
     mode: options.isNew ? 'editor' : 'viewer',
-    dirty: options.isNew === true,
+    dirty: options.isNew === true || options.recovered === true,
     readOnly: options.defaultDocument === true,
     isNew: options.isNew === true,
     mounted: null,
   };
   state.selectedFilePath = options.defaultDocument ? null : file.path;
-  state.status = options.defaultDocument ? 'Opened HVY guide' : options.isNew ? 'Created blank HVY document' : `Opened ${file.name}`;
+  state.status = options.defaultDocument
+    ? 'Opened HVY guide'
+    : options.recovered
+    ? `Restored backup of ${file.name}`
+    : options.isNew
+    ? 'Created blank HVY document'
+    : `Opened ${file.name}`;
   if (options.deferMount) {
     pendingMountDocument = document;
     return;
@@ -291,7 +315,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
     },
   });
   state.document.mounted = mounted;
-  setDocumentDirty(state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
+  setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
 }
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {
@@ -378,6 +402,57 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
   await refreshRecents();
   rerender();
   await mountCurrentDocument(document);
+}
+
+function startBackupTimer(): void {
+  if (backupTimer !== null || !isTauriRuntime()) return;
+  backupTimer = window.setInterval(() => {
+    void backupActiveDocument();
+  }, BACKUP_INTERVAL_MS);
+}
+
+async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
+  if (!state.document?.mounted || state.document.readOnly) return;
+  if (!options.force && !state.document.dirty) return;
+  try {
+    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+    await createDocumentBackup({
+      documentPath: state.document.path,
+      name: state.document.name,
+      extension: state.document.extension,
+      bytes,
+    });
+  } catch (error) {
+    if (options.force) {
+      throw error;
+    }
+    // Keep timed backups quiet; explicit recovery will surface failures.
+  }
+}
+
+async function openRecoveryDialog(): Promise<void> {
+  if (state.busy) return;
+  const document = state.document?.mounted?.document;
+  state.busy = true;
+  state.error = null;
+  state.status = 'Loading backups...';
+  try {
+    try {
+      await backupActiveDocument({ force: true });
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : String(error);
+    }
+    state.recoveryBackups = await listDocumentBackups();
+    state.recoveryDialogOpen = true;
+    state.status = state.recoveryBackups.length > 0 ? 'Loaded backups' : 'No backups available';
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+    state.status = 'Ready';
+  } finally {
+    state.busy = false;
+    rerender();
+    await mountCurrentDocument(document);
+  }
 }
 
 async function createBlankDocument(): Promise<void> {

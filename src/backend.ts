@@ -70,6 +70,21 @@ export interface CreateDocumentRequest {
   template: string;
 }
 
+export interface DocumentBackupRequest {
+  documentPath: string;
+  name: string;
+  extension: DocumentExtension;
+  bytes: number[];
+}
+
+export interface DocumentBackup {
+  id: string;
+  documentPath: string;
+  name: string;
+  extension: DocumentExtension;
+  createdAt: string;
+}
+
 export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'compaction';
 
 export interface AiProviderConfig {
@@ -203,6 +218,21 @@ export function createDocumentFile(request: CreateDocumentRequest): Promise<Docu
     relativePath: request.relativePath,
     template: request.template,
   });
+}
+
+export function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {
+  return invokeDesktop('create_document_backup', { request });
+}
+
+export function listDocumentBackups(): Promise<DocumentBackup[]> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve([]);
+  }
+  return invokeDesktop('list_document_backups');
+}
+
+export function restoreDocumentBackup(id: string): Promise<DocumentFile> {
+  return invokeDesktop('restore_document_backup', { id });
 }
 
 export function openExternalUrl(url: string): Promise<void> {

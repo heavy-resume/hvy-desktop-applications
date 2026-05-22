@@ -18,6 +18,8 @@ export interface UiHandlers {
   openProviderDocs(url: string): void;
   saveAiSettings(settings: AiSettings): void;
   cancelAiSettings(): void;
+  restoreBackup(id: string): void;
+  cancelRecovery(): void;
   openGalaxy(): void;
   openFile(): void;
   openRecentGalaxy(path: string): void;
@@ -75,6 +77,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
       ${renderNewGalaxyDialog(state)}
       ${renderNewDocumentDialog(state)}
       ${renderAiSettingsDialog(state)}
+      ${renderRecoveryDialog(state)}
     </main>`;
 
   bind(appRoot, handlers);
@@ -106,6 +109,8 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       if (url) handlers.openProviderDocs(url);
     }
     if (action === 'cancel-ai-settings') handlers.cancelAiSettings();
+    if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
+    if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'open-galaxy') handlers.openGalaxy();
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
@@ -172,26 +177,26 @@ function renderModeControls(activeMode: HvyMode, readOnly: boolean): string {
     { mode: 'viewer', label: 'Viewer' },
     { mode: 'ai', label: 'AI' },
     { mode: 'editor', label: 'Editor' },
+    { mode: 'hvy', label: 'HVY' },
     { mode: 'advanced', label: 'Advanced' },
   ];
-  const showAdvanced = activeMode === 'editor' || activeMode === 'advanced';
+  const showEditorSubmodes = activeMode === 'editor' || activeMode === 'hvy' || activeMode === 'advanced';
   const buttonHtml = ({ mode, label }: { mode: HvyMode; label: string }) => {
     const active = mode === activeMode ? ' is-active' : '';
     const disabled = readOnly && mode !== 'viewer' ? ' disabled' : '';
-    const contents = mode === 'advanced'
-      ? '<span>ADV</span>'
+    const contents = mode === 'advanced' || mode === 'hvy'
+      ? `<span>${escapeHtml(mode === 'advanced' ? 'ADV' : 'HVY')}</span>`
       : `${modeIcon(mode)}<span>${escapeHtml(label)}</span>`;
     return `<button type="button" class="mode-button${active}" data-action="set-mode" data-mode="${mode}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" aria-pressed="${mode === activeMode ? 'true' : 'false'}"${disabled}>${contents}</button>`;
   };
   return `
-    <nav class="mode-controls${activeMode === 'editor' || activeMode === 'advanced' ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
+    <nav class="mode-controls${showEditorSubmodes ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
       <div class="mode-controls-top">
-        <button type="button" class="mode-button mode-button-hvy" data-action="create-file" title="New HVY document" aria-label="New HVY document"><span>HVY</span></button>
         ${buttonHtml(modes[0])}
         ${buttonHtml(modes[1])}
         <span class="mode-editor-stack">
           ${buttonHtml(modes[2])}
-          ${showAdvanced ? buttonHtml(modes[3]) : ''}
+          ${showEditorSubmodes ? `<span class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}</span>` : ''}
         </span>
       </div>
     </nav>`;
@@ -412,6 +417,39 @@ function renderAiSettingsDialog(state: AppState): string {
     </div>`;
 }
 
+function renderRecoveryDialog(state: AppState): string {
+  if (!state.recoveryDialogOpen) {
+    return '';
+  }
+  const backups = state.recoveryBackups;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
+        <h2 id="recoveryTitle">Recover Backup</h2>
+        <p class="dialog-note">Backups are kept for two hours and refreshed every five minutes while a document has edits.</p>
+        ${
+          backups.length === 0
+            ? '<div class="empty-panel compact">No backups are available yet.</div>'
+            : `<div class="recovery-list">
+                ${backups.map((backup) => `
+                  <article class="recovery-item">
+                    <div>
+                      <strong>${escapeHtml(backup.name)}</strong>
+                      <span>${escapeHtml(formatBackupTimestamp(backup.createdAt))}</span>
+                      ${backup.documentPath ? `<small>${escapeHtml(backup.documentPath)}</small>` : '<small>Unsaved document</small>'}
+                    </div>
+                    <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore</button>
+                  </article>
+                `).join('')}
+              </div>`
+        }
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-recovery">Close</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function renderActionConfigField(action: AiActionKey, label: string, settings: AiSettings): string {
   const config = settings.actions[action];
   const effectiveProviderId = config.providerId && config.providerId !== 'default' ? config.providerId : settings.activeProviderId;
@@ -490,7 +528,16 @@ function activeProviderConfig(settings: AiSettings): AiProviderConfig {
 }
 
 function isHvyMode(value: string | undefined): value is HvyMode {
-  return value === 'viewer' || value === 'ai' || value === 'editor' || value === 'advanced';
+  return value === 'viewer' || value === 'ai' || value === 'editor' || value === 'hvy' || value === 'advanced';
+}
+
+function formatBackupTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(date);
 }
 
 function sidebarSummary(state: AppState): string {

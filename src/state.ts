@@ -1,4 +1,4 @@
-import { defaultAiSettings, type AiSettings, type DocumentExtension, type Galaxy, type GalaxyFileNode, type GalaxyTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type Galaxy, type GalaxyFileNode, type GalaxyTreeNode, type RecentState } from './backend';
 import type { HvyMode, MountedDocument } from './hvy';
 
 export interface OpenDocument {
@@ -26,6 +26,8 @@ export interface AppState {
   newGalaxyLocation: 'managed' | 'choose';
   newDocumentGalaxyPath: string | null;
   aiSettingsDialogOpen: boolean;
+  recoveryDialogOpen: boolean;
+  recoveryBackups: DocumentBackup[];
 }
 
 export const state: AppState = {
@@ -42,6 +44,8 @@ export const state: AppState = {
   newGalaxyLocation: 'managed',
   newDocumentGalaxyPath: null,
   aiSettingsDialogOpen: false,
+  recoveryDialogOpen: false,
+  recoveryBackups: [],
 };
 
 export function findFileInGalaxy(galaxy: Galaxy, path: string): GalaxyFileNode | null {

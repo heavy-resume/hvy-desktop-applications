@@ -336,11 +336,18 @@ button:disabled {
   font-weight: 650;
 }
 
-.mode-button[data-mode="advanced"] {
+.mode-editor-submodes {
   position: absolute;
   top: calc(100% + 3px);
   right: 0;
   left: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+}
+
+.mode-editor-submodes .mode-button[data-mode="hvy"],
+.mode-editor-submodes .mode-button[data-mode="advanced"] {
   width: 100%;
   min-width: 0;
   height: 24px;
@@ -370,6 +377,26 @@ button:disabled {
   background: #ffffff;
   color: #163635;
   font-weight: 650;
+}
+
+.raw-hvy-shell {
+  display: grid;
+  min-height: 100%;
+  background: #fbfaf7;
+  padding: 20px;
+}
+
+.raw-hvy-textarea {
+  width: 100%;
+  min-height: 100%;
+  resize: none;
+  border: 1px solid #c8d0cb;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17211f;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  padding: 14px;
+  white-space: pre;
 }
 
 .error-slot {
@@ -481,6 +508,52 @@ button:disabled {
   margin: -4px 0 2px;
   color: #5f6a66;
   line-height: 1.4;
+}
+
+.recovery-dialog {
+  width: min(720px, 100%);
+}
+
+.recovery-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(420px, 55vh);
+  overflow: auto;
+}
+
+.recovery-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #d1d8d3;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.recovery-item > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.recovery-item strong,
+.recovery-item span,
+.recovery-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-item span {
+  color: #4f5d59;
+  font-size: 12px;
+}
+
+.recovery-item small {
+  color: #697571;
+  font-size: 11px;
 }
 
 .provider-docs-link {
