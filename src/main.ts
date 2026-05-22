@@ -5,7 +5,6 @@ import {
   createDocumentFile,
   createGalaxy,
   initializeGalaxyPath,
-  initializeGalaxyPathWithName,
   isTauriRuntime,
   loadAiSettings,
   loadDefaultGuide,
@@ -41,13 +40,18 @@ const handlers: UiHandlers = {
   },
   createGalaxy: (name, location) => void runBusy('Creating galaxy...', async () => {
     const trimmed = name.trim();
-    if (!trimmed) {
+    if (location === 'managed' && !trimmed) {
       state.newGalaxyDialogOpen = true;
       state.status = 'Galaxy name is required';
       return;
     }
+    if (location === 'managed' && hasOpenGalaxyNamed(trimmed)) {
+      state.newGalaxyDialogOpen = true;
+      state.status = 'Galaxy name must be unique';
+      return;
+    }
     const galaxy = location === 'choose'
-      ? await createGalaxyInChosenFolder(trimmed)
+      ? await createGalaxyInChosenFolder()
       : await createGalaxy(trimmed);
     if (!galaxy) {
       state.newGalaxyDialogOpen = true;
@@ -398,6 +402,11 @@ function sortGalaxies(): void {
   state.galaxies.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
 }
 
+function hasOpenGalaxyNamed(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return state.galaxies.some((galaxy) => galaxy.manifest.name.trim().toLowerCase() === normalized);
+}
+
 function rerender(): void {
   state.document?.mounted?.mount.destroy();
   if (state.document) {
@@ -459,13 +468,13 @@ async function confirmGalaxyInitialization(path: string, defaultName: string) {
   return shouldInitialize ? initializeGalaxyPath(path) : null;
 }
 
-async function createGalaxyInChosenFolder(name: string) {
+async function createGalaxyInChosenFolder() {
   const candidate = await chooseGalaxyFolder();
   if (!candidate) return null;
   if (candidate.hasManifest) {
     return loadGalaxy(candidate.path);
   }
-  return initializeGalaxyPathWithName(candidate.path, name);
+  return initializeGalaxyPath(candidate.path);
 }
 
 function setupErrorSurface(): void {

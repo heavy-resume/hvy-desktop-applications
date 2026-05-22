@@ -456,6 +456,10 @@ button:disabled {
   font-weight: 650;
 }
 
+.dialog-note[data-state="error"] {
+  color: #8c291d;
+}
+
 .wide-dialog {
   width: min(640px, 100%);
 }

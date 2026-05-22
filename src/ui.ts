@@ -83,6 +83,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
 function bind(root: HTMLElement, handlers: UiHandlers): void {
   bindController?.abort();
   bindController = new AbortController();
+  const { signal } = bindController;
   root.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) return;
@@ -110,7 +111,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'save-as') handlers.saveAs();
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
-  }, { signal: bindController.signal });
+  }, { signal });
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
     if (!form) return;
@@ -135,7 +136,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const data = new FormData(form);
       handlers.saveAiSettings(readAiSettingsForm(data));
     }
-  }, { signal: bindController.signal });
+  }, { signal });
+  root.querySelectorAll<HTMLFormElement>('form[data-form="new-galaxy"]').forEach((form) => {
+    updateNewGalaxySubmit(form);
+    form.addEventListener('input', () => updateNewGalaxySubmit(form), { signal });
+  });
 }
 
 function renderToolbar(state: AppState): string {
@@ -262,15 +267,11 @@ function renderNewGalaxyDialog(state: AppState): string {
   }
   const managedActive = state.newGalaxyLocation === 'managed';
   const chooseActive = state.newGalaxyLocation === 'choose';
+  const existingNames = state.galaxies.map((galaxy) => galaxy.manifest.name.toLowerCase());
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="new-galaxy">
+      <form class="dialog" data-form="new-galaxy" data-existing-galaxy-names="${escapeAttr(JSON.stringify(existingNames))}">
         <h2>New Galaxy</h2>
-        <label>
-          <span>Name</span>
-          <input name="galaxyName" type="text" autocomplete="off" autofocus required>
-        </label>
-        <input name="galaxyLocation" type="hidden" value="${escapeAttr(state.newGalaxyLocation)}">
         <div class="field-group">
           <span>Location</span>
           <div class="segmented-control">
@@ -278,13 +279,49 @@ function renderNewGalaxyDialog(state: AppState): string {
             <button type="button" class="${chooseActive ? 'is-active' : ''}" data-action="set-new-galaxy-location" data-location="choose" aria-pressed="${chooseActive ? 'true' : 'false'}">Choose folder</button>
           </div>
         </div>
+        <input name="galaxyLocation" type="hidden" value="${escapeAttr(state.newGalaxyLocation)}">
+        ${managedActive ? `
+          <label>
+            <span>Name</span>
+            <input name="galaxyName" type="text" autocomplete="off" autofocus required>
+          </label>
+          <p class="dialog-note" data-role="galaxy-name-note">Choose a unique name for a new app-managed galaxy.</p>
+        ` : ''}
         <p class="dialog-note">${chooseActive ? 'Pick any folder, including a synced Google Drive or OneDrive folder.' : 'Stored in the app data folder on this device.'}</p>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-new-galaxy">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+          <button type="submit" data-role="new-galaxy-submit" ${state.busy || managedActive ? 'disabled' : ''}>${chooseActive ? 'Select' : 'Create'}</button>
         </div>
       </form>
     </div>`;
+}
+
+function updateNewGalaxySubmit(form: HTMLFormElement): void {
+  const location = new FormData(form).get('galaxyLocation');
+  const submit = form.querySelector<HTMLButtonElement>('[data-role="new-galaxy-submit"]');
+  if (!submit || location !== 'managed') return;
+  const input = form.querySelector<HTMLInputElement>('input[name="galaxyName"]');
+  const note = form.querySelector<HTMLElement>('[data-role="galaxy-name-note"]');
+  const name = input?.value.trim().toLowerCase() ?? '';
+  const existingNames = parseExistingGalaxyNames(form.dataset.existingGalaxyNames);
+  const duplicate = name.length > 0 && existingNames.includes(name);
+  submit.disabled = name.length === 0 || duplicate;
+  if (note) {
+    note.textContent = duplicate
+      ? 'A galaxy with that name is already open.'
+      : 'Choose a unique name for a new app-managed galaxy.';
+    note.dataset.state = duplicate ? 'error' : 'neutral';
+  }
+}
+
+function parseExistingGalaxyNames(value: string | undefined): string[] {
+  if (!value) return [];
+  try {
+    const names = JSON.parse(value);
+    return Array.isArray(names) ? names.filter((name): name is string => typeof name === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function isNewGalaxyLocation(value: unknown): value is 'managed' | 'choose' {

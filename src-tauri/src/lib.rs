@@ -321,18 +321,6 @@ fn initialize_galaxy_path(app: AppHandle, path: String) -> AppResult<Galaxy> {
 }
 
 #[tauri::command]
-fn initialize_galaxy_path_with_name(app: AppHandle, path: String, name: String) -> AppResult<Galaxy> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(AppError::Message("Galaxy name is required.".into()));
-    }
-    let path = PathBuf::from(path);
-    let galaxy = initialize_galaxy_with_name(&path, Some(name))?;
-    add_recent_galaxy(&app, &path)?;
-    Ok(galaxy)
-}
-
-#[tauri::command]
 fn load_galaxy(app: AppHandle, path: String) -> AppResult<Galaxy> {
     let path = PathBuf::from(path);
     let galaxy = ensure_galaxy(&path)?;
@@ -479,7 +467,6 @@ pub fn run() {
             create_galaxy,
             new_galaxy_dialog,
             initialize_galaxy_path,
-            initialize_galaxy_path_with_name,
             load_galaxy,
             open_file_dialog,
             read_document_file,
