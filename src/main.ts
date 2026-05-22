@@ -1,6 +1,7 @@
 import './styles.css';
 import { installAiChatClient } from './aiClient';
 import {
+  addFilesToGalaxy,
   chooseGalaxyFolder,
   createDocumentFile,
   createGalaxy,
@@ -106,6 +107,14 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender();
   },
+  addFilesToGalaxy: (galaxyPath) => void runBusy('Adding files...', async () => {
+    const galaxy = await addFilesToGalaxy(galaxyPath);
+    if (!galaxy) return;
+    upsertGalaxy(galaxy);
+    state.selectedGalaxyPath = galaxy.path;
+    state.status = 'Added files to galaxy';
+    await refreshRecents();
+  }),
   openAiSettings: () => {
     state.aiSettingsDialogOpen = true;
     state.status = 'Ready';

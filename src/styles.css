@@ -186,12 +186,19 @@ button:disabled {
   line-height: 1;
 }
 
-.galaxy-new-file {
-  margin-bottom: 2px;
+.galaxy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 12px;
 }
 
-.tree-file small {
-  color: #6a7672;
+.galaxy-actions .empty-action {
+  margin-left: 0;
+}
+
+.galaxy-new-file {
+  margin-bottom: 2px;
 }
 
 .tree-file.is-selected {

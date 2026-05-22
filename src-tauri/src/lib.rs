@@ -329,6 +329,42 @@ fn load_galaxy(app: AppHandle, path: String) -> AppResult<Galaxy> {
 }
 
 #[tauri::command]
+fn add_files_to_galaxy(app: AppHandle, galaxy_path: String) -> AppResult<Option<Galaxy>> {
+    let galaxy_path = PathBuf::from(galaxy_path);
+    ensure_galaxy(&galaxy_path)?;
+    let Some(paths) = rfd::FileDialog::new()
+        .add_filter("Supported documents", &["hvy", "thvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy"])
+        .add_filter("Markdown", &["md"])
+        .pick_files()
+    else {
+        return Ok(None);
+    };
+
+    let mut copied = Vec::new();
+    for source in paths {
+        if document_extension(&source).is_none() {
+            return Err(AppError::Message(
+                "Only .hvy, .thvy, and .md documents can be added to a galaxy.".into(),
+            ));
+        }
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
+        let destination = unique_copy_path(&galaxy_path, file_name);
+        fs::copy(&source, &destination)?;
+        copied.push(destination);
+    }
+
+    touch_galaxy_manifest(&galaxy_path)?;
+    add_recent_galaxy(&app, &galaxy_path)?;
+    for path in copied {
+        add_recent_file(&app, &path)?;
+    }
+    Ok(Some(load_galaxy_from_path(&galaxy_path)?))
+}
+
+#[tauri::command]
 fn open_file_dialog(app: AppHandle) -> AppResult<Option<DocumentFile>> {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Supported documents", &["hvy", "thvy", "md"])
@@ -468,6 +504,7 @@ pub fn run() {
             new_galaxy_dialog,
             initialize_galaxy_path,
             load_galaxy,
+            add_files_to_galaxy,
             open_file_dialog,
             read_document_file,
             save_document_file,
@@ -749,6 +786,29 @@ fn document_extension(path: &Path) -> Option<String> {
         "md" => Some(".md".into()),
         _ => None,
     }
+}
+
+fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let original = Path::new(file_name);
+    let stem = original
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("document");
+    let extension = original.extension().and_then(|extension| extension.to_str());
+    let mut path = root.join(original);
+    let mut index = 2;
+
+    while path.exists() {
+        let candidate_name = match extension {
+            Some(extension) if !extension.is_empty() => format!("{stem} {index}.{extension}"),
+            _ => format!("{stem} {index}"),
+        };
+        path = root.join(candidate_name);
+        index += 1;
+    }
+
+    path
 }
 
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
@@ -1074,6 +1134,18 @@ mod tests {
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], GalaxyTreeNode::Folder { name, .. } if name == "notes"));
         assert!(matches!(&nodes[1], GalaxyTreeNode::File { name, .. } if name == "a.hvy"));
+    }
+
+    #[test]
+    fn unique_copy_path_avoids_existing_documents() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("draft.hvy"), "first").unwrap();
+        fs::write(dir.path().join("draft 2.hvy"), "second").unwrap();
+
+        assert_eq!(
+            unique_copy_path(dir.path(), std::ffi::OsStr::new("draft.hvy")),
+            dir.path().join("draft 3.hvy")
+        );
     }
 
     #[test]

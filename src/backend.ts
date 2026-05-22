@@ -177,6 +177,10 @@ export function loadGalaxy(path: string): Promise<Galaxy> {
   return invokeDesktop('load_galaxy', { path });
 }
 
+export function addFilesToGalaxy(galaxyPath: string): Promise<Galaxy | null> {
+  return invokeDesktop('add_files_to_galaxy', { galaxyPath });
+}
+
 export function openFileDialog(): Promise<DocumentFile | null> {
   return invokeDesktop('open_file_dialog');
 }

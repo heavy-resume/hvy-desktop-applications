@@ -12,6 +12,7 @@ export interface UiHandlers {
   newDocumentInGalaxy(galaxyPath: string): void;
   createDocumentInGalaxy(name: string, templateId: string): void;
   cancelNewDocument(): void;
+  addFilesToGalaxy(galaxyPath: string): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string): void;
   openProviderDocs(url: string): void;
@@ -96,6 +97,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     }
     if (action === 'cancel-new-galaxy') handlers.cancelNewGalaxy();
     if (action === 'new-document-in-galaxy' && target.dataset.galaxyPath) handlers.newDocumentInGalaxy(target.dataset.galaxyPath);
+    if (action === 'add-files-to-galaxy' && target.dataset.galaxyPath) handlers.addFilesToGalaxy(target.dataset.galaxyPath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'ai-settings') handlers.openAiSettings();
     if (action === 'select-ai-provider' && target.dataset.providerId) handlers.selectAiProvider(target.dataset.providerId);
@@ -221,7 +223,10 @@ function renderGalaxy(galaxy: Galaxy, selectedFilePath: string | null): string {
       <summary title="${escapeAttr(galaxy.path)}">
         <span>${escapeHtml(galaxy.manifest.name)}</span>
       </summary>
-      <button type="button" class="empty-action galaxy-new-file" data-action="new-document-in-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}"><span aria-hidden="true">+</span> New HVY</button>
+      <div class="galaxy-actions">
+        <button type="button" class="empty-action galaxy-new-file" data-action="new-document-in-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}"><span aria-hidden="true">+</span> New HVY</button>
+        <button type="button" class="empty-action" data-action="add-files-to-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}"><span aria-hidden="true">+</span> Add Files</button>
+      </div>
       ${galaxy.files.length === 0 ? '' : `<ul class="tree">${galaxy.files.map((node) => renderNode(node, selectedFilePath)).join('')}</ul>`}
     </details>`;
 }
@@ -241,7 +246,6 @@ function renderNode(node: GalaxyTreeNode, selectedFilePath: string | null): stri
     <li>
       <button type="button" class="tree-file${selected}" data-action="select-file" data-path="${escapeAttr(node.path)}">
         <span>${escapeHtml(node.name)}</span>
-        <small>${escapeHtml(node.extension)}</small>
       </button>
     </li>`;
 }
