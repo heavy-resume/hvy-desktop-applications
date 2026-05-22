@@ -50,6 +50,12 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 npm run build:universal
 ```
 
+Build a universal macOS DMG:
+
+```bash
+npm run build:universal:dmg
+```
+
 Run the desktop app:
 
 ```bash

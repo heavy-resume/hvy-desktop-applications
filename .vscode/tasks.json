@@ -11,9 +11,22 @@
       "problemMatcher": []
     },
     {
-      "label": "HVY Galaxy: Build App Bundle",
+      "label": "HVY Galaxy: Build Universal DMG",
       "type": "shell",
-      "command": ". \"$HOME/.cargo/env\" && npm run tauri -- build --bundles app",
+      "command": ". \"$HOME/.cargo/env\" && npm run build:universal:dmg",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Universal App Bundle",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && npm run build:universal",
       "options": {
         "cwd": "${workspaceFolder}"
       },
