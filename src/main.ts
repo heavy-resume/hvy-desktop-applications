@@ -21,7 +21,7 @@ import {
 } from './backend';
 import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type VisualDocument } from './hvy';
 import { state } from './state';
-import { getHvyTemplate } from './templates';
+import { getHvyTemplate, type HvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
@@ -83,7 +83,8 @@ const handlers: UiHandlers = {
   },
   createDocumentInGalaxy: (name, templateId) => void runBusy('Creating HVY document...', async () => {
     const galaxyPath = state.newDocumentGalaxyPath;
-    const fileName = documentFileName(name);
+    const template = getHvyTemplate(templateId);
+    const fileName = documentFileName(name, template);
     if (!galaxyPath) return;
     if (!fileName) {
       state.status = 'Document name is required';
@@ -93,7 +94,7 @@ const handlers: UiHandlers = {
     const file = await createDocumentFile({
       galaxyPath,
       relativePath: fileName,
-      template: applyTemplateTitle(getHvyTemplate(templateId).content, documentTitle(fileName)),
+      template: applyTemplateTitle(template.content, documentTitle(fileName)),
     });
     upsertGalaxy(await loadGalaxy(galaxyPath));
     state.selectedGalaxyPath = galaxyPath;
@@ -443,14 +444,18 @@ title: ${JSON.stringify(title)}
 `;
 }
 
-function documentFileName(name: string): string | null {
+function documentFileName(name: string, template: HvyTemplate): string | null {
   const trimmed = name.trim();
   if (!trimmed) return null;
-  return trimmed.toLowerCase().endsWith('.hvy') ? trimmed : `${trimmed}.hvy`;
+  return hasDocumentExtension(trimmed) ? trimmed : `${trimmed}${template.extension}`;
 }
 
 function documentTitle(fileName: string): string {
-  return fileName.replace(/\.hvy$/i, '');
+  return fileName.replace(/\.(t?hvy)$/i, '');
+}
+
+function hasDocumentExtension(fileName: string): boolean {
+  return /\.(t?hvy)$/i.test(fileName);
 }
 
 function applyTemplateTitle(template: string, title: string): string {

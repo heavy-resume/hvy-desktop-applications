@@ -335,7 +335,7 @@ function renderNewDocumentDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-document">
-        <h2>New HVY</h2>
+        <h2>New Document</h2>
         <label>
           <span>Name</span>
           <input name="documentName" type="text" autocomplete="off" autofocus required>
