@@ -37,6 +37,9 @@
     "category": "Productivity",
     "shortDescription": "HVY galaxy workspace",
     "longDescription": "Cross-platform desktop workspace for viewing and editing HVY files.",
+    "macOS": {
+      "minimumSystemVersion": "10.13"
+    },
     "resources": [
       "resources/hvy-guide.hvy"
     ]

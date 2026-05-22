@@ -173,6 +173,10 @@ export function initializeGalaxyPath(path: string): Promise<Galaxy> {
   return invokeDesktop('initialize_galaxy_path', { path });
 }
 
+export function initializeGalaxyPathWithName(path: string, name: string): Promise<Galaxy> {
+  return invokeDesktop('initialize_galaxy_path_with_name', { path, name });
+}
+
 export function loadGalaxy(path: string): Promise<Galaxy> {
   return invokeDesktop('load_galaxy', { path });
 }

@@ -23,6 +23,7 @@ export interface AppState {
   error: string | null;
   busy: boolean;
   newGalaxyDialogOpen: boolean;
+  newGalaxyLocation: 'managed' | 'choose';
   newDocumentGalaxyPath: string | null;
   aiSettingsDialogOpen: boolean;
 }
@@ -38,6 +39,7 @@ export const state: AppState = {
   error: null,
   busy: false,
   newGalaxyDialogOpen: false,
+  newGalaxyLocation: 'managed',
   newDocumentGalaxyPath: null,
   aiSettingsDialogOpen: false,
 };

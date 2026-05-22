@@ -5,6 +5,7 @@ import {
   createDocumentFile,
   createGalaxy,
   initializeGalaxyPath,
+  initializeGalaxyPathWithName,
   isTauriRuntime,
   loadAiSettings,
   loadDefaultGuide,
@@ -31,25 +32,38 @@ let pendingMountDocument: VisualDocument | null = null;
 const handlers: UiHandlers = {
   newGalaxy: () => {
     state.newGalaxyDialogOpen = true;
+    state.newGalaxyLocation = 'managed';
     state.status = 'Ready';
     rerender();
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="galaxyName"]')?.focus();
     });
   },
-  createGalaxy: (name) => void runBusy('Creating galaxy...', async () => {
+  createGalaxy: (name, location) => void runBusy('Creating galaxy...', async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       state.newGalaxyDialogOpen = true;
       state.status = 'Galaxy name is required';
       return;
     }
+    const galaxy = location === 'choose'
+      ? await createGalaxyInChosenFolder(trimmed)
+      : await createGalaxy(trimmed);
+    if (!galaxy) {
+      state.newGalaxyDialogOpen = true;
+      state.status = 'Ready';
+      return;
+    }
     state.newGalaxyDialogOpen = false;
-    const galaxy = await createGalaxy(trimmed);
     upsertGalaxy(galaxy);
     state.selectedGalaxyPath = galaxy.path;
     await refreshRecents();
   }),
+  setNewGalaxyLocation: (location) => {
+    state.newGalaxyLocation = location;
+    state.status = 'Ready';
+    rerender();
+  },
   cancelNewGalaxy: () => {
     state.newGalaxyDialogOpen = false;
     state.status = 'Ready';
@@ -443,6 +457,15 @@ async function confirmGalaxyInitialization(path: string, defaultName: string) {
     `"${defaultName}" is not an HVY galaxy yet. Create .hvygalaxy.json in this folder?`
   );
   return shouldInitialize ? initializeGalaxyPath(path) : null;
+}
+
+async function createGalaxyInChosenFolder(name: string) {
+  const candidate = await chooseGalaxyFolder();
+  if (!candidate) return null;
+  if (candidate.hasManifest) {
+    return loadGalaxy(candidate.path);
+  }
+  return initializeGalaxyPathWithName(candidate.path, name);
 }
 
 function setupErrorSurface(): void {

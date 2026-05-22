@@ -6,7 +6,8 @@ import { hvyTemplates } from './templates';
 
 export interface UiHandlers {
   newGalaxy(): void;
-  createGalaxy(name: string): void;
+  createGalaxy(name: string, location: 'managed' | 'choose'): void;
+  setNewGalaxyLocation(location: 'managed' | 'choose'): void;
   cancelNewGalaxy(): void;
   newDocumentInGalaxy(galaxyPath: string): void;
   createDocumentInGalaxy(name: string, templateId: string): void;
@@ -89,6 +90,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'new-galaxy') handlers.newGalaxy();
+    if (action === 'set-new-galaxy-location' && isNewGalaxyLocation(target.dataset.location)) {
+      handlers.setNewGalaxyLocation(target.dataset.location);
+    }
     if (action === 'cancel-new-galaxy') handlers.cancelNewGalaxy();
     if (action === 'new-document-in-galaxy' && target.dataset.galaxyPath) handlers.newDocumentInGalaxy(target.dataset.galaxyPath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
@@ -114,7 +118,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     event.preventDefault();
     if (form.dataset.form === 'new-galaxy') {
       const data = new FormData(form);
-      handlers.createGalaxy(String(data.get('galaxyName') ?? ''));
+      const location = String(data.get('galaxyLocation') ?? 'managed');
+      handlers.createGalaxy(
+        String(data.get('galaxyName') ?? ''),
+        isNewGalaxyLocation(location) ? location : 'managed'
+      );
     }
     if (form.dataset.form === 'new-document') {
       const data = new FormData(form);
@@ -252,6 +260,8 @@ function renderNewGalaxyDialog(state: AppState): string {
   if (!state.newGalaxyDialogOpen) {
     return '';
   }
+  const managedActive = state.newGalaxyLocation === 'managed';
+  const chooseActive = state.newGalaxyLocation === 'choose';
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-galaxy">
@@ -260,12 +270,25 @@ function renderNewGalaxyDialog(state: AppState): string {
           <span>Name</span>
           <input name="galaxyName" type="text" autocomplete="off" autofocus required>
         </label>
+        <input name="galaxyLocation" type="hidden" value="${escapeAttr(state.newGalaxyLocation)}">
+        <div class="field-group">
+          <span>Location</span>
+          <div class="segmented-control">
+            <button type="button" class="${managedActive ? 'is-active' : ''}" data-action="set-new-galaxy-location" data-location="managed" aria-pressed="${managedActive ? 'true' : 'false'}">App managed</button>
+            <button type="button" class="${chooseActive ? 'is-active' : ''}" data-action="set-new-galaxy-location" data-location="choose" aria-pressed="${chooseActive ? 'true' : 'false'}">Choose folder</button>
+          </div>
+        </div>
+        <p class="dialog-note">${chooseActive ? 'Pick any folder, including a synced Google Drive or OneDrive folder.' : 'Stored in the app data folder on this device.'}</p>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-new-galaxy">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </form>
     </div>`;
+}
+
+function isNewGalaxyLocation(value: unknown): value is 'managed' | 'choose' {
+  return value === 'managed' || value === 'choose';
 }
 
 function renderNewDocumentDialog(state: AppState): string {

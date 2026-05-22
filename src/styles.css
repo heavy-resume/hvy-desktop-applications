@@ -43,6 +43,10 @@ select {
   padding: 8px 10px;
 }
 
+input[type="hidden"] {
+  display: none;
+}
+
 button:not(:disabled) {
   cursor: pointer;
 }
@@ -416,6 +420,40 @@ button:disabled {
   background: #fbfaf7;
   box-shadow: 0 18px 45px rgba(20, 28, 29, 0.22);
   padding: 18px;
+}
+
+.field-group {
+  display: grid;
+  gap: 7px;
+}
+
+.field-group > span,
+.dialog label > span {
+  color: #394744;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  border: 1px solid #b8c2bd;
+  border-radius: 8px;
+  background: #edf1ed;
+  padding: 3px;
+}
+
+.segmented-control button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.segmented-control button.is-active {
+  border-color: #477d7c;
+  background: #ffffff;
+  color: #163635;
+  font-weight: 650;
 }
 
 .wide-dialog {
