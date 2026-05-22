@@ -1,12 +1,12 @@
 [package]
-name = "hvy-galaxy"
+name = "hvy-workspace"
 version = "0.1.0"
-description = "Desktop galaxy workspace for HVY files"
+description = "Desktop workspace for HVY files"
 authors = ["HVY"]
 edition = "2021"
 
 [lib]
-name = "hvy_galaxy_lib"
+name = "hvy_workspace_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

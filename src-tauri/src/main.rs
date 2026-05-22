@@ -1,3 +1,3 @@
 fn main() {
-    hvy_galaxy_lib::run();
+    hvy_workspace_lib::run();
 }

@@ -1,20 +1,20 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type Galaxy, type GalaxyTreeNode } from './backend';
+import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type Workspace, type WorkspaceTreeNode } from './backend';
 import type { HvyMode } from './hvy';
 import type { AppState } from './state';
 import { hvyTemplates } from './templates';
 
 export interface UiHandlers {
-  newGalaxy(): void;
-  toggleGalaxyActions(path: string): void;
-  closeGalaxyActions(): void;
-  createGalaxy(name: string, location: 'managed' | 'choose'): void;
-  setNewGalaxyLocation(location: 'managed' | 'choose'): void;
-  cancelNewGalaxy(): void;
-  newDocumentInGalaxy(galaxyPath: string): void;
-  createDocumentInGalaxy(name: string, templateId: string): void;
+  newWorkspace(): void;
+  toggleWorkspaceActions(path: string): void;
+  closeWorkspaceActions(): void;
+  createWorkspace(name: string, location: 'managed' | 'choose'): void;
+  setNewWorkspaceLocation(location: 'managed' | 'choose'): void;
+  cancelNewWorkspace(): void;
+  newDocumentInWorkspace(workspacePath: string): void;
+  createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
-  addFilesToGalaxy(galaxyPath: string): void;
+  addFilesToWorkspace(workspacePath: string): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
   openProviderDocs(url: string): void;
@@ -22,9 +22,9 @@ export interface UiHandlers {
   cancelAiSettings(settings?: AiSettings): void;
   restoreBackup(id: string): void;
   cancelRecovery(): void;
-  openGalaxy(): void;
+  openWorkspace(): void;
   openFile(): void;
-  openRecentGalaxy(path: string): void;
+  openRecentWorkspace(path: string): void;
   openRecentFile(path: string): void;
   selectFile(path: string): void;
   setMode(mode: HvyMode): void;
@@ -45,22 +45,22 @@ let bindController: AbortController | null = null;
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   appRoot.innerHTML = `
     <main class="app-shell">
-      <aside class="galaxy-sidebar">
+      <aside class="workspace-sidebar">
         <div class="sidebar-header">
           <div>
-            <h1>HVY Galaxy</h1>
+            <h1>HVY Workspace</h1>
           </div>
           <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
         </div>
         <div class="sidebar-actions">
           <button type="button" data-action="open-file">Open File</button>
         </div>
-        <section class="galaxies-section">
+        <section class="workspaces-section">
           <div class="sidebar-section-heading">
-            <h2>Galaxies</h2>
+            <h2>Workspaces</h2>
           </div>
-          <button type="button" class="secondary-action" data-action="new-galaxy">New Galaxy</button>
-          ${renderGalaxies(state)}
+          <button type="button" class="secondary-action" data-action="new-workspace">New Workspace</button>
+          ${renderWorkspaces(state)}
         </section>
       </aside>
       <section class="document-shell">
@@ -75,7 +75,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
           </div>
         </div>
       </section>
-      ${renderNewGalaxyDialog(state)}
+      ${renderNewWorkspaceDialog(state)}
       ${renderNewDocumentDialog(state)}
       ${renderAiSettingsDialog(state)}
       ${renderRecoveryDialog(state)}
@@ -104,26 +104,26 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
           return;
         }
       }
-      if (!(event.target as HTMLElement).closest('.galaxy-actions-menu')) {
-        handlers.closeGalaxyActions();
+      if (!(event.target as HTMLElement).closest('.workspace-actions-menu')) {
+        handlers.closeWorkspaceActions();
       }
       return;
     }
     if (target.closest('#hvyMount')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
-    if (action === 'new-galaxy') handlers.newGalaxy();
-    if (action === 'toggle-galaxy-actions' && target.dataset.galaxyPath) {
+    if (action === 'new-workspace') handlers.newWorkspace();
+    if (action === 'toggle-workspace-actions' && target.dataset.workspacePath) {
       event.preventDefault();
       event.stopPropagation();
-      handlers.toggleGalaxyActions(target.dataset.galaxyPath);
+      handlers.toggleWorkspaceActions(target.dataset.workspacePath);
     }
-    if (action === 'set-new-galaxy-location' && isNewGalaxyLocation(target.dataset.location)) {
-      handlers.setNewGalaxyLocation(target.dataset.location);
+    if (action === 'set-new-workspace-location' && isNewWorkspaceLocation(target.dataset.location)) {
+      handlers.setNewWorkspaceLocation(target.dataset.location);
     }
-    if (action === 'cancel-new-galaxy') handlers.cancelNewGalaxy();
-    if (action === 'new-document-in-galaxy' && target.dataset.galaxyPath) handlers.newDocumentInGalaxy(target.dataset.galaxyPath);
-    if (action === 'add-files-to-galaxy' && target.dataset.galaxyPath) handlers.addFilesToGalaxy(target.dataset.galaxyPath);
+    if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
+    if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
+    if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'ai-settings') handlers.openAiSettings();
     if (action === 'select-ai-provider' && target.dataset.providerId) {
@@ -141,7 +141,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     }
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
-    if (action === 'open-galaxy') handlers.openGalaxy();
+    if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
     if (action === 'save') handlers.save();
@@ -154,17 +154,17 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (!form) return;
     if (form.closest('#hvyMount')) return;
     event.preventDefault();
-    if (form.dataset.form === 'new-galaxy') {
+    if (form.dataset.form === 'new-workspace') {
       const data = new FormData(form);
-      const location = String(data.get('galaxyLocation') ?? 'managed');
-      handlers.createGalaxy(
-        String(data.get('galaxyName') ?? ''),
-        isNewGalaxyLocation(location) ? location : 'managed'
+      const location = String(data.get('workspaceLocation') ?? 'managed');
+      handlers.createWorkspace(
+        String(data.get('workspaceName') ?? ''),
+        isNewWorkspaceLocation(location) ? location : 'managed'
       );
     }
     if (form.dataset.form === 'new-document') {
       const data = new FormData(form);
-      handlers.createDocumentInGalaxy(
+      handlers.createDocumentInWorkspace(
         String(data.get('documentName') ?? ''),
         String(data.get('templateId') ?? '')
       );
@@ -183,9 +183,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     event.preventDefault();
     handlers.cancelAiSettings(readAiSettingsForm(new FormData(form)));
   }, { signal });
-  root.querySelectorAll<HTMLFormElement>('form[data-form="new-galaxy"]').forEach((form) => {
-    updateNewGalaxySubmit(form);
-    form.addEventListener('input', () => updateNewGalaxySubmit(form), { signal });
+  root.querySelectorAll<HTMLFormElement>('form[data-form="new-workspace"]').forEach((form) => {
+    updateNewWorkspaceSubmit(form);
+    form.addEventListener('input', () => updateNewWorkspaceSubmit(form), { signal });
   });
 }
 
@@ -254,32 +254,32 @@ function modeIcon(mode: HvyMode): string {
   return '';
 }
 
-function renderGalaxies(state: AppState): string {
-  if (state.galaxies.length === 0) {
-    return '<div class="empty-panel">Open or create a galaxy to browse HVY files.</div>';
+function renderWorkspaces(state: AppState): string {
+  if (state.workspaces.length === 0) {
+    return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.galaxies.map((galaxy) => renderGalaxy(galaxy, state.selectedFilePath, state.openGalaxyActionsPath)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath)).join('')}</div>`;
 }
 
-function renderGalaxy(galaxy: Galaxy, selectedFilePath: string | null, openGalaxyActionsPath: string | null): string {
-  const actionsOpen = galaxy.path === openGalaxyActionsPath;
+function renderWorkspace(workspace: Workspace, selectedFilePath: string | null, openWorkspaceActionsPath: string | null): string {
+  const actionsOpen = workspace.path === openWorkspaceActionsPath;
   return `
-    <details class="galaxy-root" open>
-      <summary title="${escapeAttr(galaxy.path)}">
-        <span>${escapeHtml(galaxy.manifest.name)}</span>
+    <details class="workspace-root" open>
+      <summary title="${escapeAttr(workspace.path)}">
+        <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
-      <div class="galaxy-actions-menu${actionsOpen ? ' is-open' : ''}">
-        <button type="button" class="galaxy-action-trigger" data-action="toggle-galaxy-actions" data-galaxy-path="${escapeAttr(galaxy.path)}" title="Galaxy actions" aria-label="Galaxy actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
-        <div class="galaxy-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
-          <button type="button" role="menuitem" data-action="new-document-in-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}">New</button>
-          <button type="button" role="menuitem" data-action="add-files-to-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}">Add</button>
+      <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
+        <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
+        <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
+          <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
+          <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
         </div>
       </div>
-      ${galaxy.files.length === 0 ? '' : `<ul class="tree">${galaxy.files.map((node) => renderNode(node, selectedFilePath)).join('')}</ul>`}
+      ${workspace.files.length === 0 ? '' : `<ul class="tree">${workspace.files.map((node) => renderNode(node, selectedFilePath)).join('')}</ul>`}
     </details>`;
 }
 
-function renderNode(node: GalaxyTreeNode, selectedFilePath: string | null): string {
+function renderNode(node: WorkspaceTreeNode, selectedFilePath: string | null): string {
   if (node.kind === 'folder') {
     return `
       <li>
@@ -304,69 +304,69 @@ function renderEmptyState(state: AppState): string {
   }
   return `
     <div class="empty-state">
-      <h2>Choose a file from a galaxy</h2>
-      <p>Open a galaxy folder or a standalone HVY file to start viewing and editing.</p>
+      <h2>Choose a file from a workspace</h2>
+      <p>Open a workspace folder or a standalone HVY file to start viewing and editing.</p>
       <div>
-        <button type="button" data-action="open-galaxy">Open Galaxy</button>
-        <button type="button" data-action="new-galaxy">New Galaxy</button>
+        <button type="button" data-action="open-workspace">Open Workspace</button>
+        <button type="button" data-action="new-workspace">New Workspace</button>
       </div>
     </div>`;
 }
 
-function renderNewGalaxyDialog(state: AppState): string {
-  if (!state.newGalaxyDialogOpen) {
+function renderNewWorkspaceDialog(state: AppState): string {
+  if (!state.newWorkspaceDialogOpen) {
     return '';
   }
-  const managedActive = state.newGalaxyLocation === 'managed';
-  const chooseActive = state.newGalaxyLocation === 'choose';
-  const existingNames = state.galaxies.map((galaxy) => galaxy.manifest.name.toLowerCase());
+  const managedActive = state.newWorkspaceLocation === 'managed';
+  const chooseActive = state.newWorkspaceLocation === 'choose';
+  const existingNames = state.workspaces.map((workspace) => workspace.manifest.name.toLowerCase());
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="new-galaxy" data-existing-galaxy-names="${escapeAttr(JSON.stringify(existingNames))}">
-        <h2>New Galaxy</h2>
+      <form class="dialog" data-form="new-workspace" data-existing-workspace-names="${escapeAttr(JSON.stringify(existingNames))}">
+        <h2>New Workspace</h2>
         <div class="field-group">
           <span>Location</span>
           <div class="segmented-control">
-            <button type="button" class="${managedActive ? 'is-active' : ''}" data-action="set-new-galaxy-location" data-location="managed" aria-pressed="${managedActive ? 'true' : 'false'}">App managed</button>
-            <button type="button" class="${chooseActive ? 'is-active' : ''}" data-action="set-new-galaxy-location" data-location="choose" aria-pressed="${chooseActive ? 'true' : 'false'}">Choose folder</button>
+            <button type="button" class="${managedActive ? 'is-active' : ''}" data-action="set-new-workspace-location" data-location="managed" aria-pressed="${managedActive ? 'true' : 'false'}">App managed</button>
+            <button type="button" class="${chooseActive ? 'is-active' : ''}" data-action="set-new-workspace-location" data-location="choose" aria-pressed="${chooseActive ? 'true' : 'false'}">Choose folder</button>
           </div>
         </div>
-        <input name="galaxyLocation" type="hidden" value="${escapeAttr(state.newGalaxyLocation)}">
+        <input name="workspaceLocation" type="hidden" value="${escapeAttr(state.newWorkspaceLocation)}">
         ${managedActive ? `
           <label>
             <span>Name</span>
-            <input name="galaxyName" type="text" autocomplete="off" autofocus required>
+            <input name="workspaceName" type="text" autocomplete="off" autofocus required>
           </label>
-          <p class="dialog-note" data-role="galaxy-name-note">Choose a unique name for a new app-managed galaxy.</p>
+          <p class="dialog-note" data-role="workspace-name-note">Choose a unique name for a new app-managed workspace.</p>
         ` : ''}
         <p class="dialog-note">${chooseActive ? 'Pick any folder, including a synced Google Drive or OneDrive folder.' : 'Stored in the app data folder on this device.'}</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-new-galaxy">Cancel</button>
-          <button type="submit" data-role="new-galaxy-submit" ${state.busy || managedActive ? 'disabled' : ''}>${chooseActive ? 'Select' : 'Create'}</button>
+          <button type="button" data-action="cancel-new-workspace">Cancel</button>
+          <button type="submit" data-role="new-workspace-submit" ${state.busy || managedActive ? 'disabled' : ''}>${chooseActive ? 'Select' : 'Create'}</button>
         </div>
       </form>
     </div>`;
 }
 
-function updateNewGalaxySubmit(form: HTMLFormElement): void {
-  const location = new FormData(form).get('galaxyLocation');
-  const submit = form.querySelector<HTMLButtonElement>('[data-role="new-galaxy-submit"]');
+function updateNewWorkspaceSubmit(form: HTMLFormElement): void {
+  const location = new FormData(form).get('workspaceLocation');
+  const submit = form.querySelector<HTMLButtonElement>('[data-role="new-workspace-submit"]');
   if (!submit || location !== 'managed') return;
-  const input = form.querySelector<HTMLInputElement>('input[name="galaxyName"]');
-  const note = form.querySelector<HTMLElement>('[data-role="galaxy-name-note"]');
+  const input = form.querySelector<HTMLInputElement>('input[name="workspaceName"]');
+  const note = form.querySelector<HTMLElement>('[data-role="workspace-name-note"]');
   const name = input?.value.trim().toLowerCase() ?? '';
-  const existingNames = parseExistingGalaxyNames(form.dataset.existingGalaxyNames);
+  const existingNames = parseExistingWorkspaceNames(form.dataset.existingWorkspaceNames);
   const duplicate = name.length > 0 && existingNames.includes(name);
   submit.disabled = name.length === 0 || duplicate;
   if (note) {
     note.textContent = duplicate
-      ? 'A galaxy with that name is already open.'
-      : 'Choose a unique name for a new app-managed galaxy.';
+      ? 'A workspace with that name is already open.'
+      : 'Choose a unique name for a new app-managed workspace.';
     note.dataset.state = duplicate ? 'error' : 'neutral';
   }
 }
 
-function parseExistingGalaxyNames(value: string | undefined): string[] {
+function parseExistingWorkspaceNames(value: string | undefined): string[] {
   if (!value) return [];
   try {
     const names = JSON.parse(value);
@@ -376,12 +376,12 @@ function parseExistingGalaxyNames(value: string | undefined): string[] {
   }
 }
 
-function isNewGalaxyLocation(value: unknown): value is 'managed' | 'choose' {
+function isNewWorkspaceLocation(value: unknown): value is 'managed' | 'choose' {
   return value === 'managed' || value === 'choose';
 }
 
 function renderNewDocumentDialog(state: AppState): string {
-  if (!state.newDocumentGalaxyPath) {
+  if (!state.newDocumentWorkspacePath) {
     return '';
   }
   return `

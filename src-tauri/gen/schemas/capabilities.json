@@ -1,1 +1,1 @@
-{"main":{"identifier":"main","description":"Permissions for the main HVY Galaxy desktop window.","local":true,"windows":["main"],"permissions":["core:default","core:event:default","core:event:allow-listen"]}}
+{"main":{"identifier":"main","description":"Permissions for the main HVY Workspace desktop window.","local":true,"windows":["main"],"permissions":["core:default","core:event:default","core:event:allow-listen"]}}

@@ -1,4 +1,4 @@
-import { defaultAiSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type Galaxy, type GalaxyFileNode, type GalaxyTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import type { HvyMode, MountedDocument } from './hvy';
 
 export interface OpenDocument {
@@ -13,8 +13,8 @@ export interface OpenDocument {
 }
 
 export interface AppState {
-  galaxies: Galaxy[];
-  selectedGalaxyPath: string | null;
+  workspaces: Workspace[];
+  selectedWorkspacePath: string | null;
   selectedFilePath: string | null;
   recent: RecentState;
   aiSettings: AiSettings;
@@ -22,10 +22,10 @@ export interface AppState {
   status: string;
   error: string | null;
   busy: boolean;
-  newGalaxyDialogOpen: boolean;
-  openGalaxyActionsPath: string | null;
-  newGalaxyLocation: 'managed' | 'choose';
-  newDocumentGalaxyPath: string | null;
+  newWorkspaceDialogOpen: boolean;
+  openWorkspaceActionsPath: string | null;
+  newWorkspaceLocation: 'managed' | 'choose';
+  newDocumentWorkspacePath: string | null;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -34,19 +34,19 @@ export interface AppState {
 }
 
 export const state: AppState = {
-  galaxies: [],
-  selectedGalaxyPath: null,
+  workspaces: [],
+  selectedWorkspacePath: null,
   selectedFilePath: null,
-  recent: { galaxies: [], files: [] },
+  recent: { workspaces: [], files: [] },
   aiSettings: defaultAiSettings(),
   document: null,
   status: 'Ready',
   error: null,
   busy: false,
-  newGalaxyDialogOpen: false,
-  openGalaxyActionsPath: null,
-  newGalaxyLocation: 'managed',
-  newDocumentGalaxyPath: null,
+  newWorkspaceDialogOpen: false,
+  openWorkspaceActionsPath: null,
+  newWorkspaceLocation: 'managed',
+  newDocumentWorkspacePath: null,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
@@ -54,8 +54,8 @@ export const state: AppState = {
   recoveryBackups: [],
 };
 
-export function findFileInGalaxy(galaxy: Galaxy, path: string): GalaxyFileNode | null {
-  const visit = (nodes: GalaxyTreeNode[]): GalaxyFileNode | null => {
+export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {
+  const visit = (nodes: WorkspaceTreeNode[]): WorkspaceFileNode | null => {
     for (const node of nodes) {
       if (node.kind === 'file' && node.path === path) {
         return node;
@@ -69,5 +69,5 @@ export function findFileInGalaxy(galaxy: Galaxy, path: string): GalaxyFileNode |
     }
     return null;
   };
-  return visit(galaxy.files);
+  return visit(workspace.files);
 }

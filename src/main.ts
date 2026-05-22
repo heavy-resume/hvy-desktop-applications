@@ -1,16 +1,16 @@
 import './styles.css';
 import { installAiChatClient } from './aiClient';
 import {
-  addFilesToGalaxy,
-  chooseGalaxyFolder,
+  addFilesToWorkspace,
+  chooseWorkspaceFolder,
   createDocumentBackup,
   createDocumentFile,
-  createGalaxy,
-  initializeGalaxyPath,
+  createWorkspace,
+  initializeWorkspacePath,
   isTauriRuntime,
   loadAiSettings,
   loadDefaultGuide,
-  loadGalaxy,
+  loadWorkspace,
   listDocumentBackups,
   loadRecentState,
   onMenuEvent,
@@ -48,105 +48,105 @@ const documentSessions = new Map<string, DocumentSession>();
 const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
 
 const handlers: UiHandlers = {
-  newGalaxy: () => {
-    state.openGalaxyActionsPath = null;
-    state.newGalaxyDialogOpen = true;
-    state.newGalaxyLocation = 'managed';
+  newWorkspace: () => {
+    state.openWorkspaceActionsPath = null;
+    state.newWorkspaceDialogOpen = true;
+    state.newWorkspaceLocation = 'managed';
     state.status = 'Ready';
     rerender();
     requestAnimationFrame(() => {
-      document.querySelector<HTMLInputElement>('input[name="galaxyName"]')?.focus();
+      document.querySelector<HTMLInputElement>('input[name="workspaceName"]')?.focus();
     });
   },
-  toggleGalaxyActions: (path) => {
+  toggleWorkspaceActions: (path) => {
     const document = state.document?.mounted?.document;
-    state.openGalaxyActionsPath = state.openGalaxyActionsPath === path ? null : path;
+    state.openWorkspaceActionsPath = state.openWorkspaceActionsPath === path ? null : path;
     rerender();
     void mountCurrentDocument(document);
   },
-  closeGalaxyActions: () => {
-    if (!state.openGalaxyActionsPath) return;
+  closeWorkspaceActions: () => {
+    if (!state.openWorkspaceActionsPath) return;
     const document = state.document?.mounted?.document;
-    state.openGalaxyActionsPath = null;
+    state.openWorkspaceActionsPath = null;
     rerender();
     void mountCurrentDocument(document);
   },
-  createGalaxy: (name, location) => void runBusy('Creating galaxy...', async () => {
+  createWorkspace: (name, location) => void runBusy('Creating workspace...', async () => {
     const trimmed = name.trim();
     if (location === 'managed' && !trimmed) {
-      state.newGalaxyDialogOpen = true;
-      state.status = 'Galaxy name is required';
+      state.newWorkspaceDialogOpen = true;
+      state.status = 'Workspace name is required';
       return;
     }
-    if (location === 'managed' && hasOpenGalaxyNamed(trimmed)) {
-      state.newGalaxyDialogOpen = true;
-      state.status = 'Galaxy name must be unique';
+    if (location === 'managed' && hasOpenWorkspaceNamed(trimmed)) {
+      state.newWorkspaceDialogOpen = true;
+      state.status = 'Workspace name must be unique';
       return;
     }
-    const galaxy = location === 'choose'
-      ? await createGalaxyInChosenFolder()
-      : await createGalaxy(trimmed);
-    if (!galaxy) {
-      state.newGalaxyDialogOpen = true;
+    const workspace = location === 'choose'
+      ? await createWorkspaceInChosenFolder()
+      : await createWorkspace(trimmed);
+    if (!workspace) {
+      state.newWorkspaceDialogOpen = true;
       state.status = 'Ready';
       return;
     }
-    state.newGalaxyDialogOpen = false;
-    upsertGalaxy(galaxy);
-    state.selectedGalaxyPath = galaxy.path;
+    state.newWorkspaceDialogOpen = false;
+    upsertWorkspace(workspace);
+    state.selectedWorkspacePath = workspace.path;
     await refreshRecents();
   }),
-  setNewGalaxyLocation: (location) => {
-    state.newGalaxyLocation = location;
+  setNewWorkspaceLocation: (location) => {
+    state.newWorkspaceLocation = location;
     state.status = 'Ready';
     rerender();
   },
-  cancelNewGalaxy: () => {
-    state.newGalaxyDialogOpen = false;
+  cancelNewWorkspace: () => {
+    state.newWorkspaceDialogOpen = false;
     state.status = 'Ready';
     rerender();
   },
-  newDocumentInGalaxy: (galaxyPath) => {
-    state.openGalaxyActionsPath = null;
-    state.newDocumentGalaxyPath = galaxyPath;
+  newDocumentInWorkspace: (workspacePath) => {
+    state.openWorkspaceActionsPath = null;
+    state.newDocumentWorkspacePath = workspacePath;
     state.status = 'Ready';
     rerender();
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
     });
   },
-  createDocumentInGalaxy: (name, templateId) => void runBusy('Creating HVY document...', async () => {
-    const galaxyPath = state.newDocumentGalaxyPath;
+  createDocumentInWorkspace: (name, templateId) => void runBusy('Creating HVY document...', async () => {
+    const workspacePath = state.newDocumentWorkspacePath;
     const template = getHvyTemplate(templateId);
     const fileName = documentFileName(name, template);
-    if (!galaxyPath) return;
+    if (!workspacePath) return;
     if (!fileName) {
       state.status = 'Document name is required';
       return;
     }
-    state.newDocumentGalaxyPath = null;
+    state.newDocumentWorkspacePath = null;
     const file = await createDocumentFile({
-      galaxyPath,
+      workspacePath,
       relativePath: fileName,
       template: applyTemplateTitle(template.content, documentTitle(fileName)),
     });
-    upsertGalaxy(await loadGalaxy(galaxyPath));
-    state.selectedGalaxyPath = galaxyPath;
+    upsertWorkspace(await loadWorkspace(workspacePath));
+    state.selectedWorkspacePath = workspacePath;
     await openDocument(file, { isNew: true, deferMount: true });
     await refreshRecents();
   }),
   cancelNewDocument: () => {
-    state.newDocumentGalaxyPath = null;
+    state.newDocumentWorkspacePath = null;
     state.status = 'Ready';
     rerender();
   },
-  addFilesToGalaxy: (galaxyPath) => void runBusy('Adding files...', async () => {
-    state.openGalaxyActionsPath = null;
-    const galaxy = await addFilesToGalaxy(galaxyPath);
-    if (!galaxy) return;
-    upsertGalaxy(galaxy);
-    state.selectedGalaxyPath = galaxy.path;
-    state.status = 'Added files to galaxy';
+  addFilesToWorkspace: (workspacePath) => void runBusy('Adding files...', async () => {
+    state.openWorkspaceActionsPath = null;
+    const workspace = await addFilesToWorkspace(workspacePath);
+    if (!workspace) return;
+    upsertWorkspace(workspace);
+    state.selectedWorkspacePath = workspace.path;
+    state.status = 'Added files to workspace';
     await refreshRecents();
   }),
   openAiSettings: () => {
@@ -203,18 +203,18 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender();
   },
-  openGalaxy: () => void runBusy('Opening galaxy...', async () => {
-    const candidate = await chooseGalaxyFolder();
+  openWorkspace: () => void runBusy('Opening workspace...', async () => {
+    const candidate = await chooseWorkspaceFolder();
     if (!candidate) return;
-    const galaxy = candidate.hasManifest
-      ? await loadGalaxy(candidate.path)
-      : await confirmGalaxyInitialization(candidate.path, candidate.defaultName);
-    if (!galaxy) {
+    const workspace = candidate.hasManifest
+      ? await loadWorkspace(candidate.path)
+      : await confirmWorkspaceInitialization(candidate.path, candidate.defaultName);
+    if (!workspace) {
       state.status = 'Ready';
       return;
     }
-    upsertGalaxy(galaxy);
-    state.selectedGalaxyPath = galaxy.path;
+    upsertWorkspace(workspace);
+    state.selectedWorkspacePath = workspace.path;
     await refreshRecents();
     rerender();
   }),
@@ -224,9 +224,9 @@ const handlers: UiHandlers = {
     await openDocument(file, { deferMount: true });
     await refreshRecents();
   }),
-  openRecentGalaxy: (path) => void runBusy('Opening recent galaxy...', async () => {
-    upsertGalaxy(await loadGalaxy(path));
-    state.selectedGalaxyPath = path;
+  openRecentWorkspace: (path) => void runBusy('Opening recent workspace...', async () => {
+    upsertWorkspace(await loadWorkspace(path));
+    state.selectedWorkspacePath = path;
     await refreshRecents();
     rerender();
   }),
@@ -268,20 +268,20 @@ async function boot(): Promise<void> {
     await refreshRecents();
     state.aiSettings = await loadAiSettings();
     installAiChatClient(state.aiSettings);
-    await loadRecentGalaxies();
+    await loadRecentWorkspaces();
     mountRoot = render(state, handlers);
     await openDefaultGuide();
     startBackupTimer();
     await onMenuEvent((event) => {
-      if (event === 'new-galaxy') handlers.newGalaxy();
-      if (event === 'open-galaxy') handlers.openGalaxy();
+      if (event === 'new-workspace') handlers.newWorkspace();
+      if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
       if (event === 'open-guide') void openDefaultGuide({ force: true });
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
-      if (event.startsWith('recent-galaxy:')) handlers.openRecentGalaxy(event.slice('recent-galaxy:'.length));
+      if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
     });
   } catch (error) {
@@ -293,15 +293,15 @@ async function refreshRecents(): Promise<void> {
   state.recent = await loadRecentState();
 }
 
-async function loadRecentGalaxies(): Promise<void> {
-  for (const path of state.recent.galaxies) {
+async function loadRecentWorkspaces(): Promise<void> {
+  for (const path of state.recent.workspaces) {
     try {
-      upsertGalaxy(await loadGalaxy(path));
+      upsertWorkspace(await loadWorkspace(path));
     } catch {
       // Recents are pruned by the backend when they are opened or reloaded.
     }
   }
-  state.selectedGalaxyPath = state.galaxies[0]?.path ?? null;
+  state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
 }
 
 async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
@@ -450,7 +450,7 @@ async function saveCurrentDocument(): Promise<void> {
     state.status = `Saved ${state.document.name}`;
     const document = state.document.mounted.document;
     updateCurrentDocumentSession(document);
-    await refreshOpenGalaxyForFile(state.document.path);
+    await refreshOpenWorkspaceForFile(state.document.path);
     await refreshRecents();
     rerender();
     await mountCurrentDocument(document);
@@ -492,7 +492,7 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
   updateCurrentDocumentSession(document);
   state.selectedFilePath = file.path;
   state.status = `Saved ${file.name}`;
-  await refreshOpenGalaxyForFile(file.path);
+  await refreshOpenWorkspaceForFile(file.path);
   await refreshRecents();
   rerender();
   await mountCurrentDocument(document);
@@ -583,29 +583,29 @@ async function createBlankDocument(): Promise<void> {
   });
 }
 
-async function refreshOpenGalaxyForFile(filePath: string): Promise<void> {
-  const galaxy = state.galaxies.find((candidate) => filePath.startsWith(candidate.path));
-  if (!galaxy) return;
-  upsertGalaxy(await loadGalaxy(galaxy.path));
+async function refreshOpenWorkspaceForFile(filePath: string): Promise<void> {
+  const workspace = state.workspaces.find((candidate) => filePath.startsWith(candidate.path));
+  if (!workspace) return;
+  upsertWorkspace(await loadWorkspace(workspace.path));
 }
 
-function upsertGalaxy(galaxy: Awaited<ReturnType<typeof loadGalaxy>>): void {
-  const index = state.galaxies.findIndex((candidate) => candidate.path === galaxy.path);
+function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): void {
+  const index = state.workspaces.findIndex((candidate) => candidate.path === workspace.path);
   if (index >= 0) {
-    state.galaxies[index] = galaxy;
+    state.workspaces[index] = workspace;
   } else {
-    state.galaxies.push(galaxy);
+    state.workspaces.push(workspace);
   }
-  sortGalaxies();
+  sortWorkspaces();
 }
 
-function sortGalaxies(): void {
-  state.galaxies.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
+function sortWorkspaces(): void {
+  state.workspaces.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
 }
 
-function hasOpenGalaxyNamed(name: string): boolean {
+function hasOpenWorkspaceNamed(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  return state.galaxies.some((galaxy) => galaxy.manifest.name.trim().toLowerCase() === normalized);
+  return state.workspaces.some((workspace) => workspace.manifest.name.trim().toLowerCase() === normalized);
 }
 
 function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
@@ -666,15 +666,15 @@ function applyTemplateTitle(template: string, title: string): string {
 }
 
 function documentStorageKey(identifier: string): string {
-  return `hvy-galaxy:document:${identifier}`;
+  return `hvy-workspace:document:${identifier}`;
 }
 
 function closeUiBeforeAiSettings(): void {
-  state.newGalaxyDialogOpen = false;
-  state.newDocumentGalaxyPath = null;
+  state.newWorkspaceDialogOpen = false;
+  state.newDocumentWorkspacePath = null;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
-  state.openGalaxyActionsPath = null;
+  state.openWorkspaceActionsPath = null;
   closeMountedTransientUi();
 }
 
@@ -716,20 +716,20 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
   };
 }
 
-async function confirmGalaxyInitialization(path: string, defaultName: string) {
+async function confirmWorkspaceInitialization(path: string, defaultName: string) {
   const shouldInitialize = window.confirm(
-    `"${defaultName}" is not an HVY galaxy yet. Create .hvygalaxy.json in this folder?`
+    `"${defaultName}" is not an HVY workspace yet. Create .hvyworkspace.json in this folder?`
   );
-  return shouldInitialize ? initializeGalaxyPath(path) : null;
+  return shouldInitialize ? initializeWorkspacePath(path) : null;
 }
 
-async function createGalaxyInChosenFolder() {
-  const candidate = await chooseGalaxyFolder();
+async function createWorkspaceInChosenFolder() {
+  const candidate = await chooseWorkspaceFolder();
   if (!candidate) return null;
   if (candidate.hasManifest) {
-    return loadGalaxy(candidate.path);
+    return loadWorkspace(candidate.path);
   }
-  return initializeGalaxyPath(candidate.path);
+  return initializeWorkspacePath(candidate.path);
 }
 
 function setupErrorSurface(): void {

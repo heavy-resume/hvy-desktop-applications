@@ -118,7 +118,7 @@ button:disabled {
   height: 100vh;
 }
 
-.galaxy-sidebar {
+.workspace-sidebar {
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -137,7 +137,7 @@ button:disabled {
 
 .sidebar-header h1,
 .sidebar-section-heading h2,
-.galaxy-root summary {
+.workspace-root summary {
   margin: 0;
   color: #152223;
 }
@@ -160,14 +160,14 @@ button:disabled {
   gap: 8px;
 }
 
-.galaxies-section,
+.workspaces-section,
 .tree-list,
-.galaxy-root {
+.workspace-root {
   display: grid;
   gap: 8px;
 }
 
-.galaxy-root {
+.workspace-root {
   position: relative;
 }
 
@@ -177,7 +177,7 @@ button:disabled {
 }
 
 .sidebar-section-heading h2,
-.galaxy-root summary {
+.workspace-root summary {
   overflow: hidden;
   font-size: 13px;
   text-overflow: ellipsis;
@@ -185,13 +185,13 @@ button:disabled {
   white-space: nowrap;
 }
 
-.galaxy-root summary {
+.workspace-root summary {
   cursor: pointer;
   list-style-position: inside;
   padding-right: 34px;
 }
 
-.galaxy-root summary span {
+.workspace-root summary span {
   display: inline-block;
   max-width: calc(100% - 18px);
   overflow: hidden;
@@ -244,14 +244,14 @@ button:disabled {
   line-height: 1;
 }
 
-.galaxy-actions-menu {
+.workspace-actions-menu {
   position: absolute;
   z-index: 5;
   top: -4px;
   right: 0;
 }
 
-.galaxy-action-trigger {
+.workspace-action-trigger {
   width: 26px;
   height: 26px;
   padding: 0;
@@ -259,7 +259,7 @@ button:disabled {
   line-height: 1;
 }
 
-.galaxy-action-popover {
+.workspace-action-popover {
   position: absolute;
   top: 30px;
   right: 0;
@@ -272,12 +272,12 @@ button:disabled {
   padding: 4px;
 }
 
-.galaxy-actions-menu.is-open .galaxy-action-popover {
+.workspace-actions-menu.is-open .workspace-action-popover {
   display: grid;
   gap: 2px;
 }
 
-.galaxy-action-popover button {
+.workspace-action-popover button {
   width: 100%;
   justify-content: flex-start;
   border-color: transparent;

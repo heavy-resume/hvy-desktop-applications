@@ -1,4 +1,4 @@
-# HVY Galaxy Desktop
+# HVY Workspace Desktop
 
 Cross-platform desktop workspace for HVY files. The app is a Tauri v2 shell with
 a Vanilla TypeScript/Vite frontend and the HVY reference implementation mounted
@@ -6,19 +6,19 @@ inside the document pane.
 
 ## Current Features
 
-- Folder-backed galaxies using `.hvygalaxy.json`.
-- Galaxies can be created in app-managed storage or in any folder, including
+- Folder-backed workspaces using `.hvyworkspace.json`.
+- Workspaces can be created in app-managed storage or in any folder, including
   folders synced by Google Drive, Microsoft OneDrive, iCloud Drive, or Dropbox.
 - Recursive `.hvy`, `.thvy`, and `.md` file tree.
 - HVY viewer/editor mounting through `../heavy-file-format`.
 - Atomic saves through the Tauri backend.
-- Recent galaxies and files persisted in app data.
-- Native File menu commands for New Galaxy, Open Galaxy, Open File, and Save.
+- Recent workspaces and files persisted in app data.
+- Native File menu commands for New Workspace, Open Workspace, Open File, and Save.
 - Built-in HVY plugins only.
 
 ## Sync Model
 
-The first sync path is folder based: put a galaxy in any desktop sync folder and
+The first sync path is folder based: put a workspace in any desktop sync folder and
 open the same folder on another device. A future provider-backed path can add
 Google Drive or Microsoft OneDrive sign-in for devices that do not already have
 a desktop sync client installed.

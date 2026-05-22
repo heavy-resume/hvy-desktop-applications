@@ -1,9 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "HVY Galaxy",
-  "mainBinaryName": "HVY Galaxy",
+  "productName": "HVY Workspace",
+  "mainBinaryName": "HVY Workspace",
   "version": "0.1.0",
-  "identifier": "com.hvy.galaxy",
+  "identifier": "com.hvy.workspace",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "HVY Galaxy",
+        "title": "HVY Workspace",
         "width": 1200,
         "height": 780,
         "minWidth": 920,
@@ -35,7 +35,7 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
-    "shortDescription": "HVY galaxy workspace",
+    "shortDescription": "HVY workspace",
     "longDescription": "Cross-platform desktop workspace for viewing and editing HVY files.",
     "macOS": {
       "minimumSystemVersion": "10.13"

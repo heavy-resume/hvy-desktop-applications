@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 
 export type DocumentExtension = '.hvy' | '.thvy' | '.md';
 
-export interface GalaxyManifest {
+export interface WorkspaceManifest {
   schemaVersion: 1;
   name: string;
   createdAt: string;
@@ -12,38 +12,38 @@ export interface GalaxyManifest {
   expandedPaths?: string[];
 }
 
-export interface GalaxyFileNode {
+export interface WorkspaceFileNode {
   name: string;
   path: string;
   relativePath: string;
   extension: DocumentExtension;
 }
 
-export interface GalaxyFolderNode {
+export interface WorkspaceFolderNode {
   name: string;
   path: string;
   relativePath: string;
-  children: GalaxyTreeNode[];
+  children: WorkspaceTreeNode[];
 }
 
-export type GalaxyTreeNode =
-  | ({ kind: 'folder' } & GalaxyFolderNode)
-  | ({ kind: 'file' } & GalaxyFileNode);
+export type WorkspaceTreeNode =
+  | ({ kind: 'folder' } & WorkspaceFolderNode)
+  | ({ kind: 'file' } & WorkspaceFileNode);
 
-export interface Galaxy {
+export interface Workspace {
   path: string;
-  manifest: GalaxyManifest;
-  files: GalaxyTreeNode[];
+  manifest: WorkspaceManifest;
+  files: WorkspaceTreeNode[];
 }
 
-export interface GalaxyOpenCandidate {
+export interface WorkspaceOpenCandidate {
   path: string;
   hasManifest: boolean;
   defaultName: string;
 }
 
 export interface RecentState {
-  galaxies: string[];
+  workspaces: string[];
   files: string[];
 }
 
@@ -65,7 +65,7 @@ export interface SaveDocumentAsRequest {
 }
 
 export interface CreateDocumentRequest {
-  galaxyPath: string;
+  workspacePath: string;
   relativePath: string;
   template: string;
 }
@@ -120,7 +120,7 @@ function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Prom
 
 export function loadRecentState(): Promise<RecentState> {
   if (!isTauriRuntime()) {
-    return Promise.resolve({ galaxies: [], files: [] });
+    return Promise.resolve({ workspaces: [], files: [] });
   }
   return invokeDesktop('load_recent_state');
 }
@@ -168,32 +168,32 @@ export function loadDefaultGuide(): Promise<DocumentFile> {
   return invokeDesktop('load_default_guide');
 }
 
-export function openGalaxyDialog(): Promise<Galaxy | null> {
-  return invokeDesktop('open_galaxy_dialog');
+export function openWorkspaceDialog(): Promise<Workspace | null> {
+  return invokeDesktop('open_workspace_dialog');
 }
 
-export function chooseGalaxyFolder(): Promise<GalaxyOpenCandidate | null> {
-  return invokeDesktop('choose_galaxy_folder');
+export function chooseWorkspaceFolder(): Promise<WorkspaceOpenCandidate | null> {
+  return invokeDesktop('choose_workspace_folder');
 }
 
-export function createGalaxy(name: string): Promise<Galaxy> {
-  return invokeDesktop('create_galaxy', { name });
+export function createWorkspace(name: string): Promise<Workspace> {
+  return invokeDesktop('create_workspace', { name });
 }
 
-export function newGalaxyDialog(): Promise<Galaxy | null> {
-  return invokeDesktop('new_galaxy_dialog');
+export function newWorkspaceDialog(): Promise<Workspace | null> {
+  return invokeDesktop('new_workspace_dialog');
 }
 
-export function initializeGalaxyPath(path: string): Promise<Galaxy> {
-  return invokeDesktop('initialize_galaxy_path', { path });
+export function initializeWorkspacePath(path: string): Promise<Workspace> {
+  return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export function loadGalaxy(path: string): Promise<Galaxy> {
-  return invokeDesktop('load_galaxy', { path });
+export function loadWorkspace(path: string): Promise<Workspace> {
+  return invokeDesktop('load_workspace', { path });
 }
 
-export function addFilesToGalaxy(galaxyPath: string): Promise<Galaxy | null> {
-  return invokeDesktop('add_files_to_galaxy', { galaxyPath });
+export function addFilesToWorkspace(workspacePath: string): Promise<Workspace | null> {
+  return invokeDesktop('add_files_to_workspace', { workspacePath });
 }
 
 export function openFileDialog(): Promise<DocumentFile | null> {
@@ -214,7 +214,7 @@ export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<Do
 
 export function createDocumentFile(request: CreateDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('create_document_file', {
-    galaxyPath: request.galaxyPath,
+    workspacePath: request.workspacePath,
     relativePath: request.relativePath,
     template: request.template,
   });

@@ -10,7 +10,8 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuild
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 
-const GALAXY_MANIFEST: &str = ".hvygalaxy.json";
+const WORKSPACE_MANIFEST: &str = ".hvyworkspace.json";
+const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const AI_SETTINGS: &str = "ai-settings.json";
 const RECENT_LIMIT: usize = 12;
@@ -39,7 +40,7 @@ type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct GalaxyManifest {
+struct WorkspaceManifest {
     schema_version: u8,
     name: String,
     created_at: String,
@@ -52,15 +53,15 @@ struct GalaxyManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct Galaxy {
+struct Workspace {
     path: String,
-    manifest: GalaxyManifest,
-    files: Vec<GalaxyTreeNode>,
+    manifest: WorkspaceManifest,
+    files: Vec<WorkspaceTreeNode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct GalaxyOpenCandidate {
+struct WorkspaceOpenCandidate {
     path: String,
     has_manifest: bool,
     default_name: String,
@@ -68,12 +69,12 @@ struct GalaxyOpenCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-enum GalaxyTreeNode {
+enum WorkspaceTreeNode {
     Folder {
         name: String,
         path: String,
         relative_path: String,
-        children: Vec<GalaxyTreeNode>,
+        children: Vec<WorkspaceTreeNode>,
     },
     File {
         name: String,
@@ -86,8 +87,8 @@ enum GalaxyTreeNode {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct RecentState {
-    #[serde(default)]
-    galaxies: Vec<String>,
+    #[serde(default, alias = "galaxies")]
+    workspaces: Vec<String>,
     #[serde(default)]
     files: Vec<String>,
 }
@@ -296,74 +297,74 @@ fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
 }
 
 #[tauri::command]
-fn open_galaxy_dialog(app: AppHandle) -> AppResult<Option<Galaxy>> {
+fn open_workspace_dialog(app: AppHandle) -> AppResult<Option<Workspace>> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);
     };
-    let galaxy = ensure_galaxy(&path)?;
-    add_recent_galaxy(&app, &path)?;
-    Ok(Some(galaxy))
+    let workspace = ensure_workspace(&path)?;
+    add_recent_workspace(&app, &path)?;
+    Ok(Some(workspace))
 }
 
 #[tauri::command]
-fn choose_galaxy_folder() -> AppResult<Option<GalaxyOpenCandidate>> {
+fn choose_workspace_folder() -> AppResult<Option<WorkspaceOpenCandidate>> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);
     };
-    Ok(Some(GalaxyOpenCandidate {
-        has_manifest: path.join(GALAXY_MANIFEST).exists(),
+    Ok(Some(WorkspaceOpenCandidate {
+        has_manifest: workspace_manifest_path(&path).is_some(),
         default_name: path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("Untitled Galaxy")
+            .unwrap_or("Untitled Workspace")
             .to_string(),
         path: path_to_string(&path),
     }))
 }
 
 #[tauri::command]
-fn create_galaxy(app: AppHandle, name: String) -> AppResult<Galaxy> {
+fn create_workspace(app: AppHandle, name: String) -> AppResult<Workspace> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(AppError::Message("Galaxy name is required.".into()));
+        return Err(AppError::Message("Workspace name is required.".into()));
     }
-    let path = unique_managed_galaxy_path(&app, name)?;
+    let path = unique_managed_workspace_path(&app, name)?;
     fs::create_dir_all(&path)?;
-    let galaxy = initialize_galaxy_with_name(&path, Some(name))?;
-    add_recent_galaxy(&app, &path)?;
-    Ok(galaxy)
+    let workspace = initialize_workspace_with_name(&path, Some(name))?;
+    add_recent_workspace(&app, &path)?;
+    Ok(workspace)
 }
 
 #[tauri::command]
-fn new_galaxy_dialog(app: AppHandle) -> AppResult<Option<Galaxy>> {
+fn new_workspace_dialog(app: AppHandle) -> AppResult<Option<Workspace>> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);
     };
-    let galaxy = initialize_galaxy(&path)?;
-    add_recent_galaxy(&app, &path)?;
-    Ok(Some(galaxy))
+    let workspace = initialize_workspace(&path)?;
+    add_recent_workspace(&app, &path)?;
+    Ok(Some(workspace))
 }
 
 #[tauri::command]
-fn initialize_galaxy_path(app: AppHandle, path: String) -> AppResult<Galaxy> {
+fn initialize_workspace_path(app: AppHandle, path: String) -> AppResult<Workspace> {
     let path = PathBuf::from(path);
-    let galaxy = initialize_galaxy(&path)?;
-    add_recent_galaxy(&app, &path)?;
-    Ok(galaxy)
+    let workspace = initialize_workspace(&path)?;
+    add_recent_workspace(&app, &path)?;
+    Ok(workspace)
 }
 
 #[tauri::command]
-fn load_galaxy(app: AppHandle, path: String) -> AppResult<Galaxy> {
+fn load_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
     let path = PathBuf::from(path);
-    let galaxy = ensure_galaxy(&path)?;
-    add_recent_galaxy(&app, &path)?;
-    Ok(galaxy)
+    let workspace = ensure_workspace(&path)?;
+    add_recent_workspace(&app, &path)?;
+    Ok(workspace)
 }
 
 #[tauri::command]
-fn add_files_to_galaxy(app: AppHandle, galaxy_path: String) -> AppResult<Option<Galaxy>> {
-    let galaxy_path = PathBuf::from(galaxy_path);
-    ensure_galaxy(&galaxy_path)?;
+fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<Option<Workspace>> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
     let Some(paths) = rfd::FileDialog::new()
         .add_filter("Supported documents", &["hvy", "thvy", "md"])
         .add_filter("HVY documents", &["hvy", "thvy"])
@@ -377,23 +378,23 @@ fn add_files_to_galaxy(app: AppHandle, galaxy_path: String) -> AppResult<Option<
     for source in paths {
         if document_extension(&source).is_none() {
             return Err(AppError::Message(
-                "Only .hvy, .thvy, and .md documents can be added to a galaxy.".into(),
+                "Only .hvy, .thvy, and .md documents can be added to a workspace.".into(),
             ));
         }
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
-        let destination = unique_copy_path(&galaxy_path, file_name);
+        let destination = unique_copy_path(&workspace_path, file_name);
         fs::copy(&source, &destination)?;
         copied.push(destination);
     }
 
-    touch_galaxy_manifest(&galaxy_path)?;
-    add_recent_galaxy(&app, &galaxy_path)?;
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
     for path in copied {
         add_recent_file(&app, &path)?;
     }
-    Ok(Some(load_galaxy_from_path(&galaxy_path)?))
+    Ok(Some(load_workspace_from_path(&workspace_path)?))
 }
 
 #[tauri::command]
@@ -453,16 +454,16 @@ fn save_document_as_dialog(
 #[tauri::command]
 fn create_document_file(
     app: AppHandle,
-    galaxy_path: String,
+    workspace_path: String,
     relative_path: String,
     template: String,
 ) -> AppResult<DocumentFile> {
-    let galaxy_path = PathBuf::from(galaxy_path);
+    let workspace_path = PathBuf::from(workspace_path);
     let relative = PathBuf::from(relative_path);
     if relative.is_absolute() || relative.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
-        return Err(AppError::Message("Document path must stay inside the galaxy.".into()));
+        return Err(AppError::Message("Document path must stay inside the workspace.".into()));
     }
-    let path = galaxy_path.join(relative);
+    let path = workspace_path.join(relative);
     if path.exists() {
         return Err(AppError::Message("A document already exists at that path.".into()));
     }
@@ -470,7 +471,7 @@ fn create_document_file(
         fs::create_dir_all(parent)?;
     }
     write_file_atomically(&path, template.as_bytes())?;
-    touch_galaxy_manifest(&galaxy_path)?;
+    touch_workspace_manifest(&workspace_path)?;
     add_recent_file(&app, &path)?;
     Ok(read_document_at(&path)?)
 }
@@ -558,8 +559,8 @@ pub fn run() {
                 let id = event.id().as_ref();
                 if matches!(
                     id,
-                    "new-galaxy"
-                        | "open-galaxy"
+                    "new-workspace"
+                        | "open-workspace"
                         | "open-file"
                         | "open-guide"
                         | "ai-settings"
@@ -568,7 +569,7 @@ pub fn run() {
                         | "recover-backup"
                 )
                     || id.starts_with("recent-file:")
-                    || id.starts_with("recent-galaxy:")
+                    || id.starts_with("recent-workspace:")
                 {
                     let _ = app.emit("menu-event", id.to_string());
                 }
@@ -580,13 +581,13 @@ pub fn run() {
             load_ai_settings,
             save_ai_settings,
             load_default_guide,
-            open_galaxy_dialog,
-            choose_galaxy_folder,
-            create_galaxy,
-            new_galaxy_dialog,
-            initialize_galaxy_path,
-            load_galaxy,
-            add_files_to_galaxy,
+            open_workspace_dialog,
+            choose_workspace_folder,
+            create_workspace,
+            new_workspace_dialog,
+            initialize_workspace_path,
+            load_workspace,
+            add_files_to_workspace,
             open_file_dialog,
             read_document_file,
             save_document_file,
@@ -598,7 +599,7 @@ pub fn run() {
             open_external_url
         ])
         .run(tauri::generate_context!())
-        .expect("error while running HVY Galaxy");
+        .expect("error while running HVY Workspace");
 }
 
 #[cfg(target_os = "macos")]
@@ -606,11 +607,11 @@ fn set_native_process_name() {
     use objc2_foundation::{NSProcessInfo, NSString};
     use std::ffi::CStr;
 
-    let app_name = CStr::from_bytes_with_nul(b"HVY Galaxy\0").expect("static app name is nul-terminated");
+    let app_name = CStr::from_bytes_with_nul(b"HVY Workspace\0").expect("static app name is nul-terminated");
     unsafe {
         libc::setprogname(app_name.as_ptr());
     }
-    let process_name = NSString::from_str("HVY Galaxy");
+    let process_name = NSString::from_str("HVY Workspace");
     NSProcessInfo::processInfo().setProcessName(&process_name);
 }
 
@@ -623,25 +624,25 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .and_then(|path| read_recent_state(&path).ok())
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
-    let recent_galaxies = build_recent_galaxies_menu(app, &recent)?;
-    let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
-        .item(&PredefinedMenuItem::about(app, Some("About HVY Galaxy"), None)?)
+    let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
+    let app_menu = SubmenuBuilder::new(app, "HVY Workspace")
+        .item(&PredefinedMenuItem::about(app, Some("About HVY Workspace"), None)?)
         .separator()
         .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Galaxy"))?)
+        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Workspace"))?)
         .item(&PredefinedMenuItem::hide_others(app, Some("Hide Others"))?)
         .item(&PredefinedMenuItem::show_all(app, Some("Show All"))?)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
+        .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Workspace"))?)
         .build()?;
     let file = SubmenuBuilder::new(app, "File")
-        .item(&MenuItemBuilder::new("New Galaxy").id("new-galaxy").accelerator("CmdOrCtrl+N").build(app)?)
-        .item(&MenuItemBuilder::new("Open Galaxy").id("open-galaxy").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(&MenuItemBuilder::new("New Workspace").id("new-workspace").accelerator("CmdOrCtrl+N").build(app)?)
+        .item(&MenuItemBuilder::new("Open Workspace").id("open-workspace").accelerator("CmdOrCtrl+O").build(app)?)
         .item(&MenuItemBuilder::new("Open File").id("open-file").accelerator("CmdOrCtrl+Shift+O").build(app)?)
-        .item(&recent_galaxies)
+        .item(&recent_workspaces)
         .item(&recent_files)
         .separator()
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
@@ -690,18 +691,18 @@ fn build_recent_files_menu(
     builder.build()
 }
 
-fn build_recent_galaxies_menu(
+fn build_recent_workspaces_menu(
     app: &AppHandle,
     recent: &RecentState,
 ) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
-    let mut builder = SubmenuBuilder::new(app, "Recent Galaxies");
-    if recent.galaxies.is_empty() {
-        builder = builder.item(&MenuItemBuilder::new("No Recent Galaxies").id("recent-galaxies-empty").build(app)?);
+    let mut builder = SubmenuBuilder::new(app, "Recent Workspaces");
+    if recent.workspaces.is_empty() {
+        builder = builder.item(&MenuItemBuilder::new("No Recent Workspaces").id("recent-workspaces-empty").build(app)?);
     } else {
-        for path in &recent.galaxies {
+        for path in &recent.workspaces {
             builder = builder.item(
                 &MenuItemBuilder::new(menu_label(path))
-                    .id(format!("recent-galaxy:{path}"))
+                    .id(format!("recent-workspace:{path}"))
                     .build(app)?,
             );
         }
@@ -709,28 +710,28 @@ fn build_recent_galaxies_menu(
     builder.build()
 }
 
-fn ensure_galaxy(path: &Path) -> AppResult<Galaxy> {
-    if path.join(GALAXY_MANIFEST).exists() {
-        load_galaxy_from_path(path)
+fn ensure_workspace(path: &Path) -> AppResult<Workspace> {
+    if workspace_manifest_path(path).is_some() {
+        load_workspace_from_path(path)
     } else {
-        initialize_galaxy(path)
+        initialize_workspace(path)
     }
 }
 
-fn initialize_galaxy(path: &Path) -> AppResult<Galaxy> {
-    initialize_galaxy_with_name(path, None)
+fn initialize_workspace(path: &Path) -> AppResult<Workspace> {
+    initialize_workspace_with_name(path, None)
 }
 
-fn initialize_galaxy_with_name(path: &Path, name: Option<&str>) -> AppResult<Galaxy> {
+fn initialize_workspace_with_name(path: &Path, name: Option<&str>) -> AppResult<Workspace> {
     if !path.is_dir() {
-        return Err(AppError::Message("Galaxy path must be a folder.".into()));
+        return Err(AppError::Message("Workspace path must be a folder.".into()));
     }
-    let manifest_path = path.join(GALAXY_MANIFEST);
+    let manifest_path = workspace_manifest_path(path).unwrap_or_else(|| path.join(WORKSPACE_MANIFEST));
     let now = Utc::now().to_rfc3339();
     let manifest = if manifest_path.exists() {
         read_manifest(&manifest_path)?
     } else {
-        GalaxyManifest {
+        WorkspaceManifest {
             schema_version: 1,
             name: name
                 .map(ToOwned::to_owned)
@@ -739,7 +740,7 @@ fn initialize_galaxy_with_name(path: &Path, name: Option<&str>) -> AppResult<Gal
                         .and_then(|name| name.to_str())
                         .map(ToOwned::to_owned)
                 })
-                .unwrap_or_else(|| "Untitled Galaxy".into()),
+                .unwrap_or_else(|| "Untitled Workspace".into()),
             created_at: now.clone(),
             updated_at: now,
             root_files: Vec::new(),
@@ -747,18 +748,18 @@ fn initialize_galaxy_with_name(path: &Path, name: Option<&str>) -> AppResult<Gal
         }
     };
     write_json_atomically(&manifest_path, &manifest)?;
-    load_galaxy_from_path(path)
+    load_workspace_from_path(path)
 }
 
-fn unique_managed_galaxy_path(app: &AppHandle, name: &str) -> AppResult<PathBuf> {
+fn unique_managed_workspace_path(app: &AppHandle, name: &str) -> AppResult<PathBuf> {
     let directory = app
         .path()
         .app_data_dir()
         .map_err(|error| AppError::Message(error.to_string()))?
-        .join("galaxies");
+        .join("workspaces");
     fs::create_dir_all(&directory)?;
 
-    let slug = galaxy_folder_name(name);
+    let slug = workspace_folder_name(name);
     let mut candidate = directory.join(&slug);
     let mut suffix = 2;
     while candidate.exists() {
@@ -768,7 +769,7 @@ fn unique_managed_galaxy_path(app: &AppHandle, name: &str) -> AppResult<PathBuf>
     Ok(candidate)
 }
 
-fn galaxy_folder_name(name: &str) -> String {
+fn workspace_folder_name(name: &str) -> String {
     let mut slug = String::new();
     let mut last_was_separator = false;
     for character in name.trim().chars() {
@@ -784,45 +785,55 @@ fn galaxy_folder_name(name: &str) -> String {
         slug.pop();
     }
     if slug.is_empty() {
-        "galaxy".into()
+        "workspace".into()
     } else {
         slug
     }
 }
 
-fn load_galaxy_from_path(path: &Path) -> AppResult<Galaxy> {
-    let manifest = read_manifest(&path.join(GALAXY_MANIFEST))?;
-    Ok(Galaxy {
+fn load_workspace_from_path(path: &Path) -> AppResult<Workspace> {
+    let manifest_path = workspace_manifest_path(path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let manifest = read_manifest(&manifest_path)?;
+    Ok(Workspace {
         path: path_to_string(path),
         manifest,
-        files: scan_galaxy_files(path)?,
+        files: scan_workspace_files(path)?,
     })
 }
 
-fn read_manifest(path: &Path) -> AppResult<GalaxyManifest> {
+fn read_manifest(path: &Path) -> AppResult<WorkspaceManifest> {
     let bytes = fs::read(path)?;
-    let manifest: GalaxyManifest = serde_json::from_slice(&bytes)?;
+    let manifest: WorkspaceManifest = serde_json::from_slice(&bytes)?;
     if manifest.schema_version != 1 {
-        return Err(AppError::Message("Unsupported galaxy schema version.".into()));
+        return Err(AppError::Message("Unsupported workspace schema version.".into()));
     }
     Ok(manifest)
 }
 
-fn touch_galaxy_manifest(path: &Path) -> AppResult<()> {
-    let manifest_path = path.join(GALAXY_MANIFEST);
-    if !manifest_path.exists() {
+fn touch_workspace_manifest(path: &Path) -> AppResult<()> {
+    let Some(manifest_path) = workspace_manifest_path(path) else {
         return Ok(());
-    }
+    };
     let mut manifest = read_manifest(&manifest_path)?;
     manifest.updated_at = Utc::now().to_rfc3339();
     write_json_atomically(&manifest_path, &manifest)
 }
 
-fn scan_galaxy_files(root: &Path) -> AppResult<Vec<GalaxyTreeNode>> {
+fn workspace_manifest_path(path: &Path) -> Option<PathBuf> {
+    let current = path.join(WORKSPACE_MANIFEST);
+    if current.exists() {
+        return Some(current);
+    }
+    let legacy = path.join(LEGACY_WORKSPACE_MANIFEST);
+    legacy.exists().then_some(legacy)
+}
+
+fn scan_workspace_files(root: &Path) -> AppResult<Vec<WorkspaceTreeNode>> {
     scan_directory(root, root)
 }
 
-fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<GalaxyTreeNode>> {
+fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<WorkspaceTreeNode>> {
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -836,7 +847,7 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<GalaxyTreeNode
         if path.is_dir() {
             let children = scan_directory(root, &path)?;
             if !children.is_empty() {
-                folders.push(GalaxyTreeNode::Folder {
+                folders.push(WorkspaceTreeNode::Folder {
                     name,
                     path: path_to_string(&path),
                     relative_path: relative_path(root, &path),
@@ -844,7 +855,7 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<GalaxyTreeNode
                 });
             }
         } else if let Some(extension) = document_extension(&path) {
-            files.push(GalaxyTreeNode::File {
+            files.push(WorkspaceTreeNode::File {
                 name,
                 path: path_to_string(&path),
                 relative_path: relative_path(root, &path),
@@ -860,7 +871,8 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<GalaxyTreeNode
 }
 
 fn should_ignore(name: &str) -> bool {
-    name == GALAXY_MANIFEST
+    name == WORKSPACE_MANIFEST
+        || name == LEGACY_WORKSPACE_MANIFEST
         || name.starts_with('.')
         || matches!(name, "node_modules" | "dist" | "build" | "target" | ".git")
 }
@@ -913,11 +925,11 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
     })
 }
 
-fn add_recent_galaxy(app: &AppHandle, path: &Path) -> AppResult<()> {
+fn add_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
     let recent_path = recent_state_path(app)?;
     let mut state = read_recent_state(&recent_path)?;
-    push_recent(&mut state.galaxies, path);
-    state.galaxies.retain(|entry| Path::new(entry).is_dir());
+    push_recent(&mut state.workspaces, path);
+    state.workspaces.retain(|entry| Path::new(entry).is_dir());
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
 }
@@ -1043,8 +1055,8 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
     }
     let state: RecentState = serde_json::from_slice(&fs::read(path)?)?;
     Ok(RecentState {
-        galaxies: state
-            .galaxies
+        workspaces: state
+            .workspaces
             .into_iter()
             .filter(|entry| Path::new(entry).is_dir())
             .take(RECENT_LIMIT)
@@ -1253,9 +1265,9 @@ fn menu_label(path: &str) -> String {
         .to_string()
 }
 
-fn node_name(node: &GalaxyTreeNode) -> String {
+fn node_name(node: &WorkspaceTreeNode) -> String {
     match node {
-        GalaxyTreeNode::Folder { name, .. } | GalaxyTreeNode::File { name, .. } => name.to_ascii_lowercase(),
+        WorkspaceTreeNode::Folder { name, .. } | WorkspaceTreeNode::File { name, .. } => name.to_ascii_lowercase(),
     }
 }
 
@@ -1265,34 +1277,53 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn initializes_and_loads_galaxy_manifest() {
+    fn initializes_and_loads_workspace_manifest() {
         let dir = tempdir().unwrap();
-        let galaxy = initialize_galaxy(dir.path()).unwrap();
+        let workspace = initialize_workspace(dir.path()).unwrap();
 
-        assert_eq!(galaxy.manifest.schema_version, 1);
-        assert!(dir.path().join(GALAXY_MANIFEST).exists());
+        assert_eq!(workspace.manifest.schema_version, 1);
+        assert!(dir.path().join(WORKSPACE_MANIFEST).exists());
 
-        let loaded = load_galaxy_from_path(dir.path()).unwrap();
-        assert_eq!(loaded.manifest.name, galaxy.manifest.name);
+        let loaded = load_workspace_from_path(dir.path()).unwrap();
+        assert_eq!(loaded.manifest.name, workspace.manifest.name);
     }
 
     #[test]
-    fn initializes_galaxy_with_user_facing_name() {
+    fn initializes_workspace_with_user_facing_name() {
         let dir = tempdir().unwrap();
-        let galaxy = initialize_galaxy_with_name(dir.path(), Some("Nebula Drafts")).unwrap();
+        let workspace = initialize_workspace_with_name(dir.path(), Some("Nebula Drafts")).unwrap();
 
-        assert_eq!(galaxy.manifest.name, "Nebula Drafts");
+        assert_eq!(workspace.manifest.name, "Nebula Drafts");
         assert_eq!(
-            load_galaxy_from_path(dir.path()).unwrap().manifest.name,
+            load_workspace_from_path(dir.path()).unwrap().manifest.name,
             "Nebula Drafts"
         );
     }
 
     #[test]
-    fn galaxy_folder_name_is_filesystem_safe() {
-        assert_eq!(galaxy_folder_name("Nebula Drafts"), "nebula-drafts");
-        assert_eq!(galaxy_folder_name("  alpha/beta:  "), "alpha-beta");
-        assert_eq!(galaxy_folder_name("***"), "galaxy");
+    fn loads_legacy_workspace_manifest() {
+        let dir = tempdir().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let manifest = WorkspaceManifest {
+            schema_version: 1,
+            name: "Legacy Drafts".into(),
+            created_at: now.clone(),
+            updated_at: now,
+            root_files: Vec::new(),
+            expanded_paths: Vec::new(),
+        };
+        write_json_atomically(&dir.path().join(LEGACY_WORKSPACE_MANIFEST), &manifest).unwrap();
+
+        let workspace = load_workspace_from_path(dir.path()).unwrap();
+
+        assert_eq!(workspace.manifest.name, "Legacy Drafts");
+    }
+
+    #[test]
+    fn workspace_folder_name_is_filesystem_safe() {
+        assert_eq!(workspace_folder_name("Nebula Drafts"), "nebula-drafts");
+        assert_eq!(workspace_folder_name("  alpha/beta:  "), "alpha-beta");
+        assert_eq!(workspace_folder_name("***"), "workspace");
     }
 
     #[test]
@@ -1305,10 +1336,10 @@ mod tests {
         fs::write(dir.path().join(".git").join("hidden.hvy"), "hidden").unwrap();
         fs::write(dir.path().join("skip.txt"), "skip").unwrap();
 
-        let nodes = scan_galaxy_files(dir.path()).unwrap();
+        let nodes = scan_workspace_files(dir.path()).unwrap();
         assert_eq!(nodes.len(), 2);
-        assert!(matches!(&nodes[0], GalaxyTreeNode::Folder { name, .. } if name == "notes"));
-        assert!(matches!(&nodes[1], GalaxyTreeNode::File { name, .. } if name == "a.hvy"));
+        assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
+        assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));
     }
 
     #[test]
