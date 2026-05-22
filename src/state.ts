@@ -1,4 +1,5 @@
 import { defaultAiSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
 
 export interface OpenDocument {
@@ -18,6 +19,7 @@ export interface AppState {
   selectedFilePath: string | null;
   recent: RecentState;
   aiSettings: AiSettings;
+  colorTheme: ColorThemeSettings;
   document: OpenDocument | null;
   status: string;
   error: string | null;
@@ -29,6 +31,7 @@ export interface AppState {
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
+  colorThemeDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
 }
@@ -39,6 +42,7 @@ export const state: AppState = {
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
   aiSettings: defaultAiSettings(),
+  colorTheme: defaultColorThemeSettings(),
   document: null,
   status: 'Ready',
   error: null,
@@ -50,6 +54,7 @@ export const state: AppState = {
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
+  colorThemeDialogOpen: false,
   recoveryDialogOpen: false,
   recoveryBackups: [],
 };

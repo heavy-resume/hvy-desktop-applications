@@ -1,5 +1,6 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type Workspace, type WorkspaceTreeNode } from './backend';
+import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PALETTES, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
 import type { AppState } from './state';
 import { hvyTemplates } from './templates';
@@ -20,6 +21,14 @@ export interface UiHandlers {
   openProviderDocs(url: string): void;
   saveAiSettings(settings: AiSettings): void;
   cancelAiSettings(settings?: AiSettings): void;
+  openColorTheme(): void;
+  closeColorTheme(): void;
+  updateColorTheme(name: string, value: string): void;
+  resetColorTheme(name: string): void;
+  addColorThemeColor(): void;
+  removeColorThemeColor(name: string): void;
+  renameColorThemeColor(oldName: string, newName: string): void;
+  applyColorThemePalette(id: string | null): void;
   restoreBackup(id: string): void;
   cancelRecovery(): void;
   openWorkspace(): void;
@@ -82,6 +91,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderNewWorkspaceDialog(state)}
       ${renderNewDocumentDialog(state)}
       ${renderAiSettingsDialog(state)}
+      ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
     </main>`;
 
@@ -102,6 +112,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (!target) {
       const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
       if (backdrop && backdrop === event.target) {
+        if (backdrop.querySelector('.color-theme-dialog')) {
+          handlers.closeColorTheme();
+          return;
+        }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
         if (aiSettingsForm) {
           handlers.cancelAiSettings(readAiSettingsForm(new FormData(aiSettingsForm)));
@@ -143,6 +157,12 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
       handlers.cancelAiSettings(form ? readAiSettingsForm(new FormData(form)) : undefined);
     }
+    if (action === 'cancel-color-theme') handlers.closeColorTheme();
+    if (action === 'theme-add-color') handlers.addColorThemeColor();
+    if (action === 'theme-apply-palette') handlers.applyColorThemePalette(target.dataset.paletteId ?? null);
+    if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
+    if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
+    if (action === 'theme-remove-color' && target.dataset.colorName) handlers.removeColorThemeColor(target.dataset.colorName);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'open-workspace') handlers.openWorkspace();
@@ -152,6 +172,36 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'save-as') handlers.saveAs();
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
+  }, { signal });
+  root.addEventListener('input', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    const field = target?.dataset.field;
+    if (!target || !field || target.closest('#hvyMount')) return;
+    if (field === 'theme-color-filter') {
+      const dialog = target.closest<HTMLElement>('.color-theme-dialog');
+      const filter = target.value.trim().toLowerCase();
+      dialog?.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
+        row.hidden = filter.length > 0 && !(row.dataset.themeSearch ?? '').includes(filter);
+      });
+      return;
+    }
+    if (field !== 'theme-color-picker' && field !== 'theme-color-value') return;
+    const name = target.dataset.colorName ?? '';
+    if (!name) return;
+    const row = target.closest<HTMLElement>('.theme-color-row');
+    const valueInput = row?.querySelector<HTMLInputElement>('[data-field="theme-color-value"]');
+    const pickerInput = row?.querySelector<HTMLInputElement>('[data-field="theme-color-picker"]');
+    if (field === 'theme-color-picker' && valueInput) valueInput.value = target.value;
+    if (field === 'theme-color-value' && pickerInput) pickerInput.value = colorValueToPickerHex(target.value);
+    row?.classList.toggle('theme-color-row--override', target.value.trim().length > 0);
+    handlers.updateColorTheme(name, target.value);
+  }, { signal });
+  root.addEventListener('change', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (target?.dataset.field !== 'theme-color-name') return;
+    const oldName = target.dataset.colorName ?? '';
+    const newName = target.value.trim();
+    if (oldName && newName && oldName !== newName) handlers.renameColorThemeColor(oldName, newName);
   }, { signal });
   root.addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
@@ -199,6 +249,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     const target = event.target instanceof HTMLElement ? event.target : null;
+    if (root.querySelector('.color-theme-dialog')) {
+      event.preventDefault();
+      handlers.closeColorTheme();
+      return;
+    }
     const form = target?.closest<HTMLFormElement>('form[data-form="ai-settings"]')
       ?? root.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
     if (!form) return;
@@ -537,6 +592,115 @@ function renderAiSettingsDialog(state: AppState): string {
         </div>
       </form>
     </div>`;
+}
+
+function renderColorThemeDialog(state: AppState): string {
+  if (!state.colorThemeDialogOpen) {
+    return '';
+  }
+  const colors = state.colorTheme.colors;
+  const selectedPaletteId = getMatchedPaletteId(colors);
+  const customNames = Object.keys(colors)
+    .filter((name) => !THEME_COLOR_NAMES.includes(name))
+    .sort((left, right) => left.localeCompare(right));
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle">
+        <h2 id="colorThemeTitle">Colors</h2>
+        <p class="dialog-note">Global HVY colors apply across documents on this device.</p>
+        <div class="theme-palette-grid" aria-label="Theme palettes">
+          <article class="theme-palette-card${selectedPaletteId === null && Object.keys(colors).length === 0 ? ' is-selected' : ''}">
+            <div class="theme-palette-preview theme-palette-preview-document" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="theme-palette-copy">
+              <strong>Default</strong>
+              <span>Use the built-in HVY colors.</span>
+            </div>
+            <button type="button" data-action="theme-clear-palette">Use</button>
+          </article>
+          ${HVY_PALETTES.map((palette) => renderPaletteCard(palette, selectedPaletteId === palette.id)).join('')}
+        </div>
+        <div class="theme-filter-shell">
+          <span>Filter</span>
+          <input type="search" placeholder="Color name or variable" data-field="theme-color-filter">
+        </div>
+        <div class="theme-color-list">
+          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]), false)).join('')}
+        </div>
+        <div class="theme-custom-head">
+          <h3>Custom</h3>
+          <button type="button" class="secondary-action" data-action="theme-add-color">Add Color</button>
+        </div>
+        <div class="theme-color-list theme-color-list--custom">
+          ${customNames.length
+            ? customNames.map((name) => renderThemeColorRow(name, colors[name] ?? '', colors[name] ?? '', true)).join('')
+            : '<div class="empty-panel compact">No custom colors yet.</div>'}
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-color-theme">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderPaletteCard(palette: typeof HVY_PALETTES[number], selected: boolean): string {
+  const preview = [
+    palette.colors['--hvy-bg'] ?? '#f5f9ff',
+    palette.colors['--hvy-accent-1'] ?? '#4a8fab',
+    palette.colors['--hvy-surface'] ?? '#ffffff',
+  ];
+  return `
+    <article class="theme-palette-card${selected ? ' is-selected' : ''}">
+      <div class="theme-palette-preview" aria-hidden="true">
+        ${preview.map((color) => `<span style="background: ${escapeAttr(color)}"></span>`).join('')}
+      </div>
+      <div class="theme-palette-copy">
+        <strong>${escapeHtml(palette.name)}</strong>
+        <span>${escapeHtml(palette.description)}</span>
+      </div>
+      <button type="button" data-action="theme-apply-palette" data-palette-id="${escapeAttr(palette.id)}">Use</button>
+    </article>`;
+}
+
+function renderThemeColorRow(name: string, value: string, displayValue: string, custom: boolean): string {
+  const label = getThemeColorLabel(name);
+  const search = `${name} ${label} ${value} ${custom ? 'custom' : ''}`;
+  const overridden = value.trim().length > 0;
+  return `
+    <div class="theme-color-row${overridden ? ' theme-color-row--override' : ''}" data-theme-color-name="${escapeAttr(name)}" data-theme-search="${escapeAttr(search.toLowerCase())}">
+      <div class="theme-color-meta">
+        ${custom
+          ? `<input class="theme-color-name" data-field="theme-color-name" data-color-name="${escapeAttr(name)}" value="${escapeAttr(name)}" spellcheck="false">`
+          : `<strong>${escapeHtml(label)}</strong><span class="theme-color-var">${escapeHtml(name)}</span>`}
+      </div>
+      <input
+        class="theme-color-picker"
+        type="color"
+        data-field="theme-color-picker"
+        data-color-name="${escapeAttr(name)}"
+        value="${escapeAttr(colorValueToPickerHex(displayValue))}"
+        title="${escapeAttr(label)}"
+      >
+      <input
+        class="theme-color-value"
+        type="text"
+        data-field="theme-color-value"
+        data-color-name="${escapeAttr(name)}"
+        value="${escapeAttr(value)}"
+        placeholder="default"
+        spellcheck="false"
+      >
+      <span class="theme-color-swatch" style="${value ? `background: ${escapeAttr(value)};` : ''}" aria-hidden="true"></span>
+      ${custom
+        ? `<button type="button" class="ghost theme-color-action" data-action="theme-remove-color" data-color-name="${escapeAttr(name)}">Remove</button>`
+        : `<button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" ${overridden ? '' : 'disabled'}>Reset</button>`}
+    </div>`;
+}
+
+function getResolvedThemeColor(name: string, overrideValue: string | undefined): string {
+  if (overrideValue) return overrideValue;
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 function renderRecoveryDialog(state: AppState): string {

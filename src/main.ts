@@ -25,6 +25,7 @@ import {
   saveDocumentFile,
   type DocumentFile,
 } from './backend';
+import { applyColorTheme, getPaletteById, isCssVariableName, loadColorThemeSettings, saveColorThemeSettings } from './colorTheme';
 import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
 import { state } from './state';
 import { getHvyTemplate } from './templates';
@@ -194,6 +195,75 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  openColorTheme: () => {
+    closeUiBeforeColorTheme();
+    state.colorThemeDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  closeColorTheme: () => {
+    state.colorThemeDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  updateColorTheme: (name, value) => {
+    if (!isCssVariableName(name)) return;
+    const next = { ...state.colorTheme.colors };
+    if (value.trim()) {
+      next[name] = value.trim();
+    } else {
+      delete next[name];
+    }
+    state.colorTheme = { colors: next };
+    persistAndApplyColorTheme();
+    updateThemeRowChrome(name, next[name] ?? '');
+  },
+  resetColorTheme: (name) => {
+    const next = { ...state.colorTheme.colors };
+    delete next[name];
+    state.colorTheme = { colors: next };
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
+  addColorThemeColor: () => {
+    const next = { ...state.colorTheme.colors };
+    let i = 1;
+    let name = `--hvy-custom-${i}`;
+    while (name in next) {
+      i += 1;
+      name = `--hvy-custom-${i}`;
+    }
+    next[name] = '#000000';
+    state.colorTheme = { colors: next };
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
+  removeColorThemeColor: (name) => {
+    const next = { ...state.colorTheme.colors };
+    delete next[name];
+    state.colorTheme = { colors: next };
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
+  renameColorThemeColor: (oldName, newName) => {
+    if (!isCssVariableName(oldName) || !isCssVariableName(newName) || oldName === newName) return;
+    const next = { ...state.colorTheme.colors };
+    if (!(oldName in next) || newName in next) {
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    next[newName] = next[oldName];
+    delete next[oldName];
+    state.colorTheme = { colors: next };
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
+  applyColorThemePalette: (id) => {
+    const palette = id ? getPaletteById(id) : null;
+    state.colorTheme = { colors: palette ? { ...palette.colors } : {} };
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
   restoreBackup: (id) => void runBusy('Restoring backup...', async () => {
     const file = await restoreDocumentBackup(id);
     state.recoveryDialogOpen = false;
@@ -323,6 +393,8 @@ async function boot(): Promise<void> {
   try {
     await refreshRecents();
     state.aiSettings = await loadAiSettings();
+    state.colorTheme = loadColorThemeSettings();
+    applyColorTheme(state.colorTheme, mountRoot);
     installAiChatClient(state.aiSettings);
     await loadRecentWorkspaces();
     mountRoot = render(state, handlers);
@@ -334,6 +406,7 @@ async function boot(): Promise<void> {
       if (event === 'open-file') handlers.openFile();
       if (event === 'open-guide') void openDefaultGuide({ force: true });
       if (event === 'ai-settings') handlers.openAiSettings();
+      if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
@@ -453,6 +526,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
       setDocumentDirty(event.dirty);
     },
   });
+  applyColorTheme(state.colorTheme, mountRoot);
   state.document.mounted = mounted;
   setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
 }
@@ -677,6 +751,7 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
     }
   }
   mountRoot = render(state, handlers, { preserveMount });
+  applyColorTheme(state.colorTheme, mountRoot);
 }
 
 async function runBusy(label: string, task: () => Promise<void>): Promise<void> {
@@ -740,10 +815,42 @@ function documentStorageKey(identifier: string): string {
 function closeUiBeforeAiSettings(): void {
   state.newWorkspaceDialogOpen = false;
   state.newDocumentWorkspacePath = null;
+  state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
   closeMountedTransientUi();
+}
+
+function closeUiBeforeColorTheme(): void {
+  state.newWorkspaceDialogOpen = false;
+  state.newDocumentWorkspacePath = null;
+  state.aiSettingsDialogOpen = false;
+  state.aiSettingsDraft = null;
+  state.aiSettingsDialogInitialJson = null;
+  state.recoveryDialogOpen = false;
+  state.recoveryBackups = [];
+  state.openWorkspaceActionsPath = null;
+  closeMountedTransientUi();
+}
+
+function persistAndApplyColorTheme(): void {
+  saveColorThemeSettings(state.colorTheme);
+  applyColorTheme(state.colorTheme, mountRoot);
+  state.status = 'Updated colors';
+}
+
+function updateThemeRowChrome(name: string, value: string): void {
+  const row = document.querySelector<HTMLElement>(`.theme-color-row[data-theme-color-name="${cssEscape(name)}"]`);
+  row?.querySelector<HTMLElement>('.theme-color-swatch')?.setAttribute('style', value ? `background: ${value};` : '');
+  row?.querySelector<HTMLButtonElement>('[data-action="theme-reset-color"]')?.toggleAttribute('disabled', !value);
+}
+
+function cssEscape(value: string): string {
+  if ('CSS' in window && typeof CSS.escape === 'function') {
+    return CSS.escape(value);
+  }
+  return value.replaceAll('"', '\\"');
 }
 
 function closeMountedTransientUi(): void {
