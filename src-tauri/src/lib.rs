@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::menu::{
-    AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
@@ -620,6 +620,7 @@ pub fn run() {
                         | "open-workspace"
                         | "open-file"
                         | "open-guide"
+                        | "about"
                         | "ai-settings"
                         | "colors"
                         | "save"
@@ -685,15 +686,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
-    let about_metadata = AboutMetadataBuilder::new()
-        .name(Some("HVY Galaxy"))
-        .version(Some(env!("CARGO_PKG_VERSION")))
-        .comments(Some("Desktop workspace for HVY files"))
-        .authors(Some(vec!["HVY".into()]))
-        .icon(app.default_window_icon().cloned())
-        .build();
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
-        .item(&PredefinedMenuItem::about(app, Some("About HVY Galaxy"), Some(about_metadata))?)
+        .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
         .separator()

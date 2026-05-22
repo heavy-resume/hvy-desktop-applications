@@ -32,6 +32,7 @@ export interface AppState {
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
   colorThemeDialogOpen: boolean;
+  aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
 }
@@ -55,6 +56,7 @@ export const state: AppState = {
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
   colorThemeDialogOpen: false,
+  aboutDialogOpen: false,
   recoveryDialogOpen: false,
   recoveryBackups: [],
 };

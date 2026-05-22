@@ -4,6 +4,7 @@ import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PAL
 import type { HvyMode } from './hvy';
 import type { AppState } from './state';
 import { hvyTemplates } from './templates';
+import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 
 export interface UiHandlers {
   newWorkspace(): void;
@@ -16,6 +17,8 @@ export interface UiHandlers {
   createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
   addFilesToWorkspace(workspacePath: string): void;
+  openAbout(): void;
+  closeAbout(): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
   openProviderDocs(url: string): void;
@@ -90,6 +93,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       </section>
       ${renderNewWorkspaceDialog(state)}
       ${renderNewDocumentDialog(state)}
+      ${renderAboutDialog(state)}
       ${renderAiSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
@@ -112,6 +116,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (!target) {
       const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
       if (backdrop && backdrop === event.target) {
+        if (backdrop.querySelector('.about-dialog')) {
+          handlers.closeAbout();
+          return;
+        }
         if (backdrop.querySelector('.color-theme-dialog')) {
           handlers.closeColorTheme();
           return;
@@ -143,6 +151,8 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
+    if (action === 'about') handlers.openAbout();
+    if (action === 'close-about') handlers.closeAbout();
     if (action === 'ai-settings') handlers.openAiSettings();
     if (action === 'select-ai-provider' && target.dataset.providerId) {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -249,6 +259,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     const target = event.target instanceof HTMLElement ? event.target : null;
+    if (root.querySelector('.about-dialog')) {
+      event.preventDefault();
+      handlers.closeAbout();
+      return;
+    }
     if (root.querySelector('.color-theme-dialog')) {
       event.preventDefault();
       handlers.closeColorTheme();
@@ -536,6 +551,28 @@ function renderNewDocumentDialog(state: AppState): string {
           <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </form>
+    </div>`;
+}
+
+function renderAboutDialog(state: AppState): string {
+  if (!state.aboutDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+        <img class="about-logo" src="${escapeAttr(appIconUrl)}" alt="" aria-hidden="true">
+        <h2 id="aboutTitle">HVY Galaxy</h2>
+        <p class="about-version">Version 0.1.0</p>
+        <p class="about-copy">Desktop workspace for HVY files</p>
+        <div class="about-attribution">
+          <span>Created by Heavy Resume</span>
+          <a href="https://heavyresume.com" target="_blank" rel="noreferrer">https://heavyresume.com</a>
+        </div>
+        <div class="dialog-actions about-actions">
+          <button type="button" data-action="close-about">OK</button>
+        </div>
+      </section>
     </div>`;
 }
 

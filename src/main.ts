@@ -152,6 +152,17 @@ const handlers: UiHandlers = {
     state.status = 'Added files to workspace';
     await refreshRecents();
   }),
+  openAbout: () => {
+    closeUiBeforeAbout();
+    state.aboutDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  closeAbout: () => {
+    state.aboutDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   openAiSettings: () => {
     closeUiBeforeAiSettings();
     state.aiSettingsDraft = cloneAiSettings(state.aiSettings);
@@ -405,6 +416,7 @@ async function boot(): Promise<void> {
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
       if (event === 'open-guide') void openDefaultGuide({ force: true });
+      if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
@@ -816,6 +828,20 @@ function closeUiBeforeAiSettings(): void {
   state.newWorkspaceDialogOpen = false;
   state.newDocumentWorkspacePath = null;
   state.colorThemeDialogOpen = false;
+  state.aboutDialogOpen = false;
+  state.recoveryDialogOpen = false;
+  state.recoveryBackups = [];
+  state.openWorkspaceActionsPath = null;
+  closeMountedTransientUi();
+}
+
+function closeUiBeforeAbout(): void {
+  state.newWorkspaceDialogOpen = false;
+  state.newDocumentWorkspacePath = null;
+  state.aiSettingsDialogOpen = false;
+  state.aiSettingsDraft = null;
+  state.aiSettingsDialogInitialJson = null;
+  state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -825,6 +851,7 @@ function closeUiBeforeAiSettings(): void {
 function closeUiBeforeColorTheme(): void {
   state.newWorkspaceDialogOpen = false;
   state.newDocumentWorkspacePath = null;
+  state.aboutDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
