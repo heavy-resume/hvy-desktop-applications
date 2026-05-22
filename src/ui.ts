@@ -306,13 +306,11 @@ function renderModeControls(activeMode: HvyMode, readOnly: boolean): string {
   };
   return `
     <nav class="mode-controls${showEditorSubmodes ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
-      <div class="mode-controls-top">
-        ${buttonHtml(modes[0])}
+      ${showEditorSubmodes ? `<div class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}</div>` : ''}
+      <div class="mode-primary-controls">
+        ${buttonHtml(modes[2])}
         ${buttonHtml(modes[1])}
-        <span class="mode-editor-stack">
-          ${buttonHtml(modes[2])}
-          ${showEditorSubmodes ? `<span class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}</span>` : ''}
-        </span>
+        ${buttonHtml(modes[0])}
       </div>
     </nav>`;
 }

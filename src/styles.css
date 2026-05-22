@@ -403,31 +403,29 @@ button:disabled {
 .mode-controls {
   position: absolute;
   top: 10px;
-  right: calc(14px + 1rem);
+  right: calc(14px + 2.25rem);
   z-index: 8;
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 3px;
   border: 1px solid #b8c2bd;
   border-radius: 8px;
   background: rgba(248, 250, 248, 0.9);
   box-shadow: 0 8px 24px rgba(20, 28, 29, 0.2);
   backdrop-filter: blur(10px);
-}
-
-.mode-controls-top {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
   padding: 3px;
 }
 
-.mode-editor-stack {
-  position: relative;
+.mode-primary-controls,
+.mode-editor-submodes {
   display: inline-flex;
-  flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 3px;
+}
+
+.mode-editor-submodes {
+  padding-right: 3px;
+  border-right: 1px solid #cbd4cf;
 }
 
 .mode-button {
@@ -447,23 +445,14 @@ button:disabled {
 }
 
 .mode-editor-submodes {
-  position: absolute;
-  top: calc(100% + 3px);
-  right: 0;
-  left: 0;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 3px;
+  flex: 0 0 auto;
 }
 
 .mode-editor-submodes .mode-button[data-mode="hvy"],
 .mode-editor-submodes .mode-button[data-mode="advanced"] {
-  width: 100%;
-  min-width: 0;
-  height: 24px;
-  background: rgba(248, 250, 248, 0.96);
-  box-shadow: 0 4px 14px rgba(20, 28, 29, 0.16);
-  padding: 0 3px;
+  min-width: 34px;
+  height: 30px;
+  padding: 0 6px;
   font-size: 10px;
 }
 
