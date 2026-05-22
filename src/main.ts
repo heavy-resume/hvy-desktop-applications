@@ -23,7 +23,7 @@ import {
   saveDocumentFile,
   type DocumentFile,
 } from './backend';
-import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type VisualDocument } from './hvy';
+import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
 import { state } from './state';
 import { getHvyTemplate, type HvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
@@ -33,9 +33,23 @@ let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
 let backupTimer: number | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+const MIN_BACKUP_SPACING_MS = 60 * 1000;
+interface DocumentSession {
+  path: string;
+  name: string;
+  extension: DocumentFile['extension'];
+  mode: HvyMode;
+  dirty: boolean;
+  readOnly: boolean;
+  isNew: boolean;
+  document: VisualDocument;
+}
+const documentSessions = new Map<string, DocumentSession>();
+const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
 
 const handlers: UiHandlers = {
   newGalaxy: () => {
+    state.openGalaxyActionsPath = null;
     state.newGalaxyDialogOpen = true;
     state.newGalaxyLocation = 'managed';
     state.status = 'Ready';
@@ -43,6 +57,19 @@ const handlers: UiHandlers = {
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="galaxyName"]')?.focus();
     });
+  },
+  toggleGalaxyActions: (path) => {
+    const document = state.document?.mounted?.document;
+    state.openGalaxyActionsPath = state.openGalaxyActionsPath === path ? null : path;
+    rerender();
+    void mountCurrentDocument(document);
+  },
+  closeGalaxyActions: () => {
+    if (!state.openGalaxyActionsPath) return;
+    const document = state.document?.mounted?.document;
+    state.openGalaxyActionsPath = null;
+    rerender();
+    void mountCurrentDocument(document);
   },
   createGalaxy: (name, location) => void runBusy('Creating galaxy...', async () => {
     const trimmed = name.trim();
@@ -80,6 +107,7 @@ const handlers: UiHandlers = {
     rerender();
   },
   newDocumentInGalaxy: (galaxyPath) => {
+    state.openGalaxyActionsPath = null;
     state.newDocumentGalaxyPath = galaxyPath;
     state.status = 'Ready';
     rerender();
@@ -113,6 +141,7 @@ const handlers: UiHandlers = {
     rerender();
   },
   addFilesToGalaxy: (galaxyPath) => void runBusy('Adding files...', async () => {
+    state.openGalaxyActionsPath = null;
     const galaxy = await addFilesToGalaxy(galaxyPath);
     if (!galaxy) return;
     upsertGalaxy(galaxy);
@@ -121,13 +150,19 @@ const handlers: UiHandlers = {
     await refreshRecents();
   }),
   openAiSettings: () => {
+    closeUiBeforeAiSettings();
+    state.aiSettingsDraft = cloneAiSettings(state.aiSettings);
+    state.aiSettingsDialogInitialJson = JSON.stringify(canonicalAiSettings(state.aiSettingsDraft));
     state.aiSettingsDialogOpen = true;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
   },
-  selectAiProvider: (providerId) => {
-    state.aiSettings.activeProviderId = providerId;
-    rerender();
+  selectAiProvider: (providerId, settings) => {
+    state.aiSettingsDraft = {
+      ...settings,
+      activeProviderId: providerId,
+    };
+    rerender({ preserveMountedDocument: true });
   },
   openProviderDocs: (url) => {
     void openExternalUrl(url)
@@ -145,12 +180,17 @@ const handlers: UiHandlers = {
     state.aiSettings = await saveAiSettings(settings);
     installAiChatClient(state.aiSettings);
     state.aiSettingsDialogOpen = false;
+    state.aiSettingsDraft = null;
+    state.aiSettingsDialogInitialJson = null;
     state.status = 'Saved AI settings';
   }),
-  cancelAiSettings: () => {
+  cancelAiSettings: (settings) => {
+    if (!confirmDiscardAiSettings(settings)) return;
     state.aiSettingsDialogOpen = false;
+    state.aiSettingsDraft = null;
+    state.aiSettingsDialogInitialJson = null;
     state.status = 'Ready';
-    rerender();
+    rerender({ preserveMountedDocument: true });
   },
   restoreBackup: (id) => void runBusy('Restoring backup...', async () => {
     const file = await restoreDocumentBackup(id);
@@ -208,6 +248,9 @@ const handlers: UiHandlers = {
     }
     const document = state.document.mounted?.document;
     state.document.mode = mode;
+    if (document) {
+      updateCurrentDocumentSession(document);
+    }
     rerender();
     void mountCurrentDocument(document);
   },
@@ -274,22 +317,27 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
 }
 
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean } = {}): Promise<void> {
+  preserveCurrentDocumentSession();
   state.document?.mounted?.mount.destroy();
+  const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(file.path);
+  const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
   const bytes = new Uint8Array(file.bytes);
-  const document = await deserializeHvy(bytes, file.extension);
+  const document = session?.document ?? await deserializeHvy(bytes, file.extension);
   state.document = {
-    path: file.path,
-    name: file.name,
-    extension: file.extension,
-    mode: options.isNew ? 'editor' : 'viewer',
-    dirty: options.isNew === true || options.recovered === true,
-    readOnly: options.defaultDocument === true,
-    isNew: options.isNew === true,
+    path: session?.path ?? file.path,
+    name: session?.name ?? file.name,
+    extension: session?.extension ?? file.extension,
+    mode: session?.mode ?? (options.isNew ? 'editor' : 'viewer'),
+    dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
+    readOnly: session?.readOnly ?? options.defaultDocument === true,
+    isNew: session?.isNew ?? options.isNew === true,
     mounted: null,
   };
   state.selectedFilePath = options.defaultDocument ? null : file.path;
   state.status = options.defaultDocument
     ? 'Opened HVY guide'
+    : session
+    ? `Restored unsaved session for ${file.name}`
     : options.recovered
     ? `Restored backup of ${file.name}`
     : options.isNew
@@ -301,6 +349,41 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   }
   rerender();
   await mountCurrentDocument(document);
+}
+
+function preserveCurrentDocumentSession(): void {
+  const openDocument = state.document;
+  if (!openDocument?.path || openDocument.readOnly) return;
+  const document = openDocument.mounted?.document ?? pendingMountDocument;
+  if (!document) return;
+  const dirty = openDocument.mounted
+    ? openDocument.dirty || isMountedDocumentDirty(openDocument.mounted)
+    : openDocument.dirty;
+  documentSessions.set(openDocument.path, {
+    path: openDocument.path,
+    name: openDocument.name,
+    extension: openDocument.extension,
+    mode: openDocument.mode,
+    dirty,
+    readOnly: openDocument.readOnly,
+    isNew: openDocument.isNew,
+    document,
+  });
+}
+
+function updateCurrentDocumentSession(document: VisualDocument): void {
+  const openDocument = state.document;
+  if (!openDocument?.path || openDocument.readOnly) return;
+  documentSessions.set(openDocument.path, {
+    path: openDocument.path,
+    name: openDocument.name,
+    extension: openDocument.extension,
+    mode: openDocument.mode,
+    dirty: openDocument.dirty,
+    readOnly: openDocument.readOnly,
+    isNew: openDocument.isNew,
+    document,
+  });
 }
 
 async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
@@ -324,6 +407,10 @@ function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } 
   state.document.dirty = dirty;
   if (!options.preserveStatus || changed) {
     state.status = dirty ? 'Unsaved changes' : `Saved ${state.document.name}`;
+  }
+  const document = state.document.mounted?.document ?? pendingMountDocument;
+  if (document) {
+    updateCurrentDocumentSession(document);
   }
   updateDirtyChrome();
 }
@@ -362,6 +449,7 @@ async function saveCurrentDocument(): Promise<void> {
     state.document.dirty = false;
     state.status = `Saved ${state.document.name}`;
     const document = state.document.mounted.document;
+    updateCurrentDocumentSession(document);
     await refreshOpenGalaxyForFile(state.document.path);
     await refreshRecents();
     rerender();
@@ -383,19 +471,25 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
     return;
   }
   const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const previousPath = state.document.path;
+  const previousMode = state.document.mode;
   const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
   if (!file) return;
   const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
+  if (previousPath && previousPath !== file.path) {
+    documentSessions.delete(previousPath);
+  }
   state.document = {
     path: file.path,
     name: file.name,
     extension: file.extension,
-    mode: state.document.mode,
+    mode: previousMode,
     dirty: false,
     readOnly: false,
     isNew: false,
     mounted: null,
   };
+  updateCurrentDocumentSession(document);
   state.selectedFilePath = file.path;
   state.status = `Saved ${file.name}`;
   await refreshOpenGalaxyForFile(file.path);
@@ -413,21 +507,43 @@ function startBackupTimer(): void {
 
 async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
   if (!state.document?.mounted || state.document.readOnly) return;
-  if (!options.force && !state.document.dirty) return;
+  if (!state.document.dirty) return;
+  const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const documentKey = backupDocumentKey(state.document.path, state.document.name);
+  const bytesKey = backupBytesKey(bytes);
+  const previousBackup = backupSnapshots.get(documentKey);
+  const now = Date.now();
+  if (previousBackup?.bytesKey === bytesKey) return;
+  if (previousBackup && now - previousBackup.createdAtMs < MIN_BACKUP_SPACING_MS) return;
   try {
-    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
-    await createDocumentBackup({
+    const backup = await createDocumentBackup({
       documentPath: state.document.path,
       name: state.document.name,
       extension: state.document.extension,
       bytes,
     });
+    if (backup) {
+      backupSnapshots.set(documentKey, { bytesKey, createdAtMs: Date.parse(backup.createdAt) || now });
+    }
   } catch (error) {
     if (options.force) {
       throw error;
     }
     // Keep timed backups quiet; explicit recovery will surface failures.
   }
+}
+
+function backupDocumentKey(path: string, name: string): string {
+  return path || `untitled:${name}`;
+}
+
+function backupBytesKey(bytes: number[]): string {
+  let hash = 2166136261;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${bytes.length}:${hash >>> 0}`;
 }
 
 async function openRecoveryDialog(): Promise<void> {
@@ -492,12 +608,15 @@ function hasOpenGalaxyNamed(name: string): boolean {
   return state.galaxies.some((galaxy) => galaxy.manifest.name.trim().toLowerCase() === normalized);
 }
 
-function rerender(): void {
-  state.document?.mounted?.mount.destroy();
-  if (state.document) {
-    state.document.mounted = null;
+function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
+  const preserveMount = options.preserveMountedDocument ? mountRoot : null;
+  if (!options.preserveMountedDocument) {
+    state.document?.mounted?.mount.destroy();
+    if (state.document) {
+      state.document.mounted = null;
+    }
   }
-  mountRoot = render(state, handlers);
+  mountRoot = render(state, handlers, { preserveMount });
 }
 
 async function runBusy(label: string, task: () => Promise<void>): Promise<void> {
@@ -548,6 +667,53 @@ function applyTemplateTitle(template: string, title: string): string {
 
 function documentStorageKey(identifier: string): string {
   return `hvy-galaxy:document:${identifier}`;
+}
+
+function closeUiBeforeAiSettings(): void {
+  state.newGalaxyDialogOpen = false;
+  state.newDocumentGalaxyPath = null;
+  state.recoveryDialogOpen = false;
+  state.recoveryBackups = [];
+  state.openGalaxyActionsPath = null;
+  closeMountedTransientUi();
+}
+
+function closeMountedTransientUi(): void {
+  const root = mountRoot;
+  if (!root) return;
+  root
+    .querySelector<HTMLElement>('[data-action="close-search"], [data-action="close-ai-edit"], [data-modal-action="close"]')
+    ?.click();
+  if (root.querySelector('.search-palette, .search-backdrop, .modal-root, .ai-edit-popover')) {
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  }
+}
+
+function cloneAiSettings(settings: typeof state.aiSettings): typeof state.aiSettings {
+  return JSON.parse(JSON.stringify(settings)) as typeof state.aiSettings;
+}
+
+function confirmDiscardAiSettings(settings: typeof state.aiSettings | undefined): boolean {
+  const initial = state.aiSettingsDialogInitialJson;
+  if (!initial) return true;
+  const current = JSON.stringify(canonicalAiSettings(settings ?? state.aiSettingsDraft ?? state.aiSettings));
+  if (current === initial) return true;
+  return window.confirm('Discard changes to AI settings?');
+}
+
+function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.aiSettings {
+  return {
+    activeProviderId: settings.activeProviderId,
+    providers: [...settings.providers].sort((left, right) => left.provider.localeCompare(right.provider)),
+    actions: {
+      chat: settings.actions.chat,
+      edit: settings.actions.edit,
+      importPlanning: settings.actions.importPlanning,
+      importWriting: settings.actions.importWriting,
+      importCleanup: settings.actions.importCleanup,
+      compaction: settings.actions.compaction,
+    },
+  };
 }
 
 async function confirmGalaxyInitialization(path: string, defaultName: string) {

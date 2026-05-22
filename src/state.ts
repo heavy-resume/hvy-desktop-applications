@@ -23,9 +23,12 @@ export interface AppState {
   error: string | null;
   busy: boolean;
   newGalaxyDialogOpen: boolean;
+  openGalaxyActionsPath: string | null;
   newGalaxyLocation: 'managed' | 'choose';
   newDocumentGalaxyPath: string | null;
   aiSettingsDialogOpen: boolean;
+  aiSettingsDraft: AiSettings | null;
+  aiSettingsDialogInitialJson: string | null;
   recoveryDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
 }
@@ -41,9 +44,12 @@ export const state: AppState = {
   error: null,
   busy: false,
   newGalaxyDialogOpen: false,
+  openGalaxyActionsPath: null,
   newGalaxyLocation: 'managed',
   newDocumentGalaxyPath: null,
   aiSettingsDialogOpen: false,
+  aiSettingsDraft: null,
+  aiSettingsDialogInitialJson: null,
   recoveryDialogOpen: false,
   recoveryBackups: [],
 };

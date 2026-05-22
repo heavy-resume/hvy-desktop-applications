@@ -6,6 +6,8 @@ import { hvyTemplates } from './templates';
 
 export interface UiHandlers {
   newGalaxy(): void;
+  toggleGalaxyActions(path: string): void;
+  closeGalaxyActions(): void;
   createGalaxy(name: string, location: 'managed' | 'choose'): void;
   setNewGalaxyLocation(location: 'managed' | 'choose'): void;
   cancelNewGalaxy(): void;
@@ -14,10 +16,10 @@ export interface UiHandlers {
   cancelNewDocument(): void;
   addFilesToGalaxy(galaxyPath: string): void;
   openAiSettings(): void;
-  selectAiProvider(providerId: string): void;
+  selectAiProvider(providerId: string, settings: AiSettings): void;
   openProviderDocs(url: string): void;
   saveAiSettings(settings: AiSettings): void;
-  cancelAiSettings(): void;
+  cancelAiSettings(settings?: AiSettings): void;
   restoreBackup(id: string): void;
   cancelRecovery(): void;
   openGalaxy(): void;
@@ -40,14 +42,13 @@ if (!app) {
 const appRoot = app;
 let bindController: AbortController | null = null;
 
-export function render(state: AppState, handlers: UiHandlers): HTMLElement {
+export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   appRoot.innerHTML = `
     <main class="app-shell">
       <aside class="galaxy-sidebar">
         <div class="sidebar-header">
           <div>
             <h1>HVY Galaxy</h1>
-            <p>${escapeHtml(sidebarSummary(state))}</p>
           </div>
           <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
         </div>
@@ -80,8 +81,12 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
       ${renderRecoveryDialog(state)}
     </main>`;
 
+  const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
+  if (options.preserveMount && state.document) {
+    nextMount.replaceWith(options.preserveMount);
+  }
   bind(appRoot, handlers);
-  return appRoot.querySelector<HTMLElement>('#hvyMount')!;
+  return options.preserveMount && state.document ? options.preserveMount : nextMount;
 }
 
 function bind(root: HTMLElement, handlers: UiHandlers): void {
@@ -90,11 +95,29 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   const { signal } = bindController;
   root.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
-    if (!target) return;
+    if (!target) {
+      const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
+      if (backdrop && backdrop === event.target) {
+        const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
+        if (aiSettingsForm) {
+          handlers.cancelAiSettings(readAiSettingsForm(new FormData(aiSettingsForm)));
+          return;
+        }
+      }
+      if (!(event.target as HTMLElement).closest('.galaxy-actions-menu')) {
+        handlers.closeGalaxyActions();
+      }
+      return;
+    }
     if (target.closest('#hvyMount')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'new-galaxy') handlers.newGalaxy();
+    if (action === 'toggle-galaxy-actions' && target.dataset.galaxyPath) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.toggleGalaxyActions(target.dataset.galaxyPath);
+    }
     if (action === 'set-new-galaxy-location' && isNewGalaxyLocation(target.dataset.location)) {
       handlers.setNewGalaxyLocation(target.dataset.location);
     }
@@ -103,12 +126,19 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'add-files-to-galaxy' && target.dataset.galaxyPath) handlers.addFilesToGalaxy(target.dataset.galaxyPath);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'ai-settings') handlers.openAiSettings();
-    if (action === 'select-ai-provider' && target.dataset.providerId) handlers.selectAiProvider(target.dataset.providerId);
+    if (action === 'select-ai-provider' && target.dataset.providerId) {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
+      if (settings) handlers.selectAiProvider(target.dataset.providerId, settings);
+    }
     if (action === 'provider-docs') {
       const url = target.dataset.url;
       if (url) handlers.openProviderDocs(url);
     }
-    if (action === 'cancel-ai-settings') handlers.cancelAiSettings();
+    if (action === 'cancel-ai-settings') {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      handlers.cancelAiSettings(form ? readAiSettingsForm(new FormData(form)) : undefined);
+    }
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'open-galaxy') handlers.openGalaxy();
@@ -143,6 +173,15 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const data = new FormData(form);
       handlers.saveAiSettings(readAiSettingsForm(data));
     }
+  }, { signal });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const form = target?.closest<HTMLFormElement>('form[data-form="ai-settings"]')
+      ?? root.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
+    if (!form) return;
+    event.preventDefault();
+    handlers.cancelAiSettings(readAiSettingsForm(new FormData(form)));
   }, { signal });
   root.querySelectorAll<HTMLFormElement>('form[data-form="new-galaxy"]').forEach((form) => {
     updateNewGalaxySubmit(form);
@@ -219,18 +258,22 @@ function renderGalaxies(state: AppState): string {
   if (state.galaxies.length === 0) {
     return '<div class="empty-panel">Open or create a galaxy to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.galaxies.map((galaxy) => renderGalaxy(galaxy, state.selectedFilePath)).join('')}</div>`;
+  return `<div class="tree-list">${state.galaxies.map((galaxy) => renderGalaxy(galaxy, state.selectedFilePath, state.openGalaxyActionsPath)).join('')}</div>`;
 }
 
-function renderGalaxy(galaxy: Galaxy, selectedFilePath: string | null): string {
+function renderGalaxy(galaxy: Galaxy, selectedFilePath: string | null, openGalaxyActionsPath: string | null): string {
+  const actionsOpen = galaxy.path === openGalaxyActionsPath;
   return `
     <details class="galaxy-root" open>
       <summary title="${escapeAttr(galaxy.path)}">
         <span>${escapeHtml(galaxy.manifest.name)}</span>
       </summary>
-      <div class="galaxy-actions">
-        <button type="button" class="empty-action galaxy-new-file" data-action="new-document-in-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}"><span aria-hidden="true">+</span> New HVY</button>
-        <button type="button" class="empty-action" data-action="add-files-to-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}"><span aria-hidden="true">+</span> Add Files</button>
+      <div class="galaxy-actions-menu${actionsOpen ? ' is-open' : ''}">
+        <button type="button" class="galaxy-action-trigger" data-action="toggle-galaxy-actions" data-galaxy-path="${escapeAttr(galaxy.path)}" title="Galaxy actions" aria-label="Galaxy actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
+        <div class="galaxy-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
+          <button type="button" role="menuitem" data-action="new-document-in-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}">New</button>
+          <button type="button" role="menuitem" data-action="add-files-to-galaxy" data-galaxy-path="${escapeAttr(galaxy.path)}">Add</button>
+        </div>
       </div>
       ${galaxy.files.length === 0 ? '' : `<ul class="tree">${galaxy.files.map((node) => renderNode(node, selectedFilePath)).join('')}</ul>`}
     </details>`;
@@ -367,30 +410,31 @@ function renderAiSettingsDialog(state: AppState): string {
   if (!state.aiSettingsDialogOpen) {
     return '';
   }
-  const providerConfig = activeProviderConfig(state.aiSettings);
-  const provider = aiProviderPreset(state.aiSettings.activeProviderId);
+  const settings = state.aiSettingsDraft ?? state.aiSettings;
+  const providerConfig = activeProviderConfig(settings);
+  const provider = aiProviderPreset(settings.activeProviderId);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
         <h2>AI Settings</h2>
         <p class="dialog-note">Configure providers once, then choose the provider and model each action should use.</p>
-        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(state.aiSettings))}</textarea>
+        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         <div class="ai-provider-picker" aria-label="Configured AI providers">
           <span>Providers</span>
           <div>
             ${aiProviderPresets.map((option) => `
               <button
                 type="button"
-                class="${option.id === state.aiSettings.activeProviderId ? 'is-active' : ''}"
+                class="${option.id === settings.activeProviderId ? 'is-active' : ''}"
                 data-action="select-ai-provider"
                 data-provider-id="${escapeAttr(option.id)}"
-                aria-pressed="${option.id === state.aiSettings.activeProviderId ? 'true' : 'false'}"
+                aria-pressed="${option.id === settings.activeProviderId ? 'true' : 'false'}"
               >${escapeHtml(option.name)}</button>
             `).join('')}
           </div>
         </div>
         <button type="button" class="provider-docs-link" data-action="provider-docs" data-provider-docs data-url="${escapeAttr(provider.docsUrl)}">Setup instructions</button>
-        <input name="activeProviderId" type="hidden" value="${escapeAttr(state.aiSettings.activeProviderId)}">
+        <input name="activeProviderId" type="hidden" value="${escapeAttr(settings.activeProviderId)}">
         <div class="ai-provider-fields">
           <label>
             <span>Base URL</span>
@@ -402,12 +446,12 @@ function renderAiSettingsDialog(state: AppState): string {
           <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
         </label>
         <div class="ai-task-grid">
-          ${renderActionConfigField('chat', 'Chat / Q&A', state.aiSettings)}
-          ${renderActionConfigField('edit', 'Document and component edit', state.aiSettings)}
-          ${renderActionConfigField('importPlanning', 'Import planning', state.aiSettings)}
-          ${renderActionConfigField('importWriting', 'Import writing', state.aiSettings)}
-          ${renderActionConfigField('importCleanup', 'Import cleanup', state.aiSettings)}
-          ${renderActionConfigField('compaction', 'Compaction', state.aiSettings)}
+          ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
+          ${renderActionConfigField('edit', 'Document and component edit', settings)}
+          ${renderActionConfigField('importPlanning', 'Import planning', settings)}
+          ${renderActionConfigField('importWriting', 'Import writing', settings)}
+          ${renderActionConfigField('importCleanup', 'Import cleanup', settings)}
+          ${renderActionConfigField('compaction', 'Compaction', settings)}
         </div>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-ai-settings">Cancel</button>
@@ -538,12 +582,6 @@ function formatBackupTimestamp(value: string): string {
     dateStyle: 'short',
     timeStyle: 'short',
   }).format(date);
-}
-
-function sidebarSummary(state: AppState): string {
-  if (state.busy) return 'Working...';
-  if (state.galaxies.length === 1) return '1 galaxy open';
-  return `${state.galaxies.length} galaxies open`;
 }
 
 function escapeHtml(value: string): string {
