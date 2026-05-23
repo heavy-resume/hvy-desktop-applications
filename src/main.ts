@@ -13,6 +13,7 @@ import {
   loadDefaultGuide,
   loadMcpServerStatus,
   loadMcpSettings,
+  loadMcpStdioLaunchConfig,
   loadWorkspace,
   listDocumentBackups,
   loadRecentState,
@@ -286,6 +287,7 @@ const handlers: UiHandlers = {
   copyMcpConnectionConfig: (config) => void copyMcpConnectionConfig(config),
   copyMcpConnectionUrl: (url) => void copyMcpConnectionUrl(url),
   copyMcpBearerToken: (token) => void copyMcpBearerToken(token),
+  copyMcpSetupValue: (value, label) => void copyMcpSetupValue(value, label),
   openColorTheme: () => {
     closeUiBeforeColorTheme();
     state.colorThemeDialogOpen = true;
@@ -486,6 +488,7 @@ async function boot(): Promise<void> {
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
     state.mcpServerStatus = await loadMcpServerStatus();
+    state.mcpStdioLaunchConfig = await loadMcpStdioLaunchConfig();
     if (state.mcpSettings.startAutomatically && !state.mcpServerStatus.running) {
       state.mcpServerStatus = await startMcpServer();
     }
@@ -1017,7 +1020,7 @@ function applyTemplateTitle(template: string, title: string): string {
 }
 
 function documentStorageKey(identifier: string): string {
-  return `hvy-workspace:document:${identifier}`;
+  return `hvy-galaxy:document:${identifier}`;
 }
 
 function closeUiBeforeAiSettings(): void {
@@ -1180,17 +1183,14 @@ async function copyMcpConnectionConfig(configOverride?: string): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
-  const url = state.mcpServerStatus.url ?? `http://127.0.0.1:${state.mcpSettings.port ?? 8794}/mcp`;
-  const bearerToken = state.mcpSettings.bearerToken.trim();
-  const serverConfig: { url: string; headers?: { Authorization: string } } = { url };
-  if (bearerToken) {
-    serverConfig.headers = {
-      Authorization: `Bearer ${bearerToken}`,
-    };
-  }
   const config = JSON.stringify({
     mcpServers: {
-      'hvy-galaxy': serverConfig,
+      'hvy-galaxy': {
+        type: 'stdio',
+        command: state.mcpStdioLaunchConfig.command,
+        args: state.mcpStdioLaunchConfig.args,
+        cwd: state.mcpStdioLaunchConfig.workingDirectory,
+      },
     },
   }, null, 2);
   await navigator.clipboard.writeText(config);
@@ -1207,6 +1207,12 @@ async function copyMcpConnectionUrl(url: string): Promise<void> {
 async function copyMcpBearerToken(token: string): Promise<void> {
   await navigator.clipboard.writeText(token);
   state.status = 'Copied MCP bearer token';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function copyMcpSetupValue(value: string, label: string): Promise<void> {
+  await navigator.clipboard.writeText(value);
+  state.status = `Copied ${label}`;
   rerender({ preserveMountedDocument: true });
 }
 

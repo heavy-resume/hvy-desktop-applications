@@ -49,7 +49,7 @@ function createHvyBuiltInPluginsPlugin(): Plugin {
   });
 
   return {
-    name: 'hvy-workspace-built-in-plugins',
+    name: 'hvy-galaxy-built-in-plugins',
     resolveId(id) {
       return id === BUILT_IN_PLUGINS_ID ? BUILT_IN_PLUGINS_RESOLVED_ID : null;
     },
@@ -74,7 +74,7 @@ function createHvyBuiltInPluginsPlugin(): Plugin {
 
 function createBrythonMinimalVfsPlugin(): Plugin {
   return {
-    name: 'hvy-workspace-brython-minimal-vfs',
+    name: 'hvy-galaxy-brython-minimal-vfs',
     resolveId(id) {
       return id === BRYTHON_MINIMAL_VFS_ID ? BRYTHON_MINIMAL_VFS_RESOLVED_ID : null;
     },

@@ -1,6 +1,6 @@
 # HVY Galaxy Desktop
 
-Cross-platform desktop workspace for HVY files. The app is a Tauri v2 shell with
+Cross-platform desktop app for HVY files. The app is a Tauri v2 shell with
 a Vanilla TypeScript/Vite frontend and the HVY reference implementation mounted
 inside the document pane.
 

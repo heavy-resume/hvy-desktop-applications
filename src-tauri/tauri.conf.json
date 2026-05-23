@@ -3,7 +3,7 @@
   "productName": "HVY Galaxy",
   "mainBinaryName": "HVY Galaxy",
   "version": "0.1.0",
-  "identifier": "com.hvy.workspace",
+  "identifier": "com.heavyresume.hvy-galaxy",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -35,8 +35,8 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
-    "shortDescription": "HVY workspace",
-    "longDescription": "Cross-platform desktop workspace for viewing and editing HVY files.",
+    "shortDescription": "HVY Galaxy",
+    "longDescription": "Cross-platform desktop app for viewing and editing HVY files.",
     "macOS": {
       "minimumSystemVersion": "10.13"
     },

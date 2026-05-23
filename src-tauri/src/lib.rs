@@ -1,9 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,6 +24,7 @@ const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const AI_SETTINGS: &str = "ai-settings.json";
 const MCP_SETTINGS: &str = "mcp-settings.json";
+const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
 const DEFAULT_MCP_PORT: u16 = 8794;
 const RECENT_LIMIT: usize = 12;
 const BACKUP_RETENTION_HOURS: i64 = 2;
@@ -48,6 +49,17 @@ impl serde::Serialize for AppError {
 }
 
 type AppResult<T> = Result<T, AppError>;
+
+pub fn run_mcp_stdio_main() -> Result<(), String> {
+    run_mcp_stdio(
+        std::env::args().skip(1).filter(|arg| arg != "--mcp-stdio"),
+        std::env::var_os("HVY_GALAXY_WORKSPACES"),
+        std::env::current_dir().map_err(|error| error.to_string())?,
+        std::io::stdin().lock(),
+        std::io::stdout().lock(),
+    )
+    .map_err(|error| error.to_string())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -174,6 +186,34 @@ struct McpServerStatus {
     url: Option<String>,
     message: String,
     last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct McpStdioLaunchConfig {
+    command: String,
+    args: Vec<String>,
+    working_directory: String,
+    workspace_config_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct McpWorkspaceConfig {
+    #[serde(default)]
+    workspaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpStdioFraming {
+    ContentLength,
+    Newline,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct McpStdioMessage {
+    body: Vec<u8>,
+    framing: McpStdioFraming,
 }
 
 impl Default for McpServerStatus {
@@ -454,6 +494,21 @@ fn load_mcp_server_status(runtime: State<McpRuntime>) -> AppResult<McpServerStat
 }
 
 #[tauri::command]
+fn load_mcp_stdio_launch_config(app: AppHandle) -> AppResult<McpStdioLaunchConfig> {
+    let workspace_config_path = mcp_stdio_workspace_config_path(&app)?;
+    let working_directory = workspace_config_path
+        .parent()
+        .map(path_to_string)
+        .unwrap_or_else(|| ".".into());
+    Ok(McpStdioLaunchConfig {
+        command: path_to_string(&std::env::current_exe()?),
+        args: vec!["--mcp-stdio".into()],
+        working_directory,
+        workspace_config_path: path_to_string(&workspace_config_path),
+    })
+}
+
+#[tauri::command]
 fn start_mcp_server(app: AppHandle, runtime: State<McpRuntime>) -> AppResult<McpServerStatus> {
     let settings = read_mcp_settings(&mcp_settings_path(&app)?)?;
     let port = settings.port.unwrap_or(DEFAULT_MCP_PORT);
@@ -525,7 +580,7 @@ fn stop_mcp_server(app: AppHandle, runtime: State<McpRuntime>) -> AppResult<McpS
 }
 
 #[tauri::command]
-fn update_mcp_workspaces(runtime: State<McpRuntime>, paths: Vec<String>) -> AppResult<()> {
+fn update_mcp_workspaces(app: AppHandle, runtime: State<McpRuntime>, paths: Vec<String>) -> AppResult<()> {
     let mut normalized = Vec::new();
     for path in paths {
         let path = PathBuf::from(path);
@@ -535,10 +590,14 @@ fn update_mcp_workspaces(runtime: State<McpRuntime>, paths: Vec<String>) -> AppR
     }
     normalized.sort();
     normalized.dedup();
+    let config = McpWorkspaceConfig {
+        workspaces: normalized.clone(),
+    };
     *runtime
         .workspaces
         .lock()
         .map_err(|_| AppError::Message("MCP workspace lock is unavailable.".into()))? = normalized;
+    write_mcp_stdio_workspace_config(&app, &config)?;
     Ok(())
 }
 
@@ -898,6 +957,7 @@ pub fn run() {
             load_mcp_settings,
             save_mcp_settings,
             load_mcp_server_status,
+            load_mcp_stdio_launch_config,
             start_mcp_server,
             stop_mcp_server,
             update_mcp_workspaces,
@@ -1661,19 +1721,7 @@ fn handle_mcp_json_rpc(app: &AppHandle, request: serde_json::Value) -> serde_jso
     let method = request.get("method").and_then(|method| method.as_str()).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
     match method {
-        "initialize" => json_rpc_result(
-            id,
-            serde_json::json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "hvy-galaxy",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        ),
+        "initialize" => json_rpc_result(id, mcp_initialize_result(&params)),
         "notifications/initialized" => serde_json::Value::Null,
         "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list() })),
         "tools/call" => match handle_mcp_tool_call(app, params) {
@@ -1682,6 +1730,39 @@ fn handle_mcp_json_rpc(app: &AppHandle, request: serde_json::Value) -> serde_jso
         },
         _ => json_rpc_error(Some(id), -32601, "Method not found."),
     }
+}
+
+fn handle_mcp_json_rpc_for_workspaces(workspaces: &[Workspace], request: serde_json::Value) -> serde_json::Value {
+    let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let method = request.get("method").and_then(|method| method.as_str()).unwrap_or("");
+    let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    match method {
+        "initialize" => json_rpc_result(id, mcp_initialize_result(&params)),
+        "notifications/initialized" => serde_json::Value::Null,
+        "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list() })),
+        "tools/call" => match handle_mcp_tool_call_from(workspaces, params) {
+            Ok(result) => json_rpc_result(id, result),
+            Err(error) => json_rpc_error(Some(id), -32000, &error.to_string()),
+        },
+        _ => json_rpc_error(Some(id), -32601, "Method not found."),
+    }
+}
+
+fn mcp_initialize_result(params: &serde_json::Value) -> serde_json::Value {
+    let protocol_version = params
+        .get("protocolVersion")
+        .and_then(|version| version.as_str())
+        .unwrap_or("2025-06-18");
+    serde_json::json!({
+        "protocolVersion": protocol_version,
+        "capabilities": {
+            "tools": {}
+        },
+        "serverInfo": {
+            "name": "hvy-galaxy",
+            "version": env!("CARGO_PKG_VERSION")
+        }
+    })
 }
 
 fn mcp_tool_list() -> serde_json::Value {
@@ -1736,6 +1817,10 @@ fn mcp_tool_list() -> serde_json::Value {
 }
 
 fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult<serde_json::Value> {
+    handle_mcp_tool_call_from(&known_workspaces(app)?, params)
+}
+
+fn handle_mcp_tool_call_from(workspaces: &[Workspace], params: serde_json::Value) -> AppResult<serde_json::Value> {
     let name = params
         .get("name")
         .and_then(|name| name.as_str())
@@ -1745,16 +1830,12 @@ fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
     let result = match name {
-        "workspace.list" => mcp_workspace_list(app)?,
-        "workspace.tree" => mcp_workspace_tree(app, arguments)?,
-        "workspace.search" => mcp_workspace_search(app, arguments)?,
+        "workspace.list" => mcp_workspace_list_from(workspaces)?,
+        "workspace.tree" => mcp_workspace_tree_from(workspaces, arguments)?,
+        "workspace.search" => mcp_workspace_search_from(workspaces, arguments)?,
         _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
     };
     Ok(mcp_tool_result(result))
-}
-
-fn mcp_workspace_list(app: &AppHandle) -> AppResult<serde_json::Value> {
-    mcp_workspace_list_from(&known_workspaces(app)?)
 }
 
 fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<serde_json::Value> {
@@ -1771,10 +1852,6 @@ fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<serde_json::Va
     }))
 }
 
-fn mcp_workspace_tree(app: &AppHandle, arguments: serde_json::Value) -> AppResult<serde_json::Value> {
-    mcp_workspace_tree_from(&known_workspaces(app)?, arguments)
-}
-
 fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
     let requested_path = arguments.get("workspacePath").and_then(|path| path.as_str());
     let workspaces = workspaces
@@ -1787,10 +1864,6 @@ fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde_json::Valu
         }))
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "workspaces": workspaces }))
-}
-
-fn mcp_workspace_search(app: &AppHandle, arguments: serde_json::Value) -> AppResult<serde_json::Value> {
-    mcp_workspace_search_from(&known_workspaces(app)?, arguments)
 }
 
 fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
@@ -1935,6 +2008,212 @@ fn byte_index_saturating_after(value: &str, byte_index: usize, chars_after: usiz
         .nth(chars_after)
         .map(|(index, _)| byte_index.min(value.len()) + index)
         .unwrap_or(value.len())
+}
+
+fn run_mcp_stdio<I, R, W>(
+    args: I,
+    env_workspaces: Option<std::ffi::OsString>,
+    cwd: PathBuf,
+    input: R,
+    mut output: W,
+) -> AppResult<()>
+where
+    I: IntoIterator<Item = String>,
+    R: Read,
+    W: Write,
+{
+    let workspace_paths = mcp_stdio_workspace_paths(args, env_workspaces, cwd)?;
+    let mut reader = BufReader::new(input);
+    while let Some(message) = read_mcp_stdio_message(&mut reader)? {
+        let request = match serde_json::from_slice::<serde_json::Value>(&message.body) {
+            Ok(request) => request,
+            Err(error) => {
+                write_mcp_stdio_message(
+                    &mut output,
+                    &json_rpc_error(None, -32700, &format!("Invalid JSON: {error}")),
+                    message.framing,
+                )?;
+                continue;
+            }
+        };
+        let response = if mcp_request_method(&request) == Some("tools/call") {
+            let workspaces = load_mcp_stdio_workspaces(&workspace_paths)?;
+            handle_mcp_json_rpc_for_workspaces(&workspaces, request)
+        } else {
+            handle_mcp_json_rpc_for_workspaces(&[], request)
+        };
+        if !response.is_null() {
+            write_mcp_stdio_message(&mut output, &response, message.framing)?;
+        }
+    }
+    Ok(())
+}
+
+fn mcp_request_method(request: &serde_json::Value) -> Option<&str> {
+    request.get("method").and_then(|method| method.as_str())
+}
+
+fn mcp_stdio_workspace_paths<I>(
+    args: I,
+    env_workspaces: Option<std::ffi::OsString>,
+    cwd: PathBuf,
+) -> AppResult<Vec<PathBuf>>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut roots = Vec::new();
+    let mut config_paths = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--workspace" {
+            let path = args
+                .next()
+                .ok_or_else(|| AppError::Message("--workspace requires a path.".into()))?;
+            roots.push(PathBuf::from(path));
+        } else if let Some(path) = arg.strip_prefix("--workspace=") {
+            roots.push(PathBuf::from(path));
+        } else if arg == "--workspaces" {
+            let value = args
+                .next()
+                .ok_or_else(|| AppError::Message("--workspaces requires a path list.".into()))?;
+            roots.extend(std::env::split_paths(&value));
+        } else if let Some(value) = arg.strip_prefix("--workspaces=") {
+            roots.extend(std::env::split_paths(value));
+        } else if arg == "--config" {
+            let path = args
+                .next()
+                .ok_or_else(|| AppError::Message("--config requires a path.".into()))?;
+            config_paths.push(PathBuf::from(path));
+        } else if let Some(path) = arg.strip_prefix("--config=") {
+            config_paths.push(PathBuf::from(path));
+        } else {
+            return Err(AppError::Message(format!("Unknown MCP stdio argument: {arg}")));
+        }
+    }
+    let default_config = cwd.join(MCP_STDIO_WORKSPACE_CONFIG);
+    if default_config.is_file() {
+        config_paths.insert(0, default_config);
+    }
+    for config_path in config_paths {
+        roots.extend(read_mcp_workspace_config_paths(&config_path)?);
+    }
+    if let Some(value) = env_workspaces {
+        roots.extend(std::env::split_paths(&value));
+    }
+    roots.push(cwd);
+
+    let mut seen = HashSet::new();
+    let mut workspaces = Vec::new();
+    for root in roots {
+        for workspace in discover_workspace_paths(&root)? {
+            let key = fs::canonicalize(&workspace).unwrap_or(workspace.clone());
+            if seen.insert(path_to_string(&key)) {
+                workspaces.push(workspace);
+            }
+        }
+    }
+    Ok(workspaces)
+}
+
+fn read_mcp_workspace_config_paths(path: &Path) -> AppResult<Vec<PathBuf>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let config: McpWorkspaceConfig = serde_json::from_slice(&fs::read(path)?)?;
+    let config_directory = path.parent().unwrap_or_else(|| Path::new("."));
+    Ok(config
+        .workspaces
+        .into_iter()
+        .map(PathBuf::from)
+        .map(|workspace| {
+            if workspace.is_absolute() {
+                workspace
+            } else {
+                config_directory.join(workspace)
+            }
+        })
+        .collect())
+}
+
+fn discover_workspace_paths(root: &Path) -> AppResult<Vec<PathBuf>> {
+    if workspace_manifest_path(root).is_some() {
+        return Ok(vec![root.to_path_buf()]);
+    }
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut workspaces = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        if path.is_dir() && workspace_manifest_path(&path).is_some() {
+            workspaces.push(path);
+        }
+    }
+    workspaces.sort();
+    Ok(workspaces)
+}
+
+fn load_mcp_stdio_workspaces(paths: &[PathBuf]) -> AppResult<Vec<Workspace>> {
+    let mut workspaces = Vec::new();
+    for path in paths {
+        if let Ok(workspace) = load_workspace_from_path(path) {
+            workspaces.push(workspace);
+        }
+    }
+    Ok(workspaces)
+}
+
+fn read_mcp_stdio_message<R: BufRead>(reader: &mut R) -> AppResult<Option<McpStdioMessage>> {
+    let mut content_length = None;
+    let mut saw_header = false;
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            return if saw_header {
+                Err(AppError::Message("MCP stdio stream ended inside headers.".into()))
+            } else {
+                Ok(None)
+            };
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            break;
+        }
+        if !saw_header && !trimmed.to_ascii_lowercase().starts_with("content-length:") {
+            return Ok(Some(McpStdioMessage {
+                body: trimmed.as_bytes().to_vec(),
+                framing: McpStdioFraming::Newline,
+            }));
+        }
+        saw_header = true;
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse::<usize>().ok();
+            }
+        }
+    }
+    let length = content_length.ok_or_else(|| AppError::Message("Missing MCP Content-Length header.".into()))?;
+    let mut body = vec![0_u8; length];
+    reader.read_exact(&mut body)?;
+    Ok(Some(McpStdioMessage {
+        body,
+        framing: McpStdioFraming::ContentLength,
+    }))
+}
+
+fn write_mcp_stdio_message<W: Write>(
+    writer: &mut W,
+    value: &serde_json::Value,
+    framing: McpStdioFraming,
+) -> AppResult<()> {
+    let body = value.to_string();
+    match framing {
+        McpStdioFraming::ContentLength => write!(writer, "Content-Length: {}\r\n\r\n{}", body.len(), body)?,
+        McpStdioFraming::Newline => writeln!(writer, "{body}")?,
+    }
+    writer.flush()?;
+    Ok(())
 }
 
 fn mcp_tool_result(value: serde_json::Value) -> serde_json::Value {
@@ -2140,6 +2419,20 @@ fn mcp_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
         .map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     Ok(directory.join(MCP_SETTINGS))
+}
+
+fn mcp_stdio_workspace_config_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("mcp");
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(MCP_STDIO_WORKSPACE_CONFIG))
+}
+
+fn write_mcp_stdio_workspace_config(app: &AppHandle, config: &McpWorkspaceConfig) -> AppResult<()> {
+    write_json_atomically(&mcp_stdio_workspace_config_path(app)?, config)
 }
 
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
@@ -2498,5 +2791,184 @@ mod tests {
         assert!(mcp_request_is_authorized(&request, "secret-token"));
         assert!(!mcp_request_is_authorized(&missing, "secret-token"));
         assert!(!mcp_request_is_authorized(&request, "other-token"));
+    }
+
+    #[test]
+    fn mcp_stdio_discovers_workspaces_from_args_env_config_and_cwd() {
+        let arg_workspace = tempdir().unwrap();
+        let config_workspace = tempdir().unwrap();
+        let explicit_config_workspace = tempdir().unwrap();
+        let env_root = tempdir().unwrap();
+        let env_workspace = env_root.path().join("env-workspace");
+        let cwd_root = tempdir().unwrap();
+        let cwd_workspace = cwd_root.path().join("cwd-workspace");
+        fs::create_dir(&env_workspace).unwrap();
+        fs::create_dir(&cwd_workspace).unwrap();
+        initialize_workspace_with_name(arg_workspace.path(), Some("Args")).unwrap();
+        initialize_workspace_with_name(config_workspace.path(), Some("Config")).unwrap();
+        initialize_workspace_with_name(explicit_config_workspace.path(), Some("Explicit Config")).unwrap();
+        initialize_workspace_with_name(&env_workspace, Some("Env")).unwrap();
+        initialize_workspace_with_name(&cwd_workspace, Some("Cwd")).unwrap();
+        let env_value = std::env::join_paths([env_root.path()]).unwrap();
+        write_json_atomically(
+            &cwd_root.path().join(MCP_STDIO_WORKSPACE_CONFIG),
+            &McpWorkspaceConfig {
+                workspaces: vec![path_to_string(config_workspace.path())],
+            },
+        )
+        .unwrap();
+        let explicit_config = cwd_root.path().join("explicit-workspaces.json");
+        write_json_atomically(
+            &explicit_config,
+            &McpWorkspaceConfig {
+                workspaces: vec![path_to_string(explicit_config_workspace.path())],
+            },
+        )
+        .unwrap();
+
+        let paths = mcp_stdio_workspace_paths(
+            vec![
+                "--config".to_string(),
+                path_to_string(&explicit_config),
+                "--workspace".to_string(),
+                path_to_string(arg_workspace.path()),
+                "--workspace".to_string(),
+                path_to_string(arg_workspace.path()),
+            ],
+            Some(env_value),
+            cwd_root.path().to_path_buf(),
+        )
+        .unwrap();
+        let names = load_mcp_stdio_workspaces(&paths)
+            .unwrap()
+            .into_iter()
+            .map(|workspace| workspace.manifest.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["Args", "Config", "Explicit Config", "Env", "Cwd"]);
+    }
+
+    #[test]
+    fn mcp_stdio_serves_initialized_tool_calls() {
+        let workspace = tempdir().unwrap();
+        fs::write(workspace.path().join("resume.hvy"), "Resume for James Hutchison").unwrap();
+        initialize_workspace_with_name(workspace.path(), Some("Career")).unwrap();
+        let requests = [
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "test", "version": "0" }
+                }
+            }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "workspace.search",
+                    "arguments": {
+                        "query": "James Hutchison"
+                    }
+                }
+            }),
+        ];
+        let input = requests
+            .iter()
+            .map(mcp_test_frame)
+            .collect::<Vec<_>>()
+            .join("");
+        let mut output = Vec::new();
+
+        run_mcp_stdio(
+            vec!["--workspace".to_string(), path_to_string(workspace.path())],
+            None,
+            tempdir().unwrap().path().to_path_buf(),
+            input.as_bytes(),
+            &mut output,
+        )
+        .unwrap();
+        let mut reader = BufReader::new(output.as_slice());
+        let initialize = read_mcp_stdio_message(&mut reader).unwrap().unwrap();
+        let search = read_mcp_stdio_message(&mut reader).unwrap().unwrap();
+        let initialize: serde_json::Value = serde_json::from_slice(&initialize.body).unwrap();
+        let search: serde_json::Value = serde_json::from_slice(&search.body).unwrap();
+
+        assert_eq!(initialize["result"]["serverInfo"]["name"], "hvy-galaxy");
+        assert_eq!(
+            search["result"]["structuredContent"]["results"][0]["relativePath"],
+            "resume.hvy"
+        );
+    }
+
+    #[test]
+    fn mcp_stdio_initializes_even_when_workspace_load_fails() {
+        let workspace = tempdir().unwrap();
+        initialize_workspace_with_name(workspace.path(), Some("Missing")).unwrap();
+        fs::remove_file(workspace.path().join(WORKSPACE_MANIFEST)).unwrap();
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "claude-ai", "version": "0.1.0" }
+            }
+        });
+        let input = mcp_test_frame(&request);
+        let mut output = Vec::new();
+
+        run_mcp_stdio(
+            vec!["--workspace".to_string(), path_to_string(workspace.path())],
+            None,
+            workspace.path().to_path_buf(),
+            input.as_bytes(),
+            &mut output,
+        )
+        .unwrap();
+        let mut reader = BufReader::new(output.as_slice());
+        let initialize = read_mcp_stdio_message(&mut reader).unwrap().unwrap();
+        let initialize: serde_json::Value = serde_json::from_slice(&initialize.body).unwrap();
+
+        assert_eq!(initialize["id"], 1);
+        assert_eq!(initialize["result"]["serverInfo"]["name"], "hvy-galaxy");
+    }
+
+    #[test]
+    fn mcp_stdio_supports_newline_framing_from_current_spec() {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "claude-ai", "version": "0.1.0" }
+            }
+        });
+        let mut output = Vec::new();
+
+        run_mcp_stdio(
+            Vec::<String>::new(),
+            None,
+            tempdir().unwrap().path().to_path_buf(),
+            format!("{request}\n").as_bytes(),
+            &mut output,
+        )
+        .unwrap();
+
+        let line = String::from_utf8(output).unwrap();
+        let response: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
+        assert_eq!(response["id"], 0);
+        assert_eq!(response["result"]["protocolVersion"], "2025-11-25");
+    }
+
+    fn mcp_test_frame(value: &serde_json::Value) -> String {
+        let body = value.to_string();
+        format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
     }
 }

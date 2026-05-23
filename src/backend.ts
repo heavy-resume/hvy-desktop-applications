@@ -106,6 +106,13 @@ export interface McpServerStatus {
   lastError: string | null;
 }
 
+export interface McpStdioLaunchConfig {
+  command: string;
+  args: string[];
+  workingDirectory: string;
+  workspaceConfigPath: string;
+}
+
 export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
 
 export interface AiProviderConfig {
@@ -176,6 +183,13 @@ export function loadMcpServerStatus(): Promise<McpServerStatus> {
   return invokeDesktop('load_mcp_server_status');
 }
 
+export function loadMcpStdioLaunchConfig(): Promise<McpStdioLaunchConfig> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(defaultMcpStdioLaunchConfig());
+  }
+  return invokeDesktop('load_mcp_stdio_launch_config');
+}
+
 export function startMcpServer(): Promise<McpServerStatus> {
   return invokeDesktop('start_mcp_server');
 }
@@ -207,6 +221,15 @@ export function defaultMcpSettings(): McpSettings {
     port: 8794,
     writeAccess: 'hvyCliEdits',
     bearerToken: generateMcpBearerToken(),
+  };
+}
+
+export function defaultMcpStdioLaunchConfig(): McpStdioLaunchConfig {
+  return {
+    command: '/path/to/HVY Galaxy',
+    args: ['--mcp-stdio'],
+    workingDirectory: '/path/to/hvy-galaxy-mcp',
+    workspaceConfigPath: '/path/to/hvy-galaxy-mcp/hvy-galaxy-mcp-workspaces.json',
   };
 }
 

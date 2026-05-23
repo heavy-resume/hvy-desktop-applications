@@ -41,6 +41,7 @@ export interface UiHandlers {
   copyMcpConnectionConfig(config?: string): void;
   copyMcpConnectionUrl(url: string): void;
   copyMcpBearerToken(token: string): void;
+  copyMcpSetupValue(value: string, label: string): void;
   openColorTheme(): void;
   closeColorTheme(): void;
   updateColorTheme(name: string, value: string): void;
@@ -239,16 +240,33 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'copy-mcp-url') {
       const url = target
         .closest<HTMLElement>('.mcp-status-card')
-        ?.querySelector<HTMLElement>('[data-role="mcp-url"]')
-        ?.textContent
+        ?.querySelector<HTMLInputElement>('[data-role="mcp-url"]')
+        ?.value
         ?.trim();
       if (url) handlers.copyMcpConnectionUrl(url);
+    }
+    if (action === 'copy-mcp-value') {
+      const field = target.closest<HTMLElement>('.mcp-copy-field');
+      const value = field?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')?.value.trim();
+      const label = field?.dataset.copyLabel ?? 'value';
+      if (value) handlers.copyMcpSetupValue(value, label);
     }
     if (action === 'copy-mcp-config') {
       const preview = target
         .closest<HTMLFormElement>('form[data-form="mcp-settings"]')
-        ?.querySelector<HTMLElement>('[data-role="mcp-connection-config"]');
-      handlers.copyMcpConnectionConfig(preview?.textContent ?? undefined);
+        ?.querySelector<HTMLTextAreaElement>('.mcp-config-panel:not([hidden]) [data-role="mcp-connection-config"]');
+      handlers.copyMcpConnectionConfig(preview?.value ?? undefined);
+    }
+    if (action === 'select-mcp-transport' && target.dataset.transport) {
+      const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
+      form?.querySelectorAll<HTMLElement>('[data-transport-tab]').forEach((tab) => {
+        const active = tab.dataset.transportTab === target.dataset.transport;
+        tab.classList.toggle('is-active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      form?.querySelectorAll<HTMLElement>('[data-transport-panel]').forEach((panel) => {
+        panel.hidden = panel.dataset.transportPanel !== target.dataset.transport;
+      });
     }
     if (action === 'cancel-color-theme') handlers.closeColorTheme();
     if (action === 'theme-add-color') handlers.addColorThemeColor();
@@ -856,7 +874,7 @@ function renderAboutDialog(state: AppState): string {
         <img class="about-logo" src="${escapeAttr(appIconUrl)}" alt="" aria-hidden="true">
         <h2 id="aboutTitle">HVY Galaxy</h2>
         <p class="about-version">Version 0.1.0</p>
-        <p class="about-copy">Desktop workspace for HVY files</p>
+        <p class="about-copy">Desktop app for HVY files</p>
         <div class="about-attribution">
           <span>Created by Heavy Resume</span>
           <a href="https://heavyresume.com" target="_blank" rel="noreferrer">https://heavyresume.com</a>
@@ -935,38 +953,16 @@ function renderMcpSettingsDialog(state: AppState): string {
   const settings = state.mcpSettingsDraft ?? state.mcpSettings;
   const status = state.mcpServerStatus;
   const endpointUrl = status.url ?? mcpConnectionUrl(settings);
-  const connectionConfig = formatMcpConnectionConfig(settings);
+  const stdioConfig = formatMcpStdioConnectionConfig(state.mcpStdioLaunchConfig);
+  const httpConfig = formatMcpHttpConnectionConfig(settings);
+  const stdioWorkspaceConfig = formatMcpWorkspaceConfig(state.workspaces);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
         <h2>MCP Server</h2>
         <p class="dialog-note">Let local AI agents search workspaces and edit HVY files through the low-context HVY CLI surface.</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
-        <div class="mcp-status-card" data-state="${status.running ? 'running' : 'stopped'}">
-          <div>
-            <strong>${status.running ? 'Running' : 'Stopped'}</strong>
-            <span>${escapeHtml(status.message)}</span>
-            <div class="mcp-url-row">
-              <code data-role="mcp-url" data-running="${status.running ? 'true' : 'false'}">${escapeHtml(endpointUrl)}</code>
-              <button type="button" class="icon-button" data-action="copy-mcp-url" title="Copy URL" aria-label="Copy URL">${copyIcon()}</button>
-            </div>
-            ${status.lastError ? `<small>${escapeHtml(status.lastError)}</small>` : ''}
-          </div>
-          <div class="mcp-status-actions">
-            <button type="button" data-action="start-mcp-server" ${status.running || state.busy ? 'disabled' : ''}>Start</button>
-            <button type="button" data-action="stop-mcp-server" ${!status.running || state.busy ? 'disabled' : ''}>Stop</button>
-            <button type="button" data-action="restart-mcp-server" ${state.busy ? 'disabled' : ''}>Restart</button>
-          </div>
-        </div>
-        <label class="checkbox-row">
-          <input name="startAutomatically" type="checkbox" ${settings.startAutomatically ? 'checked' : ''}>
-          <span>Start automatically with HVY Galaxy</span>
-        </label>
-        <div class="mcp-settings-grid">
-          <label>
-            <span>Port</span>
-            <input name="port" data-field="mcp-port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
-          </label>
+        <div class="mcp-settings-grid mcp-settings-grid--global">
           <label>
             <span>Write access</span>
             <select name="writeAccess">
@@ -975,23 +971,108 @@ function renderMcpSettingsDialog(state: AppState): string {
               <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
             </select>
           </label>
-          <label class="mcp-token-field">
-            <span>Bearer token</span>
-            <div class="mcp-token-control">
-              <input name="bearerToken" data-field="mcp-token" type="password" value="${escapeAttr(settings.bearerToken)}" autocomplete="off" spellcheck="false">
-              <button type="button" class="icon-button" data-action="toggle-mcp-token" title="Show bearer token" aria-label="Show bearer token">${eyeIcon()}</button>
-              <button type="button" class="icon-button" data-action="copy-mcp-token" title="Copy bearer token" aria-label="Copy bearer token">${copyIcon()}</button>
-              <button type="button" data-action="generate-mcp-token">Generate</button>
-            </div>
-          </label>
         </div>
-        <div class="mcp-config-preview"><span>Connection config</span><pre data-role="mcp-connection-config">${escapeHtml(connectionConfig)}</pre></div>
+        <div class="mcp-config-preview">
+          <div class="mcp-config-header">
+            <span>Connection config</span>
+            <div class="segmented-control mcp-transport-tabs" role="tablist" aria-label="MCP transport">
+              <button type="button" class="is-active" data-action="select-mcp-transport" data-transport="stdio" data-transport-tab="stdio" role="tab" aria-selected="true">STDIO</button>
+              <button type="button" data-action="select-mcp-transport" data-transport="http" data-transport-tab="http" role="tab" aria-selected="false">Streamable HTTP</button>
+            </div>
+          </div>
+          <section class="mcp-config-panel" data-transport-panel="stdio">
+            <div class="mcp-setup-grid">
+              ${renderMcpReadonlyField('Command to launch', state.mcpStdioLaunchConfig.command)}
+              ${renderMcpReadonlyField('Command line arguments', formatShellArgs(state.mcpStdioLaunchConfig.args) || '(none)')}
+              ${renderMcpReadonlyField('Working directory', state.mcpStdioLaunchConfig.workingDirectory)}
+              ${renderMcpReadonlyField('Workspace config file', state.mcpStdioLaunchConfig.workspaceConfigPath)}
+              ${renderMcpReadonlyField('Environment variable passthrough', '(none)')}
+            </div>
+            ${renderMcpReadonlyBlock('JSON config', stdioConfig, 'mcp-connection-config')}
+            ${renderMcpReadonlyBlock('Workspace config', stdioWorkspaceConfig)}
+          </section>
+          <section class="mcp-config-panel" data-transport-panel="http" hidden>
+            <div class="mcp-status-card" data-state="${status.running ? 'running' : 'stopped'}">
+              <div>
+                <strong>${status.running ? 'Running' : 'Stopped'}</strong>
+                <span>${escapeHtml(status.message)}</span>
+                ${renderMcpReadonlyField('URL', endpointUrl, 'mcp-url', 'copy-mcp-url', status.running ? 'true' : 'false')}
+                ${status.lastError ? `<small>${escapeHtml(status.lastError)}</small>` : ''}
+              </div>
+              <div class="mcp-status-actions">
+                <button type="button" data-action="start-mcp-server" ${status.running || state.busy ? 'disabled' : ''}>Start</button>
+                <button type="button" data-action="stop-mcp-server" ${!status.running || state.busy ? 'disabled' : ''}>Stop</button>
+                <button type="button" data-action="restart-mcp-server" ${state.busy ? 'disabled' : ''}>Restart</button>
+              </div>
+            </div>
+            <label class="checkbox-row">
+              <input name="startAutomatically" type="checkbox" ${settings.startAutomatically ? 'checked' : ''}>
+              <span>Start automatically with HVY Galaxy</span>
+            </label>
+            <div class="mcp-settings-grid">
+              <label>
+                <span>Port</span>
+                <input name="port" data-field="mcp-port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
+              </label>
+              <label class="mcp-token-field">
+                <span>Bearer token</span>
+                <div class="mcp-token-control">
+                  <input name="bearerToken" data-field="mcp-token" type="password" value="${escapeAttr(settings.bearerToken)}" autocomplete="off" spellcheck="false">
+                  <button type="button" class="icon-button" data-action="toggle-mcp-token" title="Show bearer token" aria-label="Show bearer token">${eyeIcon()}</button>
+                  <button type="button" class="icon-button" data-action="copy-mcp-token" title="Copy bearer token" aria-label="Copy bearer token">${copyIcon()}</button>
+                  <button type="button" data-action="generate-mcp-token">Generate</button>
+                </div>
+              </label>
+            </div>
+            <div class="mcp-setup-grid">
+              ${renderMcpReadonlyField('Connection URL', endpointUrl, 'mcp-http-url')}
+              ${renderMcpReadonlyField('Bearer token state', settings.bearerToken.trim() ? 'Configured' : 'None', 'mcp-http-token-state')}
+            </div>
+            ${renderMcpReadonlyBlock('JSON config', httpConfig, 'mcp-connection-config')}
+          </section>
+        </div>
         <div class="dialog-actions">
           <button type="button" data-action="copy-mcp-config">Copy Config</button>
           <button type="button" data-action="cancel-mcp-settings">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
+    </div>`;
+}
+
+function renderMcpReadonlyField(
+  label: string,
+  value: string,
+  role?: string,
+  copyAction = 'copy-mcp-value',
+  running?: string,
+): string {
+  return `
+    <div class="mcp-copy-field" data-copy-label="${escapeAttr(label)}">
+      <span>${escapeHtml(label)}</span>
+      <span class="mcp-copy-control">
+        <input
+          type="text"
+          readonly
+          aria-label="${escapeAttr(label)}"
+          value="${escapeAttr(value)}"
+          ${role ? `data-role="${escapeAttr(role)}"` : ''}
+          ${running ? `data-running="${escapeAttr(running)}"` : ''}
+          spellcheck="false"
+        >
+        <button type="button" class="icon-button" data-action="${escapeAttr(copyAction)}" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
+      </span>
+    </div>`;
+}
+
+function renderMcpReadonlyBlock(label: string, value: string, role?: string): string {
+  return `
+    <div class="mcp-copy-field mcp-copy-field--block" data-copy-label="${escapeAttr(label)}">
+      <span>${escapeHtml(label)}</span>
+      <span class="mcp-copy-control mcp-copy-control--block">
+        <textarea readonly aria-label="${escapeAttr(label)}" ${role ? `data-role="${escapeAttr(role)}"` : ''} spellcheck="false">${escapeHtml(value)}</textarea>
+        <button type="button" class="icon-button" data-action="copy-mcp-value" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
+      </span>
     </div>`;
 }
 
@@ -1170,21 +1251,57 @@ function isMcpWriteAccess(value: FormDataEntryValue | null): value is McpSetting
 }
 
 function updateMcpConnectionPreview(form: HTMLFormElement): void {
-  const preview = form.querySelector<HTMLElement>('[data-role="mcp-connection-config"]');
-  if (!preview) return;
-  preview.textContent = formatMcpConnectionConfig(readMcpSettingsForm(new FormData(form)));
+  const httpPreview = form.querySelector<HTMLTextAreaElement>('[data-transport-panel="http"] [data-role="mcp-connection-config"]');
+  if (httpPreview) {
+    const settings = readMcpSettingsForm(new FormData(form));
+    httpPreview.value = formatMcpHttpConnectionConfig(settings);
+    const nextUrl = mcpConnectionUrl(settings);
+    const httpUrl = form.querySelector<HTMLInputElement>('[data-role="mcp-http-url"]');
+    if (httpUrl) httpUrl.value = nextUrl;
+    const token = form.querySelector<HTMLInputElement>('[data-role="mcp-http-token-state"]');
+    if (token) token.value = settings.bearerToken.trim() ? 'Configured' : 'None';
+  }
 }
 
 function updateMcpUrlPreview(form: HTMLFormElement): void {
-  const url = form.querySelector<HTMLElement>('[data-role="mcp-url"]');
+  const url = form.querySelector<HTMLInputElement>('[data-role="mcp-url"]');
   if (!url || url.dataset.running === 'true') return;
-  url.textContent = mcpConnectionUrl(readMcpSettingsForm(new FormData(form)));
+  url.value = mcpConnectionUrl(readMcpSettingsForm(new FormData(form)));
 }
 
-function formatMcpConnectionConfig(settings: McpSettings): string {
-  const url = mcpConnectionUrl(settings);
+function formatMcpStdioConnectionConfig(launch: { command: string; args: string[]; workingDirectory: string }): string {
+  return JSON.stringify({
+    mcpServers: {
+      'hvy-galaxy': {
+        type: 'stdio',
+        command: launch.command,
+        args: launch.args,
+        cwd: launch.workingDirectory,
+      },
+    },
+  }, null, 2);
+}
+
+function formatShellArgs(args: string[]): string {
+  return args.map(shellQuoteArg).join(' ');
+}
+
+function shellQuoteArg(arg: string): string {
+  if (arg.length === 0) {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(arg)) {
+    return arg;
+  }
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatMcpHttpConnectionConfig(settings: McpSettings): string {
+  const serverConfig: { type: string; url: string; headers?: { Authorization: string } } = {
+    type: 'http',
+    url: mcpConnectionUrl(settings),
+  };
   const bearerToken = settings.bearerToken.trim();
-  const serverConfig: { url: string; headers?: { Authorization: string } } = { url };
   if (bearerToken) {
     serverConfig.headers = {
       Authorization: `Bearer ${bearerToken}`,
@@ -1194,6 +1311,12 @@ function formatMcpConnectionConfig(settings: McpSettings): string {
     mcpServers: {
       'hvy-galaxy': serverConfig,
     },
+  }, null, 2);
+}
+
+function formatMcpWorkspaceConfig(workspaces: Workspace[]): string {
+  return JSON.stringify({
+    workspaces: workspaces.map((workspace) => workspace.path),
   }, null, 2);
 }
 
