@@ -110,7 +110,6 @@ export interface McpStdioLaunchConfig {
   command: string;
   args: string[];
   workingDirectory: string;
-  workspaceConfigPath: string;
 }
 
 export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
@@ -229,7 +228,6 @@ export function defaultMcpStdioLaunchConfig(): McpStdioLaunchConfig {
     command: '/path/to/HVY Galaxy',
     args: ['--mcp-stdio'],
     workingDirectory: '/path/to/hvy-galaxy-mcp',
-    workspaceConfigPath: '/path/to/hvy-galaxy-mcp/hvy-galaxy-mcp-workspaces.json',
   };
 }
 

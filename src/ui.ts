@@ -955,7 +955,6 @@ function renderMcpSettingsDialog(state: AppState): string {
   const endpointUrl = status.url ?? mcpConnectionUrl(settings);
   const stdioConfig = formatMcpStdioConnectionConfig(state.mcpStdioLaunchConfig);
   const httpConfig = formatMcpHttpConnectionConfig(settings);
-  const stdioWorkspaceConfig = formatMcpWorkspaceConfig(state.workspaces);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
@@ -985,11 +984,8 @@ function renderMcpSettingsDialog(state: AppState): string {
               ${renderMcpReadonlyField('Command to launch', state.mcpStdioLaunchConfig.command)}
               ${renderMcpReadonlyField('Command line arguments', formatShellArgs(state.mcpStdioLaunchConfig.args) || '(none)')}
               ${renderMcpReadonlyField('Working directory', state.mcpStdioLaunchConfig.workingDirectory)}
-              ${renderMcpReadonlyField('Workspace config file', state.mcpStdioLaunchConfig.workspaceConfigPath)}
-              ${renderMcpReadonlyField('Environment variable passthrough', '(none)')}
             </div>
             ${renderMcpReadonlyBlock('JSON config', stdioConfig, 'mcp-connection-config')}
-            ${renderMcpReadonlyBlock('Workspace config', stdioWorkspaceConfig)}
           </section>
           <section class="mcp-config-panel" data-transport-panel="http" hidden>
             <div class="mcp-status-card" data-state="${status.running ? 'running' : 'stopped'}">
@@ -1311,12 +1307,6 @@ function formatMcpHttpConnectionConfig(settings: McpSettings): string {
     mcpServers: {
       'hvy-galaxy': serverConfig,
     },
-  }, null, 2);
-}
-
-function formatMcpWorkspaceConfig(workspaces: Workspace[]): string {
-  return JSON.stringify({
-    workspaces: workspaces.map((workspace) => workspace.path),
   }, null, 2);
 }
 

@@ -194,7 +194,6 @@ struct McpStdioLaunchConfig {
     command: String,
     args: Vec<String>,
     working_directory: String,
-    workspace_config_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -202,6 +201,17 @@ struct McpStdioLaunchConfig {
 struct McpWorkspaceConfig {
     #[serde(default)]
     workspaces: Vec<String>,
+    #[serde(default = "default_mcp_write_access")]
+    write_access: String,
+}
+
+impl Default for McpWorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            workspaces: Vec::new(),
+            write_access: default_mcp_write_access(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,6 +484,7 @@ fn load_mcp_settings(app: AppHandle) -> AppResult<McpSettings> {
     let path = mcp_settings_path(&app)?;
     let settings = read_mcp_settings(&path)?;
     write_json_atomically(&path, &settings)?;
+    write_mcp_stdio_settings(&app, &settings)?;
     Ok(settings)
 }
 
@@ -481,6 +492,7 @@ fn load_mcp_settings(app: AppHandle) -> AppResult<McpSettings> {
 fn save_mcp_settings(app: AppHandle, settings: McpSettings) -> AppResult<McpSettings> {
     let settings = normalize_mcp_settings(settings)?;
     write_json_atomically(&mcp_settings_path(&app)?, &settings)?;
+    write_mcp_stdio_settings(&app, &settings)?;
     Ok(settings)
 }
 
@@ -504,7 +516,6 @@ fn load_mcp_stdio_launch_config(app: AppHandle) -> AppResult<McpStdioLaunchConfi
         command: path_to_string(&std::env::current_exe()?),
         args: vec!["--mcp-stdio".into()],
         working_directory,
-        workspace_config_path: path_to_string(&workspace_config_path),
     })
 }
 
@@ -590,8 +601,10 @@ fn update_mcp_workspaces(app: AppHandle, runtime: State<McpRuntime>, paths: Vec<
     }
     normalized.sort();
     normalized.dedup();
+    let settings = read_mcp_settings(&mcp_settings_path(&app)?)?;
     let config = McpWorkspaceConfig {
         workspaces: normalized.clone(),
+        write_access: settings.write_access,
     };
     *runtime
         .workspaces
@@ -1541,10 +1554,7 @@ fn read_mcp_settings(path: &Path) -> AppResult<McpSettings> {
 }
 
 fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
-    let write_access = match settings.write_access.trim() {
-        "searchOnly" | "hvyCliEdits" | "createImportSave" => settings.write_access.trim().to_string(),
-        _ => default_mcp_write_access(),
-    };
+    let write_access = normalize_mcp_write_access(&settings.write_access);
     let bearer_token = settings.bearer_token.trim().to_string();
     Ok(McpSettings {
         start_automatically: settings.start_automatically,
@@ -1552,6 +1562,13 @@ fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
         write_access,
         bearer_token,
     })
+}
+
+fn normalize_mcp_write_access(value: &str) -> String {
+    match value.trim() {
+        "searchOnly" | "hvyCliEdits" | "createImportSave" => value.trim().to_string(),
+        _ => default_mcp_write_access(),
+    }
 }
 
 fn spawn_mcp_server(app: AppHandle, port: u16) -> AppResult<McpServerHandle> {
@@ -1733,6 +1750,14 @@ fn handle_mcp_json_rpc(app: &AppHandle, request: serde_json::Value) -> serde_jso
 }
 
 fn handle_mcp_json_rpc_for_workspaces(workspaces: &[Workspace], request: serde_json::Value) -> serde_json::Value {
+    handle_mcp_json_rpc_for_workspaces_with_access(workspaces, request, &default_mcp_write_access())
+}
+
+fn handle_mcp_json_rpc_for_workspaces_with_access(
+    workspaces: &[Workspace],
+    request: serde_json::Value,
+    write_access: &str,
+) -> serde_json::Value {
     let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|method| method.as_str()).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
@@ -1740,7 +1765,7 @@ fn handle_mcp_json_rpc_for_workspaces(workspaces: &[Workspace], request: serde_j
         "initialize" => json_rpc_result(id, mcp_initialize_result(&params)),
         "notifications/initialized" => serde_json::Value::Null,
         "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list() })),
-        "tools/call" => match handle_mcp_tool_call_from(workspaces, params) {
+        "tools/call" => match handle_mcp_tool_call_from_with_access(workspaces, params, write_access) {
             Ok(result) => json_rpc_result(id, result),
             Err(error) => json_rpc_error(Some(id), -32000, &error.to_string()),
         },
@@ -1821,10 +1846,19 @@ fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult
 }
 
 fn handle_mcp_tool_call_from(workspaces: &[Workspace], params: serde_json::Value) -> AppResult<serde_json::Value> {
+    handle_mcp_tool_call_from_with_access(workspaces, params, &default_mcp_write_access())
+}
+
+fn handle_mcp_tool_call_from_with_access(
+    workspaces: &[Workspace],
+    params: serde_json::Value,
+    write_access: &str,
+) -> AppResult<serde_json::Value> {
     let name = params
         .get("name")
         .and_then(|name| name.as_str())
         .ok_or_else(|| AppError::Message("tools/call requires a tool name.".into()))?;
+    ensure_mcp_tool_allowed(name, write_access)?;
     let arguments = params
         .get("arguments")
         .cloned()
@@ -1836,6 +1870,31 @@ fn handle_mcp_tool_call_from(workspaces: &[Workspace], params: serde_json::Value
         _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
     };
     Ok(mcp_tool_result(result))
+}
+
+fn ensure_mcp_tool_allowed(name: &str, write_access: &str) -> AppResult<()> {
+    if mcp_tool_required_access(name) <= mcp_write_access_level(write_access) {
+        return Ok(());
+    }
+    Err(AppError::Message(format!(
+        "Tool {name} is not allowed by MCP write access setting."
+    )))
+}
+
+fn mcp_tool_required_access(name: &str) -> u8 {
+    match name {
+        "workspace.list" | "workspace.tree" | "workspace.search" => 0,
+        _ => 2,
+    }
+}
+
+fn mcp_write_access_level(write_access: &str) -> u8 {
+    match normalize_mcp_write_access(write_access).as_str() {
+        "searchOnly" => 0,
+        "hvyCliEdits" => 1,
+        "createImportSave" => 2,
+        _ => 1,
+    }
 }
 
 fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<serde_json::Value> {
@@ -2022,7 +2081,12 @@ where
     R: Read,
     W: Write,
 {
-    let workspace_paths = mcp_stdio_workspace_paths(args, env_workspaces, cwd)?;
+    let workspace_config = mcp_stdio_workspace_config(args, env_workspaces, cwd)?;
+    let workspace_paths = workspace_config
+        .workspaces
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
     let mut reader = BufReader::new(input);
     while let Some(message) = read_mcp_stdio_message(&mut reader)? {
         let request = match serde_json::from_slice::<serde_json::Value>(&message.body) {
@@ -2038,7 +2102,7 @@ where
         };
         let response = if mcp_request_method(&request) == Some("tools/call") {
             let workspaces = load_mcp_stdio_workspaces(&workspace_paths)?;
-            handle_mcp_json_rpc_for_workspaces(&workspaces, request)
+            handle_mcp_json_rpc_for_workspaces_with_access(&workspaces, request, &workspace_config.write_access)
         } else {
             handle_mcp_json_rpc_for_workspaces(&[], request)
         };
@@ -2053,11 +2117,11 @@ fn mcp_request_method(request: &serde_json::Value) -> Option<&str> {
     request.get("method").and_then(|method| method.as_str())
 }
 
-fn mcp_stdio_workspace_paths<I>(
+fn mcp_stdio_workspace_config<I>(
     args: I,
     env_workspaces: Option<std::ffi::OsString>,
     cwd: PathBuf,
-) -> AppResult<Vec<PathBuf>>
+) -> AppResult<McpWorkspaceConfig>
 where
     I: IntoIterator<Item = String>,
 {
@@ -2094,9 +2158,8 @@ where
     if default_config.is_file() {
         config_paths.insert(0, default_config);
     }
-    for config_path in config_paths {
-        roots.extend(read_mcp_workspace_config_paths(&config_path)?);
-    }
+    let workspace_config = read_mcp_workspace_config_paths(&config_paths)?;
+    roots.extend(workspace_config.workspaces.iter().map(PathBuf::from));
     if let Some(value) = env_workspaces {
         roots.extend(std::env::split_paths(&value));
     }
@@ -2108,20 +2171,34 @@ where
         for workspace in discover_workspace_paths(&root)? {
             let key = fs::canonicalize(&workspace).unwrap_or(workspace.clone());
             if seen.insert(path_to_string(&key)) {
-                workspaces.push(workspace);
+                workspaces.push(path_to_string(&workspace));
             }
         }
     }
-    Ok(workspaces)
+    Ok(McpWorkspaceConfig {
+        workspaces,
+        write_access: workspace_config.write_access,
+    })
 }
 
-fn read_mcp_workspace_config_paths(path: &Path) -> AppResult<Vec<PathBuf>> {
+fn read_mcp_workspace_config_paths(paths: &[PathBuf]) -> AppResult<McpWorkspaceConfig> {
+    let mut merged = McpWorkspaceConfig::default();
+    for path in paths {
+        let config = read_mcp_workspace_config(path)?;
+        merged.write_access = config.write_access;
+        merged.workspaces.extend(config.workspaces);
+    }
+    Ok(merged)
+}
+
+fn read_mcp_workspace_config(path: &Path) -> AppResult<McpWorkspaceConfig> {
     if !path.exists() {
-        return Ok(Vec::new());
+        return Ok(McpWorkspaceConfig::default());
     }
     let config: McpWorkspaceConfig = serde_json::from_slice(&fs::read(path)?)?;
+    let write_access = normalize_mcp_write_access(&config.write_access);
     let config_directory = path.parent().unwrap_or_else(|| Path::new("."));
-    Ok(config
+    let workspaces = config
         .workspaces
         .into_iter()
         .map(PathBuf::from)
@@ -2132,7 +2209,12 @@ fn read_mcp_workspace_config_paths(path: &Path) -> AppResult<Vec<PathBuf>> {
                 config_directory.join(workspace)
             }
         })
-        .collect())
+        .map(|workspace| path_to_string(&workspace))
+        .collect();
+    Ok(McpWorkspaceConfig {
+        workspaces,
+        write_access,
+    })
 }
 
 fn discover_workspace_paths(root: &Path) -> AppResult<Vec<PathBuf>> {
@@ -2431,8 +2513,19 @@ fn mcp_stdio_workspace_config_path(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(directory.join(MCP_STDIO_WORKSPACE_CONFIG))
 }
 
+fn read_mcp_stdio_workspace_config(app: &AppHandle) -> AppResult<McpWorkspaceConfig> {
+    let path = mcp_stdio_workspace_config_path(app)?;
+    read_mcp_workspace_config(&path)
+}
+
 fn write_mcp_stdio_workspace_config(app: &AppHandle, config: &McpWorkspaceConfig) -> AppResult<()> {
     write_json_atomically(&mcp_stdio_workspace_config_path(app)?, config)
+}
+
+fn write_mcp_stdio_settings(app: &AppHandle, settings: &McpSettings) -> AppResult<()> {
+    let mut config = read_mcp_stdio_workspace_config(app).unwrap_or_else(|_| McpWorkspaceConfig::default());
+    config.write_access = settings.write_access.clone();
+    write_mcp_stdio_workspace_config(app, &config)
 }
 
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
@@ -2814,6 +2907,7 @@ mod tests {
             &cwd_root.path().join(MCP_STDIO_WORKSPACE_CONFIG),
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(config_workspace.path())],
+                write_access: "searchOnly".into(),
             },
         )
         .unwrap();
@@ -2822,11 +2916,12 @@ mod tests {
             &explicit_config,
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(explicit_config_workspace.path())],
+                write_access: "createImportSave".into(),
             },
         )
         .unwrap();
 
-        let paths = mcp_stdio_workspace_paths(
+        let config = mcp_stdio_workspace_config(
             vec![
                 "--config".to_string(),
                 path_to_string(&explicit_config),
@@ -2839,6 +2934,7 @@ mod tests {
             cwd_root.path().to_path_buf(),
         )
         .unwrap();
+        let paths = config.workspaces.iter().map(PathBuf::from).collect::<Vec<_>>();
         let names = load_mcp_stdio_workspaces(&paths)
             .unwrap()
             .into_iter()
@@ -2846,6 +2942,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["Args", "Config", "Explicit Config", "Env", "Cwd"]);
+        assert_eq!(config.write_access, "createImportSave");
+    }
+
+    #[test]
+    fn mcp_stdio_reads_write_access_from_workspace_config() {
+        let workspace = tempdir().unwrap();
+        initialize_workspace_with_name(workspace.path(), Some("Config")).unwrap();
+        let cwd = tempdir().unwrap();
+        write_json_atomically(
+            &cwd.path().join(MCP_STDIO_WORKSPACE_CONFIG),
+            &McpWorkspaceConfig {
+                workspaces: vec![path_to_string(workspace.path())],
+                write_access: "searchOnly".into(),
+            },
+        )
+        .unwrap();
+
+        let config = mcp_stdio_workspace_config(Vec::<String>::new(), None, cwd.path().to_path_buf()).unwrap();
+
+        assert_eq!(config.write_access, "searchOnly");
+        assert_eq!(config.workspaces, vec![path_to_string(workspace.path())]);
+    }
+
+    #[test]
+    fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
+        assert!(ensure_mcp_tool_allowed("workspace.search", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("workspace.create", "searchOnly").is_err());
+        assert!(ensure_mcp_tool_allowed("workspace.create", "createImportSave").is_ok());
     }
 
     #[test]
