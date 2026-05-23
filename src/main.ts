@@ -501,7 +501,6 @@ async function boot(): Promise<void> {
       if (event === 'mcp-start') handlers.startMcpServer();
       if (event === 'mcp-stop') handlers.stopMcpServer();
       if (event === 'mcp-restart') handlers.restartMcpServer();
-      if (event === 'mcp-copy-config') handlers.copyMcpConnectionConfig();
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
@@ -1162,14 +1161,10 @@ function confirmDiscardMcpSettings(settings: McpSettings | undefined): boolean {
 }
 
 async function copyMcpConnectionConfig(): Promise<void> {
-  if (!state.mcpServerStatus.url) {
-    state.status = 'Start the MCP server before copying config';
-    rerender({ preserveMountedDocument: true });
-    return;
-  }
+  const url = state.mcpServerStatus.url ?? `http://127.0.0.1:${state.mcpSettings.port ?? 8794}/mcp`;
   const config = JSON.stringify({
     mcpServers: {
-      'hvy-workspace': { url: state.mcpServerStatus.url },
+      'hvy-workspace': { url },
     },
   }, null, 2);
   await navigator.clipboard.writeText(config);

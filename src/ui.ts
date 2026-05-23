@@ -872,7 +872,7 @@ function renderMcpSettingsDialog(state: AppState): string {
   }
   const settings = state.mcpSettingsDraft ?? state.mcpSettings;
   const status = state.mcpServerStatus;
-  const connectionConfig = status.url ? formatMcpConnectionConfig(status.url) : '';
+  const connectionConfig = formatMcpConnectionConfig(mcpConnectionUrl(settings));
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
@@ -883,7 +883,7 @@ function renderMcpSettingsDialog(state: AppState): string {
           <div>
             <strong>${status.running ? 'Running' : 'Stopped'}</strong>
             <span>${escapeHtml(status.message)}</span>
-            ${status.url ? `<code>${escapeHtml(status.url)}</code>` : ''}
+            <code>${escapeHtml(status.url ?? mcpConnectionUrl(settings))}</code>
             ${status.lastError ? `<small>${escapeHtml(status.lastError)}</small>` : ''}
           </div>
           <div class="mcp-status-actions">
@@ -893,39 +893,26 @@ function renderMcpSettingsDialog(state: AppState): string {
           </div>
         </div>
         <label class="checkbox-row">
-          <input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>
-          <span>Enable MCP server controls</span>
-        </label>
-        <label class="checkbox-row">
           <input name="startAutomatically" type="checkbox" ${settings.startAutomatically ? 'checked' : ''}>
           <span>Start automatically with HVY Galaxy</span>
         </label>
         <div class="mcp-settings-grid">
           <label>
             <span>Port</span>
-            <input name="port" type="number" min="1" max="65535" step="1" value="${settings.port ? escapeAttr(String(settings.port)) : ''}" placeholder="Auto">
-          </label>
-          <label>
-            <span>Workspace access</span>
-            <select name="workspaceAccess">
-              <option value="openWorkspaces" ${settings.workspaceAccess === 'openWorkspaces' ? 'selected' : ''}>Open workspaces only</option>
-              <option value="recentWorkspaces" ${settings.workspaceAccess === 'recentWorkspaces' ? 'selected' : ''}>Open and recent workspaces</option>
-            </select>
+            <input name="port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
           </label>
           <label>
             <span>Write access</span>
             <select name="writeAccess">
               <option value="searchOnly" ${settings.writeAccess === 'searchOnly' ? 'selected' : ''}>Search only</option>
-              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>HVY CLI edits</option>
-              <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Create, import, and save</option>
+              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>Search &amp; Alter files</option>
+              <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
             </select>
           </label>
         </div>
-        ${connectionConfig
-          ? `<div class="mcp-config-preview"><span>Connection config</span><pre>${escapeHtml(connectionConfig)}</pre></div>`
-          : '<div class="empty-panel compact">Start the MCP server to generate connection config.</div>'}
+        <div class="mcp-config-preview"><span>Connection config</span><pre>${escapeHtml(connectionConfig)}</pre></div>
         <div class="dialog-actions">
-          <button type="button" data-action="copy-mcp-config" ${status.url ? '' : 'disabled'}>Copy Config</button>
+          <button type="button" data-action="copy-mcp-config">Copy Config</button>
           <button type="button" data-action="cancel-mcp-settings">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
@@ -1078,20 +1065,15 @@ function renderRecoveryDialog(state: AppState): string {
 function readMcpSettingsForm(data: FormData): McpSettings {
   const parsed = parseMcpSettings(String(data.get('settingsJson') ?? ''));
   const portValue = Number(data.get('port') ?? '');
-  const workspaceAccess = data.get('workspaceAccess');
   const writeAccess = data.get('writeAccess');
   return {
     ...(parsed ?? {
-      enabled: false,
       startAutomatically: false,
-      port: null,
-      workspaceAccess: 'openWorkspaces',
+      port: 8794,
       writeAccess: 'hvyCliEdits',
     }),
-    enabled: data.get('enabled') === 'on',
     startAutomatically: data.get('startAutomatically') === 'on',
-    port: Number.isInteger(portValue) && portValue > 0 && portValue <= 65535 ? portValue : null,
-    workspaceAccess: isMcpWorkspaceAccess(workspaceAccess) ? workspaceAccess : 'openWorkspaces',
+    port: Number.isInteger(portValue) && portValue > 0 && portValue <= 65535 ? portValue : 8794,
     writeAccess: isMcpWriteAccess(writeAccess) ? writeAccess : 'hvyCliEdits',
   };
 }
@@ -1099,14 +1081,10 @@ function readMcpSettingsForm(data: FormData): McpSettings {
 function parseMcpSettings(value: string): McpSettings | null {
   try {
     const parsed = JSON.parse(value) as McpSettings;
-    return typeof parsed === 'object' && typeof parsed.enabled === 'boolean' ? parsed : null;
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
   } catch {
     return null;
   }
-}
-
-function isMcpWorkspaceAccess(value: FormDataEntryValue | null): value is McpSettings['workspaceAccess'] {
-  return value === 'openWorkspaces' || value === 'recentWorkspaces';
 }
 
 function isMcpWriteAccess(value: FormDataEntryValue | null): value is McpSettings['writeAccess'] {
@@ -1119,6 +1097,10 @@ function formatMcpConnectionConfig(url: string): string {
       'hvy-workspace': { url },
     },
   }, null, 2);
+}
+
+function mcpConnectionUrl(settings: McpSettings): string {
+  return `http://127.0.0.1:${settings.port ?? 8794}/mcp`;
 }
 
 function renderActionConfigField(action: AiActionKey, label: string, settings: AiSettings): string {

@@ -17,6 +17,7 @@ const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const AI_SETTINGS: &str = "ai-settings.json";
 const MCP_SETTINGS: &str = "mcp-settings.json";
+const DEFAULT_MCP_PORT: u16 = 8794;
 const RECENT_LIMIT: usize = 12;
 const BACKUP_RETENTION_HOURS: i64 = 2;
 
@@ -139,13 +140,9 @@ struct DocumentBackupSnapshot {
 #[serde(rename_all = "camelCase")]
 struct McpSettings {
     #[serde(default)]
-    enabled: bool,
-    #[serde(default)]
     start_automatically: bool,
     #[serde(default)]
     port: Option<u16>,
-    #[serde(default = "default_mcp_workspace_access")]
-    workspace_access: String,
     #[serde(default = "default_mcp_write_access")]
     write_access: String,
 }
@@ -153,10 +150,8 @@ struct McpSettings {
 impl Default for McpSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
             start_automatically: false,
-            port: None,
-            workspace_access: default_mcp_workspace_access(),
+            port: Some(DEFAULT_MCP_PORT),
             write_access: default_mcp_write_access(),
         }
     }
@@ -180,10 +175,6 @@ impl Default for McpServerStatus {
             last_error: None,
         }
     }
-}
-
-fn default_mcp_workspace_access() -> String {
-    "openWorkspaces".into()
 }
 
 fn default_mcp_write_access() -> String {
@@ -729,7 +720,6 @@ pub fn run() {
                         | "mcp-start"
                         | "mcp-stop"
                         | "mcp-restart"
-                        | "mcp-copy-config"
                         | "colors"
                         | "save"
                         | "save-as"
@@ -830,7 +820,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Restart MCP Server").id("mcp-restart").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Server Settings...").id("mcp-settings").build(app)?)
-        .item(&MenuItemBuilder::new("Copy Connection Config").id("mcp-copy-config").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
@@ -1311,19 +1300,13 @@ fn read_mcp_settings(path: &Path) -> AppResult<McpSettings> {
 }
 
 fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
-    let workspace_access = match settings.workspace_access.trim() {
-        "openWorkspaces" | "recentWorkspaces" => settings.workspace_access.trim().to_string(),
-        _ => default_mcp_workspace_access(),
-    };
     let write_access = match settings.write_access.trim() {
         "searchOnly" | "hvyCliEdits" | "createImportSave" => settings.write_access.trim().to_string(),
         _ => default_mcp_write_access(),
     };
     Ok(McpSettings {
-        enabled: settings.enabled,
         start_automatically: settings.start_automatically,
         port: settings.port.filter(|port| *port > 0),
-        workspace_access,
         write_access,
     })
 }
@@ -1693,31 +1676,26 @@ mod tests {
     #[test]
     fn normalizes_mcp_settings() {
         let settings = normalize_mcp_settings(McpSettings {
-            enabled: true,
             start_automatically: true,
             port: Some(0),
-            workspace_access: "everything".into(),
             write_access: "all".into(),
         })
         .unwrap();
 
-        assert!(settings.enabled);
         assert!(settings.start_automatically);
         assert_eq!(settings.port, None);
-        assert_eq!(settings.workspace_access, "openWorkspaces");
         assert_eq!(settings.write_access, "hvyCliEdits");
 
+        assert_eq!(McpSettings::default().port, Some(DEFAULT_MCP_PORT));
+
         let explicit = normalize_mcp_settings(McpSettings {
-            enabled: false,
             start_automatically: false,
-            port: Some(47391),
-            workspace_access: "recentWorkspaces".into(),
+            port: Some(8794),
             write_access: "createImportSave".into(),
         })
         .unwrap();
 
-        assert_eq!(explicit.port, Some(47391));
-        assert_eq!(explicit.workspace_access, "recentWorkspaces");
+        assert_eq!(explicit.port, Some(8794));
         assert_eq!(explicit.write_access, "createImportSave");
     }
 }

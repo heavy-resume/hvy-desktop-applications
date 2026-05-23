@@ -90,14 +90,11 @@ export interface DocumentBackup {
   createdAt: string;
 }
 
-export type McpWorkspaceAccess = 'openWorkspaces' | 'recentWorkspaces';
 export type McpWriteAccess = 'searchOnly' | 'hvyCliEdits' | 'createImportSave';
 
 export interface McpSettings {
-  enabled: boolean;
   startAutomatically: boolean;
   port: number | null;
-  workspaceAccess: McpWorkspaceAccess;
   writeAccess: McpWriteAccess;
 }
 
@@ -198,10 +195,8 @@ export function defaultAiSettings(): AiSettings {
 
 export function defaultMcpSettings(): McpSettings {
   return {
-    enabled: false,
     startAutomatically: false,
-    port: null,
-    workspaceAccess: 'openWorkspaces',
+    port: 8794,
     writeAccess: 'hvyCliEdits',
   };
 }
