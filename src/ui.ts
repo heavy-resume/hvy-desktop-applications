@@ -502,6 +502,13 @@ function renderWorkspaceSearchResult(result: HvyDocumentSearchResult, search: Wo
   const active = search.activeResultId === result.id;
   const context = [result.contextLabel, result.sourceFile].filter(Boolean).join(' / ');
   const fields = getWorkspaceResultFields(result);
+  const snippet = result.category === 'semantic'
+    ? ''
+    : `<span class="search-result-snippets">
+          <span class="search-result-snippet">
+            <span>${highlightPlainText(result.preview, search.submittedQuery, search.mode === 'keyword')}</span>
+          </span>
+        </span>`;
   return `
     <button
       type="button"
@@ -513,12 +520,7 @@ function renderWorkspaceSearchResult(result: HvyDocumentSearchResult, search: Wo
         <span class="search-result-title">${highlightPlainText(result.locationLabel || result.label || result.preview || 'Search result', search.submittedQuery, search.mode === 'keyword')}</span>
         ${context ? `<span class="search-result-context">${escapeHtml(context)}</span>` : ''}
         ${fields.length ? `<span class="search-result-fields">${fields.map((field) => `<span>${escapeHtml(field)}</span>`).join('')}</span>` : ''}
-        <span class="search-result-snippets">
-          <span class="search-result-snippet">
-            ${result.category === 'semantic' ? '<span class="search-result-snippet-label">Reason</span>' : ''}
-            <span>${highlightPlainText(result.preview, search.submittedQuery, search.mode === 'keyword')}</span>
-          </span>
-        </span>
+        ${snippet}
       </span>
     </button>`;
 }
@@ -541,6 +543,9 @@ function groupResultsByCategory(results: HvyDocumentSearchResult[]): Array<[Sear
 }
 
 function getWorkspaceResultFields(result: HvyDocumentSearchResult): string[] {
+  if (result.category === 'semantic') {
+    return [];
+  }
   const fields = result.matches?.length
     ? result.matches.map((match) => match.label)
     : [result.sourceField];
@@ -929,10 +934,6 @@ function renderAiSettingsDialog(state: AppState): string {
         <label>
           <span>API Key</span>
           <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
-        </label>
-        <label>
-          <span>Semantic search batch size</span>
-          <input name="semanticFilterBatchSize" type="number" min="1" step="1" value="${escapeAttr(String(normalizeSemanticFilterBatchSize(settings.semanticFilterBatchSize)))}">
         </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
@@ -1332,16 +1333,13 @@ function readAiSettingsForm(data: FormData): AiSettings {
     activeProviderId: providerId,
     providers,
     actions: readActionSettings(data, providerId),
-    semanticFilterBatchSize: readSemanticFilterBatchSize(data),
   };
 }
 
 function parseAiSettings(value: string): AiSettings | null {
   try {
     const parsed = JSON.parse(value) as AiSettings;
-    return Array.isArray(parsed.providers) && parsed.actions
-      ? { ...parsed, semanticFilterBatchSize: normalizeSemanticFilterBatchSize(parsed.semanticFilterBatchSize) }
-      : null;
+    return Array.isArray(parsed.providers) && parsed.actions ? parsed : null;
   } catch {
     return null;
   }
@@ -1364,14 +1362,6 @@ function readActionConfig(data: FormData, action: AiActionKey, fallbackProviderI
     providerId: String(data.get(`${action}ProviderId`) ?? fallbackProviderId).trim() || fallbackProviderId,
     model: String(data.get(`${action}Model`) ?? '').trim(),
   };
-}
-
-function readSemanticFilterBatchSize(data: FormData): number {
-  return normalizeSemanticFilterBatchSize(Number.parseInt(String(data.get('semanticFilterBatchSize') ?? '1'), 10));
-}
-
-function normalizeSemanticFilterBatchSize(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
 }
 
 function activeProviderConfig(settings: AiSettings): AiProviderConfig {

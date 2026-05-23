@@ -1,14 +1,8 @@
 import type { DocumentExtension } from './backend';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
-import { buildSemanticFilterInstructionPrompt } from '../../heavy-file-format/src/search/semantic-candidates';
 import type {
   HvyDocumentSearchRequest,
   HvyDocumentSearchResponse,
-  HvySemanticFilterCandidate,
-  HvySemanticFilterCandidateBudget,
-  HvySemanticFilterMatch,
-  HvySemanticFilterProvider,
-  HvySemanticFilterRequest,
 } from '../../heavy-file-format/src/search/types';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
@@ -26,7 +20,6 @@ export interface MountedDocument {
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
   storageKey?: string;
-  semanticFilterBatchSize?: number;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -61,79 +54,19 @@ export async function mountHvyDocument(
     mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
-    semanticFilterProvider: createBatchedSemanticFilterProvider(options.semanticFilterBatchSize),
+    semanticFilterProvider: chatSemanticFilterProvider,
     storageKey: mode === 'editor' || mode === 'advanced' ? null : options.storageKey,
     onDocumentChange: options.onDocumentChange,
   });
   return { mount, document };
 }
 
-export async function searchHvyDocuments(request: HvyDocumentSearchRequest, options: { semanticFilterBatchSize?: number } = {}): Promise<HvyDocumentSearchResponse> {
+export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {
   const { searchDocuments } = await loadHvyEmbed();
   return searchDocuments({
-    semanticFilterProvider: createBatchedSemanticFilterProvider(options.semanticFilterBatchSize),
+    semanticFilterProvider: chatSemanticFilterProvider,
     ...request,
   });
-}
-
-function createBatchedSemanticFilterProvider(batchSizeInput: number | undefined): HvySemanticFilterProvider {
-  const batchSize = normalizeSemanticFilterBatchSize(batchSizeInput);
-  return async (request) => {
-    if (request.candidates.length <= batchSize) {
-      return chatSemanticFilterProvider(request);
-    }
-    const matches: HvySemanticFilterMatch[] = [];
-    const seen = new Set<string>();
-    for (const candidates of chunkCandidates(request.candidates, batchSize)) {
-      throwIfAborted(request.signal);
-      const batchRequest = buildSemanticBatchRequest(request, candidates);
-      const batchMatches = await chatSemanticFilterProvider(batchRequest);
-      for (const match of batchMatches) {
-        if (!seen.has(match.candidateId)) {
-          seen.add(match.candidateId);
-          matches.push(match);
-        }
-      }
-    }
-    throwIfAborted(request.signal);
-    return matches;
-  };
-}
-
-function buildSemanticBatchRequest(
-  request: HvySemanticFilterRequest,
-  candidates: HvySemanticFilterCandidate[],
-): HvySemanticFilterRequest {
-  return {
-    ...request,
-    instructionPrompt: buildSemanticFilterInstructionPrompt(request.prompt, candidates),
-    candidates,
-    candidateBudget: {
-      ...request.candidateBudget,
-      usedTotalCandidateChars: candidates.reduce((total, candidate) => total + JSON.stringify(candidate).length, 0),
-      includedCandidates: candidates.length,
-      totalCandidates: request.candidateBudget.totalCandidates,
-      truncated: request.candidateBudget.truncated,
-    } satisfies HvySemanticFilterCandidateBudget,
-  };
-}
-
-function chunkCandidates(candidates: HvySemanticFilterCandidate[], batchSize: number): HvySemanticFilterCandidate[][] {
-  const chunks: HvySemanticFilterCandidate[][] = [];
-  for (let index = 0; index < candidates.length; index += batchSize) {
-    chunks.push(candidates.slice(index, index + batchSize));
-  }
-  return chunks;
-}
-
-function normalizeSemanticFilterBatchSize(value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    throw new DOMException('The operation was aborted.', 'AbortError');
-  }
 }
 
 async function mountRawHvyDocument(

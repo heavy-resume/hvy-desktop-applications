@@ -609,8 +609,6 @@ async function submitWorkspaceSearch(): Promise<void> {
       documents,
       query,
       mode: state.workspaceSearch.mode,
-    }, {
-      semanticFilterBatchSize: state.aiSettings.semanticFilterBatchSize,
     });
     state.workspaceSearch.results = response.results;
     state.workspaceSearch.error = null;
@@ -755,7 +753,6 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   const generation = ++mountGeneration;
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
-    semanticFilterBatchSize: state.aiSettings.semanticFilterBatchSize,
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);
@@ -1228,7 +1225,6 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
   return {
     activeProviderId: settings.activeProviderId,
     providers: [...settings.providers].sort((left, right) => left.provider.localeCompare(right.provider)),
-    semanticFilterBatchSize: normalizeSemanticFilterBatchSize(settings.semanticFilterBatchSize),
     actions: {
       chat: settings.actions.chat,
       edit: settings.actions.edit,
@@ -1239,10 +1235,6 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
       compaction: settings.actions.compaction,
     },
   };
-}
-
-function normalizeSemanticFilterBatchSize(value: number): number {
-  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
 }
 
 async function confirmWorkspaceInitialization(path: string, defaultName: string) {

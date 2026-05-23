@@ -146,9 +146,7 @@ export interface AiSettings {
   activeProviderId: string;
   providers: AiProviderConfig[];
   actions: AiActionSettings;
-  semanticFilterBatchSize: number;
 }
-
 
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -244,7 +242,6 @@ export function defaultAiSettings(): AiSettings {
     activeProviderId: provider.provider,
     providers: [provider],
     actions: defaultAiActionSettings(),
-    semanticFilterBatchSize: 1,
   };
 }
 
@@ -334,7 +331,7 @@ export function defaultAiActionSettings(providerId = 'default'): AiActionSetting
     importPlanning: { providerId, model: 'gpt-5.4-mini' },
     importWriting: { providerId, model: 'gpt-5.4-mini' },
     importCleanup: { providerId, model: 'gpt-5.4-mini' },
-    semanticFilter: { providerId, model: 'gpt-5.4-mini' },
+    semanticFilter: { providerId, model: 'gpt-5.4-nano' },
     compaction: { providerId, model: 'gpt-5.4-nano' },
   };
 }
