@@ -1,5 +1,5 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpClientInstallTarget, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PALETTES, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceSearchState } from './state';
@@ -38,7 +38,9 @@ export interface UiHandlers {
   startMcpServer(): void;
   stopMcpServer(): void;
   restartMcpServer(): void;
-  copyMcpConnectionConfig(config?: string): void;
+  installMcpClient(target: McpClientInstallTarget): void;
+  removeMcpClient(target: McpClientInstallTarget): void;
+  restoreMcpClientBackup(target: McpClientInstallTarget): void;
   copyMcpConnectionUrl(url: string): void;
   copyMcpBearerToken(token: string): void;
   copyMcpSetupValue(value: string, label: string): void;
@@ -210,6 +212,15 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'start-mcp-server') handlers.startMcpServer();
     if (action === 'stop-mcp-server') handlers.stopMcpServer();
     if (action === 'restart-mcp-server') handlers.restartMcpServer();
+    if (action === 'install-mcp-client' && isMcpClientInstallTarget(target.dataset.target)) {
+      handlers.installMcpClient(target.dataset.target);
+    }
+    if (action === 'remove-mcp-client' && isMcpClientInstallTarget(target.dataset.target)) {
+      handlers.removeMcpClient(target.dataset.target);
+    }
+    if (action === 'restore-mcp-client-backup' && isMcpClientInstallTarget(target.dataset.target)) {
+      handlers.restoreMcpClientBackup(target.dataset.target);
+    }
     if (action === 'generate-mcp-token') {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
       const tokenInput = form?.querySelector<HTMLInputElement>('input[name="bearerToken"]');
@@ -250,12 +261,6 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const value = field?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')?.value.trim();
       const label = field?.dataset.copyLabel ?? 'value';
       if (value) handlers.copyMcpSetupValue(value, label);
-    }
-    if (action === 'copy-mcp-config') {
-      const preview = target
-        .closest<HTMLFormElement>('form[data-form="mcp-settings"]')
-        ?.querySelector<HTMLTextAreaElement>('.mcp-config-panel:not([hidden]) [data-role="mcp-connection-config"]');
-      handlers.copyMcpConnectionConfig(preview?.value ?? undefined);
     }
     if (action === 'select-mcp-transport' && target.dataset.transport) {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
@@ -953,8 +958,6 @@ function renderMcpSettingsDialog(state: AppState): string {
   const settings = state.mcpSettingsDraft ?? state.mcpSettings;
   const status = state.mcpServerStatus;
   const endpointUrl = status.url ?? mcpConnectionUrl(settings);
-  const stdioConfig = formatMcpStdioConnectionConfig(state.mcpStdioLaunchConfig);
-  const httpConfig = formatMcpHttpConnectionConfig(settings);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
@@ -985,7 +988,28 @@ function renderMcpSettingsDialog(state: AppState): string {
               ${renderMcpReadonlyField('Command line arguments', formatShellArgs(state.mcpStdioLaunchConfig.args) || '(none)')}
               ${renderMcpReadonlyField('Working directory', state.mcpStdioLaunchConfig.workingDirectory)}
             </div>
-            ${renderMcpReadonlyBlock('JSON config', stdioConfig, 'mcp-connection-config')}
+            <div class="mcp-install-list">
+              ${state.mcpClientInstallStatus.map((client) => {
+                const installDisabled = state.busy || !client.configExists || !client.executableExists;
+                const removeDisabled = state.busy || !client.configExists || !client.installed;
+                const restoreDisabled = state.busy || !client.latestBackupPath;
+                const actionLabel = client.installed ? `Refresh ${client.label}` : `Install for ${client.label}`;
+                return `
+                  <article class="mcp-install-card${client.installed ? ' is-installed' : ''}">
+                    <div>
+                      <strong>${escapeHtml(client.label)}</strong>
+                      <span>${escapeHtml(client.message)}</span>
+                      <small>${escapeHtml(client.configPath)}</small>
+                      ${client.latestBackupLabel ? `<small>Latest backup: ${escapeHtml(client.latestBackupLabel)}</small>` : ''}
+                    </div>
+                    <div class="mcp-install-actions">
+                      <button type="button" data-action="install-mcp-client" data-target="${escapeAttr(client.target)}" ${installDisabled ? 'disabled' : ''}>${escapeHtml(actionLabel)}</button>
+                      <button type="button" class="ghost" data-action="remove-mcp-client" data-target="${escapeAttr(client.target)}" ${removeDisabled ? 'disabled' : ''}>Remove</button>
+                      <button type="button" class="ghost" data-action="restore-mcp-client-backup" data-target="${escapeAttr(client.target)}" ${restoreDisabled ? 'disabled' : ''}>Restore Latest</button>
+                    </div>
+                  </article>`;
+              }).join('')}
+            </div>
           </section>
           <section class="mcp-config-panel" data-transport-panel="http" hidden>
             <div class="mcp-status-card" data-state="${status.running ? 'running' : 'stopped'}">
@@ -1024,11 +1048,9 @@ function renderMcpSettingsDialog(state: AppState): string {
               ${renderMcpReadonlyField('Connection URL', endpointUrl, 'mcp-http-url')}
               ${renderMcpReadonlyField('Bearer token state', settings.bearerToken.trim() ? 'Configured' : 'None', 'mcp-http-token-state')}
             </div>
-            ${renderMcpReadonlyBlock('JSON config', httpConfig, 'mcp-connection-config')}
           </section>
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="copy-mcp-config">Copy Config</button>
           <button type="button" data-action="cancel-mcp-settings">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
@@ -1057,17 +1079,6 @@ function renderMcpReadonlyField(
           spellcheck="false"
         >
         <button type="button" class="icon-button" data-action="${escapeAttr(copyAction)}" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
-      </span>
-    </div>`;
-}
-
-function renderMcpReadonlyBlock(label: string, value: string, role?: string): string {
-  return `
-    <div class="mcp-copy-field mcp-copy-field--block" data-copy-label="${escapeAttr(label)}">
-      <span>${escapeHtml(label)}</span>
-      <span class="mcp-copy-control mcp-copy-control--block">
-        <textarea readonly aria-label="${escapeAttr(label)}" ${role ? `data-role="${escapeAttr(role)}"` : ''} spellcheck="false">${escapeHtml(value)}</textarea>
-        <button type="button" class="icon-button" data-action="copy-mcp-value" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
       </span>
     </div>`;
 }
@@ -1246,36 +1257,23 @@ function isMcpWriteAccess(value: FormDataEntryValue | null): value is McpSetting
   return value === 'searchOnly' || value === 'hvyCliEdits' || value === 'createImportSave';
 }
 
+function isMcpClientInstallTarget(value: string | undefined): value is McpClientInstallTarget {
+  return value === 'codex' || value === 'claude';
+}
+
 function updateMcpConnectionPreview(form: HTMLFormElement): void {
-  const httpPreview = form.querySelector<HTMLTextAreaElement>('[data-transport-panel="http"] [data-role="mcp-connection-config"]');
-  if (httpPreview) {
-    const settings = readMcpSettingsForm(new FormData(form));
-    httpPreview.value = formatMcpHttpConnectionConfig(settings);
-    const nextUrl = mcpConnectionUrl(settings);
-    const httpUrl = form.querySelector<HTMLInputElement>('[data-role="mcp-http-url"]');
-    if (httpUrl) httpUrl.value = nextUrl;
-    const token = form.querySelector<HTMLInputElement>('[data-role="mcp-http-token-state"]');
-    if (token) token.value = settings.bearerToken.trim() ? 'Configured' : 'None';
-  }
+  const settings = readMcpSettingsForm(new FormData(form));
+  const nextUrl = mcpConnectionUrl(settings);
+  const httpUrl = form.querySelector<HTMLInputElement>('[data-role="mcp-http-url"]');
+  if (httpUrl) httpUrl.value = nextUrl;
+  const token = form.querySelector<HTMLInputElement>('[data-role="mcp-http-token-state"]');
+  if (token) token.value = settings.bearerToken.trim() ? 'Configured' : 'None';
 }
 
 function updateMcpUrlPreview(form: HTMLFormElement): void {
   const url = form.querySelector<HTMLInputElement>('[data-role="mcp-url"]');
   if (!url || url.dataset.running === 'true') return;
   url.value = mcpConnectionUrl(readMcpSettingsForm(new FormData(form)));
-}
-
-function formatMcpStdioConnectionConfig(launch: { command: string; args: string[]; workingDirectory: string }): string {
-  return JSON.stringify({
-    mcpServers: {
-      'hvy-galaxy': {
-        type: 'stdio',
-        command: launch.command,
-        args: launch.args,
-        cwd: launch.workingDirectory,
-      },
-    },
-  }, null, 2);
 }
 
 function formatShellArgs(args: string[]): string {
@@ -1290,24 +1288,6 @@ function shellQuoteArg(arg: string): string {
     return arg;
   }
   return `'${arg.replace(/'/g, `'\\''`)}'`;
-}
-
-function formatMcpHttpConnectionConfig(settings: McpSettings): string {
-  const serverConfig: { type: string; url: string; headers?: { Authorization: string } } = {
-    type: 'http',
-    url: mcpConnectionUrl(settings),
-  };
-  const bearerToken = settings.bearerToken.trim();
-  if (bearerToken) {
-    serverConfig.headers = {
-      Authorization: `Bearer ${bearerToken}`,
-    };
-  }
-  return JSON.stringify({
-    mcpServers: {
-      'hvy-galaxy': serverConfig,
-    },
-  }, null, 2);
 }
 
 function mcpConnectionUrl(settings: McpSettings): string {

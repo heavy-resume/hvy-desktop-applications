@@ -9,7 +9,9 @@ import {
   createWorkspace,
   initializeWorkspacePath,
   isTauriRuntime,
+  installMcpClient,
   loadAiSettings,
+  loadMcpClientInstallStatus,
   loadDefaultGuide,
   loadMcpServerStatus,
   loadMcpSettings,
@@ -21,8 +23,10 @@ import {
   openExternalUrl,
   openFileDialog,
   readDocumentFile,
+  removeMcpClient,
   renameDocumentFile,
   revealDocumentFile,
+  restoreMcpClientBackup,
   restoreDocumentBackup,
   saveMcpSettings,
   saveAiSettings,
@@ -31,6 +35,7 @@ import {
   startMcpServer,
   stopMcpServer,
   type DocumentFile,
+  type McpClientInstallTarget,
   type McpSettings,
   type WorkspaceFileNode,
   type WorkspaceTreeNode,
@@ -255,6 +260,7 @@ const handlers: UiHandlers = {
     state.mcpSettingsDialogOpen = true;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
+    void refreshMcpClientInstallStatus();
   },
   saveMcpSettings: (settings) => void runBusy('Saving MCP settings...', async () => {
     state.mcpSettings = await saveMcpSettings(settings);
@@ -284,7 +290,21 @@ const handlers: UiHandlers = {
     state.mcpServerStatus = await startMcpServer();
     state.status = state.mcpServerStatus.message;
   }),
-  copyMcpConnectionConfig: (config) => void copyMcpConnectionConfig(config),
+  installMcpClient: (target: McpClientInstallTarget) => void runBusy('Installing MCP client config...', async () => {
+    state.mcpClientInstallStatus = await installMcpClient(target);
+    const client = state.mcpClientInstallStatus.find((status) => status.target === target);
+    state.status = client?.message ?? 'Installed MCP client config';
+  }),
+  removeMcpClient: (target: McpClientInstallTarget) => void runBusy('Removing MCP client config...', async () => {
+    state.mcpClientInstallStatus = await removeMcpClient(target);
+    const client = state.mcpClientInstallStatus.find((status) => status.target === target);
+    state.status = client?.message ?? 'Removed MCP client config';
+  }),
+  restoreMcpClientBackup: (target: McpClientInstallTarget) => void runBusy('Restoring MCP client config...', async () => {
+    state.mcpClientInstallStatus = await restoreMcpClientBackup(target);
+    const client = state.mcpClientInstallStatus.find((status) => status.target === target);
+    state.status = client?.message ?? 'Restored MCP client config backup';
+  }),
   copyMcpConnectionUrl: (url) => void copyMcpConnectionUrl(url),
   copyMcpBearerToken: (token) => void copyMcpBearerToken(token),
   copyMcpSetupValue: (value, label) => void copyMcpSetupValue(value, label),
@@ -489,6 +509,7 @@ async function boot(): Promise<void> {
     state.mcpSettings = await loadMcpSettings();
     state.mcpServerStatus = await loadMcpServerStatus();
     state.mcpStdioLaunchConfig = await loadMcpStdioLaunchConfig();
+    state.mcpClientInstallStatus = await loadMcpClientInstallStatus();
     if (state.mcpSettings.startAutomatically && !state.mcpServerStatus.running) {
       state.mcpServerStatus = await startMcpServer();
     }
@@ -525,6 +546,15 @@ async function boot(): Promise<void> {
 
 async function refreshRecents(): Promise<void> {
   state.recent = await loadRecentState();
+}
+
+async function refreshMcpClientInstallStatus(): Promise<void> {
+  try {
+    state.mcpClientInstallStatus = await loadMcpClientInstallStatus();
+    rerender({ preserveMountedDocument: true });
+  } catch {
+    // The modal still shows the manual config if client detection is unavailable.
+  }
 }
 
 async function loadRecentWorkspaces(): Promise<void> {
@@ -1174,28 +1204,6 @@ function confirmDiscardMcpSettings(settings: McpSettings | undefined): boolean {
   const current = JSON.stringify(settings ?? state.mcpSettingsDraft ?? state.mcpSettings);
   if (current === initial) return true;
   return window.confirm('Discard changes to MCP server settings?');
-}
-
-async function copyMcpConnectionConfig(configOverride?: string): Promise<void> {
-  if (configOverride) {
-    await navigator.clipboard.writeText(configOverride);
-    state.status = 'Copied MCP connection config';
-    rerender({ preserveMountedDocument: true });
-    return;
-  }
-  const config = JSON.stringify({
-    mcpServers: {
-      'hvy-galaxy': {
-        type: 'stdio',
-        command: state.mcpStdioLaunchConfig.command,
-        args: state.mcpStdioLaunchConfig.args,
-        cwd: state.mcpStdioLaunchConfig.workingDirectory,
-      },
-    },
-  }, null, 2);
-  await navigator.clipboard.writeText(config);
-  state.status = 'Copied MCP connection config';
-  rerender({ preserveMountedDocument: true });
 }
 
 async function copyMcpConnectionUrl(url: string): Promise<void> {

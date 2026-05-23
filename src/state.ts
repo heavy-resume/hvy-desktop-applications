@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvyDocumentSearchResult } from '../../heavy-file-format/src/search/types';
@@ -23,6 +23,7 @@ export interface AppState {
   mcpSettings: McpSettings;
   mcpServerStatus: McpServerStatus;
   mcpStdioLaunchConfig: McpStdioLaunchConfig;
+  mcpClientInstallStatus: McpClientInstallStatus[];
   colorTheme: ColorThemeSettings;
   document: OpenDocument | null;
   status: string;
@@ -66,6 +67,7 @@ export const state: AppState = {
   mcpSettings: defaultMcpSettings(),
   mcpServerStatus: defaultMcpServerStatus(),
   mcpStdioLaunchConfig: defaultMcpStdioLaunchConfig(),
+  mcpClientInstallStatus: defaultMcpClientInstallStatus(),
   colorTheme: defaultColorThemeSettings(),
   document: null,
   status: 'Ready',

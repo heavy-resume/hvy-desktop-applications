@@ -977,6 +977,57 @@ button:disabled {
   gap: 6px;
 }
 
+.mcp-install-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mcp-install-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+  background: var(--hvy-surface, #fffaf2);
+  padding: 10px 12px;
+}
+
+.mcp-install-card.is-installed {
+  border-color: var(--hvy-accent-1, #4a8fab);
+}
+
+.mcp-install-card > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.mcp-install-card strong {
+  color: var(--hvy-text, #152223);
+}
+
+.mcp-install-card span,
+.mcp-install-card small {
+  overflow: hidden;
+  color: var(--hvy-text-muted, #5f6a66);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.mcp-install-card small {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.mcp-install-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .checkbox-row {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
@@ -1070,10 +1121,6 @@ button:disabled {
   color: var(--hvy-text-alt, #394744);
   font-size: 12px;
   font-weight: 650;
-}
-
-.mcp-copy-field--block {
-  grid-column: 1 / -1;
 }
 
 .mcp-copy-control {

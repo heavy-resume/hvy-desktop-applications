@@ -112,6 +112,21 @@ export interface McpStdioLaunchConfig {
   workingDirectory: string;
 }
 
+export type McpClientInstallTarget = 'codex' | 'claude';
+
+export interface McpClientInstallStatus {
+  target: McpClientInstallTarget;
+  label: string;
+  configPath: string;
+  configExists: boolean;
+  executableExists: boolean;
+  installed: boolean;
+  backupCount: number;
+  latestBackupPath: string | null;
+  latestBackupLabel: string | null;
+  message: string;
+}
+
 export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
 
 export interface AiProviderConfig {
@@ -189,6 +204,25 @@ export function loadMcpStdioLaunchConfig(): Promise<McpStdioLaunchConfig> {
   return invokeDesktop('load_mcp_stdio_launch_config');
 }
 
+export function loadMcpClientInstallStatus(): Promise<McpClientInstallStatus[]> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(defaultMcpClientInstallStatus());
+  }
+  return invokeDesktop('load_mcp_client_install_status');
+}
+
+export function installMcpClient(target: McpClientInstallTarget): Promise<McpClientInstallStatus[]> {
+  return invokeDesktop('install_mcp_client', { target });
+}
+
+export function removeMcpClient(target: McpClientInstallTarget): Promise<McpClientInstallStatus[]> {
+  return invokeDesktop('remove_mcp_client', { target });
+}
+
+export function restoreMcpClientBackup(target: McpClientInstallTarget): Promise<McpClientInstallStatus[]> {
+  return invokeDesktop('restore_mcp_client_backup', { target });
+}
+
 export function startMcpServer(): Promise<McpServerStatus> {
   return invokeDesktop('start_mcp_server');
 }
@@ -229,6 +263,35 @@ export function defaultMcpStdioLaunchConfig(): McpStdioLaunchConfig {
     args: ['--mcp-stdio'],
     workingDirectory: '/path/to/hvy-galaxy-mcp',
   };
+}
+
+export function defaultMcpClientInstallStatus(): McpClientInstallStatus[] {
+  return [
+    {
+      target: 'codex',
+      label: 'Codex',
+      configPath: '~/.codex/config.toml',
+      configExists: false,
+      executableExists: false,
+      installed: false,
+      backupCount: 0,
+      latestBackupPath: null,
+      latestBackupLabel: null,
+      message: 'Codex config file was not found.',
+    },
+    {
+      target: 'claude',
+      label: 'Claude',
+      configPath: '~/Library/Application Support/Claude/claude_desktop_config.json',
+      configExists: false,
+      executableExists: false,
+      installed: false,
+      backupCount: 0,
+      latestBackupPath: null,
+      latestBackupLabel: null,
+      message: 'Claude config file was not found.',
+    },
+  ];
 }
 
 export function generateMcpBearerToken(): string {

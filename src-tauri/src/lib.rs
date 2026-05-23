@@ -198,6 +198,21 @@ struct McpStdioLaunchConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct McpClientInstallStatus {
+    target: String,
+    label: String,
+    config_path: String,
+    config_exists: bool,
+    executable_exists: bool,
+    installed: bool,
+    backup_count: usize,
+    latest_backup_path: Option<String>,
+    latest_backup_label: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct McpWorkspaceConfig {
     #[serde(default)]
     workspaces: Vec<String>,
@@ -517,6 +532,65 @@ fn load_mcp_stdio_launch_config(app: AppHandle) -> AppResult<McpStdioLaunchConfi
         args: vec!["--mcp-stdio".into()],
         working_directory,
     })
+}
+
+#[tauri::command]
+fn load_mcp_client_install_status(app: AppHandle) -> AppResult<Vec<McpClientInstallStatus>> {
+    let launch = load_mcp_stdio_launch_config(app)?;
+    mcp_client_install_statuses(&launch)
+}
+
+#[tauri::command]
+fn install_mcp_client(app: AppHandle, target: String) -> AppResult<Vec<McpClientInstallStatus>> {
+    let launch = load_mcp_stdio_launch_config(app)?;
+    let path = match target.as_str() {
+        "codex" => codex_config_path()?,
+        "claude" => claude_config_path()?,
+        _ => return Err(AppError::Message(format!("Unknown MCP client target: {target}"))),
+    };
+    if !path.exists() {
+        return Err(AppError::Message(format!("{} was not found.", path_to_string(&path))));
+    }
+    if !Path::new(&launch.command).exists() {
+        return Err(AppError::Message(format!("{} was not found.", launch.command)));
+    }
+    match target.as_str() {
+        "codex" => install_mcp_for_codex(&path, &launch)?,
+        "claude" => install_mcp_for_claude(&path, &launch)?,
+        _ => unreachable!(),
+    }
+    mcp_client_install_statuses(&launch)
+}
+
+#[tauri::command]
+fn remove_mcp_client(app: AppHandle, target: String) -> AppResult<Vec<McpClientInstallStatus>> {
+    let launch = load_mcp_stdio_launch_config(app)?;
+    let path = match target.as_str() {
+        "codex" => codex_config_path()?,
+        "claude" => claude_config_path()?,
+        _ => return Err(AppError::Message(format!("Unknown MCP client target: {target}"))),
+    };
+    if !path.exists() {
+        return Err(AppError::Message(format!("{} was not found.", path_to_string(&path))));
+    }
+    match target.as_str() {
+        "codex" => remove_mcp_from_codex(&path)?,
+        "claude" => remove_mcp_from_claude(&path)?,
+        _ => unreachable!(),
+    }
+    mcp_client_install_statuses(&launch)
+}
+
+#[tauri::command]
+fn restore_mcp_client_backup(app: AppHandle, target: String) -> AppResult<Vec<McpClientInstallStatus>> {
+    let launch = load_mcp_stdio_launch_config(app)?;
+    let path = match target.as_str() {
+        "codex" => codex_config_path()?,
+        "claude" => claude_config_path()?,
+        _ => return Err(AppError::Message(format!("Unknown MCP client target: {target}"))),
+    };
+    restore_mcp_client_backup_file(&path)?;
+    mcp_client_install_statuses(&launch)
 }
 
 #[tauri::command]
@@ -971,6 +1045,10 @@ pub fn run() {
             save_mcp_settings,
             load_mcp_server_status,
             load_mcp_stdio_launch_config,
+            load_mcp_client_install_status,
+            install_mcp_client,
+            remove_mcp_client,
+            restore_mcp_client_backup,
             start_mcp_server,
             stop_mcp_server,
             update_mcp_workspaces,
@@ -2528,6 +2606,336 @@ fn write_mcp_stdio_settings(app: &AppHandle, settings: &McpSettings) -> AppResul
     write_mcp_stdio_workspace_config(app, &config)
 }
 
+fn mcp_client_install_statuses(launch: &McpStdioLaunchConfig) -> AppResult<Vec<McpClientInstallStatus>> {
+    Ok(vec![
+        mcp_client_install_status(
+            "codex",
+            "Codex",
+            codex_config_path()?,
+            launch,
+            codex_config_has_hvy_mcp,
+        ),
+        mcp_client_install_status(
+            "claude",
+            "Claude",
+            claude_config_path()?,
+            launch,
+            claude_config_has_hvy_mcp,
+        ),
+    ])
+}
+
+fn mcp_client_install_status(
+    target: &str,
+    label: &str,
+    path: PathBuf,
+    launch: &McpStdioLaunchConfig,
+    is_installed: fn(&Path, &McpStdioLaunchConfig) -> bool,
+) -> McpClientInstallStatus {
+    let config_exists = path.exists();
+    let executable_exists = Path::new(&launch.command).exists();
+    let installed = config_exists && is_installed(&path, launch);
+    let backups = mcp_client_backup_paths(&path);
+    let latest_backup_path = backups.first().map(|path| path_to_string(path));
+    let latest_backup_label = backups.first().and_then(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(mcp_client_backup_label)
+    });
+    let message = if !config_exists {
+        if backups.is_empty() {
+            format!("{label} config file was not found.")
+        } else {
+            format!("{label} config file was not found. A backup can be restored.")
+        }
+    } else if installed {
+        if executable_exists {
+            format!("HVY MCP is installed for {label}. Refresh or remove it anytime.")
+        } else {
+            "HVY MCP is installed, but the HVY Galaxy executable was not found.".into()
+        }
+    } else if !executable_exists {
+        "HVY Galaxy executable was not found.".into()
+    } else {
+        format!("Ready to install HVY MCP for {label}. A backup will be saved first.")
+    };
+    McpClientInstallStatus {
+        target: target.into(),
+        label: label.into(),
+        config_path: path_to_string(&path),
+        config_exists,
+        executable_exists,
+        installed,
+        backup_count: backups.len(),
+        latest_backup_path,
+        latest_backup_label,
+        message,
+    }
+}
+
+fn codex_config_path() -> AppResult<PathBuf> {
+    if let Some(home) = std::env::var_os("CODEX_HOME") {
+        return Ok(PathBuf::from(home).join("config.toml"));
+    }
+    Ok(user_home_dir()?.join(".codex").join("config.toml"))
+}
+
+fn claude_config_path() -> AppResult<PathBuf> {
+    Ok(user_home_dir()?
+        .join("Library")
+        .join("Application Support")
+        .join("Claude")
+        .join("claude_desktop_config.json"))
+}
+
+fn user_home_dir() -> AppResult<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| AppError::Message("Could not determine the home directory.".into()))
+}
+
+fn install_mcp_for_codex(path: &Path, launch: &McpStdioLaunchConfig) -> AppResult<()> {
+    let current = fs::read_to_string(path)?;
+    let next = upsert_codex_mcp_block(&current, launch);
+    backup_file_before_overwrite(path)?;
+    write_file_atomically(path, next.as_bytes())
+}
+
+fn install_mcp_for_claude(path: &Path, launch: &McpStdioLaunchConfig) -> AppResult<()> {
+    let current = fs::read_to_string(path)?;
+    let next = upsert_claude_mcp_config(&current, launch)?;
+    backup_file_before_overwrite(path)?;
+    write_file_atomically(path, next.as_bytes())
+}
+
+fn remove_mcp_from_codex(path: &Path) -> AppResult<()> {
+    let current = fs::read_to_string(path)?;
+    let next = remove_codex_mcp_block(&current);
+    backup_file_before_overwrite(path)?;
+    write_file_atomically(path, next.as_bytes())
+}
+
+fn remove_mcp_from_claude(path: &Path) -> AppResult<()> {
+    let current = fs::read_to_string(path)?;
+    let next = remove_claude_mcp_config(&current)?;
+    backup_file_before_overwrite(path)?;
+    write_file_atomically(path, next.as_bytes())
+}
+
+fn restore_mcp_client_backup_file(path: &Path) -> AppResult<()> {
+    let backup_path = latest_mcp_client_backup_path(path)
+        .ok_or_else(|| AppError::Message(format!("No HVY MCP backup was found for {}.", path_to_string(path))))?;
+    if path.exists() {
+        backup_file_before_overwrite(path)?;
+    } else if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(&backup_path, path)?;
+    Ok(())
+}
+
+fn backup_file_before_overwrite(path: &Path) -> AppResult<PathBuf> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Cannot back up a file without a parent directory.".into()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Cannot back up a file without a valid file name.".into()))?;
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ");
+    for attempt in 0..100 {
+        let suffix = if attempt == 0 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let backup_path = parent.join(format!("{file_name}.hvy-galaxy-backup-{timestamp}{suffix}"));
+        if backup_path.exists() {
+            continue;
+        }
+        fs::copy(path, &backup_path)?;
+        return Ok(backup_path);
+    }
+    Err(AppError::Message(format!(
+        "Could not create a backup for {}.",
+        path_to_string(path)
+    )))
+}
+
+fn latest_mcp_client_backup_path(path: &Path) -> Option<PathBuf> {
+    mcp_client_backup_paths(path).into_iter().next()
+}
+
+fn mcp_client_backup_paths(path: &Path) -> Vec<PathBuf> {
+    let Some(parent) = path.parent() else {
+        return Vec::new();
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let prefix = format!("{file_name}.hvy-galaxy-backup-");
+    let mut paths = fs::read_dir(parent)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with(&prefix))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    paths.sort_by(|left, right| {
+        right
+            .file_name()
+            .and_then(|name| name.to_str())
+            .cmp(&left.file_name().and_then(|name| name.to_str()))
+    });
+    paths
+}
+
+fn mcp_client_backup_label(file_name: &str) -> String {
+    file_name
+        .split(".hvy-galaxy-backup-")
+        .nth(1)
+        .unwrap_or(file_name)
+        .to_string()
+}
+
+fn codex_config_has_hvy_mcp(path: &Path, launch: &McpStdioLaunchConfig) -> bool {
+    fs::read_to_string(path)
+        .map(|content| {
+            (content.contains("[mcp_servers.hvy-galaxy]")
+                || content.contains("[mcp_servers.\"hvy-galaxy\"]"))
+                && content.contains(&toml_string(&launch.command))
+        })
+        .unwrap_or(false)
+}
+
+fn claude_config_has_hvy_mcp(path: &Path, launch: &McpStdioLaunchConfig) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|value| {
+            value
+                .get("mcpServers")
+                .and_then(|servers| servers.get("hvy-galaxy"))
+                .and_then(|server| server.get("command"))
+                .and_then(|command| command.as_str())
+                .map(|command| command == launch.command)
+        })
+        .unwrap_or(false)
+}
+
+fn upsert_codex_mcp_block(content: &str, launch: &McpStdioLaunchConfig) -> String {
+    let block = codex_mcp_block(launch);
+    let mut next = remove_codex_mcp_block(content).trim_end().to_string();
+    if !next.is_empty() {
+        next.push_str("\n\n");
+    }
+    next.push_str(&block);
+    next.push('\n');
+    next
+}
+
+fn remove_codex_mcp_block(content: &str) -> String {
+    let mut output = Vec::new();
+    let mut skipping = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let is_hvy_header =
+            trimmed == "[mcp_servers.hvy-galaxy]" || trimmed == "[mcp_servers.\"hvy-galaxy\"]";
+        if is_hvy_header {
+            skipping = true;
+            continue;
+        }
+        if skipping && trimmed.starts_with('[') {
+            skipping = false;
+        }
+        if !skipping {
+            output.push(line);
+        }
+    }
+    let mut next = output.join("\n").trim_end().to_string();
+    next.push('\n');
+    next
+}
+
+fn codex_mcp_block(launch: &McpStdioLaunchConfig) -> String {
+    format!(
+        "[mcp_servers.hvy-galaxy]\ntype = \"stdio\"\ncommand = {}\nargs = {}\ncwd = {}",
+        toml_string(&launch.command),
+        toml_string_array(&launch.args),
+        toml_string(&launch.working_directory)
+    )
+}
+
+fn upsert_claude_mcp_config(content: &str, launch: &McpStdioLaunchConfig) -> AppResult<String> {
+    let mut value = if content.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str::<serde_json::Value>(content)?
+    };
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("Claude config must be a JSON object.".into()))?;
+    let servers = object
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("Claude mcpServers value must be a JSON object.".into()))?;
+    servers.insert(
+        "hvy-galaxy".into(),
+        serde_json::json!({
+            "type": "stdio",
+            "command": launch.command,
+            "args": launch.args,
+            "cwd": launch.working_directory,
+        }),
+    );
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+}
+
+fn remove_claude_mcp_config(content: &str) -> AppResult<String> {
+    let mut value = if content.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str::<serde_json::Value>(content)?
+    };
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AppError::Message("Claude config must be a JSON object.".into()))?;
+    if let Some(servers_value) = object.get_mut("mcpServers") {
+        let servers = servers_value
+            .as_object_mut()
+            .ok_or_else(|| AppError::Message("Claude mcpServers value must be a JSON object.".into()))?;
+        servers.remove("hvy-galaxy");
+    }
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
+}
+
+fn toml_string_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| toml_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn toml_string(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!("\"{escaped}\"")
+}
+
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
     let json = serde_json::to_vec_pretty(value)?;
     write_file_atomically(path, &json)
@@ -2764,6 +3172,160 @@ mod tests {
         assert_eq!(explicit.port, Some(8794));
         assert_eq!(explicit.write_access, "createImportSave");
         assert_eq!(explicit.bearer_token, "secret-token");
+    }
+
+    #[test]
+    fn upserts_codex_mcp_block_without_touching_other_servers() {
+        let launch = test_mcp_launch();
+        let current = r#"model = "gpt-5"
+
+[mcp_servers.other]
+command = "other"
+
+[mcp_servers.hvy-galaxy]
+command = "old"
+args = []
+
+[profiles.work]
+model = "gpt-5.4"
+"#;
+
+        let next = upsert_codex_mcp_block(current, &launch);
+
+        assert!(next.contains("[mcp_servers.other]\ncommand = \"other\""));
+        assert!(next.contains("[profiles.work]\nmodel = \"gpt-5.4\""));
+        assert!(next.contains("[mcp_servers.hvy-galaxy]\ntype = \"stdio\""));
+        assert!(next.contains("command = \"/Applications/HVY Galaxy.app/Contents/MacOS/HVY Galaxy\""));
+        assert_eq!(next.matches("[mcp_servers.hvy-galaxy]").count(), 1);
+        assert!(!next.contains("command = \"old\""));
+    }
+
+    #[test]
+    fn upserts_claude_mcp_config_preserving_existing_servers() {
+        let launch = test_mcp_launch();
+        let current = r#"{
+  "mcpServers": {
+    "other": {
+      "command": "other"
+    }
+  },
+  "theme": "dark"
+}"#;
+
+        let next = upsert_claude_mcp_config(current, &launch).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&next).unwrap();
+
+        assert_eq!(parsed["theme"], "dark");
+        assert_eq!(parsed["mcpServers"]["other"]["command"], "other");
+        assert_eq!(parsed["mcpServers"]["hvy-galaxy"]["type"], "stdio");
+        assert_eq!(
+            parsed["mcpServers"]["hvy-galaxy"]["command"],
+            "/Applications/HVY Galaxy.app/Contents/MacOS/HVY Galaxy"
+        );
+        assert_eq!(parsed["mcpServers"]["hvy-galaxy"]["args"][0], "--mcp-stdio");
+    }
+
+    #[test]
+    fn removes_codex_mcp_block_without_touching_other_servers() {
+        let current = r#"model = "gpt-5"
+
+[mcp_servers.other]
+command = "other"
+
+[mcp_servers.hvy-galaxy]
+command = "old"
+args = []
+
+[profiles.work]
+model = "gpt-5.4"
+"#;
+
+        let next = remove_codex_mcp_block(current);
+
+        assert!(next.contains("[mcp_servers.other]\ncommand = \"other\""));
+        assert!(next.contains("[profiles.work]\nmodel = \"gpt-5.4\""));
+        assert!(!next.contains("[mcp_servers.hvy-galaxy]"));
+        assert!(!next.contains("command = \"old\""));
+    }
+
+    #[test]
+    fn removes_claude_mcp_config_preserving_existing_servers() {
+        let current = r#"{
+  "mcpServers": {
+    "hvy-galaxy": {
+      "command": "old"
+    },
+    "other": {
+      "command": "other"
+    }
+  },
+  "theme": "dark"
+}"#;
+
+        let next = remove_claude_mcp_config(current).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&next).unwrap();
+
+        assert_eq!(parsed["theme"], "dark");
+        assert_eq!(parsed["mcpServers"]["other"]["command"], "other");
+        assert!(parsed["mcpServers"].get("hvy-galaxy").is_none());
+    }
+
+    #[test]
+    fn installing_mcp_client_config_keeps_a_backup_copy() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "model = \"gpt-5\"\n").unwrap();
+
+        install_mcp_for_codex(&path, &test_mcp_launch()).unwrap();
+
+        let backup_paths = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("config.toml.hvy-galaxy-backup-"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(backup_paths.len(), 1);
+        assert_eq!(fs::read_to_string(&backup_paths[0]).unwrap(), "model = \"gpt-5\"\n");
+        assert!(fs::read_to_string(path).unwrap().contains("[mcp_servers.hvy-galaxy]"));
+    }
+
+    #[test]
+    fn restoring_mcp_client_config_uses_latest_backup() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "current\n").unwrap();
+        fs::write(
+            dir.path()
+                .join("config.toml.hvy-galaxy-backup-20260101T000000Z"),
+            "old\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path()
+                .join("config.toml.hvy-galaxy-backup-20260102T000000Z"),
+            "latest\n",
+        )
+        .unwrap();
+
+        restore_mcp_client_backup_file(&path).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "latest\n");
+        let pre_restore_backups = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("config.toml.hvy-galaxy-backup-"))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(pre_restore_backups.len(), 3);
     }
 
     #[test]
@@ -3094,5 +3656,13 @@ mod tests {
     fn mcp_test_frame(value: &serde_json::Value) -> String {
         let body = value.to_string();
         format!("Content-Length: {}\r\n\r\n{}", body.len(), body)
+    }
+
+    fn test_mcp_launch() -> McpStdioLaunchConfig {
+        McpStdioLaunchConfig {
+            command: "/Applications/HVY Galaxy.app/Contents/MacOS/HVY Galaxy".into(),
+            args: vec!["--mcp-stdio".into()],
+            working_directory: "/Users/example/Library/Application Support/com.hvy.galaxy/mcp".into(),
+        }
     }
 }
