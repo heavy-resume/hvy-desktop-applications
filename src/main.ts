@@ -515,7 +515,7 @@ async function submitWorkspaceSearch(): Promise<void> {
   try {
     preserveCurrentDocumentSession();
     const documents = await buildWorkspaceSearchDocuments(workspaces);
-  const response = await searchHvyDocuments({
+    const response = await searchHvyDocuments({
       documents,
       query,
       mode: state.workspaceSearch.mode,
@@ -663,7 +663,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   if (!state.document || !mountRoot || !document) return;
   state.document.mounted?.mount.destroy();
   const generation = ++mountGeneration;
-    const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
+  const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
     semanticFilterBatchSize: state.aiSettings.semanticFilterBatchSize,
     onDocumentChange: (event) => {

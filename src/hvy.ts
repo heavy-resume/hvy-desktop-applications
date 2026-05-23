@@ -127,7 +127,7 @@ function chunkCandidates(candidates: HvySemanticFilterCandidate[], batchSize: nu
 }
 
 function normalizeSemanticFilterBatchSize(value: number | undefined): number {
-  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

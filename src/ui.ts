@@ -82,8 +82,8 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         <section class="workspaces-section">
           <div class="sidebar-section-heading">
             <h2>Workspaces</h2>
+            <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
           </div>
-          <button type="button" class="secondary-action" data-action="new-workspace">New Workspace</button>
           ${renderWorkspaces(state)}
         </section>
       </aside>
@@ -810,6 +810,10 @@ function renderAiSettingsDialog(state: AppState): string {
           <span>API Key</span>
           <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
         </label>
+        <label>
+          <span>Semantic search batch size</span>
+          <input name="semanticFilterBatchSize" type="number" min="1" step="1" value="${escapeAttr(String(normalizeSemanticFilterBatchSize(settings.semanticFilterBatchSize)))}">
+        </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
           ${renderActionConfigField('edit', 'Document and component edit', settings)}
@@ -1007,13 +1011,16 @@ function readAiSettingsForm(data: FormData): AiSettings {
     activeProviderId: providerId,
     providers,
     actions: readActionSettings(data, providerId),
+    semanticFilterBatchSize: readSemanticFilterBatchSize(data),
   };
 }
 
 function parseAiSettings(value: string): AiSettings | null {
   try {
     const parsed = JSON.parse(value) as AiSettings;
-    return Array.isArray(parsed.providers) && parsed.actions ? parsed : null;
+    return Array.isArray(parsed.providers) && parsed.actions
+      ? { ...parsed, semanticFilterBatchSize: normalizeSemanticFilterBatchSize(parsed.semanticFilterBatchSize) }
+      : null;
   } catch {
     return null;
   }
@@ -1036,6 +1043,14 @@ function readActionConfig(data: FormData, action: AiActionKey, fallbackProviderI
     providerId: String(data.get(`${action}ProviderId`) ?? fallbackProviderId).trim() || fallbackProviderId,
     model: String(data.get(`${action}Model`) ?? '').trim(),
   };
+}
+
+function readSemanticFilterBatchSize(data: FormData): number {
+  return normalizeSemanticFilterBatchSize(Number.parseInt(String(data.get('semanticFilterBatchSize') ?? '1'), 10));
+}
+
+function normalizeSemanticFilterBatchSize(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
 }
 
 function activeProviderConfig(settings: AiSettings): AiProviderConfig {

@@ -194,8 +194,20 @@ button:disabled {
 }
 
 .sidebar-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid var(--hvy-border, #c5cec8);
   padding-bottom: 7px;
+}
+
+.workspace-new-trigger {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 999px;
+  font-size: 18px;
 }
 
 .sidebar-section-heading h2,
@@ -550,6 +562,10 @@ button:disabled {
   right: 0;
 }
 
+.workspace-actions-menu.is-open {
+  z-index: 20;
+}
+
 .workspace-search-trigger,
 .workspace-action-trigger {
   display: inline-grid;
@@ -581,6 +597,7 @@ button:disabled {
 
 .workspace-action-popover {
   position: absolute;
+  z-index: 1;
   top: 30px;
   right: 0;
   display: none;
