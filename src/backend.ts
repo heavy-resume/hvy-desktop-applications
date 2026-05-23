@@ -96,6 +96,7 @@ export interface McpSettings {
   startAutomatically: boolean;
   port: number | null;
   writeAccess: McpWriteAccess;
+  bearerToken: string;
 }
 
 export interface McpServerStatus {
@@ -183,6 +184,13 @@ export function stopMcpServer(): Promise<McpServerStatus> {
   return invokeDesktop('stop_mcp_server');
 }
 
+export function updateMcpWorkspaces(paths: string[]): Promise<void> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('update_mcp_workspaces', { paths });
+}
+
 export function defaultAiSettings(): AiSettings {
   const provider = defaultAiProviderConfig();
   return {
@@ -198,7 +206,24 @@ export function defaultMcpSettings(): McpSettings {
     startAutomatically: false,
     port: 8794,
     writeAccess: 'hvyCliEdits',
+    bearerToken: generateMcpBearerToken(),
   };
+}
+
+export function generateMcpBearerToken(): string {
+  const bytes = new Uint8Array(32);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 export function defaultMcpServerStatus(): McpServerStatus {

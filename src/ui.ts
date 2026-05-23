@@ -1,5 +1,5 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PALETTES, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceSearchState } from './state';
@@ -38,7 +38,9 @@ export interface UiHandlers {
   startMcpServer(): void;
   stopMcpServer(): void;
   restartMcpServer(): void;
-  copyMcpConnectionConfig(): void;
+  copyMcpConnectionConfig(config?: string): void;
+  copyMcpConnectionUrl(url: string): void;
+  copyMcpBearerToken(token: string): void;
   openColorTheme(): void;
   closeColorTheme(): void;
   updateColorTheme(name: string, value: string): void;
@@ -207,7 +209,47 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'start-mcp-server') handlers.startMcpServer();
     if (action === 'stop-mcp-server') handlers.stopMcpServer();
     if (action === 'restart-mcp-server') handlers.restartMcpServer();
-    if (action === 'copy-mcp-config') handlers.copyMcpConnectionConfig();
+    if (action === 'generate-mcp-token') {
+      const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
+      const tokenInput = form?.querySelector<HTMLInputElement>('input[name="bearerToken"]');
+      if (form && tokenInput) {
+        tokenInput.value = generateMcpBearerToken();
+        updateMcpConnectionPreview(form);
+      }
+    }
+    if (action === 'toggle-mcp-token') {
+      const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
+      const tokenInput = form?.querySelector<HTMLInputElement>('input[name="bearerToken"]');
+      if (tokenInput) {
+        const reveal = tokenInput.type === 'password';
+        tokenInput.type = reveal ? 'text' : 'password';
+        target.setAttribute('aria-label', reveal ? 'Hide bearer token' : 'Show bearer token');
+        target.setAttribute('title', reveal ? 'Hide bearer token' : 'Show bearer token');
+        target.innerHTML = reveal ? eyeOffIcon() : eyeIcon();
+      }
+    }
+    if (action === 'copy-mcp-token') {
+      const token = target
+        .closest<HTMLFormElement>('form[data-form="mcp-settings"]')
+        ?.querySelector<HTMLInputElement>('input[name="bearerToken"]')
+        ?.value
+        ?.trim();
+      if (token) handlers.copyMcpBearerToken(token);
+    }
+    if (action === 'copy-mcp-url') {
+      const url = target
+        .closest<HTMLElement>('.mcp-status-card')
+        ?.querySelector<HTMLElement>('[data-role="mcp-url"]')
+        ?.textContent
+        ?.trim();
+      if (url) handlers.copyMcpConnectionUrl(url);
+    }
+    if (action === 'copy-mcp-config') {
+      const preview = target
+        .closest<HTMLFormElement>('form[data-form="mcp-settings"]')
+        ?.querySelector<HTMLElement>('[data-role="mcp-connection-config"]');
+      handlers.copyMcpConnectionConfig(preview?.textContent ?? undefined);
+    }
     if (action === 'cancel-color-theme') handlers.closeColorTheme();
     if (action === 'theme-add-color') handlers.addColorThemeColor();
     if (action === 'theme-apply-palette') handlers.applyColorThemePalette(target.dataset.paletteId ?? null);
@@ -230,6 +272,14 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (!target || !field || target.closest('#hvyMount')) return;
     if (field === 'workspace-search-query') {
       handlers.updateWorkspaceSearchQuery(target.value);
+      return;
+    }
+    if (field === 'mcp-port' || field === 'mcp-token') {
+      const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
+      if (form) {
+        updateMcpConnectionPreview(form);
+        updateMcpUrlPreview(form);
+      }
       return;
     }
     if (field === 'theme-color-filter') {
@@ -351,7 +401,7 @@ function renderWorkspaceSearchDialog(search: WorkspaceSearchState, workspaces: W
   }
   const count = search.results.length;
   const scopedWorkspace = search.workspacePath ? workspaces.find((workspace) => workspace.path === search.workspacePath) ?? null : null;
-  const searchScope = scopedWorkspace ? scopedWorkspace.manifest.name : 'open workspaces';
+  const searchScope = scopedWorkspace ? scopedWorkspace.manifest.name : 'added workspaces';
   const status = search.isLoading
     ? search.mode === 'semantic' ? `Analyzing ${searchScope}...` : `Searching ${searchScope}...`
     : search.error
@@ -403,7 +453,7 @@ function renderWorkspaceSearchModeButton(mode: HvyDocumentSearchMode, label: str
 
 function renderWorkspaceSearchResults(search: WorkspaceSearchState): string {
   if (search.isLoading) {
-    return '<div class="search-results search-results-empty">Searching open workspace files...</div>';
+    return '<div class="search-results search-results-empty">Searching workspace files...</div>';
   }
   if (search.results.length === 0) {
     const message = search.submittedQuery.trim().length > 0 ? 'No matches. Try another term or prompt.' : 'Workspace results will appear here.';
@@ -625,6 +675,18 @@ function sparklesIcon(): string {
 
 function closeIcon(): string {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+}
+
+function eyeIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+}
+
+function eyeOffIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"/><path d="M9.4 5.4A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a18.5 18.5 0 0 1-3.1 4.1"/><path d="M6.6 6.6C3.6 8.5 2 12 2 12s3.5 7 10 7c1.4 0 2.7-.3 3.9-.9"/></svg>';
+}
+
+function copyIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';
 }
 
 function renderWorkspaces(state: AppState): string {
@@ -872,7 +934,8 @@ function renderMcpSettingsDialog(state: AppState): string {
   }
   const settings = state.mcpSettingsDraft ?? state.mcpSettings;
   const status = state.mcpServerStatus;
-  const connectionConfig = formatMcpConnectionConfig(mcpConnectionUrl(settings));
+  const endpointUrl = status.url ?? mcpConnectionUrl(settings);
+  const connectionConfig = formatMcpConnectionConfig(settings);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
@@ -883,7 +946,10 @@ function renderMcpSettingsDialog(state: AppState): string {
           <div>
             <strong>${status.running ? 'Running' : 'Stopped'}</strong>
             <span>${escapeHtml(status.message)}</span>
-            <code>${escapeHtml(status.url ?? mcpConnectionUrl(settings))}</code>
+            <div class="mcp-url-row">
+              <code data-role="mcp-url" data-running="${status.running ? 'true' : 'false'}">${escapeHtml(endpointUrl)}</code>
+              <button type="button" class="icon-button" data-action="copy-mcp-url" title="Copy URL" aria-label="Copy URL">${copyIcon()}</button>
+            </div>
             ${status.lastError ? `<small>${escapeHtml(status.lastError)}</small>` : ''}
           </div>
           <div class="mcp-status-actions">
@@ -899,7 +965,7 @@ function renderMcpSettingsDialog(state: AppState): string {
         <div class="mcp-settings-grid">
           <label>
             <span>Port</span>
-            <input name="port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
+            <input name="port" data-field="mcp-port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
           </label>
           <label>
             <span>Write access</span>
@@ -909,8 +975,17 @@ function renderMcpSettingsDialog(state: AppState): string {
               <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
             </select>
           </label>
+          <label class="mcp-token-field">
+            <span>Bearer token</span>
+            <div class="mcp-token-control">
+              <input name="bearerToken" data-field="mcp-token" type="password" value="${escapeAttr(settings.bearerToken)}" autocomplete="off" spellcheck="false">
+              <button type="button" class="icon-button" data-action="toggle-mcp-token" title="Show bearer token" aria-label="Show bearer token">${eyeIcon()}</button>
+              <button type="button" class="icon-button" data-action="copy-mcp-token" title="Copy bearer token" aria-label="Copy bearer token">${copyIcon()}</button>
+              <button type="button" data-action="generate-mcp-token">Generate</button>
+            </div>
+          </label>
         </div>
-        <div class="mcp-config-preview"><span>Connection config</span><pre>${escapeHtml(connectionConfig)}</pre></div>
+        <div class="mcp-config-preview"><span>Connection config</span><pre data-role="mcp-connection-config">${escapeHtml(connectionConfig)}</pre></div>
         <div class="dialog-actions">
           <button type="button" data-action="copy-mcp-config">Copy Config</button>
           <button type="button" data-action="cancel-mcp-settings">Cancel</button>
@@ -1066,15 +1141,18 @@ function readMcpSettingsForm(data: FormData): McpSettings {
   const parsed = parseMcpSettings(String(data.get('settingsJson') ?? ''));
   const portValue = Number(data.get('port') ?? '');
   const writeAccess = data.get('writeAccess');
+  const bearerToken = String(data.get('bearerToken') ?? '').trim();
   return {
     ...(parsed ?? {
       startAutomatically: false,
       port: 8794,
       writeAccess: 'hvyCliEdits',
+      bearerToken: generateMcpBearerToken(),
     }),
     startAutomatically: data.get('startAutomatically') === 'on',
     port: Number.isInteger(portValue) && portValue > 0 && portValue <= 65535 ? portValue : 8794,
     writeAccess: isMcpWriteAccess(writeAccess) ? writeAccess : 'hvyCliEdits',
+    bearerToken,
   };
 }
 
@@ -1091,10 +1169,30 @@ function isMcpWriteAccess(value: FormDataEntryValue | null): value is McpSetting
   return value === 'searchOnly' || value === 'hvyCliEdits' || value === 'createImportSave';
 }
 
-function formatMcpConnectionConfig(url: string): string {
+function updateMcpConnectionPreview(form: HTMLFormElement): void {
+  const preview = form.querySelector<HTMLElement>('[data-role="mcp-connection-config"]');
+  if (!preview) return;
+  preview.textContent = formatMcpConnectionConfig(readMcpSettingsForm(new FormData(form)));
+}
+
+function updateMcpUrlPreview(form: HTMLFormElement): void {
+  const url = form.querySelector<HTMLElement>('[data-role="mcp-url"]');
+  if (!url || url.dataset.running === 'true') return;
+  url.textContent = mcpConnectionUrl(readMcpSettingsForm(new FormData(form)));
+}
+
+function formatMcpConnectionConfig(settings: McpSettings): string {
+  const url = mcpConnectionUrl(settings);
+  const bearerToken = settings.bearerToken.trim();
+  const serverConfig: { url: string; headers?: { Authorization: string } } = { url };
+  if (bearerToken) {
+    serverConfig.headers = {
+      Authorization: `Bearer ${bearerToken}`,
+    };
+  }
   return JSON.stringify({
     mcpServers: {
-      'hvy-workspace': { url },
+      'hvy-galaxy': serverConfig,
     },
   }, null, 2);
 }

@@ -33,6 +33,7 @@ import {
   type McpSettings,
   type WorkspaceFileNode,
   type WorkspaceTreeNode,
+  updateMcpWorkspaces,
 } from './backend';
 import { applyColorTheme, getPaletteById, isCssVariableName, loadColorThemeSettings, saveColorThemeSettings } from './colorTheme';
 import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, searchHvyDocuments, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
@@ -282,7 +283,9 @@ const handlers: UiHandlers = {
     state.mcpServerStatus = await startMcpServer();
     state.status = state.mcpServerStatus.message;
   }),
-  copyMcpConnectionConfig: () => void copyMcpConnectionConfig(),
+  copyMcpConnectionConfig: (config) => void copyMcpConnectionConfig(config),
+  copyMcpConnectionUrl: (url) => void copyMcpConnectionUrl(url),
+  copyMcpBearerToken: (token) => void copyMcpBearerToken(token),
   openColorTheme: () => {
     closeUiBeforeColorTheme();
     state.colorThemeDialogOpen = true;
@@ -483,6 +486,9 @@ async function boot(): Promise<void> {
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
     state.mcpServerStatus = await loadMcpServerStatus();
+    if (state.mcpSettings.startAutomatically && !state.mcpServerStatus.running) {
+      state.mcpServerStatus = await startMcpServer();
+    }
     state.colorTheme = loadColorThemeSettings();
     applyColorTheme(state.colorTheme, mountRoot);
     installAiChatClient(state.aiSettings);
@@ -498,9 +504,10 @@ async function boot(): Promise<void> {
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
-      if (event === 'mcp-start') handlers.startMcpServer();
-      if (event === 'mcp-stop') handlers.stopMcpServer();
-      if (event === 'mcp-restart') handlers.restartMcpServer();
+      if (event === 'mcp-toggle') {
+        if (state.mcpServerStatus.running) handlers.stopMcpServer();
+        else handlers.startMcpServer();
+      }
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
@@ -526,6 +533,7 @@ async function loadRecentWorkspaces(): Promise<void> {
     }
   }
   state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
+  syncMcpWorkspaces();
 }
 
 async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
@@ -925,10 +933,15 @@ function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): 
     state.workspaces.push(workspace);
   }
   sortWorkspaces();
+  syncMcpWorkspaces();
 }
 
 function sortWorkspaces(): void {
   state.workspaces.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
+}
+
+function syncMcpWorkspaces(): void {
+  void updateMcpWorkspaces(state.workspaces.map((workspace) => workspace.path));
 }
 
 function hasOpenWorkspaceNamed(name: string): boolean {
@@ -1160,15 +1173,40 @@ function confirmDiscardMcpSettings(settings: McpSettings | undefined): boolean {
   return window.confirm('Discard changes to MCP server settings?');
 }
 
-async function copyMcpConnectionConfig(): Promise<void> {
+async function copyMcpConnectionConfig(configOverride?: string): Promise<void> {
+  if (configOverride) {
+    await navigator.clipboard.writeText(configOverride);
+    state.status = 'Copied MCP connection config';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   const url = state.mcpServerStatus.url ?? `http://127.0.0.1:${state.mcpSettings.port ?? 8794}/mcp`;
+  const bearerToken = state.mcpSettings.bearerToken.trim();
+  const serverConfig: { url: string; headers?: { Authorization: string } } = { url };
+  if (bearerToken) {
+    serverConfig.headers = {
+      Authorization: `Bearer ${bearerToken}`,
+    };
+  }
   const config = JSON.stringify({
     mcpServers: {
-      'hvy-workspace': { url },
+      'hvy-galaxy': serverConfig,
     },
   }, null, 2);
   await navigator.clipboard.writeText(config);
   state.status = 'Copied MCP connection config';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function copyMcpConnectionUrl(url: string): Promise<void> {
+  await navigator.clipboard.writeText(url);
+  state.status = 'Copied MCP server URL';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function copyMcpBearerToken(token: string): Promise<void> {
+  await navigator.clipboard.writeText(token);
+  state.status = 'Copied MCP bearer token';
   rerender({ preserveMountedDocument: true });
 }
 
@@ -1195,7 +1233,7 @@ function normalizeSemanticFilterBatchSize(value: number): number {
 
 async function confirmWorkspaceInitialization(path: string, defaultName: string) {
   const shouldInitialize = window.confirm(
-    `"${defaultName}" is not an HVY workspace yet. Create .hvyworkspace.json in this folder?`
+    `"${defaultName}" is not a workspace yet. Create .hvyworkspace.json in this folder?`
   );
   return shouldInitialize ? initializeWorkspacePath(path) : null;
 }

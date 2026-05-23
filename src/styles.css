@@ -181,6 +181,16 @@ button:disabled {
   line-height: 1;
 }
 
+.icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
 .sidebar-actions {
   display: grid;
   flex: none;
@@ -968,6 +978,18 @@ button:disabled {
   white-space: nowrap;
 }
 
+.mcp-url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-url-row .icon-button {
+  width: 34px;
+  height: 34px;
+}
+
 .mcp-status-actions {
   display: flex;
   flex: none;
@@ -983,6 +1005,32 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
+}
+
+.mcp-settings-grid input:not([type="checkbox"]):not([type="radio"]),
+.mcp-settings-grid select,
+.mcp-settings-grid button {
+  min-height: 36px;
+}
+
+.mcp-settings-grid select {
+  padding-block: 7px;
+}
+
+.mcp-token-field {
+  grid-column: 1 / -1;
+}
+
+.mcp-token-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px 36px auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-token-control .icon-button {
+  width: 36px;
+  height: 36px;
 }
 
 .mcp-config-preview {

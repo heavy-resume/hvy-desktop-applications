@@ -3,13 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tauri::menu::{
     MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 
 const WORKSPACE_MANIFEST: &str = ".hvyworkspace.json";
@@ -145,6 +152,8 @@ struct McpSettings {
     port: Option<u16>,
     #[serde(default = "default_mcp_write_access")]
     write_access: String,
+    #[serde(default = "generate_mcp_bearer_token")]
+    bearer_token: String,
 }
 
 impl Default for McpSettings {
@@ -153,6 +162,7 @@ impl Default for McpSettings {
             start_automatically: false,
             port: Some(DEFAULT_MCP_PORT),
             write_access: default_mcp_write_access(),
+            bearer_token: generate_mcp_bearer_token(),
         }
     }
 }
@@ -177,8 +187,74 @@ impl Default for McpServerStatus {
     }
 }
 
+struct McpRuntime {
+    handle: Mutex<Option<McpServerHandle>>,
+    status: Mutex<McpServerStatus>,
+    workspaces: Mutex<Vec<String>>,
+}
+
+struct McpServerHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Default for McpRuntime {
+    fn default() -> Self {
+        Self {
+            handle: Mutex::new(None),
+            status: Mutex::new(McpServerStatus::default()),
+            workspaces: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Drop for McpServerHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 fn default_mcp_write_access() -> String {
     "hvyCliEdits".into()
+}
+
+fn generate_mcp_bearer_token() -> String {
+    let mut bytes = [0_u8; 32];
+    fill_token_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(unix)]
+fn fill_token_bytes(bytes: &mut [u8]) {
+    if fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(bytes))
+        .is_ok()
+    {
+        return;
+    }
+    fill_fallback_token_bytes(bytes);
+}
+
+#[cfg(not(unix))]
+fn fill_token_bytes(bytes: &mut [u8]) {
+    fill_fallback_token_bytes(bytes);
+}
+
+fn fill_fallback_token_bytes(bytes: &mut [u8]) {
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+        ^ u64::from(std::process::id());
+    for byte in bytes {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        *byte = (seed & 0xff) as u8;
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -355,7 +431,10 @@ fn save_ai_settings(app: AppHandle, settings: AiSettings) -> AppResult<AiSetting
 
 #[tauri::command]
 fn load_mcp_settings(app: AppHandle) -> AppResult<McpSettings> {
-    read_mcp_settings(&mcp_settings_path(&app)?)
+    let path = mcp_settings_path(&app)?;
+    let settings = read_mcp_settings(&path)?;
+    write_json_atomically(&path, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -366,21 +445,101 @@ fn save_mcp_settings(app: AppHandle, settings: McpSettings) -> AppResult<McpSett
 }
 
 #[tauri::command]
-fn load_mcp_server_status() -> AppResult<McpServerStatus> {
-    Ok(McpServerStatus::default())
+fn load_mcp_server_status(runtime: State<McpRuntime>) -> AppResult<McpServerStatus> {
+    Ok(runtime
+        .status
+        .lock()
+        .map_err(|_| AppError::Message("MCP status lock is unavailable.".into()))?
+        .clone())
 }
 
 #[tauri::command]
-fn start_mcp_server() -> AppResult<McpServerStatus> {
-    Ok(McpServerStatus {
-        message: "MCP server controls are ready. The protocol listener is not implemented yet.".into(),
-        ..McpServerStatus::default()
-    })
+fn start_mcp_server(app: AppHandle, runtime: State<McpRuntime>) -> AppResult<McpServerStatus> {
+    let settings = read_mcp_settings(&mcp_settings_path(&app)?)?;
+    let port = settings.port.unwrap_or(DEFAULT_MCP_PORT);
+    let url = format!("http://127.0.0.1:{port}/mcp");
+    let mut handle_guard = runtime
+        .handle
+        .lock()
+        .map_err(|_| AppError::Message("MCP server lock is unavailable.".into()))?;
+    if handle_guard.is_some() {
+        return Ok(runtime
+            .status
+            .lock()
+            .map_err(|_| AppError::Message("MCP status lock is unavailable.".into()))?
+            .clone());
+    }
+
+    match spawn_mcp_server(app.clone(), port) {
+        Ok(handle) => {
+            *handle_guard = Some(handle);
+            let status = McpServerStatus {
+                running: true,
+                url: Some(url),
+                message: "MCP server is running.".into(),
+                last_error: None,
+            };
+            *runtime
+                .status
+                .lock()
+                .map_err(|_| AppError::Message("MCP status lock is unavailable.".into()))? = status.clone();
+            refresh_menu(&app)?;
+            Ok(status)
+        }
+        Err(error) => {
+            let status = McpServerStatus {
+                running: false,
+                url: None,
+                message: "MCP server could not start.".into(),
+                last_error: Some(error.to_string()),
+            };
+            *runtime
+                .status
+                .lock()
+                .map_err(|_| AppError::Message("MCP status lock is unavailable.".into()))? = status.clone();
+            refresh_menu(&app)?;
+            Ok(status)
+        }
+    }
 }
 
 #[tauri::command]
-fn stop_mcp_server() -> AppResult<McpServerStatus> {
-    Ok(McpServerStatus::default())
+fn stop_mcp_server(app: AppHandle, runtime: State<McpRuntime>) -> AppResult<McpServerStatus> {
+    let mut handle_guard = runtime
+        .handle
+        .lock()
+        .map_err(|_| AppError::Message("MCP server lock is unavailable.".into()))?;
+    if let Some(mut handle) = handle_guard.take() {
+        handle.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = handle.thread.take() {
+            let _ = thread.join();
+        }
+    }
+    let status = McpServerStatus::default();
+    *runtime
+        .status
+        .lock()
+        .map_err(|_| AppError::Message("MCP status lock is unavailable.".into()))? = status.clone();
+    refresh_menu(&app)?;
+    Ok(status)
+}
+
+#[tauri::command]
+fn update_mcp_workspaces(runtime: State<McpRuntime>, paths: Vec<String>) -> AppResult<()> {
+    let mut normalized = Vec::new();
+    for path in paths {
+        let path = PathBuf::from(path);
+        if workspace_manifest_path(&path).is_some() {
+            normalized.push(path_to_string(&path));
+        }
+    }
+    normalized.sort();
+    normalized.dedup();
+    *runtime
+        .workspaces
+        .lock()
+        .map_err(|_| AppError::Message("MCP workspace lock is unavailable.".into()))? = normalized;
+    Ok(())
 }
 
 #[tauri::command]
@@ -702,6 +861,7 @@ pub fn run() {
     set_native_process_name();
 
     tauri::Builder::default()
+        .manage(McpRuntime::default())
         .setup(|app| {
             set_native_process_name();
             let menu = build_menu(app.handle())?;
@@ -717,9 +877,7 @@ pub fn run() {
                         | "about"
                         | "ai-settings"
                         | "mcp-settings"
-                        | "mcp-start"
-                        | "mcp-stop"
-                        | "mcp-restart"
+                        | "mcp-toggle"
                         | "colors"
                         | "save"
                         | "save-as"
@@ -742,6 +900,7 @@ pub fn run() {
             load_mcp_server_status,
             start_mcp_server,
             stop_mcp_server,
+            update_mcp_workspaces,
             load_default_guide,
             open_workspace_dialog,
             choose_workspace_folder,
@@ -789,6 +948,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
+    let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
+    let mcp_toggle_label = if mcp_status.running { "Stop MCP Server" } else { "Start MCP Server" };
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
         .separator()
@@ -815,9 +976,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Recover Backup...").id("recover-backup").build(app)?)
         .build()?;
     let mcp = SubmenuBuilder::new(app, "MCP Server")
-        .item(&MenuItemBuilder::new("Start MCP Server").id("mcp-start").build(app)?)
-        .item(&MenuItemBuilder::new("Stop MCP Server").id("mcp-stop").build(app)?)
-        .item(&MenuItemBuilder::new("Restart MCP Server").id("mcp-restart").build(app)?)
+        .item(
+            &MenuItemBuilder::new(mcp_status_menu_label(&mcp_status))
+                .id("mcp-status")
+                .enabled(false)
+                .build(app)?,
+        )
+        .item(&MenuItemBuilder::new(mcp_toggle_label).id("mcp-toggle").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Server Settings...").id("mcp-settings").build(app)?)
         .build()?;
@@ -843,6 +1008,22 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .build()?;
 
     MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&mcp).item(&help).build()
+}
+
+fn mcp_status_menu_label(status: &McpServerStatus) -> String {
+    if !status.running {
+        return "Stopped".into();
+    }
+    status
+        .url
+        .as_deref()
+        .and_then(mcp_port_from_url)
+        .map(|port| format!("Listening on port {port}"))
+        .unwrap_or_else(|| "Listening".into())
+}
+
+fn mcp_port_from_url(url: &str) -> Option<&str> {
+    url.rsplit_once(':')?.1.split('/').next().filter(|port| !port.is_empty())
 }
 
 fn build_recent_files_menu(
@@ -1304,11 +1485,507 @@ fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
         "searchOnly" | "hvyCliEdits" | "createImportSave" => settings.write_access.trim().to_string(),
         _ => default_mcp_write_access(),
     };
+    let bearer_token = settings.bearer_token.trim().to_string();
     Ok(McpSettings {
         start_automatically: settings.start_automatically,
         port: settings.port.filter(|port| *port > 0),
         write_access,
+        bearer_token,
     })
+}
+
+fn spawn_mcp_server(app: AppHandle, port: u16) -> AppResult<McpServerHandle> {
+    let listener = TcpListener::bind(("127.0.0.1", port))?;
+    listener.set_nonblocking(true)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let thread = thread::Builder::new()
+        .name("hvy-mcp-server".into())
+        .spawn(move || {
+            while !thread_stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => handle_mcp_stream(&app, stream),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(StdDuration::from_millis(50));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })?;
+    Ok(McpServerHandle {
+        stop,
+        thread: Some(thread),
+    })
+}
+
+fn handle_mcp_stream(app: &AppHandle, mut stream: TcpStream) {
+    let response = match read_http_request(&mut stream) {
+        Ok(request) => handle_mcp_http_request(app, request),
+        Err(error) => http_json_response(
+            400,
+            &json_rpc_error(None, -32700, &format!("Invalid request: {error}")),
+        ),
+    };
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
+struct HttpRequest {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl HttpRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+fn read_http_request(stream: &mut TcpStream) -> AppResult<HttpRequest> {
+    stream.set_read_timeout(Some(StdDuration::from_secs(2)))?;
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    let header_end = loop {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Err(AppError::Message("Connection closed before headers.".into()));
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Some(index) = find_header_end(&buffer) {
+            break index;
+        }
+        if buffer.len() > 64 * 1024 {
+            return Err(AppError::Message("HTTP headers are too large.".into()));
+        }
+    };
+    let headers = String::from_utf8_lossy(&buffer[..header_end]);
+    let mut lines = headers.lines();
+    let request_line = lines
+        .next()
+        .ok_or_else(|| AppError::Message("Missing request line.".into()))?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts
+        .next()
+        .ok_or_else(|| AppError::Message("Missing HTTP method.".into()))?
+        .to_string();
+    let path = request_parts
+        .next()
+        .ok_or_else(|| AppError::Message("Missing HTTP path.".into()))?
+        .to_string();
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
+        .collect::<Vec<_>>();
+    let content_length = headers
+        .iter()
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let body_start = header_end + 4;
+    let mut body = buffer.get(body_start..).unwrap_or_default().to_vec();
+    while body.len() < content_length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+    body.truncate(content_length);
+    Ok(HttpRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn handle_mcp_http_request(app: &AppHandle, request: HttpRequest) -> String {
+    if request.method == "GET" && request.path == "/health" {
+        return http_json_response(
+            200,
+            &serde_json::json!({
+                "status": "ok",
+                "server": "hvy-galaxy"
+            }),
+        );
+    }
+    if request.method != "POST" || request.path.split('?').next() != Some("/mcp") {
+        return http_json_response(
+            404,
+            &serde_json::json!({
+                "error": "HVY MCP server listens for POST requests at /mcp."
+            }),
+        );
+    }
+    let settings = match mcp_settings_path(app).and_then(|path| read_mcp_settings(&path)) {
+        Ok(settings) => settings,
+        Err(error) => {
+            return http_json_response(
+                500,
+                &json_rpc_error(None, -32000, &format!("Could not load MCP settings: {error}")),
+            )
+        }
+    };
+    if !mcp_request_is_authorized(&request, &settings.bearer_token) {
+        return http_json_response(401, &json_rpc_error(None, -32001, "Unauthorized."));
+    }
+    let parsed = serde_json::from_slice::<serde_json::Value>(&request.body);
+    let response = match parsed {
+        Ok(value) => handle_mcp_json_rpc(app, value),
+        Err(error) => json_rpc_error(None, -32700, &format!("Invalid JSON: {error}")),
+    };
+    http_json_response(200, &response)
+}
+
+fn mcp_request_is_authorized(request: &HttpRequest, bearer_token: &str) -> bool {
+    if bearer_token.trim().is_empty() {
+        return true;
+    }
+    let Some((scheme, token)) = request.header("authorization").and_then(|value| value.split_once(' ')) else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("bearer") && token.trim() == bearer_token
+}
+
+fn handle_mcp_json_rpc(app: &AppHandle, request: serde_json::Value) -> serde_json::Value {
+    let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let method = request.get("method").and_then(|method| method.as_str()).unwrap_or("");
+    let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    match method {
+        "initialize" => json_rpc_result(
+            id,
+            serde_json::json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "hvy-galaxy",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }),
+        ),
+        "notifications/initialized" => serde_json::Value::Null,
+        "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list() })),
+        "tools/call" => match handle_mcp_tool_call(app, params) {
+            Ok(result) => json_rpc_result(id, result),
+            Err(error) => json_rpc_error(Some(id), -32000, &error.to_string()),
+        },
+        _ => json_rpc_error(Some(id), -32601, "Method not found."),
+    }
+}
+
+fn mcp_tool_list() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "name": "workspace.list",
+            "description": "List workspaces currently added to HVY Galaxy without reading HVY file contents. Use this to discover which workspaces are available through HVY Galaxy.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "workspace.tree",
+            "description": "Return low-context file trees for workspaces currently added to HVY Galaxy. Use this when the user asks what HVY files or folders are available in a workspace.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workspacePath": {
+                        "type": "string",
+                        "description": "Optional absolute path of one workspace to inspect. Omit to inspect every workspace currently added to HVY Galaxy."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "workspace.search",
+            "description": "Search HVY files in workspaces currently added to HVY Galaxy and return matching file paths, snippets, and line numbers. Use this to answer questions like which HVY file contains a resume, a person's name, a topic, or other document content.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search text, name, phrase, or topic to find inside HVY files in workspaces currently added to HVY Galaxy."
+                    },
+                    "workspacePath": {
+                        "type": "string",
+                        "description": "Optional absolute path of one workspace to search. Omit to search every workspace currently added to HVY Galaxy."
+                    },
+                    "max": {
+                        "type": "number",
+                        "description": "Maximum number of matching files to return."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    ])
+}
+
+fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult<serde_json::Value> {
+    let name = params
+        .get("name")
+        .and_then(|name| name.as_str())
+        .ok_or_else(|| AppError::Message("tools/call requires a tool name.".into()))?;
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let result = match name {
+        "workspace.list" => mcp_workspace_list(app)?,
+        "workspace.tree" => mcp_workspace_tree(app, arguments)?,
+        "workspace.search" => mcp_workspace_search(app, arguments)?,
+        _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
+    };
+    Ok(mcp_tool_result(result))
+}
+
+fn mcp_workspace_list(app: &AppHandle) -> AppResult<serde_json::Value> {
+    mcp_workspace_list_from(&known_workspaces(app)?)
+}
+
+fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<serde_json::Value> {
+    Ok(serde_json::json!({
+        "workspaces": workspaces
+            .iter()
+            .map(|workspace| serde_json::json!({
+                "name": workspace.manifest.name,
+                "path": workspace.path,
+                "updatedAt": workspace.manifest.updated_at,
+                "fileCount": count_workspace_files(&workspace.files),
+            }))
+            .collect::<Vec<_>>()
+    }))
+}
+
+fn mcp_workspace_tree(app: &AppHandle, arguments: serde_json::Value) -> AppResult<serde_json::Value> {
+    mcp_workspace_tree_from(&known_workspaces(app)?, arguments)
+}
+
+fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
+    let requested_path = arguments.get("workspacePath").and_then(|path| path.as_str());
+    let workspaces = workspaces
+        .iter()
+        .filter(|workspace| requested_path.map(|path| path == workspace.path).unwrap_or(true))
+        .map(|workspace| serde_json::json!({
+            "name": workspace.manifest.name,
+            "path": workspace.path,
+            "files": workspace.files,
+        }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "workspaces": workspaces }))
+}
+
+fn mcp_workspace_search(app: &AppHandle, arguments: serde_json::Value) -> AppResult<serde_json::Value> {
+    mcp_workspace_search_from(&known_workspaces(app)?, arguments)
+}
+
+fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
+    let query = arguments
+        .get("query")
+        .and_then(|query| query.as_str())
+        .unwrap_or("")
+        .trim();
+    if query.is_empty() {
+        return Err(AppError::Message("workspace.search requires a non-empty query.".into()));
+    }
+    let max = arguments
+        .get("max")
+        .and_then(|max| max.as_u64())
+        .map(|max| max.clamp(1, 100) as usize)
+        .unwrap_or(25);
+    let requested_path = arguments.get("workspacePath").and_then(|path| path.as_str());
+    let query_lower = query.to_ascii_lowercase();
+    let mut results = Vec::new();
+    for workspace in workspaces {
+        if requested_path.map(|path| path != workspace.path).unwrap_or(false) {
+            continue;
+        }
+        for file in flatten_workspace_file_nodes(&workspace.files) {
+            if results.len() >= max {
+                break;
+            }
+            if let Ok(text) = fs::read_to_string(&file.path) {
+                for (line_index, line) in text.lines().enumerate() {
+                    if !line.to_ascii_lowercase().contains(&query_lower) {
+                        continue;
+                    }
+                    results.push(serde_json::json!({
+                        "workspaceName": workspace.manifest.name,
+                        "workspacePath": workspace.path,
+                        "path": file.path,
+                        "relativePath": file.relative_path,
+                        "extension": file.extension,
+                        "lineNumber": line_index + 1,
+                        "snippet": search_snippet(line, query),
+                    }));
+                    break;
+                }
+            }
+            if results.len() >= max {
+                break;
+            }
+        }
+    }
+    Ok(serde_json::json!({
+        "query": query,
+        "results": results
+    }))
+}
+
+#[derive(Clone)]
+struct FlatWorkspaceFile {
+    path: String,
+    relative_path: String,
+    extension: String,
+}
+
+fn flatten_workspace_file_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<FlatWorkspaceFile> {
+    let mut files = Vec::new();
+    append_workspace_file_nodes(nodes, &mut files);
+    files
+}
+
+fn append_workspace_file_nodes(nodes: &[WorkspaceTreeNode], files: &mut Vec<FlatWorkspaceFile>) {
+    for node in nodes {
+        match node {
+            WorkspaceTreeNode::File {
+                path,
+                relative_path,
+                extension,
+                ..
+            } => files.push(FlatWorkspaceFile {
+                path: path.clone(),
+                relative_path: relative_path.clone(),
+                extension: extension.clone(),
+            }),
+            WorkspaceTreeNode::Folder { children, .. } => append_workspace_file_nodes(children, files),
+        }
+    }
+}
+
+fn known_workspaces(app: &AppHandle) -> AppResult<Vec<Workspace>> {
+    let runtime = app.state::<McpRuntime>();
+    let paths = runtime
+        .workspaces
+        .lock()
+        .map_err(|_| AppError::Message("MCP workspace lock is unavailable.".into()))?
+        .clone();
+    let mut workspaces = Vec::new();
+    for path in paths {
+        if let Ok(workspace) = load_workspace_from_path(Path::new(&path)) {
+            workspaces.push(workspace);
+        }
+    }
+    Ok(workspaces)
+}
+
+fn count_workspace_files(nodes: &[WorkspaceTreeNode]) -> usize {
+    nodes
+        .iter()
+        .map(|node| match node {
+            WorkspaceTreeNode::File { .. } => 1,
+            WorkspaceTreeNode::Folder { children, .. } => count_workspace_files(children),
+        })
+        .sum()
+}
+
+fn search_snippet(line: &str, query: &str) -> String {
+    let clean = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lower = clean.to_ascii_lowercase();
+    let query_lower = query.to_ascii_lowercase();
+    let Some(match_index) = lower.find(&query_lower) else {
+        return clean.chars().take(180).collect();
+    };
+    let start = byte_index_saturating_before(&clean, match_index, 70);
+    let end = byte_index_saturating_after(&clean, match_index + query.len(), 90);
+    format!(
+        "{}{}{}",
+        if start > 0 { "..." } else { "" },
+        &clean[start..end],
+        if end < clean.len() { "..." } else { "" }
+    )
+}
+
+fn byte_index_saturating_before(value: &str, byte_index: usize, chars_before: usize) -> usize {
+    value[..byte_index.min(value.len())]
+        .char_indices()
+        .rev()
+        .nth(chars_before)
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn byte_index_saturating_after(value: &str, byte_index: usize, chars_after: usize) -> usize {
+    value[byte_index.min(value.len())..]
+        .char_indices()
+        .nth(chars_after)
+        .map(|(index, _)| byte_index.min(value.len()) + index)
+        .unwrap_or(value.len())
+}
+
+fn mcp_tool_result(value: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "content": [{
+            "type": "text",
+            "text": serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".into())
+        }],
+        "structuredContent": value,
+        "isError": false
+    })
+}
+
+fn json_rpc_result(id: serde_json::Value, result: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result
+    })
+}
+
+fn json_rpc_error(id: Option<serde_json::Value>, code: i64, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id.unwrap_or(serde_json::Value::Null),
+        "error": {
+            "code": code,
+            "message": message
+        }
+    })
+}
+
+fn http_json_response(status: u16, value: &serde_json::Value) -> String {
+    let body = if value.is_null() {
+        String::new()
+    } else {
+        value.to_string()
+    };
+    let label = match status {
+        200 => "OK",
+        401 => "Unauthorized",
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "OK",
+    };
+    format!(
+        "HTTP/1.1 {status} {label}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: http://127.0.0.1\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
 }
 
 fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
@@ -1679,12 +2356,14 @@ mod tests {
             start_automatically: true,
             port: Some(0),
             write_access: "all".into(),
+            bearer_token: "".into(),
         })
         .unwrap();
 
         assert!(settings.start_automatically);
         assert_eq!(settings.port, None);
         assert_eq!(settings.write_access, "hvyCliEdits");
+        assert_eq!(settings.bearer_token, "");
 
         assert_eq!(McpSettings::default().port, Some(DEFAULT_MCP_PORT));
 
@@ -1692,10 +2371,132 @@ mod tests {
             start_automatically: false,
             port: Some(8794),
             write_access: "createImportSave".into(),
+            bearer_token: "secret-token".into(),
         })
         .unwrap();
 
         assert_eq!(explicit.port, Some(8794));
         assert_eq!(explicit.write_access, "createImportSave");
+        assert_eq!(explicit.bearer_token, "secret-token");
+    }
+
+    #[test]
+    fn mcp_tool_list_exposes_workspace_tools() {
+        let tools = mcp_tool_list();
+        let tools = tools.as_array().unwrap();
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["workspace.list", "workspace.tree", "workspace.search"]);
+        assert!(tools[2]
+            .get("description")
+            .and_then(|description| description.as_str())
+            .unwrap()
+            .contains("which HVY file contains a resume"));
+        assert_eq!(
+            tools[2]["inputSchema"]["required"].as_array().unwrap()[0],
+            serde_json::json!("query")
+        );
+    }
+
+    #[test]
+    fn mcp_workspace_suite_lists_trees_and_searches_files() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("people")).unwrap();
+        fs::write(
+            dir.path().join("people").join("james-resume.hvy"),
+            "Resume\nJames Hutchison\nExperience building HVY Galaxy.",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("notes.md"),
+            "# Notes\nThis markdown file mentions HVY Galaxy but not the resume owner.",
+        )
+        .unwrap();
+        fs::write(dir.path().join("ignore.txt"), "James Hutchison outside supported documents").unwrap();
+        let workspace = initialize_workspace_with_name(dir.path(), Some("Career Documents")).unwrap();
+        let workspaces = vec![workspace.clone()];
+
+        let list = mcp_workspace_list_from(&workspaces).unwrap();
+        assert_eq!(list["workspaces"][0]["name"], "Career Documents");
+        assert_eq!(list["workspaces"][0]["fileCount"], 2);
+
+        let tree = mcp_workspace_tree_from(&workspaces, serde_json::json!({})).unwrap();
+        assert_eq!(tree["workspaces"][0]["path"], workspace.path);
+        assert!(tree["workspaces"][0]["files"]
+            .to_string()
+            .contains("james-resume.hvy"));
+        assert!(!tree["workspaces"][0]["files"].to_string().contains("ignore.txt"));
+
+        let search = mcp_workspace_search_from(
+            &workspaces,
+            serde_json::json!({
+                "query": "James Hutchison",
+                "max": 10
+            }),
+        )
+        .unwrap();
+        assert_eq!(search["query"], "James Hutchison");
+        assert_eq!(search["results"].as_array().unwrap().len(), 1);
+        assert_eq!(search["results"][0]["relativePath"], "people/james-resume.hvy");
+        assert_eq!(search["results"][0]["lineNumber"], 2);
+        assert!(search["results"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("James Hutchison"));
+    }
+
+    #[test]
+    fn mcp_workspace_search_can_be_scoped_and_limited() {
+        let first = tempdir().unwrap();
+        let second = tempdir().unwrap();
+        fs::write(first.path().join("one.hvy"), "needle in first workspace").unwrap();
+        fs::write(second.path().join("two.hvy"), "needle in second workspace").unwrap();
+        let first_workspace = initialize_workspace_with_name(first.path(), Some("First")).unwrap();
+        let second_workspace = initialize_workspace_with_name(second.path(), Some("Second")).unwrap();
+        let workspaces = vec![first_workspace.clone(), second_workspace.clone()];
+
+        let scoped = mcp_workspace_search_from(
+            &workspaces,
+            serde_json::json!({
+                "query": "needle",
+                "workspacePath": second_workspace.path,
+                "max": 1
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(scoped["results"].as_array().unwrap().len(), 1);
+        assert_eq!(scoped["results"][0]["workspaceName"], "Second");
+        assert_eq!(scoped["results"][0]["relativePath"], "two.hvy");
+    }
+
+    #[test]
+    fn mcp_workspace_search_rejects_empty_queries() {
+        let error = mcp_workspace_search_from(&[], serde_json::json!({ "query": "   " })).unwrap_err();
+        assert!(error.to_string().contains("requires a non-empty query"));
+    }
+
+    #[test]
+    fn mcp_authorization_allows_blank_token_or_matching_bearer() {
+        let request = HttpRequest {
+            method: "POST".into(),
+            path: "/mcp".into(),
+            headers: vec![("Authorization".into(), "Bearer secret-token".into())],
+            body: Vec::new(),
+        };
+        let missing = HttpRequest {
+            method: "POST".into(),
+            path: "/mcp".into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+
+        assert!(mcp_request_is_authorized(&missing, ""));
+        assert!(mcp_request_is_authorized(&request, "secret-token"));
+        assert!(!mcp_request_is_authorized(&missing, "secret-token"));
+        assert!(!mcp_request_is_authorized(&request, "other-token"));
     }
 }
