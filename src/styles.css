@@ -210,7 +210,7 @@ button:disabled {
 .workspace-root summary {
   cursor: pointer;
   list-style-position: inside;
-  padding-right: 34px;
+  padding-right: 64px;
 }
 
 .workspace-root summary span {
@@ -550,14 +550,33 @@ button:disabled {
   right: 0;
 }
 
+.workspace-search-trigger,
 .workspace-action-trigger {
   display: inline-grid;
   place-items: center;
   width: 26px;
   height: 26px;
+  border-radius: 999px;
   padding: 0 0 2px;
   font-size: 18px;
   line-height: 1;
+}
+
+.workspace-search-trigger {
+  position: absolute;
+  top: -4px;
+  right: 30px;
+  padding: 0;
+}
+
+.workspace-search-trigger svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .workspace-action-popover {

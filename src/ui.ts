@@ -18,7 +18,7 @@ export interface UiHandlers {
   createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
   addFilesToWorkspace(workspacePath: string): void;
-  openWorkspaceSearch(): void;
+  openWorkspaceSearch(workspacePath?: string): void;
   closeWorkspaceSearch(): void;
   setWorkspaceSearchMode(mode: HvyDocumentSearchMode): void;
   updateWorkspaceSearchQuery(query: string): void;
@@ -77,7 +77,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         </div>
         <div class="sidebar-actions">
           <button type="button" data-action="open-file">Open File</button>
-          <button type="button" data-action="open-workspace-search" ${state.workspaces.length === 0 ? 'disabled' : ''}>Search Workspace</button>
+          <button type="button" data-action="open-workspace-search" ${state.workspaces.length === 0 ? 'disabled' : ''}>Search Workspaces</button>
         </div>
         <section class="workspaces-section">
           <div class="sidebar-section-heading">
@@ -105,7 +105,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderAiSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
-      ${renderWorkspaceSearchDialog(state.workspaceSearch)}
+      ${renderWorkspaceSearchDialog(state.workspaceSearch, state.workspaces)}
     </main>`;
 
   const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
@@ -163,7 +163,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
-    if (action === 'open-workspace-search') handlers.openWorkspaceSearch();
+    if (action === 'open-workspace-search') handlers.openWorkspaceSearch(target.dataset.workspacePath);
     if (action === 'close-workspace-search') handlers.closeWorkspaceSearch();
     if (action === 'set-workspace-search-mode' && isWorkspaceSearchMode(target.dataset.searchMode)) handlers.setWorkspaceSearchMode(target.dataset.searchMode);
     if (action === 'select-workspace-search-result' && target.dataset.searchResultId) handlers.selectWorkspaceSearchResult(target.dataset.searchResultId);
@@ -310,13 +310,15 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   });
 }
 
-function renderWorkspaceSearchDialog(search: WorkspaceSearchState): string {
+function renderWorkspaceSearchDialog(search: WorkspaceSearchState, workspaces: Workspace[]): string {
   if (!search.open) {
     return '';
   }
   const count = search.results.length;
+  const scopedWorkspace = search.workspacePath ? workspaces.find((workspace) => workspace.path === search.workspacePath) ?? null : null;
+  const searchScope = scopedWorkspace ? scopedWorkspace.manifest.name : 'open workspaces';
   const status = search.isLoading
-    ? search.mode === 'semantic' ? 'Analyzing workspace...' : 'Searching workspace...'
+    ? search.mode === 'semantic' ? `Analyzing ${searchScope}...` : `Searching ${searchScope}...`
     : search.error
     ? search.error
     : search.submittedQuery.trim().length === 0
@@ -335,10 +337,10 @@ function renderWorkspaceSearchDialog(search: WorkspaceSearchState): string {
         <div class="search-input-row">
           <span class="search-input-icon" aria-hidden="true">${magnifyingGlassIcon()}</span>
           <label>
-            <span>${isSemantic ? 'Semantic workspace search' : 'Workspace search'}</span>
+            <span>${isSemantic ? `Semantic search in ${escapeHtml(searchScope)}` : `Search ${escapeHtml(searchScope)}`}</span>
             ${isSemantic
-              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-search-query" placeholder="Describe what you are looking for across open workspaces" rows="4" autofocus>${escapeHtml(search.queryDraft)}</textarea>`
-              : `<input class="search-input" data-field="workspace-search-query" value="${escapeAttr(search.queryDraft)}" placeholder="Find across open workspaces..." autocomplete="off" spellcheck="false" autofocus>`
+              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-search-query" placeholder="Describe what you are looking for across ${escapeAttr(searchScope)}" rows="4" autofocus>${escapeHtml(search.queryDraft)}</textarea>`
+              : `<input class="search-input" data-field="workspace-search-query" value="${escapeAttr(search.queryDraft)}" placeholder="Find across ${escapeAttr(searchScope)}..." autocomplete="off" spellcheck="false" autofocus>`
             }
           </label>
         </div>
@@ -604,6 +606,7 @@ function renderWorkspace(workspace: Workspace, selectedFilePath: string | null, 
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
+      <button type="button" class="workspace-search-trigger" data-action="open-workspace-search" data-workspace-path="${escapeAttr(workspace.path)}" title="Search this workspace" aria-label="Search ${escapeAttr(workspace.manifest.name)}">${magnifyingGlassIcon()}</button>
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>

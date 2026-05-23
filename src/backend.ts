@@ -109,6 +109,7 @@ export interface AiSettings {
   activeProviderId: string;
   providers: AiProviderConfig[];
   actions: AiActionSettings;
+  semanticFilterBatchSize: number;
 }
 
 
@@ -147,6 +148,7 @@ export function defaultAiSettings(): AiSettings {
     activeProviderId: provider.provider,
     providers: [provider],
     actions: defaultAiActionSettings(),
+    semanticFilterBatchSize: 1,
   };
 }
 

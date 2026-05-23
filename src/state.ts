@@ -41,6 +41,7 @@ export interface AppState {
 
 export interface WorkspaceSearchState {
   open: boolean;
+  workspacePath: string | null;
   queryDraft: string;
   submittedQuery: string;
   mode: HvyDocumentSearchMode;
@@ -74,6 +75,7 @@ export const state: AppState = {
   recoveryBackups: [],
   workspaceSearch: {
     open: false,
+    workspacePath: null,
     queryDraft: '',
     submittedQuery: '',
     mode: 'keyword',

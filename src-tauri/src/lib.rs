@@ -221,6 +221,8 @@ struct AiSettings {
     active_provider_id: String,
     providers: Vec<AiProviderConfig>,
     actions: AiActionSettings,
+    #[serde(default = "default_semantic_filter_batch_size")]
+    semantic_filter_batch_size: usize,
 }
 
 impl Default for AiSettings {
@@ -230,8 +232,13 @@ impl Default for AiSettings {
             active_provider_id: provider.provider.clone(),
             providers: vec![provider],
             actions: AiActionSettings::default(),
+            semantic_filter_batch_size: default_semantic_filter_batch_size(),
         }
     }
+}
+
+fn default_semantic_filter_batch_size() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1210,6 +1217,7 @@ fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
         active_provider_id,
         providers,
         actions,
+        semantic_filter_batch_size: settings.semantic_filter_batch_size.max(1),
     })
 }
 
@@ -1297,6 +1305,7 @@ fn preset_ai_settings(settings: AiSettingsPresetFile) -> AiSettings {
             semantic_filter: AiActionConfig::new(&provider_id, active_models.semantic_filter.trim()),
             compaction: AiActionConfig::new(&provider_id, active_models.compaction.trim()),
         },
+        semantic_filter_batch_size: default_semantic_filter_batch_size(),
     }
 }
 
@@ -1312,6 +1321,7 @@ fn legacy_ai_settings(settings: AiSettingsLegacy) -> AiSettings {
         active_provider_id: provider_id.clone(),
         providers: vec![provider],
         actions: same_model_ai_action_settings(&provider_id, &model),
+        semantic_filter_batch_size: default_semantic_filter_batch_size(),
     }
 }
 
@@ -1525,6 +1535,7 @@ mod tests {
                 semantic_filter: AiActionConfig::new(" openai-compatible ", " semantic "),
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
+            semantic_filter_batch_size: 0,
         })
         .unwrap();
 
@@ -1537,5 +1548,6 @@ mod tests {
         assert_eq!(settings.actions.edit.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.model, "semantic");
+        assert_eq!(settings.semantic_filter_batch_size, 1);
     }
 }

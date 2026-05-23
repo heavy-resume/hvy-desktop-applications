@@ -156,8 +156,9 @@ const handlers: UiHandlers = {
     state.status = 'Added files to workspace';
     await refreshRecents();
   }),
-  openWorkspaceSearch: () => {
+  openWorkspaceSearch: (workspacePath) => {
     closeUiBeforeWorkspaceSearch();
+    state.workspaceSearch.workspacePath = workspacePath ?? null;
     state.workspaceSearch.open = true;
     state.workspaceSearch.error = null;
     state.status = 'Ready';
@@ -500,7 +501,10 @@ async function submitWorkspaceSearch(): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
-  if (state.workspaces.length === 0) {
+  const workspaces = state.workspaceSearch.workspacePath
+    ? state.workspaces.filter((workspace) => workspace.path === state.workspaceSearch.workspacePath)
+    : state.workspaces;
+  if (workspaces.length === 0) {
     state.workspaceSearch.error = 'Open a workspace before searching.';
     rerender({ preserveMountedDocument: true });
     return;
@@ -510,11 +514,13 @@ async function submitWorkspaceSearch(): Promise<void> {
   rerender({ preserveMountedDocument: true });
   try {
     preserveCurrentDocumentSession();
-    const documents = await buildWorkspaceSearchDocuments();
-    const response = await searchHvyDocuments({
+    const documents = await buildWorkspaceSearchDocuments(workspaces);
+  const response = await searchHvyDocuments({
       documents,
       query,
       mode: state.workspaceSearch.mode,
+    }, {
+      semanticFilterBatchSize: state.aiSettings.semanticFilterBatchSize,
     });
     state.workspaceSearch.results = response.results;
     state.workspaceSearch.error = null;
@@ -542,30 +548,33 @@ async function selectWorkspaceSearchResult(resultId: string): Promise<void> {
   });
 }
 
-async function buildWorkspaceSearchDocuments(): Promise<HvyDocumentSearchDocument[]> {
+async function buildWorkspaceSearchDocuments(workspaces = state.workspaces): Promise<HvyDocumentSearchDocument[]> {
   const documents: HvyDocumentSearchDocument[] = [];
-  const files = state.workspaces.flatMap((workspace) => flattenWorkspaceFiles(workspace.files));
-  for (const file of files) {
-    const session = documentSessions.get(file.path);
-    const openDocument = state.document?.path === file.path ? state.document : null;
-    const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
-    if (liveDocument) {
-      documents.push({
-        documentId: file.path,
-        documentTitle: displaySearchDocumentTitle(file.name),
-        document: liveDocument,
-      });
-      continue;
-    }
-    try {
-      const documentFile = await readDocumentFile(file.path);
-      documents.push({
-        documentId: file.path,
-        documentTitle: displaySearchDocumentTitle(documentFile.name),
-        document: await deserializeHvy(new Uint8Array(documentFile.bytes), documentFile.extension),
-      });
-    } catch {
-      // Keep workspace search resilient if one file was moved, deleted, or cannot be parsed.
+  const includeWorkspaceName = workspaces.length > 1 || state.workspaceSearch.workspacePath === null;
+  for (const workspace of workspaces) {
+    for (const file of flattenWorkspaceFiles(workspace.files)) {
+      const session = documentSessions.get(file.path);
+      const openDocument = state.document?.path === file.path ? state.document : null;
+      const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
+      const title = displaySearchDocumentTitle(file.name, includeWorkspaceName ? workspace.manifest.name : null);
+      if (liveDocument) {
+        documents.push({
+          documentId: file.path,
+          documentTitle: title,
+          document: liveDocument,
+        });
+        continue;
+      }
+      try {
+        const documentFile = await readDocumentFile(file.path);
+        documents.push({
+          documentId: file.path,
+          documentTitle: displaySearchDocumentTitle(documentFile.name, includeWorkspaceName ? workspace.manifest.name : null),
+          document: await deserializeHvy(new Uint8Array(documentFile.bytes), documentFile.extension),
+        });
+      } catch {
+        // Keep workspace search resilient if one file was moved, deleted, or cannot be parsed.
+      }
     }
   }
   return documents;
@@ -575,8 +584,9 @@ function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] 
   return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
 }
 
-function displaySearchDocumentTitle(name: string): string {
-  return name.replace(/\.(t?hvy|md)$/i, '');
+function displaySearchDocumentTitle(name: string, workspaceName: string | null = null): string {
+  const fileName = name.replace(/\.(t?hvy|md)$/i, '');
+  return workspaceName ? `${workspaceName} / ${fileName}` : fileName;
 }
 
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean } = {}): Promise<void> {
@@ -653,8 +663,9 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   if (!state.document || !mountRoot || !document) return;
   state.document.mounted?.mount.destroy();
   const generation = ++mountGeneration;
-  const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
+    const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
+    semanticFilterBatchSize: state.aiSettings.semanticFilterBatchSize,
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);
@@ -1066,6 +1077,7 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
   return {
     activeProviderId: settings.activeProviderId,
     providers: [...settings.providers].sort((left, right) => left.provider.localeCompare(right.provider)),
+    semanticFilterBatchSize: normalizeSemanticFilterBatchSize(settings.semanticFilterBatchSize),
     actions: {
       chat: settings.actions.chat,
       edit: settings.actions.edit,
@@ -1076,6 +1088,10 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
       compaction: settings.actions.compaction,
     },
   };
+}
+
+function normalizeSemanticFilterBatchSize(value: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 1;
 }
 
 async function confirmWorkspaceInitialization(path: string, defaultName: string) {
