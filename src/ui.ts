@@ -1,10 +1,11 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type Workspace, type WorkspaceTreeNode } from './backend';
+import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PALETTES, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceSearchState } from './state';
 import { hvyTemplates } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
+import ufoLogoUrl from './assets/ufo-no-bg.svg';
 import type { HvyDocumentSearchMode, HvyDocumentSearchResult, SearchResultCategory } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
@@ -31,6 +32,13 @@ export interface UiHandlers {
   openProviderDocs(url: string): void;
   saveAiSettings(settings: AiSettings): void;
   cancelAiSettings(settings?: AiSettings): void;
+  openMcpSettings(): void;
+  saveMcpSettings(settings: McpSettings): void;
+  cancelMcpSettings(settings?: McpSettings): void;
+  startMcpServer(): void;
+  stopMcpServer(): void;
+  restartMcpServer(): void;
+  copyMcpConnectionConfig(): void;
   openColorTheme(): void;
   closeColorTheme(): void;
   updateColorTheme(name: string, value: string): void;
@@ -70,7 +78,8 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
     <main class="app-shell">
       <aside class="workspace-sidebar">
         <div class="sidebar-header">
-          <div>
+          <div class="brand-lockup">
+            <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
             <h1>HVY Galaxy</h1>
           </div>
           <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
@@ -103,6 +112,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderNewDocumentDialog(state)}
       ${renderAboutDialog(state)}
       ${renderAiSettingsDialog(state)}
+      ${renderMcpSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
       ${renderWorkspaceSearchDialog(state.workspaceSearch, state.workspaces)}
@@ -131,6 +141,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         }
         if (backdrop.querySelector('.color-theme-dialog')) {
           handlers.closeColorTheme();
+          return;
+        }
+        const mcpSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="mcp-settings"]');
+        if (mcpSettingsForm) {
+          handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
           return;
         }
         if (backdrop.querySelector('.workspace-search-palette')) {
@@ -184,6 +199,15 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
       handlers.cancelAiSettings(form ? readAiSettingsForm(new FormData(form)) : undefined);
     }
+    if (action === 'mcp-settings') handlers.openMcpSettings();
+    if (action === 'cancel-mcp-settings') {
+      const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
+      handlers.cancelMcpSettings(form ? readMcpSettingsForm(new FormData(form)) : undefined);
+    }
+    if (action === 'start-mcp-server') handlers.startMcpServer();
+    if (action === 'stop-mcp-server') handlers.stopMcpServer();
+    if (action === 'restart-mcp-server') handlers.restartMcpServer();
+    if (action === 'copy-mcp-config') handlers.copyMcpConnectionConfig();
     if (action === 'cancel-color-theme') handlers.closeColorTheme();
     if (action === 'theme-add-color') handlers.addColorThemeColor();
     if (action === 'theme-apply-palette') handlers.applyColorThemePalette(target.dataset.paletteId ?? null);
@@ -276,6 +300,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const data = new FormData(form);
       handlers.saveAiSettings(readAiSettingsForm(data));
     }
+    if (form.dataset.form === 'mcp-settings') {
+      const data = new FormData(form);
+      handlers.saveMcpSettings(readMcpSettingsForm(data));
+    }
     if (form.dataset.form === 'workspace-search') {
       handlers.submitWorkspaceSearch();
     }
@@ -291,6 +319,13 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (root.querySelector('.color-theme-dialog')) {
       event.preventDefault();
       handlers.closeColorTheme();
+      return;
+    }
+    const mcpSettingsForm = target?.closest<HTMLFormElement>('form[data-form="mcp-settings"]')
+      ?? root.querySelector<HTMLFormElement>('form[data-form="mcp-settings"]');
+    if (mcpSettingsForm) {
+      event.preventDefault();
+      handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
       return;
     }
     if (root.querySelector('.workspace-search-palette')) {
@@ -831,6 +866,73 @@ function renderAiSettingsDialog(state: AppState): string {
     </div>`;
 }
 
+function renderMcpSettingsDialog(state: AppState): string {
+  if (!state.mcpSettingsDialogOpen) {
+    return '';
+  }
+  const settings = state.mcpSettingsDraft ?? state.mcpSettings;
+  const status = state.mcpServerStatus;
+  const connectionConfig = status.url ? formatMcpConnectionConfig(status.url) : '';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
+        <h2>MCP Server</h2>
+        <p class="dialog-note">Let local AI agents search workspaces and edit HVY files through the low-context HVY CLI surface.</p>
+        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <div class="mcp-status-card" data-state="${status.running ? 'running' : 'stopped'}">
+          <div>
+            <strong>${status.running ? 'Running' : 'Stopped'}</strong>
+            <span>${escapeHtml(status.message)}</span>
+            ${status.url ? `<code>${escapeHtml(status.url)}</code>` : ''}
+            ${status.lastError ? `<small>${escapeHtml(status.lastError)}</small>` : ''}
+          </div>
+          <div class="mcp-status-actions">
+            <button type="button" data-action="start-mcp-server" ${status.running || state.busy ? 'disabled' : ''}>Start</button>
+            <button type="button" data-action="stop-mcp-server" ${!status.running || state.busy ? 'disabled' : ''}>Stop</button>
+            <button type="button" data-action="restart-mcp-server" ${state.busy ? 'disabled' : ''}>Restart</button>
+          </div>
+        </div>
+        <label class="checkbox-row">
+          <input name="enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>
+          <span>Enable MCP server controls</span>
+        </label>
+        <label class="checkbox-row">
+          <input name="startAutomatically" type="checkbox" ${settings.startAutomatically ? 'checked' : ''}>
+          <span>Start automatically with HVY Galaxy</span>
+        </label>
+        <div class="mcp-settings-grid">
+          <label>
+            <span>Port</span>
+            <input name="port" type="number" min="1" max="65535" step="1" value="${settings.port ? escapeAttr(String(settings.port)) : ''}" placeholder="Auto">
+          </label>
+          <label>
+            <span>Workspace access</span>
+            <select name="workspaceAccess">
+              <option value="openWorkspaces" ${settings.workspaceAccess === 'openWorkspaces' ? 'selected' : ''}>Open workspaces only</option>
+              <option value="recentWorkspaces" ${settings.workspaceAccess === 'recentWorkspaces' ? 'selected' : ''}>Open and recent workspaces</option>
+            </select>
+          </label>
+          <label>
+            <span>Write access</span>
+            <select name="writeAccess">
+              <option value="searchOnly" ${settings.writeAccess === 'searchOnly' ? 'selected' : ''}>Search only</option>
+              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>HVY CLI edits</option>
+              <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Create, import, and save</option>
+            </select>
+          </label>
+        </div>
+        ${connectionConfig
+          ? `<div class="mcp-config-preview"><span>Connection config</span><pre>${escapeHtml(connectionConfig)}</pre></div>`
+          : '<div class="empty-panel compact">Start the MCP server to generate connection config.</div>'}
+        <div class="dialog-actions">
+          <button type="button" data-action="copy-mcp-config" ${status.url ? '' : 'disabled'}>Copy Config</button>
+          <button type="button" data-action="cancel-mcp-settings">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+        </div>
+      </form>
+    </div>`;
+}
+
 function renderColorThemeDialog(state: AppState): string {
   if (!state.colorThemeDialogOpen) {
     return '';
@@ -971,6 +1073,52 @@ function renderRecoveryDialog(state: AppState): string {
         </div>
       </section>
     </div>`;
+}
+
+function readMcpSettingsForm(data: FormData): McpSettings {
+  const parsed = parseMcpSettings(String(data.get('settingsJson') ?? ''));
+  const portValue = Number(data.get('port') ?? '');
+  const workspaceAccess = data.get('workspaceAccess');
+  const writeAccess = data.get('writeAccess');
+  return {
+    ...(parsed ?? {
+      enabled: false,
+      startAutomatically: false,
+      port: null,
+      workspaceAccess: 'openWorkspaces',
+      writeAccess: 'hvyCliEdits',
+    }),
+    enabled: data.get('enabled') === 'on',
+    startAutomatically: data.get('startAutomatically') === 'on',
+    port: Number.isInteger(portValue) && portValue > 0 && portValue <= 65535 ? portValue : null,
+    workspaceAccess: isMcpWorkspaceAccess(workspaceAccess) ? workspaceAccess : 'openWorkspaces',
+    writeAccess: isMcpWriteAccess(writeAccess) ? writeAccess : 'hvyCliEdits',
+  };
+}
+
+function parseMcpSettings(value: string): McpSettings | null {
+  try {
+    const parsed = JSON.parse(value) as McpSettings;
+    return typeof parsed === 'object' && typeof parsed.enabled === 'boolean' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isMcpWorkspaceAccess(value: FormDataEntryValue | null): value is McpSettings['workspaceAccess'] {
+  return value === 'openWorkspaces' || value === 'recentWorkspaces';
+}
+
+function isMcpWriteAccess(value: FormDataEntryValue | null): value is McpSettings['writeAccess'] {
+  return value === 'searchOnly' || value === 'hvyCliEdits' || value === 'createImportSave';
+}
+
+function formatMcpConnectionConfig(url: string): string {
+  return JSON.stringify({
+    mcpServers: {
+      'hvy-workspace': { url },
+    },
+  }, null, 2);
 }
 
 function renderActionConfigField(action: AiActionKey, label: string, settings: AiSettings): string {

@@ -11,6 +11,8 @@ import {
   isTauriRuntime,
   loadAiSettings,
   loadDefaultGuide,
+  loadMcpServerStatus,
+  loadMcpSettings,
   loadWorkspace,
   listDocumentBackups,
   loadRecentState,
@@ -21,10 +23,14 @@ import {
   renameDocumentFile,
   revealDocumentFile,
   restoreDocumentBackup,
+  saveMcpSettings,
   saveAiSettings,
   saveDocumentAsDialog,
   saveDocumentFile,
+  startMcpServer,
+  stopMcpServer,
   type DocumentFile,
+  type McpSettings,
   type WorkspaceFileNode,
   type WorkspaceTreeNode,
 } from './backend';
@@ -240,6 +246,43 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  openMcpSettings: () => {
+    closeUiBeforeMcpSettings();
+    state.mcpSettingsDraft = cloneMcpSettings(state.mcpSettings);
+    state.mcpSettingsDialogInitialJson = JSON.stringify(state.mcpSettingsDraft);
+    state.mcpSettingsDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  saveMcpSettings: (settings) => void runBusy('Saving MCP settings...', async () => {
+    state.mcpSettings = await saveMcpSettings(settings);
+    state.mcpSettingsDialogOpen = false;
+    state.mcpSettingsDraft = null;
+    state.mcpSettingsDialogInitialJson = null;
+    state.status = 'Saved MCP settings';
+  }),
+  cancelMcpSettings: (settings) => {
+    if (!confirmDiscardMcpSettings(settings)) return;
+    state.mcpSettingsDialogOpen = false;
+    state.mcpSettingsDraft = null;
+    state.mcpSettingsDialogInitialJson = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  startMcpServer: () => void runBusy('Starting MCP server...', async () => {
+    state.mcpServerStatus = await startMcpServer();
+    state.status = state.mcpServerStatus.message;
+  }),
+  stopMcpServer: () => void runBusy('Stopping MCP server...', async () => {
+    state.mcpServerStatus = await stopMcpServer();
+    state.status = state.mcpServerStatus.message;
+  }),
+  restartMcpServer: () => void runBusy('Restarting MCP server...', async () => {
+    await stopMcpServer();
+    state.mcpServerStatus = await startMcpServer();
+    state.status = state.mcpServerStatus.message;
+  }),
+  copyMcpConnectionConfig: () => void copyMcpConnectionConfig(),
   openColorTheme: () => {
     closeUiBeforeColorTheme();
     state.colorThemeDialogOpen = true;
@@ -438,6 +481,8 @@ async function boot(): Promise<void> {
   try {
     await refreshRecents();
     state.aiSettings = await loadAiSettings();
+    state.mcpSettings = await loadMcpSettings();
+    state.mcpServerStatus = await loadMcpServerStatus();
     state.colorTheme = loadColorThemeSettings();
     applyColorTheme(state.colorTheme, mountRoot);
     installAiChatClient(state.aiSettings);
@@ -452,6 +497,11 @@ async function boot(): Promise<void> {
       if (event === 'open-guide') void openDefaultGuide({ force: true });
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
+      if (event === 'mcp-settings') handlers.openMcpSettings();
+      if (event === 'mcp-start') handlers.startMcpServer();
+      if (event === 'mcp-stop') handlers.stopMcpServer();
+      if (event === 'mcp-restart') handlers.restartMcpServer();
+      if (event === 'mcp-copy-config') handlers.copyMcpConnectionConfig();
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
@@ -963,6 +1013,9 @@ function closeUiBeforeAiSettings(): void {
   state.newDocumentWorkspacePath = null;
   state.colorThemeDialogOpen = false;
   state.aboutDialogOpen = false;
+  state.mcpSettingsDialogOpen = false;
+  state.mcpSettingsDraft = null;
+  state.mcpSettingsDialogInitialJson = null;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -975,6 +1028,9 @@ function closeUiBeforeAbout(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.mcpSettingsDialogOpen = false;
+  state.mcpSettingsDraft = null;
+  state.mcpSettingsDialogInitialJson = null;
   state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
@@ -989,6 +1045,23 @@ function closeUiBeforeColorTheme(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.mcpSettingsDialogOpen = false;
+  state.mcpSettingsDraft = null;
+  state.mcpSettingsDialogInitialJson = null;
+  state.recoveryDialogOpen = false;
+  state.recoveryBackups = [];
+  state.openWorkspaceActionsPath = null;
+  closeMountedTransientUi();
+}
+
+function closeUiBeforeMcpSettings(): void {
+  state.newWorkspaceDialogOpen = false;
+  state.newDocumentWorkspacePath = null;
+  state.aboutDialogOpen = false;
+  state.aiSettingsDialogOpen = false;
+  state.aiSettingsDraft = null;
+  state.aiSettingsDialogInitialJson = null;
+  state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -1002,6 +1075,9 @@ function closeUiBeforeWorkspaceSearch(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.mcpSettingsDialogOpen = false;
+  state.mcpSettingsDraft = null;
+  state.mcpSettingsDialogInitialJson = null;
   state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
@@ -1065,12 +1141,40 @@ function cloneAiSettings(settings: typeof state.aiSettings): typeof state.aiSett
   return JSON.parse(JSON.stringify(settings)) as typeof state.aiSettings;
 }
 
+function cloneMcpSettings(settings: McpSettings): McpSettings {
+  return JSON.parse(JSON.stringify(settings)) as McpSettings;
+}
+
 function confirmDiscardAiSettings(settings: typeof state.aiSettings | undefined): boolean {
   const initial = state.aiSettingsDialogInitialJson;
   if (!initial) return true;
   const current = JSON.stringify(canonicalAiSettings(settings ?? state.aiSettingsDraft ?? state.aiSettings));
   if (current === initial) return true;
   return window.confirm('Discard changes to AI settings?');
+}
+
+function confirmDiscardMcpSettings(settings: McpSettings | undefined): boolean {
+  const initial = state.mcpSettingsDialogInitialJson;
+  if (!initial) return true;
+  const current = JSON.stringify(settings ?? state.mcpSettingsDraft ?? state.mcpSettings);
+  if (current === initial) return true;
+  return window.confirm('Discard changes to MCP server settings?');
+}
+
+async function copyMcpConnectionConfig(): Promise<void> {
+  if (!state.mcpServerStatus.url) {
+    state.status = 'Start the MCP server before copying config';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  const config = JSON.stringify({
+    mcpServers: {
+      'hvy-workspace': { url: state.mcpServerStatus.url },
+    },
+  }, null, 2);
+  await navigator.clipboard.writeText(config);
+  state.status = 'Copied MCP connection config';
+  rerender({ preserveMountedDocument: true });
 }
 
 function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.aiSettings {

@@ -16,6 +16,7 @@ const WORKSPACE_MANIFEST: &str = ".hvyworkspace.json";
 const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const AI_SETTINGS: &str = "ai-settings.json";
+const MCP_SETTINGS: &str = "mcp-settings.json";
 const RECENT_LIMIT: usize = 12;
 const BACKUP_RETENTION_HOURS: i64 = 2;
 
@@ -132,6 +133,61 @@ struct DocumentBackupSnapshot {
     extension: String,
     created_at: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct McpSettings {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    start_automatically: bool,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default = "default_mcp_workspace_access")]
+    workspace_access: String,
+    #[serde(default = "default_mcp_write_access")]
+    write_access: String,
+}
+
+impl Default for McpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start_automatically: false,
+            port: None,
+            workspace_access: default_mcp_workspace_access(),
+            write_access: default_mcp_write_access(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct McpServerStatus {
+    running: bool,
+    url: Option<String>,
+    message: String,
+    last_error: Option<String>,
+}
+
+impl Default for McpServerStatus {
+    fn default() -> Self {
+        Self {
+            running: false,
+            url: None,
+            message: "MCP server is stopped.".into(),
+            last_error: None,
+        }
+    }
+}
+
+fn default_mcp_workspace_access() -> String {
+    "openWorkspaces".into()
+}
+
+fn default_mcp_write_access() -> String {
+    "hvyCliEdits".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -304,6 +360,36 @@ fn save_ai_settings(app: AppHandle, settings: AiSettings) -> AppResult<AiSetting
     let settings = normalize_ai_settings(settings)?;
     write_json_atomically(&ai_settings_path(&app)?, &settings)?;
     Ok(settings)
+}
+
+#[tauri::command]
+fn load_mcp_settings(app: AppHandle) -> AppResult<McpSettings> {
+    read_mcp_settings(&mcp_settings_path(&app)?)
+}
+
+#[tauri::command]
+fn save_mcp_settings(app: AppHandle, settings: McpSettings) -> AppResult<McpSettings> {
+    let settings = normalize_mcp_settings(settings)?;
+    write_json_atomically(&mcp_settings_path(&app)?, &settings)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+fn load_mcp_server_status() -> AppResult<McpServerStatus> {
+    Ok(McpServerStatus::default())
+}
+
+#[tauri::command]
+fn start_mcp_server() -> AppResult<McpServerStatus> {
+    Ok(McpServerStatus {
+        message: "MCP server controls are ready. The protocol listener is not implemented yet.".into(),
+        ..McpServerStatus::default()
+    })
+}
+
+#[tauri::command]
+fn stop_mcp_server() -> AppResult<McpServerStatus> {
+    Ok(McpServerStatus::default())
 }
 
 #[tauri::command]
@@ -639,6 +725,11 @@ pub fn run() {
                         | "open-guide"
                         | "about"
                         | "ai-settings"
+                        | "mcp-settings"
+                        | "mcp-start"
+                        | "mcp-stop"
+                        | "mcp-restart"
+                        | "mcp-copy-config"
                         | "colors"
                         | "save"
                         | "save-as"
@@ -656,6 +747,11 @@ pub fn run() {
             load_recent_state,
             load_ai_settings,
             save_ai_settings,
+            load_mcp_settings,
+            save_mcp_settings,
+            load_mcp_server_status,
+            start_mcp_server,
+            stop_mcp_server,
             load_default_guide,
             open_workspace_dialog,
             choose_workspace_folder,
@@ -728,6 +824,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Recover Backup...").id("recover-backup").build(app)?)
         .build()?;
+    let mcp = SubmenuBuilder::new(app, "MCP Server")
+        .item(&MenuItemBuilder::new("Start MCP Server").id("mcp-start").build(app)?)
+        .item(&MenuItemBuilder::new("Stop MCP Server").id("mcp-stop").build(app)?)
+        .item(&MenuItemBuilder::new("Restart MCP Server").id("mcp-restart").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Server Settings...").id("mcp-settings").build(app)?)
+        .item(&MenuItemBuilder::new("Copy Connection Config").id("mcp-copy-config").build(app)?)
+        .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
         .item(&PredefinedMenuItem::redo(app, Some("Redo"))?)
@@ -749,7 +853,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         )
         .build()?;
 
-    MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&help).build()
+    MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&mcp).item(&help).build()
 }
 
 fn build_recent_files_menu(
@@ -1198,6 +1302,32 @@ fn read_ai_settings(path: &Path) -> AppResult<AiSettings> {
     }
 }
 
+fn read_mcp_settings(path: &Path) -> AppResult<McpSettings> {
+    if !path.exists() {
+        return Ok(McpSettings::default());
+    }
+    let settings: McpSettings = serde_json::from_slice(&fs::read(path)?)?;
+    normalize_mcp_settings(settings)
+}
+
+fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
+    let workspace_access = match settings.workspace_access.trim() {
+        "openWorkspaces" | "recentWorkspaces" => settings.workspace_access.trim().to_string(),
+        _ => default_mcp_workspace_access(),
+    };
+    let write_access = match settings.write_access.trim() {
+        "searchOnly" | "hvyCliEdits" | "createImportSave" => settings.write_access.trim().to_string(),
+        _ => default_mcp_write_access(),
+    };
+    Ok(McpSettings {
+        enabled: settings.enabled,
+        start_automatically: settings.start_automatically,
+        port: settings.port.filter(|port| *port > 0),
+        workspace_access,
+        write_access,
+    })
+}
+
 fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
     let mut providers = Vec::new();
     for provider in settings.providers {
@@ -1341,6 +1471,15 @@ fn ai_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
         .map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     Ok(directory.join(AI_SETTINGS))
+}
+
+fn mcp_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(MCP_SETTINGS))
 }
 
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> AppResult<()> {
@@ -1549,5 +1688,36 @@ mod tests {
         assert_eq!(settings.actions.semantic_filter.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.model, "semantic");
         assert_eq!(settings.semantic_filter_batch_size, 1);
+    }
+
+    #[test]
+    fn normalizes_mcp_settings() {
+        let settings = normalize_mcp_settings(McpSettings {
+            enabled: true,
+            start_automatically: true,
+            port: Some(0),
+            workspace_access: "everything".into(),
+            write_access: "all".into(),
+        })
+        .unwrap();
+
+        assert!(settings.enabled);
+        assert!(settings.start_automatically);
+        assert_eq!(settings.port, None);
+        assert_eq!(settings.workspace_access, "openWorkspaces");
+        assert_eq!(settings.write_access, "hvyCliEdits");
+
+        let explicit = normalize_mcp_settings(McpSettings {
+            enabled: false,
+            start_automatically: false,
+            port: Some(47391),
+            workspace_access: "recentWorkspaces".into(),
+            write_access: "createImportSave".into(),
+        })
+        .unwrap();
+
+        assert_eq!(explicit.port, Some(47391));
+        assert_eq!(explicit.workspace_access, "recentWorkspaces");
+        assert_eq!(explicit.write_access, "createImportSave");
     }
 }

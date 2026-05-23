@@ -1,4 +1,4 @@
-import { defaultAiSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultMcpServerStatus, defaultMcpSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type McpServerStatus, type McpSettings, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvyDocumentSearchResult } from '../../heavy-file-format/src/search/types';
@@ -20,6 +20,8 @@ export interface AppState {
   selectedFilePath: string | null;
   recent: RecentState;
   aiSettings: AiSettings;
+  mcpSettings: McpSettings;
+  mcpServerStatus: McpServerStatus;
   colorTheme: ColorThemeSettings;
   document: OpenDocument | null;
   status: string;
@@ -32,6 +34,9 @@ export interface AppState {
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
+  mcpSettingsDialogOpen: boolean;
+  mcpSettingsDraft: McpSettings | null;
+  mcpSettingsDialogInitialJson: string | null;
   colorThemeDialogOpen: boolean;
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
@@ -57,6 +62,8 @@ export const state: AppState = {
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
   aiSettings: defaultAiSettings(),
+  mcpSettings: defaultMcpSettings(),
+  mcpServerStatus: defaultMcpServerStatus(),
   colorTheme: defaultColorThemeSettings(),
   document: null,
   status: 'Ready',
@@ -69,6 +76,9 @@ export const state: AppState = {
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
+  mcpSettingsDialogOpen: false,
+  mcpSettingsDraft: null,
+  mcpSettingsDialogInitialJson: null,
   colorThemeDialogOpen: false,
   aboutDialogOpen: false,
   recoveryDialogOpen: false,

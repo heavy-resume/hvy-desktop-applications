@@ -90,6 +90,24 @@ export interface DocumentBackup {
   createdAt: string;
 }
 
+export type McpWorkspaceAccess = 'openWorkspaces' | 'recentWorkspaces';
+export type McpWriteAccess = 'searchOnly' | 'hvyCliEdits' | 'createImportSave';
+
+export interface McpSettings {
+  enabled: boolean;
+  startAutomatically: boolean;
+  port: number | null;
+  workspaceAccess: McpWorkspaceAccess;
+  writeAccess: McpWriteAccess;
+}
+
+export interface McpServerStatus {
+  running: boolean;
+  url: string | null;
+  message: string;
+  lastError: string | null;
+}
+
 export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
 
 export interface AiProviderConfig {
@@ -142,6 +160,32 @@ export function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
   return invokeDesktop('save_ai_settings', { settings });
 }
 
+export function loadMcpSettings(): Promise<McpSettings> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(defaultMcpSettings());
+  }
+  return invokeDesktop('load_mcp_settings');
+}
+
+export function saveMcpSettings(settings: McpSettings): Promise<McpSettings> {
+  return invokeDesktop('save_mcp_settings', { settings });
+}
+
+export function loadMcpServerStatus(): Promise<McpServerStatus> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(defaultMcpServerStatus());
+  }
+  return invokeDesktop('load_mcp_server_status');
+}
+
+export function startMcpServer(): Promise<McpServerStatus> {
+  return invokeDesktop('start_mcp_server');
+}
+
+export function stopMcpServer(): Promise<McpServerStatus> {
+  return invokeDesktop('stop_mcp_server');
+}
+
 export function defaultAiSettings(): AiSettings {
   const provider = defaultAiProviderConfig();
   return {
@@ -149,6 +193,25 @@ export function defaultAiSettings(): AiSettings {
     providers: [provider],
     actions: defaultAiActionSettings(),
     semanticFilterBatchSize: 1,
+  };
+}
+
+export function defaultMcpSettings(): McpSettings {
+  return {
+    enabled: false,
+    startAutomatically: false,
+    port: null,
+    workspaceAccess: 'openWorkspaces',
+    writeAccess: 'hvyCliEdits',
+  };
+}
+
+export function defaultMcpServerStatus(): McpServerStatus {
+  return {
+    running: false,
+    url: null,
+    message: 'MCP server is stopped.',
+    lastError: null,
   };
 }
 
