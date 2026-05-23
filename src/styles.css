@@ -1570,6 +1570,24 @@ button:disabled {
   padding: 0 !important;
 }
 
+.hvy-document-host .chat-panel-close {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  min-width: 2rem;
+  max-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  max-height: 2rem;
+  border-radius: 999px;
+  padding: 0;
+}
+
+.hvy-document-host .chat-panel-close .hvy-ui-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
