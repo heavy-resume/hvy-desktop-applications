@@ -1,7 +1,7 @@
 import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
-import type { HvyDocumentSearchMode, HvyDocumentSearchResult } from '../../heavy-file-format/src/search/types';
+import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface OpenDocument {
   path: string;
@@ -11,6 +11,7 @@ export interface OpenDocument {
   dirty: boolean;
   readOnly: boolean;
   isNew: boolean;
+  metaOpen: boolean;
   mounted: MountedDocument | null;
 }
 
@@ -43,19 +44,25 @@ export interface AppState {
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
-  workspaceSearch: WorkspaceSearchState;
+  workspaceFilter: WorkspaceFilterState;
+  workspaceFilters: Record<string, WorkspaceFilterConfig>;
 }
 
-export interface WorkspaceSearchState {
+export interface WorkspaceFilterConfig {
+  query: string;
+  mode: HvyDocumentSearchMode;
+  filterMode: SearchFilterMode;
+}
+
+export interface WorkspaceFilterState {
   open: boolean;
   workspacePath: string | null;
   queryDraft: string;
   submittedQuery: string;
   mode: HvyDocumentSearchMode;
+  filterMode: SearchFilterMode;
   isLoading: boolean;
   error: string | null;
-  results: HvyDocumentSearchResult[];
-  activeResultId: string | null;
 }
 
 export const state: AppState = {
@@ -87,17 +94,17 @@ export const state: AppState = {
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
   recoveryBackups: [],
-  workspaceSearch: {
+  workspaceFilter: {
     open: false,
     workspacePath: null,
     queryDraft: '',
     submittedQuery: '',
     mode: 'keyword',
+    filterMode: 'deprioritize',
     isLoading: false,
     error: null,
-    results: [],
-    activeResultId: null,
   },
+  workspaceFilters: {},
 };
 
 export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {

@@ -64,6 +64,17 @@ export interface SaveDocumentAsRequest {
   bytes: number[];
 }
 
+export interface ThemeFile {
+  path: string;
+  name: string;
+  bytes: number[];
+}
+
+export interface SaveThemeAsRequest {
+  suggestedName: string;
+  bytes: number[];
+}
+
 export interface CreateDocumentRequest {
   workspacePath: string;
   relativePath: string;
@@ -382,6 +393,14 @@ export function saveDocumentFile(request: SaveDocumentRequest): Promise<void> {
 
 export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFile | null> {
   return invokeDesktop('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+}
+
+export function openColorThemeDialog(): Promise<ThemeFile | null> {
+  return invokeDesktop('open_color_theme_dialog');
+}
+
+export function saveColorThemeAsDialog(request: SaveThemeAsRequest): Promise<ThemeFile | null> {
+  return invokeDesktop('save_color_theme_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
 }
 
 export function createDocumentFile(request: CreateDocumentRequest): Promise<DocumentFile> {

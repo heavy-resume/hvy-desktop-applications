@@ -3,12 +3,18 @@ import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/s
 import type {
   HvyDocumentSearchRequest,
   HvyDocumentSearchResponse,
+  HvyDocumentSearchSnapshot,
+  HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
 type HvyEmbedMount = ReturnType<HvyEmbedModule['mountHvy']>;
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty'>;
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty'> & {
+  openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
+  setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
+  getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
+};
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 type HvyDocumentChangeCallback = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['onDocumentChange']>;
 
@@ -20,6 +26,7 @@ export interface MountedDocument {
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
   storageKey?: string;
+  searchSnapshot?: HvySearchSnapshotInput | null;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -56,6 +63,7 @@ export async function mountHvyDocument(
     plugins: builtInPlugins,
     semanticFilterProvider: chatSemanticFilterProvider,
     storageKey: mode === 'editor' || mode === 'advanced' ? null : options.storageKey,
+    searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
   return { mount, document };
@@ -67,6 +75,15 @@ export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Pro
     semanticFilterProvider: chatSemanticFilterProvider,
     ...request,
   });
+}
+
+export async function createHvyDocumentSearchSnapshot(
+  response: HvyDocumentSearchResponse,
+  documentId: string,
+  options: { filterEnabled?: boolean; filterMode?: HvyDocumentSearchSnapshot['filterMode'] } = {},
+): Promise<HvyDocumentSearchSnapshot> {
+  const { createDocumentSearchSnapshot } = await loadHvyEmbed();
+  return createDocumentSearchSnapshot(response, documentId, options);
 }
 
 async function mountRawHvyDocument(
@@ -135,4 +152,12 @@ export function markMountedDocumentSaved(mounted: MountedDocument): void {
 
 export function isMountedDocumentDirty(mounted: MountedDocument): boolean {
   return mounted.mount.isDirty();
+}
+
+export function openMountedDocumentMeta(mounted: MountedDocument): boolean {
+  return mounted.mount.openDocumentMeta?.() ?? false;
+}
+
+export function setMountedSearchSnapshot(mounted: MountedDocument, snapshot: HvySearchSnapshotInput | null): void {
+  mounted.mount.setSearchSnapshot?.(snapshot);
 }

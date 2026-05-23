@@ -7,6 +7,22 @@ import ufoCss from '../../heavy-file-format/src/palettes/ufo-palette.css?inline'
 
 export interface ColorThemeSettings {
   colors: Record<string, string>;
+  themeName: string;
+  savedThemes: SavedColorTheme[];
+  themeUses: Record<string, number>;
+}
+
+export interface SavedColorTheme {
+  id: string;
+  name: string;
+  colors: Record<string, string>;
+  lastUsedAt: number;
+}
+
+export interface ColorThemeFile {
+  schemaVersion: 1;
+  name: string;
+  colors: Record<string, string>;
 }
 
 export interface HvyPalette {
@@ -17,6 +33,7 @@ export interface HvyPalette {
 }
 
 export const COLOR_THEME_STORAGE_KEY = 'hvy-galaxy-color-theme-v1';
+export const COLOR_THEME_FILE_EXTENSION = '.hvytheme';
 
 export const THEME_COLOR_NAMES: readonly string[] = [
   '--hvy-bg',
@@ -189,19 +206,31 @@ export const HVY_PALETTES: readonly HvyPalette[] = [
 ];
 
 export function defaultColorThemeSettings(): ColorThemeSettings {
-  return { colors: {} };
+  return { colors: {}, themeName: '', savedThemes: [], themeUses: {} };
 }
 
 export function loadColorThemeSettings(): ColorThemeSettings {
   try {
     const parsed = JSON.parse(localStorage.getItem(COLOR_THEME_STORAGE_KEY) ?? '{}') as Partial<ColorThemeSettings>;
-    if (!parsed.colors || typeof parsed.colors !== 'object' || Array.isArray(parsed.colors)) {
-      return defaultColorThemeSettings();
-    }
+    const savedThemes = Array.isArray(parsed.savedThemes)
+      ? parsed.savedThemes
+        .map((theme): SavedColorTheme | null => {
+          if (!theme || typeof theme !== 'object') return null;
+          const id = typeof theme.id === 'string' && theme.id.trim() ? theme.id.trim() : createSavedThemeId();
+          const name = typeof theme.name === 'string' && theme.name.trim() ? theme.name.trim() : 'Untitled Theme';
+          const lastUsedAt = typeof theme.lastUsedAt === 'number' && Number.isFinite(theme.lastUsedAt) ? theme.lastUsedAt : 0;
+          return { id, name, colors: sanitizeThemeColors(theme.colors), lastUsedAt };
+        })
+        .filter((theme): theme is SavedColorTheme => theme !== null)
+      : [];
+    const themeUses = parsed.themeUses && typeof parsed.themeUses === 'object' && !Array.isArray(parsed.themeUses)
+      ? Object.fromEntries(Object.entries(parsed.themeUses).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])))
+      : {};
     return {
-      colors: Object.fromEntries(
-        Object.entries(parsed.colors).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && isCssVariableName(entry[0]))
-      ),
+      colors: sanitizeThemeColors(parsed.colors),
+      themeName: typeof parsed.themeName === 'string' ? parsed.themeName : '',
+      savedThemes,
+      themeUses,
     };
   } catch {
     return defaultColorThemeSettings();
@@ -209,7 +238,17 @@ export function loadColorThemeSettings(): ColorThemeSettings {
 }
 
 export function saveColorThemeSettings(settings: ColorThemeSettings): void {
-  localStorage.setItem(COLOR_THEME_STORAGE_KEY, JSON.stringify(settings));
+  localStorage.setItem(COLOR_THEME_STORAGE_KEY, JSON.stringify({
+    colors: sanitizeThemeColors(settings.colors),
+    themeName: settings.themeName.trim(),
+    savedThemes: settings.savedThemes.map((theme) => ({
+      id: theme.id,
+      name: theme.name.trim() || 'Untitled Theme',
+      colors: sanitizeThemeColors(theme.colors),
+      lastUsedAt: theme.lastUsedAt,
+    })),
+    themeUses: settings.themeUses,
+  }));
 }
 
 export function getPaletteById(id: string): HvyPalette | null {
@@ -218,18 +257,34 @@ export function getPaletteById(id: string): HvyPalette | null {
 
 export function getMatchedPaletteId(colors: Record<string, string>): string | null {
   for (const palette of HVY_PALETTES) {
-    if (Object.entries(palette.colors).every(([name, value]) => colors[name]?.trim() === value.trim())) {
+    if (themeColorsEqual(colors, palette.colors)) {
       return palette.id;
     }
   }
   return null;
 }
 
+export function getMatchedSavedThemeId(colors: Record<string, string>, savedThemes: readonly SavedColorTheme[]): string | null {
+  for (const theme of savedThemes) {
+    if (themeColorsEqual(colors, theme.colors)) {
+      return theme.id;
+    }
+  }
+  return null;
+}
+
+export function createSavedThemeId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `theme-${crypto.randomUUID()}`;
+  }
+  return `theme-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function applyColorTheme(settings: ColorThemeSettings, root: HTMLElement | null = null): void {
   const targets = [document.documentElement, root].filter((target): target is HTMLElement => target !== null);
   for (const target of targets) {
     clearColorTheme(target);
-    for (const [name, value] of Object.entries(settings.colors)) {
+    for (const [name, value] of Object.entries(sanitizeThemeColors(settings.colors))) {
       if (isCssVariableName(name) && value.trim()) {
         target.style.setProperty(name, value);
       }
@@ -268,6 +323,35 @@ export function colorValueToPickerHex(value: string): string {
   return '#000000';
 }
 
+export function colorValueToAlpha(value: string): number {
+  const alpha = extractCssAlpha(value);
+  return alpha === null ? 1 : alpha;
+}
+
+export function mergeAlphaIntoCssColor(value: string, alpha: number): string {
+  const clampedAlpha = Math.max(0, Math.min(1, alpha));
+  const rgb = parseCssRgb(value) ?? parseHexRgb(colorValueToPickerHex(value));
+  if (!rgb) {
+    return value;
+  }
+  if (clampedAlpha >= 1) {
+    return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+  }
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${formatAlpha(clampedAlpha)})`;
+}
+
+export function mergePickerHexIntoCssColor(hex: string, currentValue: string): string {
+  const rgb = parseHexRgb(hex);
+  if (!rgb) {
+    return hex;
+  }
+  const alpha = extractCssAlpha(currentValue);
+  if (alpha === null) {
+    return hex;
+  }
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${formatAlpha(alpha)})`;
+}
+
 export function isCssVariableName(value: string): boolean {
   return /^--[a-zA-Z0-9_-]+$/.test(value);
 }
@@ -278,4 +362,86 @@ export function parsePaletteCss(css: string): Record<string, string> {
     colors[match[1]] = match[2].trim();
   }
   return colors;
+}
+
+export function createColorThemeFile(name: string, colors: Record<string, string>): ColorThemeFile {
+  return {
+    schemaVersion: 1,
+    name: name.trim() || 'Untitled Theme',
+    colors: sanitizeThemeColors(colors),
+  };
+}
+
+export function serializeColorThemeFile(theme: ColorThemeFile): string {
+  return `${JSON.stringify(createColorThemeFile(theme.name, theme.colors), null, 2)}\n`;
+}
+
+export function parseColorThemeFile(text: string): ColorThemeFile {
+  const parsed = JSON.parse(text) as Partial<ColorThemeFile>;
+  if (parsed.schemaVersion !== 1) {
+    throw new Error('Theme file version is not supported.');
+  }
+  if (typeof parsed.name !== 'string' || !parsed.name.trim()) {
+    throw new Error('Theme file is missing a name.');
+  }
+  const colors = sanitizeThemeColors(parsed.colors);
+  return createColorThemeFile(parsed.name, colors);
+}
+
+export function sanitizeThemeColors(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && (THEME_COLOR_NAMES as readonly string[]).includes(entry[0]) && entry[1].trim().length > 0)
+      .map(([name, color]) => [name, color.trim()])
+  );
+}
+
+export function themeColorsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftColors = sanitizeThemeColors(left);
+  const rightColors = sanitizeThemeColors(right);
+  const names = new Set([...Object.keys(leftColors), ...Object.keys(rightColors)]);
+  for (const name of names) {
+    if ((leftColors[name] ?? '').trim() !== (rightColors[name] ?? '').trim()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function extractCssAlpha(value: string): number | null {
+  const match = value.trim().match(/^rgba?\(\s*(?:\d{1,3})\s*[,\s]\s*(?:\d{1,3})\s*[,\s]\s*(?:\d{1,3})(?:\s*[,/]\s*([\d.]+)\s*)\)$/i);
+  if (!match?.[1]) {
+    return null;
+  }
+  const alpha = Number.parseFloat(match[1]);
+  return Number.isFinite(alpha) ? Math.max(0, Math.min(1, alpha)) : null;
+}
+
+function parseCssRgb(value: string): { r: number; g: number; b: number } | null {
+  const match = value.trim().match(/^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})(?:\s*[,/]\s*[\d.]+\s*)?\)$/i);
+  if (!match) {
+    return null;
+  }
+  const [r, g, b] = match.slice(1, 4).map((part) => Math.max(0, Math.min(255, Number.parseInt(part, 10))));
+  return { r, g, b };
+}
+
+function parseHexRgb(value: string): { r: number; g: number; b: number } | null {
+  const match = value.trim().match(/^#([0-9a-f]{6})$/i);
+  if (!match) {
+    return null;
+  }
+  const hex = match[1];
+  return {
+    r: Number.parseInt(hex.slice(0, 2), 16),
+    g: Number.parseInt(hex.slice(2, 4), 16),
+    b: Number.parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function formatAlpha(alpha: number): string {
+  return alpha.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }

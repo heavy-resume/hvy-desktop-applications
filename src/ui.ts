@@ -1,12 +1,12 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpClientInstallTarget, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
-import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PALETTES, THEME_COLOR_NAMES } from './colorTheme';
+import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
-import type { AppState, WorkspaceSearchState } from './state';
+import type { AppState, WorkspaceFilterState } from './state';
 import { hvyTemplates } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 import ufoLogoUrl from './assets/ufo-no-bg.svg';
-import type { HvyDocumentSearchMode, HvyDocumentSearchResult, SearchResultCategory } from '../../heavy-file-format/src/search/types';
+import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
   newWorkspace(): void;
@@ -19,12 +19,13 @@ export interface UiHandlers {
   createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
   addFilesToWorkspace(workspacePath: string): void;
-  openWorkspaceSearch(workspacePath?: string): void;
-  closeWorkspaceSearch(): void;
-  setWorkspaceSearchMode(mode: HvyDocumentSearchMode): void;
-  updateWorkspaceSearchQuery(query: string): void;
-  submitWorkspaceSearch(): void;
-  selectWorkspaceSearchResult(resultId: string): void;
+  openWorkspaceFilter(workspacePath: string): void;
+  closeWorkspaceFilter(): void;
+  setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
+  setWorkspaceFilterBehavior(mode: SearchFilterMode): void;
+  updateWorkspaceFilterQuery(query: string): void;
+  submitWorkspaceFilter(): void;
+  clearWorkspaceFilter(): void;
   openAbout(): void;
   closeAbout(): void;
   openAiSettings(): void;
@@ -46,11 +47,14 @@ export interface UiHandlers {
   copyMcpSetupValue(value: string, label: string): void;
   openColorTheme(): void;
   closeColorTheme(): void;
+  updateColorThemeName(name: string): void;
+  saveColorTheme(): void;
+  exportColorTheme(): void;
+  importColorTheme(): void;
+  selectColorTheme(id: string): void;
+  deleteColorTheme(id: string): void;
   updateColorTheme(name: string, value: string): void;
   resetColorTheme(name: string): void;
-  addColorThemeColor(): void;
-  removeColorThemeColor(name: string): void;
-  renameColorThemeColor(oldName: string, newName: string): void;
   applyColorThemePalette(id: string | null): void;
   restoreBackup(id: string): void;
   cancelRecovery(): void;
@@ -63,6 +67,7 @@ export interface UiHandlers {
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
   setMode(mode: HvyMode): void;
+  openDocumentMeta(): void;
   save(): void;
   saveAs(): void;
   createFile(): void;
@@ -91,7 +96,6 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         </div>
         <div class="sidebar-actions">
           <button type="button" data-action="open-file">Open File</button>
-          <button type="button" data-action="open-workspace-search" ${state.workspaces.length === 0 ? 'disabled' : ''}>Search Workspaces</button>
         </div>
         <section class="workspaces-section">
           <div class="sidebar-section-heading">
@@ -107,7 +111,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         </header>
         <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>
         <div class="document-stage">
-          ${state.document ? renderModeControls(state.document.mode, state.document.readOnly) : ''}
+          ${state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen) : ''}
           <div id="hvyMount" class="document-host${state.document ? ' hvy-vscode-has-mode-controls' : ''}">
             ${renderEmptyState(state)}
           </div>
@@ -120,7 +124,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderMcpSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
-      ${renderWorkspaceSearchDialog(state.workspaceSearch, state.workspaces)}
+      ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
 
   const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
@@ -153,8 +157,8 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
           handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
           return;
         }
-        if (backdrop.querySelector('.workspace-search-palette')) {
-          handlers.closeWorkspaceSearch();
+        if (backdrop.querySelector('.workspace-filter-dialog')) {
+          handlers.closeWorkspaceFilter();
           return;
         }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -183,10 +187,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
-    if (action === 'open-workspace-search') handlers.openWorkspaceSearch(target.dataset.workspacePath);
-    if (action === 'close-workspace-search') handlers.closeWorkspaceSearch();
-    if (action === 'set-workspace-search-mode' && isWorkspaceSearchMode(target.dataset.searchMode)) handlers.setWorkspaceSearchMode(target.dataset.searchMode);
-    if (action === 'select-workspace-search-result' && target.dataset.searchResultId) handlers.selectWorkspaceSearchResult(target.dataset.searchResultId);
+    if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
+    if (action === 'close-workspace-filter') handlers.closeWorkspaceFilter();
+    if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
+    if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
+    if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
@@ -274,16 +279,20 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       });
     }
     if (action === 'cancel-color-theme') handlers.closeColorTheme();
-    if (action === 'theme-add-color') handlers.addColorThemeColor();
+    if (action === 'theme-save') handlers.saveColorTheme();
+    if (action === 'theme-export') handlers.exportColorTheme();
+    if (action === 'theme-import') handlers.importColorTheme();
+    if (action === 'theme-select' && target.dataset.themeId) handlers.selectColorTheme(target.dataset.themeId);
+    if (action === 'theme-delete' && target.dataset.themeId) handlers.deleteColorTheme(target.dataset.themeId);
     if (action === 'theme-apply-palette') handlers.applyColorThemePalette(target.dataset.paletteId ?? null);
     if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
-    if (action === 'theme-remove-color' && target.dataset.colorName) handlers.removeColorThemeColor(target.dataset.colorName);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
+    if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
     if (action === 'create-file') handlers.createFile();
@@ -293,8 +302,8 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
     const field = target?.dataset.field;
     if (!target || !field || target.closest('#hvyMount')) return;
-    if (field === 'workspace-search-query') {
-      handlers.updateWorkspaceSearchQuery(target.value);
+    if (field === 'workspace-filter-query') {
+      handlers.updateWorkspaceFilterQuery(target.value);
       return;
     }
     if (field === 'mcp-port' || field === 'mcp-token') {
@@ -313,23 +322,34 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       });
       return;
     }
-    if (field !== 'theme-color-picker' && field !== 'theme-color-value') return;
+    if (field === 'theme-name') {
+      handlers.updateColorThemeName(target.value);
+      return;
+    }
+    if (field !== 'theme-color-picker' && field !== 'theme-color-value' && field !== 'theme-color-alpha') return;
     const name = target.dataset.colorName ?? '';
     if (!name) return;
     const row = target.closest<HTMLElement>('.theme-color-row');
     const valueInput = row?.querySelector<HTMLInputElement>('[data-field="theme-color-value"]');
     const pickerInput = row?.querySelector<HTMLInputElement>('[data-field="theme-color-picker"]');
-    if (field === 'theme-color-picker' && valueInput) valueInput.value = target.value;
-    if (field === 'theme-color-value' && pickerInput) pickerInput.value = colorValueToPickerHex(target.value);
-    row?.classList.toggle('theme-color-row--override', target.value.trim().length > 0);
-    handlers.updateColorTheme(name, target.value);
-  }, { signal });
-  root.addEventListener('change', (event) => {
-    const target = event.target instanceof HTMLInputElement ? event.target : null;
-    if (target?.dataset.field !== 'theme-color-name') return;
-    const oldName = target.dataset.colorName ?? '';
-    const newName = target.value.trim();
-    if (oldName && newName && oldName !== newName) handlers.renameColorThemeColor(oldName, newName);
+    let nextValue = target.value;
+    if (field === 'theme-color-picker') {
+      nextValue = mergePickerHexIntoCssColor(target.value, valueInput?.value ?? '');
+      if (valueInput) valueInput.value = nextValue;
+    }
+    if (field === 'theme-color-value' && pickerInput) {
+      pickerInput.value = colorValueToPickerHex(target.value);
+    }
+    if (field === 'theme-color-alpha') {
+      nextValue = mergeAlphaIntoCssColor(valueInput?.value ?? '', Number.parseFloat(target.value));
+      if (valueInput) valueInput.value = nextValue;
+      if (pickerInput) pickerInput.value = colorValueToPickerHex(nextValue);
+    }
+    syncThemeAlphaControl(row, nextValue);
+    const overridden = nextValue.trim().length > 0;
+    row?.classList.toggle('theme-color-row--override', overridden);
+    syncThemeOverrideAction(row, name, overridden);
+    handlers.updateColorTheme(name, nextValue);
   }, { signal });
   root.addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
@@ -377,8 +397,8 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const data = new FormData(form);
       handlers.saveMcpSettings(readMcpSettingsForm(data));
     }
-    if (form.dataset.form === 'workspace-search') {
-      handlers.submitWorkspaceSearch();
+    if (form.dataset.form === 'workspace-filter') {
+      handlers.submitWorkspaceFilter();
     }
   }, { signal });
   document.addEventListener('keydown', (event) => {
@@ -401,9 +421,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
       return;
     }
-    if (root.querySelector('.workspace-search-palette')) {
+    if (root.querySelector('.workspace-filter-dialog')) {
       event.preventDefault();
-      handlers.closeWorkspaceSearch();
+      handlers.closeWorkspaceFilter();
       return;
     }
     const form = target?.closest<HTMLFormElement>('form[data-form="ai-settings"]')
@@ -418,162 +438,93 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   });
 }
 
-function renderWorkspaceSearchDialog(search: WorkspaceSearchState, workspaces: Workspace[]): string {
-  if (!search.open) {
+function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
+  if (!filter.open) {
     return '';
   }
-  const count = search.results.length;
-  const scopedWorkspace = search.workspacePath ? workspaces.find((workspace) => workspace.path === search.workspacePath) ?? null : null;
-  const searchScope = scopedWorkspace ? scopedWorkspace.manifest.name : 'added workspaces';
-  const status = search.isLoading
-    ? search.mode === 'semantic' ? `Analyzing ${searchScope}...` : `Searching ${searchScope}...`
-    : search.error
-    ? search.error
-    : search.submittedQuery.trim().length === 0
-    ? 'Press Enter to search'
-    : `${count} result${count === 1 ? '' : 's'}`;
-  const isSemantic = search.mode === 'semantic';
+  const scopedWorkspace = filter.workspacePath ? workspaces.find((workspace) => workspace.path === filter.workspacePath) ?? null : null;
+  const workspaceName = scopedWorkspace?.manifest.name ?? 'workspace';
+  const activeFilter = filter.workspacePath ? activeFilters[filter.workspacePath] : null;
+  const applied = Boolean(
+    activeFilter
+      && activeFilter.query.trim() === filter.queryDraft.trim()
+      && activeFilter.mode === filter.mode
+      && activeFilter.filterMode === filter.filterMode
+  );
+  const isSemantic = filter.mode === 'semantic';
+  const status = filter.isLoading
+    ? isSemantic ? `Analyzing ${workspaceName}...` : `Filtering ${workspaceName}...`
+    : filter.error
+    ? filter.error
+    : '';
   return `
-    <section class="workspace-search-overlay" aria-label="Workspace search">
-      <div class="search-backdrop" data-action="close-workspace-search"></div>
-      <form class="search-palette workspace-search-palette${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-search" role="dialog" aria-modal="true" aria-label="Search workspace">
-        <div class="search-tabbar" role="tablist" aria-label="Workspace search mode">
-          ${renderWorkspaceSearchModeButton('keyword', 'Search', search)}
-          ${renderWorkspaceSearchModeButton('semantic', 'Semantic', search)}
-          <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-search" aria-label="Close workspace search">${closeIcon()}</button>
+    <section class="workspace-filter-overlay" aria-label="Workspace filter">
+      <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
+      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" role="dialog" aria-modal="true" aria-label="Filter workspace">
+        <div class="search-tabbar">
+          <div class="workspace-filter-title">
+            ${funnelIcon()}
+            <span>Filter ${escapeHtml(workspaceName)}</span>
+          </div>
+          <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
         <div class="search-input-row">
-          <span class="search-input-icon" aria-hidden="true">${magnifyingGlassIcon()}</span>
+          <span class="search-input-icon" aria-hidden="true">${funnelIcon()}</span>
           <label>
-            <span>${isSemantic ? `Semantic search in ${escapeHtml(searchScope)}` : `Search ${escapeHtml(searchScope)}`}</span>
+            <span>Filter document</span>
             ${isSemantic
-              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-search-query" placeholder="Describe what you are looking for across ${escapeAttr(searchScope)}" rows="4" autofocus>${escapeHtml(search.queryDraft)}</textarea>`
-              : `<input class="search-input" data-field="workspace-search-query" value="${escapeAttr(search.queryDraft)}" placeholder="Find across ${escapeAttr(searchScope)}..." autocomplete="off" spellcheck="false" autofocus>`
+              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
+              : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
             }
           </label>
         </div>
-        <div class="workspace-search-actions">
-          <button type="submit" class="secondary" ${search.isLoading ? 'disabled' : ''}>Search</button>
+        ${status ? `<div class="search-status${filter.error ? ' is-error' : ''}" role="status">${escapeHtml(status)}</div>` : ''}
+        <div class="search-filter-box">
+          <div class="search-filter-box-head">
+            ${funnelIcon()}
+            <span>Filter Technique</span>
+            ${renderWorkspaceFilterModeButton('semantic', 'Semantic', filter)}
+          </div>
+          <div class="search-filter-mode-group" role="group" aria-label="Filter behavior">
+            ${renderWorkspaceFilterBehaviorButton('deprioritize', 'Shade', filter)}
+            ${renderWorkspaceFilterBehaviorButton('hide', 'Hide', filter)}
+          </div>
         </div>
-        <div class="search-status${search.error ? ' is-error' : ''}" role="status">${escapeHtml(status)}</div>
-        ${renderWorkspaceSearchResults(search)}
+        <div class="workspace-filter-actions">
+          <button
+            type="submit"
+            class="secondary${applied ? ' is-active' : ''}"
+            aria-pressed="${applied ? 'true' : 'false'}"
+            ${filter.isLoading || filter.queryDraft.trim().length === 0 ? 'disabled' : ''}
+          >${applied ? 'Update filter' : 'Filter'}</button>
+          ${activeFilter ? `<button type="button" class="ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
+        </div>
       </form>
     </section>`;
 }
 
-function renderWorkspaceSearchModeButton(mode: HvyDocumentSearchMode, label: string, search: WorkspaceSearchState): string {
-  const active = search.mode === mode;
+function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {
+  const active = filter.mode === mode;
   return `
     <button
       type="button"
       class="search-tab${active ? ' is-active' : ''}"
-      data-action="set-workspace-search-mode"
-      data-search-mode="${escapeAttr(mode)}"
-      role="tab"
-      aria-selected="${active ? 'true' : 'false'}"
-    >${mode === 'semantic' ? sparklesIcon() : magnifyingGlassIcon()}<span>${escapeHtml(label)}</span></button>`;
+      data-action="set-workspace-filter-mode"
+      data-filter-mode="${escapeAttr(filter.mode === 'semantic' ? 'keyword' : mode)}"
+      aria-pressed="${active ? 'true' : 'false'}"
+    >${sparklesIcon()}<span>${escapeHtml(label)}</span></button>`;
 }
 
-function renderWorkspaceSearchResults(search: WorkspaceSearchState): string {
-  if (search.isLoading) {
-    return '<div class="search-results search-results-empty">Searching workspace files...</div>';
-  }
-  if (search.results.length === 0) {
-    const message = search.submittedQuery.trim().length > 0 ? 'No matches. Try another term or prompt.' : 'Workspace results will appear here.';
-    return `<div class="search-results search-results-empty">${escapeHtml(message)}</div>`;
-  }
-  const byDocument = groupWorkspaceSearchResults(search.results);
-  return `<div class="search-results workspace-search-results">
-    ${byDocument.map(([documentId, results]) => `
-      <section class="search-result-group">
-        <div class="search-result-group-title">${escapeHtml(results[0]?.documentTitle || fileNameFromPath(documentId))}</div>
-        ${groupResultsByCategory(results).map(([category, categoryResults]) => `
-          <div class="workspace-search-category">
-            <div class="workspace-search-category-title">${escapeHtml(searchCategoryLabel(category))}</div>
-            ${categoryResults.map((result) => renderWorkspaceSearchResult(result, search)).join('')}
-          </div>
-        `).join('')}
-      </section>
-    `).join('')}
-  </div>`;
-}
-
-function renderWorkspaceSearchResult(result: HvyDocumentSearchResult, search: WorkspaceSearchState): string {
-  const active = search.activeResultId === result.id;
-  const context = [result.contextLabel, result.sourceFile].filter(Boolean).join(' / ');
-  const fields = getWorkspaceResultFields(result);
-  const snippet = result.category === 'semantic'
-    ? ''
-    : `<span class="search-result-snippets">
-          <span class="search-result-snippet">
-            <span>${highlightPlainText(result.preview, search.submittedQuery, search.mode === 'keyword')}</span>
-          </span>
-        </span>`;
+function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: string, filter: WorkspaceFilterState): string {
+  const active = filter.filterMode === mode;
   return `
     <button
       type="button"
-      class="search-result${active ? ' is-active' : ''}"
-      data-action="select-workspace-search-result"
-      data-search-result-id="${escapeAttr(result.id)}"
-    >
-      <span class="search-result-main">
-        <span class="search-result-title">${highlightPlainText(result.locationLabel || result.label || result.preview || 'Search result', search.submittedQuery, search.mode === 'keyword')}</span>
-        ${context ? `<span class="search-result-context">${escapeHtml(context)}</span>` : ''}
-        ${fields.length ? `<span class="search-result-fields">${fields.map((field) => `<span>${escapeHtml(field)}</span>`).join('')}</span>` : ''}
-        ${snippet}
-      </span>
-    </button>`;
-}
-
-function groupWorkspaceSearchResults(results: HvyDocumentSearchResult[]): Array<[string, HvyDocumentSearchResult[]]> {
-  const groups = new Map<string, HvyDocumentSearchResult[]>();
-  for (const result of results) {
-    const group = groups.get(result.documentId) ?? [];
-    group.push(result);
-    groups.set(result.documentId, group);
-  }
-  return [...groups.entries()];
-}
-
-function groupResultsByCategory(results: HvyDocumentSearchResult[]): Array<[SearchResultCategory, HvyDocumentSearchResult[]]> {
-  const order: SearchResultCategory[] = ['semantic', 'tags', 'contents', 'description'];
-  return order
-    .map((category) => [category, results.filter((result) => result.category === category)] as [SearchResultCategory, HvyDocumentSearchResult[]])
-    .filter(([, categoryResults]) => categoryResults.length > 0);
-}
-
-function getWorkspaceResultFields(result: HvyDocumentSearchResult): string[] {
-  if (result.category === 'semantic') {
-    return [];
-  }
-  const fields = result.matches?.length
-    ? result.matches.map((match) => match.label)
-    : [result.sourceField];
-  return [...new Set(fields.filter(Boolean))];
-}
-
-function searchCategoryLabel(category: SearchResultCategory): string {
-  if (category === 'semantic') return 'Semantic';
-  if (category === 'tags') return 'Tags';
-  if (category === 'description') return 'Description';
-  return 'Contents';
-}
-
-function fileNameFromPath(path: string): string {
-  return path.split(/[\\/]/).pop() || path;
-}
-
-function highlightPlainText(value: string, query: string, shouldHighlight: boolean): string {
-  const source = escapeHtml(value);
-  if (!shouldHighlight || !query.trim()) {
-    return source;
-  }
-  const index = value.toLocaleLowerCase().indexOf(query.trim().toLocaleLowerCase());
-  if (index < 0) {
-    return source;
-  }
-  const length = query.trim().length;
-  return `${escapeHtml(value.slice(0, index))}<mark>${escapeHtml(value.slice(index, index + length))}</mark>${escapeHtml(value.slice(index + length))}`;
+      class="search-filter-mode-button${active ? ' is-active' : ''}"
+      data-action="set-workspace-filter-behavior"
+      data-filter-behavior="${escapeAttr(mode)}"
+      aria-pressed="${active ? 'true' : 'false'}"
+    >${escapeHtml(label)}</button>`;
 }
 
 function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers): void {
@@ -652,7 +603,7 @@ function renderToolbar(state: AppState): string {
     </div>`;
 }
 
-function renderModeControls(activeMode: HvyMode, readOnly: boolean): string {
+function renderModeControls(activeMode: HvyMode, readOnly: boolean, metaOpen: boolean): string {
   const modes: Array<{ mode: HvyMode; label: string }> = [
     { mode: 'viewer', label: 'Viewer' },
     { mode: 'ai', label: 'AI' },
@@ -662,16 +613,16 @@ function renderModeControls(activeMode: HvyMode, readOnly: boolean): string {
   ];
   const showEditorSubmodes = activeMode === 'editor' || activeMode === 'hvy' || activeMode === 'advanced';
   const buttonHtml = ({ mode, label }: { mode: HvyMode; label: string }) => {
-    const active = mode === activeMode ? ' is-active' : '';
+    const active = mode === activeMode && !(metaOpen && mode === 'advanced') ? ' is-active' : '';
     const disabled = readOnly && mode !== 'viewer' ? ' disabled' : '';
     const contents = mode === 'advanced' || mode === 'hvy'
       ? `<span>${escapeHtml(mode === 'advanced' ? 'ADV' : 'HVY')}</span>`
       : `${modeIcon(mode)}<span>${escapeHtml(label)}</span>`;
-    return `<button type="button" class="mode-button${active}" data-action="set-mode" data-mode="${mode}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" aria-pressed="${mode === activeMode ? 'true' : 'false'}"${disabled}>${contents}</button>`;
+    return `<button type="button" class="mode-button${active}" data-action="set-mode" data-mode="${mode}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" aria-pressed="${active ? 'true' : 'false'}"${disabled}>${contents}</button>`;
   };
   return `
     <nav class="mode-controls${showEditorSubmodes ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
-      ${showEditorSubmodes ? `<div class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}</div>` : ''}
+      ${showEditorSubmodes ? `<div class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}<button type="button" class="mode-button mode-button-meta${metaOpen ? ' is-active' : ''}" data-action="open-document-meta" title="Document Meta" aria-label="Document Meta" aria-pressed="${metaOpen ? 'true' : 'false'}"${readOnly ? ' disabled' : ''}><span>Meta</span></button></div>` : ''}
       <div class="mode-primary-controls">
         ${buttonHtml(modes[2])}
         ${buttonHtml(modes[1])}
@@ -693,12 +644,12 @@ function modeIcon(mode: HvyMode): string {
   return '';
 }
 
-function magnifyingGlassIcon(): string {
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>';
-}
-
 function sparklesIcon(): string {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></svg>';
+}
+
+function funnelIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5Z"/></svg>';
 }
 
 function closeIcon(): string {
@@ -721,17 +672,26 @@ function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters)).join('')}</div>`;
 }
 
-function renderWorkspace(workspace: Workspace, selectedFilePath: string | null, openWorkspaceActionsPath: string | null): string {
+function renderWorkspace(
+  workspace: Workspace,
+  selectedFilePath: string | null,
+  openWorkspaceActionsPath: string | null,
+  activeFilters: AppState['workspaceFilters'],
+): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
+  const filter = activeFilters[workspace.path];
+  const filterTitle = filter
+    ? `Filter ${workspace.manifest.name}: ${filter.query}`
+    : `Filter ${workspace.manifest.name}`;
   return `
     <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}" open>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
-      <button type="button" class="workspace-search-trigger" data-action="open-workspace-search" data-workspace-path="${escapeAttr(workspace.path)}" title="Search this workspace" aria-label="Search ${escapeAttr(workspace.manifest.name)}">${magnifyingGlassIcon()}</button>
+      <button type="button" class="workspace-filter-trigger${filter ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
@@ -1090,42 +1050,33 @@ function renderColorThemeDialog(state: AppState): string {
   }
   const colors = state.colorTheme.colors;
   const selectedPaletteId = getMatchedPaletteId(colors);
-  const customNames = Object.keys(colors)
-    .filter((name) => !THEME_COLOR_NAMES.includes(name))
-    .sort((left, right) => left.localeCompare(right));
+  const selectedCustomThemeId = getMatchedSavedThemeId(colors, state.colorTheme.savedThemes);
+  const themeName = state.colorTheme.themeName || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state) || 'Untitled Theme';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle">
         <h2 id="colorThemeTitle">Colors</h2>
         <p class="dialog-note">Global HVY colors apply across documents on this device.</p>
+        <div class="theme-file-panel">
+          <label class="theme-name-field">
+            <span>Theme Name</span>
+            <input data-field="theme-name" value="${escapeAttr(themeName)}" placeholder="Untitled Theme" spellcheck="false">
+          </label>
+          <div class="theme-file-actions">
+            <button type="button" class="secondary-action" data-action="theme-save">Save Theme</button>
+            <button type="button" class="secondary-action" data-action="theme-export">Export</button>
+            <button type="button" class="secondary-action" data-action="theme-import">Import</button>
+          </div>
+        </div>
         <div class="theme-palette-grid" aria-label="Theme palettes">
-          <article class="theme-palette-card${selectedPaletteId === null && Object.keys(colors).length === 0 ? ' is-selected' : ''}">
-            <div class="theme-palette-preview theme-palette-preview-document" aria-hidden="true">
-              <span></span><span></span><span></span>
-            </div>
-            <div class="theme-palette-copy">
-              <strong>Default</strong>
-              <span>Use the built-in HVY colors.</span>
-            </div>
-            <button type="button" data-action="theme-clear-palette">Use</button>
-          </article>
-          ${HVY_PALETTES.map((palette) => renderPaletteCard(palette, selectedPaletteId === palette.id)).join('')}
+          ${renderThemeCards(state, selectedPaletteId, selectedCustomThemeId)}
         </div>
         <div class="theme-filter-shell">
           <span>Filter</span>
           <input type="search" placeholder="Color name or variable" data-field="theme-color-filter">
         </div>
         <div class="theme-color-list">
-          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]), false)).join('')}
-        </div>
-        <div class="theme-custom-head">
-          <h3>Custom</h3>
-          <button type="button" class="secondary-action" data-action="theme-add-color">Add Color</button>
-        </div>
-        <div class="theme-color-list theme-color-list--custom">
-          ${customNames.length
-            ? customNames.map((name) => renderThemeColorRow(name, colors[name] ?? '', colors[name] ?? '', true)).join('')
-            : '<div class="empty-panel compact">No custom colors yet.</div>'}
+          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]))).join('')}
         </div>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-color-theme">Done</button>
@@ -1134,58 +1085,155 @@ function renderColorThemeDialog(state: AppState): string {
     </div>`;
 }
 
-function renderPaletteCard(palette: typeof HVY_PALETTES[number], selected: boolean): string {
+interface ThemeCard {
+  id: string;
+  name: string;
+  description: string;
+  colors: Record<string, string>;
+  builtIn: boolean;
+  selected: boolean;
+  lastUsedAt: number;
+}
+
+function renderThemeCards(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null): string {
+  const cards: ThemeCard[] = [
+    {
+      id: 'default',
+      name: 'Default',
+      description: 'Use the built-in HVY colors.',
+      colors: {},
+      builtIn: true,
+      selected: selectedCustomThemeId === null && selectedPaletteId === null && Object.keys(state.colorTheme.colors).length === 0,
+      lastUsedAt: state.colorTheme.themeUses.default ?? 0,
+    },
+    ...HVY_PALETTES.map((palette) => ({
+      id: `palette:${palette.id}`,
+      name: palette.name,
+      description: palette.description,
+      colors: palette.colors,
+      builtIn: true,
+      selected: selectedCustomThemeId === null && selectedPaletteId === palette.id,
+      lastUsedAt: state.colorTheme.themeUses[`palette:${palette.id}`] ?? 0,
+    })),
+    ...state.colorTheme.savedThemes.map((theme) => ({
+      id: `custom:${theme.id}`,
+      name: theme.name,
+      description: 'Custom theme',
+      colors: theme.colors,
+      builtIn: false,
+      selected: selectedCustomThemeId === theme.id,
+      lastUsedAt: theme.lastUsedAt,
+    })),
+  ];
+  return cards
+    .sort((left, right) => (right.lastUsedAt - left.lastUsedAt) || left.name.localeCompare(right.name))
+    .map(renderThemeCard)
+    .join('');
+}
+
+function renderThemeCard(theme: ThemeCard): string {
   const preview = [
-    palette.colors['--hvy-bg'] ?? '#f5f9ff',
-    palette.colors['--hvy-accent-1'] ?? '#4a8fab',
-    palette.colors['--hvy-surface'] ?? '#ffffff',
+    theme.colors['--hvy-bg'] ?? '#f5f9ff',
+    theme.colors['--hvy-accent-1'] ?? '#4a8fab',
+    theme.colors['--hvy-surface'] ?? '#ffffff',
   ];
   return `
-    <article class="theme-palette-card${selected ? ' is-selected' : ''}">
-      <div class="theme-palette-preview" aria-hidden="true">
+    <article class="theme-palette-card${theme.selected ? ' is-selected' : ''}${theme.builtIn ? '' : ' theme-palette-card--custom'}">
+      <div class="theme-palette-preview${theme.id === 'default' ? ' theme-palette-preview-document' : ''}" aria-hidden="true">
         ${preview.map((color) => `<span style="background: ${escapeAttr(color)}"></span>`).join('')}
       </div>
       <div class="theme-palette-copy">
-        <strong>${escapeHtml(palette.name)}</strong>
-        <span>${escapeHtml(palette.description)}</span>
+        <strong>${escapeHtml(theme.name)}</strong>
+        <span>${escapeHtml(theme.description)}</span>
       </div>
-      <button type="button" data-action="theme-apply-palette" data-palette-id="${escapeAttr(palette.id)}">Use</button>
+      <div class="theme-palette-actions">
+        <button type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}">${theme.selected ? 'Using' : 'Use'}</button>
+        ${theme.builtIn ? '' : `<button type="button" class="ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}">Delete</button>`}
+      </div>
     </article>`;
 }
 
-function renderThemeColorRow(name: string, value: string, displayValue: string, custom: boolean): string {
+function selectedThemeName(paletteId: string | null, customThemeId: string | null, state: AppState): string | null {
+  if (customThemeId) return state.colorTheme.savedThemes.find((theme) => theme.id === customThemeId)?.name ?? null;
+  if (paletteId) return HVY_PALETTES.find((palette) => palette.id === paletteId)?.name ?? null;
+  return Object.keys(state.colorTheme.colors).length === 0 ? 'Default' : null;
+}
+
+function renderThemeColorRow(name: string, value: string, displayValue: string): string {
   const label = getThemeColorLabel(name);
-  const search = `${name} ${label} ${value} ${custom ? 'custom' : ''}`;
+  const search = `${name} ${label} ${value} ${displayValue}`;
   const overridden = value.trim().length > 0;
+  const pickerValue = colorValueToPickerHex(displayValue);
+  const alphaValue = colorValueToAlpha(displayValue);
+  const valueLabel = `${label} color value`;
   return `
     <div class="theme-color-row${overridden ? ' theme-color-row--override' : ''}" data-theme-color-name="${escapeAttr(name)}" data-theme-search="${escapeAttr(search.toLowerCase())}">
       <div class="theme-color-meta">
-        ${custom
-          ? `<input class="theme-color-name" data-field="theme-color-name" data-color-name="${escapeAttr(name)}" value="${escapeAttr(name)}" spellcheck="false">`
-          : `<strong>${escapeHtml(label)}</strong><span class="theme-color-var">${escapeHtml(name)}</span>`}
+        <strong>${escapeHtml(label)}</strong><span class="theme-color-var">${escapeHtml(name)}</span>
       </div>
       <input
         class="theme-color-picker"
         type="color"
         data-field="theme-color-picker"
         data-color-name="${escapeAttr(name)}"
-        value="${escapeAttr(colorValueToPickerHex(displayValue))}"
-        title="${escapeAttr(label)}"
+        value="${escapeAttr(pickerValue)}"
+        aria-label="${escapeAttr(`${label} color picker`)}"
       >
       <input
         class="theme-color-value"
-        type="text"
         data-field="theme-color-value"
         data-color-name="${escapeAttr(name)}"
-        value="${escapeAttr(value)}"
-        placeholder="default"
+        value="${escapeAttr(displayValue)}"
+        placeholder="CSS color"
+        aria-label="${escapeAttr(valueLabel)}"
         spellcheck="false"
       >
-      <span class="theme-color-swatch" style="${value ? `background: ${escapeAttr(value)};` : ''}" aria-hidden="true"></span>
-      ${custom
-        ? `<button type="button" class="ghost theme-color-action" data-action="theme-remove-color" data-color-name="${escapeAttr(name)}">Remove</button>`
-        : `<button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" ${overridden ? '' : 'disabled'}>Reset</button>`}
+      <label class="theme-alpha-control" title="Alpha">
+        <span>A</span>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          data-field="theme-color-alpha"
+          data-color-name="${escapeAttr(name)}"
+          value="${escapeAttr(String(alphaValue))}"
+          aria-label="${escapeAttr(`${label} alpha`)}"
+        >
+        <output>${escapeHtml(String(Math.round(alphaValue * 100)))}</output>
+      </label>
+      <span class="theme-color-swatch" style="${displayValue ? `background: ${escapeAttr(displayValue)};` : ''}" aria-hidden="true"></span>
+      ${overridden
+        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default">Reset</button></span>`
+        : '<span class="theme-color-action theme-color-default muted">Default</span>'}
     </div>`;
+}
+
+function syncThemeAlphaControl(row: HTMLElement | null | undefined, value: string): void {
+  if (!row) return;
+  const alpha = colorValueToAlpha(value);
+  const alphaInput = row.querySelector<HTMLInputElement>('[data-field="theme-color-alpha"]');
+  const alphaOutput = row.querySelector<HTMLOutputElement>('.theme-alpha-control output');
+  if (alphaInput) {
+    alphaInput.value = String(alpha);
+  }
+  if (alphaOutput) {
+    alphaOutput.value = String(Math.round(alpha * 100));
+    alphaOutput.textContent = alphaOutput.value;
+  }
+}
+
+function syncThemeOverrideAction(row: HTMLElement | null | undefined, name: string, overridden: boolean): void {
+  if (!row) return;
+  const defaultLabel = row.querySelector<HTMLElement>('.theme-color-default');
+  if (overridden && defaultLabel) {
+    defaultLabel.outerHTML = `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default">Reset</button></span>`;
+    return;
+  }
+  const resetGroup = row.querySelector<HTMLElement>('.theme-color-reset-group');
+  if (!overridden && resetGroup) {
+    resetGroup.outerHTML = '<span class="theme-color-action theme-color-default muted">Default</span>';
+  }
 }
 
 function getResolvedThemeColor(name: string, overrideValue: string | undefined): string {
@@ -1377,8 +1425,12 @@ function isHvyMode(value: string | undefined): value is HvyMode {
   return value === 'viewer' || value === 'ai' || value === 'editor' || value === 'hvy' || value === 'advanced';
 }
 
-function isWorkspaceSearchMode(value: string | undefined): value is HvyDocumentSearchMode {
+function isWorkspaceFilterMode(value: string | undefined): value is HvyDocumentSearchMode {
   return value === 'keyword' || value === 'semantic';
+}
+
+function isWorkspaceFilterBehavior(value: string | undefined): value is SearchFilterMode {
+  return value === 'deprioritize' || value === 'hide';
 }
 
 function formatBackupTimestamp(value: string): string {

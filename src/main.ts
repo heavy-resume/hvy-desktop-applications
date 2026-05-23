@@ -1,6 +1,6 @@
 import './styles.css';
 import { installAiChatClient } from './aiClient';
-import type { HvyDocumentSearchDocument, HvyDocumentSearchResult } from '../../heavy-file-format/src/search/types';
+import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
 import {
   addFilesToWorkspace,
   chooseWorkspaceFolder,
@@ -21,6 +21,7 @@ import {
   loadRecentState,
   onMenuEvent,
   openExternalUrl,
+  openColorThemeDialog,
   openFileDialog,
   readDocumentFile,
   removeMcpClient,
@@ -30,6 +31,7 @@ import {
   restoreDocumentBackup,
   saveMcpSettings,
   saveAiSettings,
+  saveColorThemeAsDialog,
   saveDocumentAsDialog,
   saveDocumentFile,
   startMcpServer,
@@ -37,13 +39,11 @@ import {
   type DocumentFile,
   type McpClientInstallTarget,
   type McpSettings,
-  type WorkspaceFileNode,
-  type WorkspaceTreeNode,
   updateMcpWorkspaces,
 } from './backend';
-import { applyColorTheme, getPaletteById, isCssVariableName, loadColorThemeSettings, saveColorThemeSettings } from './colorTheme';
-import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, searchHvyDocuments, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
-import { state } from './state';
+import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
+import { createHvyDocumentSearchSnapshot, deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, searchHvyDocuments, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { state, type WorkspaceFilterConfig } from './state';
 import { getHvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
 
@@ -61,11 +61,11 @@ interface DocumentSession {
   dirty: boolean;
   readOnly: boolean;
   isNew: boolean;
+  metaOpen: boolean;
   document: VisualDocument;
 }
 const documentSessions = new Map<string, DocumentSession>();
 const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
-let pendingWorkspaceSearchTarget: HvyDocumentSearchResult | null = null;
 
 const handlers: UiHandlers = {
   newWorkspace: () => {
@@ -169,36 +169,46 @@ const handlers: UiHandlers = {
     state.status = 'Added files to workspace';
     await refreshRecents();
   }),
-  openWorkspaceSearch: (workspacePath) => {
-    closeUiBeforeWorkspaceSearch();
-    state.workspaceSearch.workspacePath = workspacePath ?? null;
-    state.workspaceSearch.open = true;
-    state.workspaceSearch.error = null;
+  openWorkspaceFilter: (workspacePath) => {
+    closeUiBeforeWorkspaceFilter();
+    const activeFilter = state.workspaceFilters[workspacePath];
+    state.workspaceFilter.workspacePath = workspacePath;
+    state.workspaceFilter.open = true;
+    state.workspaceFilter.error = null;
+    state.workspaceFilter.queryDraft = activeFilter?.query ?? '';
+    state.workspaceFilter.submittedQuery = activeFilter?.query ?? '';
+    state.workspaceFilter.mode = activeFilter?.mode ?? 'keyword';
+    state.workspaceFilter.filterMode = activeFilter?.filterMode ?? 'deprioritize';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
-      document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-search-query"]')?.focus();
+      document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-filter-query"]')?.focus();
     });
   },
-  closeWorkspaceSearch: () => {
-    state.workspaceSearch.open = false;
-    state.workspaceSearch.isLoading = false;
+  closeWorkspaceFilter: () => {
+    state.workspaceFilter.open = false;
+    state.workspaceFilter.isLoading = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  setWorkspaceSearchMode: (mode) => {
-    state.workspaceSearch.mode = mode;
-    state.workspaceSearch.error = null;
+  setWorkspaceFilterMode: (mode) => {
+    state.workspaceFilter.mode = mode;
+    state.workspaceFilter.error = null;
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
-      document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-search-query"]')?.focus();
+      document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-filter-query"]')?.focus();
     });
   },
-  updateWorkspaceSearchQuery: (query) => {
-    state.workspaceSearch.queryDraft = query;
+  setWorkspaceFilterBehavior: (mode) => {
+    state.workspaceFilter.filterMode = mode;
+    state.workspaceFilter.error = null;
+    rerender({ preserveMountedDocument: true });
   },
-  submitWorkspaceSearch: () => void submitWorkspaceSearch(),
-  selectWorkspaceSearchResult: (resultId) => void selectWorkspaceSearchResult(resultId),
+  updateWorkspaceFilterQuery: (query) => {
+    state.workspaceFilter.queryDraft = query;
+  },
+  submitWorkspaceFilter: () => void submitWorkspaceFilter(),
+  clearWorkspaceFilter: () => void clearWorkspaceFilter(),
   openAbout: () => {
     closeUiBeforeAbout();
     state.aboutDialogOpen = true;
@@ -319,6 +329,100 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  updateColorThemeName: (name) => {
+    state.colorTheme = { ...state.colorTheme, themeName: name };
+    saveColorThemeSettings(state.colorTheme);
+  },
+  saveColorTheme: () => {
+    const name = state.colorTheme.themeName.trim() || currentThemeDisplayName() || 'Untitled Theme';
+    const matchedThemeId = getMatchedSavedThemeId(state.colorTheme.colors, state.colorTheme.savedThemes);
+    const now = Date.now();
+    const savedThemes = [...state.colorTheme.savedThemes];
+    const existingIndex = savedThemes.findIndex((theme) => theme.id === matchedThemeId || theme.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0);
+    if (existingIndex >= 0) {
+      savedThemes[existingIndex] = { ...savedThemes[existingIndex], name, colors: { ...state.colorTheme.colors }, lastUsedAt: now };
+    } else {
+      savedThemes.push({ id: createSavedThemeId(), name, colors: { ...state.colorTheme.colors }, lastUsedAt: now });
+    }
+    state.colorTheme = { ...state.colorTheme, themeName: name, savedThemes };
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
+  exportColorTheme: () => void runBusy('Exporting theme...', async () => {
+    const theme = createColorThemeFile(state.colorTheme.themeName || currentThemeDisplayName() || 'Untitled Theme', state.colorTheme.colors);
+    const bytes = Array.from(new TextEncoder().encode(serializeColorThemeFile(theme)));
+    await saveColorThemeAsDialog({ suggestedName: themeSuggestedFileName(theme.name), bytes });
+    state.colorThemeDialogOpen = true;
+    state.status = `Exported theme ${theme.name}`;
+  }),
+  importColorTheme: () => void runBusy('Importing theme...', async () => {
+    const file = await openColorThemeDialog();
+    if (!file) {
+      state.colorThemeDialogOpen = true;
+      return;
+    }
+    const theme = parseColorThemeFile(new TextDecoder().decode(new Uint8Array(file.bytes)));
+    const now = Date.now();
+    const savedThemes = [...state.colorTheme.savedThemes];
+    const existingIndex = savedThemes.findIndex((saved) => saved.name.localeCompare(theme.name, undefined, { sensitivity: 'accent' }) === 0);
+    if (existingIndex >= 0) {
+      savedThemes[existingIndex] = { ...savedThemes[existingIndex], colors: theme.colors, lastUsedAt: now };
+    } else {
+      savedThemes.push({ id: createSavedThemeId(), name: theme.name, colors: theme.colors, lastUsedAt: now });
+    }
+    state.colorTheme = {
+      colors: theme.colors,
+      themeName: theme.name,
+      savedThemes,
+      themeUses: state.colorTheme.themeUses,
+    };
+    persistAndApplyColorTheme();
+    state.colorThemeDialogOpen = true;
+    state.status = `Imported theme ${theme.name}`;
+  }),
+  selectColorTheme: (id) => {
+    const now = Date.now();
+    if (id === 'default') {
+      state.colorTheme = {
+        ...state.colorTheme,
+        colors: {},
+        themeName: 'Default',
+        themeUses: { ...state.colorTheme.themeUses, default: now },
+      };
+    } else if (id.startsWith('palette:')) {
+      const palette = getPaletteById(id.slice('palette:'.length));
+      if (!palette) return;
+      state.colorTheme = {
+        ...state.colorTheme,
+        colors: { ...palette.colors },
+        themeName: palette.name,
+        themeUses: { ...state.colorTheme.themeUses, [id]: now },
+      };
+    } else if (id.startsWith('custom:')) {
+      const themeId = id.slice('custom:'.length);
+      const savedThemes = state.colorTheme.savedThemes.map((theme) => theme.id === themeId ? { ...theme, lastUsedAt: now } : theme);
+      const theme = savedThemes.find((item) => item.id === themeId);
+      if (!theme) return;
+      state.colorTheme = {
+        ...state.colorTheme,
+        colors: { ...theme.colors },
+        themeName: theme.name,
+        savedThemes,
+      };
+    }
+    persistAndApplyColorTheme();
+    rerender({ preserveMountedDocument: true });
+  },
+  deleteColorTheme: (id) => {
+    if (!id.startsWith('custom:')) return;
+    const themeId = id.slice('custom:'.length);
+    state.colorTheme = {
+      ...state.colorTheme,
+      savedThemes: state.colorTheme.savedThemes.filter((theme) => theme.id !== themeId),
+    };
+    saveColorThemeSettings(state.colorTheme);
+    rerender({ preserveMountedDocument: true });
+  },
   updateColorTheme: (name, value) => {
     if (!isCssVariableName(name)) return;
     const next = { ...state.colorTheme.colors };
@@ -327,53 +431,26 @@ const handlers: UiHandlers = {
     } else {
       delete next[name];
     }
-    state.colorTheme = { colors: next };
+    state.colorTheme = { ...state.colorTheme, colors: next };
     persistAndApplyColorTheme();
     updateThemeRowChrome(name, next[name] ?? '');
   },
   resetColorTheme: (name) => {
     const next = { ...state.colorTheme.colors };
     delete next[name];
-    state.colorTheme = { colors: next };
-    persistAndApplyColorTheme();
-    rerender({ preserveMountedDocument: true });
-  },
-  addColorThemeColor: () => {
-    const next = { ...state.colorTheme.colors };
-    let i = 1;
-    let name = `--hvy-custom-${i}`;
-    while (name in next) {
-      i += 1;
-      name = `--hvy-custom-${i}`;
-    }
-    next[name] = '#000000';
-    state.colorTheme = { colors: next };
-    persistAndApplyColorTheme();
-    rerender({ preserveMountedDocument: true });
-  },
-  removeColorThemeColor: (name) => {
-    const next = { ...state.colorTheme.colors };
-    delete next[name];
-    state.colorTheme = { colors: next };
-    persistAndApplyColorTheme();
-    rerender({ preserveMountedDocument: true });
-  },
-  renameColorThemeColor: (oldName, newName) => {
-    if (!isCssVariableName(oldName) || !isCssVariableName(newName) || oldName === newName) return;
-    const next = { ...state.colorTheme.colors };
-    if (!(oldName in next) || newName in next) {
-      rerender({ preserveMountedDocument: true });
-      return;
-    }
-    next[newName] = next[oldName];
-    delete next[oldName];
-    state.colorTheme = { colors: next };
+    state.colorTheme = { ...state.colorTheme, colors: next };
     persistAndApplyColorTheme();
     rerender({ preserveMountedDocument: true });
   },
   applyColorThemePalette: (id) => {
     const palette = id ? getPaletteById(id) : null;
-    state.colorTheme = { colors: palette ? { ...palette.colors } : {} };
+    const themeUseId = id ? `palette:${id}` : 'default';
+    state.colorTheme = {
+      colors: palette ? { ...palette.colors } : {},
+      themeName: palette?.name ?? '',
+      savedThemes: state.colorTheme.savedThemes,
+      themeUses: { ...state.colorTheme.themeUses, [themeUseId]: Date.now() },
+    };
     persistAndApplyColorTheme();
     rerender({ preserveMountedDocument: true });
   },
@@ -487,11 +564,41 @@ const handlers: UiHandlers = {
     }
     const document = state.document.mounted?.document;
     state.document.mode = mode;
+    state.document.metaOpen = false;
     if (document) {
       updateCurrentDocumentSession(document);
     }
     rerender();
     void mountCurrentDocument(document);
+  },
+  openDocumentMeta: () => {
+    if (!state.document) return;
+    if (state.document.readOnly) {
+      state.status = 'The HVY guide is read-only';
+      rerender();
+      void mountCurrentDocument();
+      return;
+    }
+    if (state.document.mode === 'advanced') {
+      if (state.document.mounted) {
+        state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
+        rerender({ preserveMountedDocument: true });
+      }
+      return;
+    }
+    const document = state.document.mounted?.document;
+    state.document.mode = 'advanced';
+    state.document.metaOpen = false;
+    if (document) {
+      updateCurrentDocumentSession(document);
+    }
+    rerender();
+    void mountCurrentDocument(document).then(() => {
+      if (state.document?.mode === 'advanced' && state.document.mounted) {
+        state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
+        rerender({ preserveMountedDocument: true });
+      }
+    });
   },
   save: () => void saveCurrentDocument(),
   saveAs: () => void saveCurrentDocumentAs(),
@@ -581,100 +688,100 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
   }
 }
 
-async function submitWorkspaceSearch(): Promise<void> {
-  const query = state.workspaceSearch.queryDraft.trim();
-  state.workspaceSearch.submittedQuery = query;
-  state.workspaceSearch.activeResultId = null;
-  state.workspaceSearch.error = null;
-  state.workspaceSearch.results = [];
-  if (!query) {
+async function submitWorkspaceFilter(): Promise<void> {
+  const workspacePath = state.workspaceFilter.workspacePath;
+  const query = state.workspaceFilter.queryDraft.trim();
+  state.workspaceFilter.submittedQuery = query;
+  state.workspaceFilter.error = null;
+  if (!workspacePath || !state.workspaces.some((workspace) => workspace.path === workspacePath)) {
+    state.workspaceFilter.error = 'Open a workspace before filtering.';
     rerender({ preserveMountedDocument: true });
     return;
   }
-  const workspaces = state.workspaceSearch.workspacePath
-    ? state.workspaces.filter((workspace) => workspace.path === state.workspaceSearch.workspacePath)
-    : state.workspaces;
-  if (workspaces.length === 0) {
-    state.workspaceSearch.error = 'Open a workspace before searching.';
+  if (!query) {
+    delete state.workspaceFilters[workspacePath];
+    await applyWorkspaceFilterToCurrentDocument();
     rerender({ preserveMountedDocument: true });
     return;
   }
 
-  state.workspaceSearch.isLoading = true;
+  const config: WorkspaceFilterConfig = {
+    query,
+    mode: state.workspaceFilter.mode,
+    filterMode: state.workspaceFilter.filterMode,
+  };
+  state.workspaceFilter.isLoading = true;
   rerender({ preserveMountedDocument: true });
   try {
     preserveCurrentDocumentSession();
-    const documents = await buildWorkspaceSearchDocuments(workspaces);
-    const response = await searchHvyDocuments({
-      documents,
-      query,
-      mode: state.workspaceSearch.mode,
-    });
-    state.workspaceSearch.results = response.results;
-    state.workspaceSearch.error = null;
-    state.status = `Workspace search found ${response.results.length} result${response.results.length === 1 ? '' : 's'}`;
+    state.workspaceFilters[workspacePath] = config;
+    await applyWorkspaceFilterToCurrentDocument();
+    state.workspaceFilter.open = false;
+    state.workspaceFilter.error = null;
+    state.status = `Filtered ${workspaceNameForPath(workspacePath)}`;
   } catch (error) {
-    state.workspaceSearch.results = [];
-    state.workspaceSearch.error = error instanceof Error ? error.message : String(error);
+    state.workspaceFilter.error = error instanceof Error ? error.message : String(error);
     state.status = 'Ready';
   } finally {
-    state.workspaceSearch.isLoading = false;
+    state.workspaceFilter.isLoading = false;
     rerender({ preserveMountedDocument: true });
   }
 }
 
-async function selectWorkspaceSearchResult(resultId: string): Promise<void> {
-  const result = state.workspaceSearch.results.find((candidate) => candidate.id === resultId);
-  if (!result) return;
-  state.workspaceSearch.activeResultId = result.id;
-  pendingWorkspaceSearchTarget = result;
-  await runBusy('Opening search result...', async () => {
-    const file = await readDocumentFile(result.documentId);
-    state.workspaceSearch.open = false;
-    await openDocument(file, { deferMount: true });
-    await refreshRecents();
+async function clearWorkspaceFilter(): Promise<void> {
+  const workspacePath = state.workspaceFilter.workspacePath;
+  if (!workspacePath) return;
+  delete state.workspaceFilters[workspacePath];
+  state.workspaceFilter.submittedQuery = '';
+  state.workspaceFilter.error = null;
+  state.workspaceFilter.open = false;
+  await applyWorkspaceFilterToCurrentDocument();
+  state.status = `Cleared filter for ${workspaceNameForPath(workspacePath)}`;
+  rerender({ preserveMountedDocument: true });
+}
+
+async function applyWorkspaceFilterToCurrentDocument(): Promise<void> {
+  const openDocument = state.document;
+  const document = openDocument?.mounted?.document ?? pendingMountDocument;
+  if (!openDocument || !document) return;
+  const snapshot = await createWorkspaceFilterSnapshotForDocument(openDocument.path, openDocument.name, document);
+  if (openDocument.mounted) {
+    setMountedSearchSnapshot(openDocument.mounted, snapshot);
+  }
+}
+
+async function createWorkspaceFilterSnapshotForDocument(
+  path: string,
+  name: string,
+  document: VisualDocument,
+) {
+  const workspacePath = workspacePathForFile(path);
+  const filter = workspacePath ? state.workspaceFilters[workspacePath] : null;
+  if (!filter || !filter.query.trim()) {
+    return null;
+  }
+  const documents: HvyDocumentSearchDocument[] = [{
+    documentId: path,
+    documentTitle: displayDocumentName(name),
+    document,
+  }];
+  const response = await searchHvyDocuments({
+    documents,
+    query: filter.query,
+    mode: filter.mode,
+  });
+  return createHvyDocumentSearchSnapshot(response, path, {
+    filterEnabled: true,
+    filterMode: filter.filterMode,
   });
 }
 
-async function buildWorkspaceSearchDocuments(workspaces = state.workspaces): Promise<HvyDocumentSearchDocument[]> {
-  const documents: HvyDocumentSearchDocument[] = [];
-  const includeWorkspaceName = workspaces.length > 1 || state.workspaceSearch.workspacePath === null;
-  for (const workspace of workspaces) {
-    for (const file of flattenWorkspaceFiles(workspace.files)) {
-      const session = documentSessions.get(file.path);
-      const openDocument = state.document?.path === file.path ? state.document : null;
-      const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
-      const title = displaySearchDocumentTitle(file.name, includeWorkspaceName ? workspace.manifest.name : null);
-      if (liveDocument) {
-        documents.push({
-          documentId: file.path,
-          documentTitle: title,
-          document: liveDocument,
-        });
-        continue;
-      }
-      try {
-        const documentFile = await readDocumentFile(file.path);
-        documents.push({
-          documentId: file.path,
-          documentTitle: displaySearchDocumentTitle(documentFile.name, includeWorkspaceName ? workspace.manifest.name : null),
-          document: await deserializeHvy(new Uint8Array(documentFile.bytes), documentFile.extension),
-        });
-      } catch {
-        // Keep workspace search resilient if one file was moved, deleted, or cannot be parsed.
-      }
-    }
-  }
-  return documents;
+function workspaceNameForPath(path: string): string {
+  return state.workspaces.find((workspace) => workspace.path === path)?.manifest.name ?? 'workspace';
 }
 
-function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
-  return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
-}
-
-function displaySearchDocumentTitle(name: string, workspaceName: string | null = null): string {
-  const fileName = name.replace(/\.(t?hvy|md)$/i, '');
-  return workspaceName ? `${workspaceName} / ${fileName}` : fileName;
+function displayDocumentName(name: string): string {
+  return name.replace(/\.(t?hvy|md)$/i, '');
 }
 
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean } = {}): Promise<void> {
@@ -692,6 +799,7 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
     readOnly: session?.readOnly ?? options.defaultDocument === true,
     isNew: session?.isNew ?? options.isNew === true,
+    metaOpen: session?.metaOpen ?? false,
     mounted: null,
   };
   state.selectedFilePath = options.defaultDocument ? null : file.path;
@@ -728,6 +836,7 @@ function preserveCurrentDocumentSession(): void {
     dirty,
     readOnly: openDocument.readOnly,
     isNew: openDocument.isNew,
+    metaOpen: openDocument.metaOpen,
     document,
   });
 }
@@ -743,6 +852,7 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
     dirty: openDocument.dirty,
     readOnly: openDocument.readOnly,
     isNew: openDocument.isNew,
+    metaOpen: openDocument.metaOpen,
     document,
   });
 }
@@ -751,8 +861,10 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   if (!state.document || !mountRoot || !document) return;
   state.document.mounted?.mount.destroy();
   const generation = ++mountGeneration;
+  const searchSnapshot = await createWorkspaceFilterSnapshotForDocument(state.document.path, state.document.name, document);
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
+    searchSnapshot,
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);
@@ -849,6 +961,7 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
     dirty: false,
     readOnly: false,
     isNew: false,
+    metaOpen: false,
     mounted: null,
   };
   updateCurrentDocumentSession(document);
@@ -1008,7 +1121,6 @@ async function runBusy(label: string, task: () => Promise<void>): Promise<void> 
     pendingMountDocument = null;
     rerender();
     await mountCurrentDocument(documentToMount);
-    navigateToPendingWorkspaceSearchTarget();
   }
 }
 
@@ -1110,7 +1222,7 @@ function closeUiBeforeMcpSettings(): void {
   closeMountedTransientUi();
 }
 
-function closeUiBeforeWorkspaceSearch(): void {
+function closeUiBeforeWorkspaceFilter(): void {
   state.newWorkspaceDialogOpen = false;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
@@ -1127,28 +1239,6 @@ function closeUiBeforeWorkspaceSearch(): void {
   closeMountedTransientUi();
 }
 
-function navigateToPendingWorkspaceSearchTarget(): void {
-  const target = pendingWorkspaceSearchTarget;
-  pendingWorkspaceSearchTarget = null;
-  if (!target || !mountRoot) return;
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      const sectionKey = cssEscape(target.sectionKey);
-      const blockId = target.blockId ? cssEscape(target.blockId) : '';
-      const selector = target.blockId
-        ? `[data-section-key="${sectionKey}"][data-block-id="${blockId}"]`
-        : `[data-section-key="${sectionKey}"]`;
-      const element = mountRoot?.querySelector<HTMLElement>(selector);
-      if (!element) return;
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      element.classList.add('workspace-search-target-highlight');
-      window.setTimeout(() => {
-        element.classList.remove('workspace-search-target-highlight');
-      }, 1600);
-    });
-  });
-}
-
 function persistAndApplyColorTheme(): void {
   saveColorThemeSettings(state.colorTheme);
   applyColorTheme(state.colorTheme, mountRoot);
@@ -1159,6 +1249,28 @@ function updateThemeRowChrome(name: string, value: string): void {
   const row = document.querySelector<HTMLElement>(`.theme-color-row[data-theme-color-name="${cssEscape(name)}"]`);
   row?.querySelector<HTMLElement>('.theme-color-swatch')?.setAttribute('style', value ? `background: ${value};` : '');
   row?.querySelector<HTMLButtonElement>('[data-action="theme-reset-color"]')?.toggleAttribute('disabled', !value);
+}
+
+function currentThemeDisplayName(): string | null {
+  const customThemeId = getMatchedSavedThemeId(state.colorTheme.colors, state.colorTheme.savedThemes);
+  if (customThemeId) {
+    return state.colorTheme.savedThemes.find((theme) => theme.id === customThemeId)?.name ?? null;
+  }
+  const paletteId = getMatchedPaletteId(state.colorTheme.colors);
+  if (paletteId) {
+    return getPaletteById(paletteId)?.name ?? null;
+  }
+  return Object.keys(state.colorTheme.colors).length === 0 ? 'Default' : null;
+}
+
+function themeSuggestedFileName(name: string): string {
+  const stem = name
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, '-')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80)
+    .trim() || 'Untitled Theme';
+  return stem.toLowerCase().endsWith('.hvytheme') ? stem : `${stem}.hvytheme`;
 }
 
 function cssEscape(value: string): string {
@@ -1174,7 +1286,7 @@ function closeMountedTransientUi(): void {
   root
     .querySelector<HTMLElement>('[data-action="close-search"], [data-action="close-ai-edit"], [data-modal-action="close"]')
     ?.click();
-  if (root.querySelector('.search-palette, .search-backdrop, .modal-root, .ai-edit-popover')) {
+  if (root.querySelector('.workspace-filter-dialog, .workspace-filter-backdrop, .modal-root, .ai-edit-popover')) {
     root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   }
 }

@@ -127,6 +127,14 @@ struct DocumentFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct ThemeFile {
+    path: String,
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct DocumentBackupRequest {
     document_path: String,
     name: String,
@@ -846,6 +854,37 @@ fn save_document_as_dialog(
 }
 
 #[tauri::command]
+fn open_color_theme_dialog() -> AppResult<Option<ThemeFile>> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("HVY themes", &["hvytheme"])
+        .add_filter("JSON", &["json"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    read_theme_at(&path).map(Some)
+}
+
+#[tauri::command]
+fn save_color_theme_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Option<ThemeFile>> {
+    let Some(mut path) = rfd::FileDialog::new()
+        .add_filter("HVY themes", &["hvytheme"])
+        .set_file_name(ensure_theme_file_name(&suggested_name))
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    if path.extension().is_none() {
+        path.set_extension("hvytheme");
+    }
+    if theme_extension(&path).is_none() {
+        return Err(AppError::Message("Theme path must end in .hvytheme or .json.".into()));
+    }
+    write_file_atomically(&path, &bytes)?;
+    read_theme_at(&path).map(Some)
+}
+
+#[tauri::command]
 fn create_document_file(
     app: AppHandle,
     workspace_path: String,
@@ -1057,6 +1096,8 @@ pub fn run() {
             read_document_file,
             save_document_file,
             save_document_as_dialog,
+            open_color_theme_dialog,
+            save_color_theme_as_dialog,
             create_document_file,
             reveal_document_file,
             rename_document_file,
@@ -1383,6 +1424,42 @@ fn document_extension(path: &Path) -> Option<String> {
         "md" => Some(".md".into()),
         _ => None,
     }
+}
+
+fn theme_extension(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "hvytheme" => Some(".hvytheme".into()),
+        "json" => Some(".json".into()),
+        _ => None,
+    }
+}
+
+fn ensure_theme_file_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "Untitled Theme.hvytheme".into();
+    }
+    let path = Path::new(trimmed);
+    if theme_extension(path).is_some() {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}.hvytheme")
+    }
+}
+
+fn read_theme_at(path: &Path) -> AppResult<ThemeFile> {
+    theme_extension(path)
+        .ok_or_else(|| AppError::Message("Only .hvytheme and .json theme files are supported.".into()))?;
+    Ok(ThemeFile {
+        path: path_to_string(path),
+        name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled Theme.hvytheme")
+            .to_string(),
+        bytes: fs::read(path)?,
+    })
 }
 
 fn normalized_rename_stem(name: &str) -> AppResult<String> {
