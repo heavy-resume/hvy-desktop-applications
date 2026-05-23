@@ -2,9 +2,10 @@ import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToPickerHex, getMatchedPaletteId, getThemeColorLabel, HVY_PALETTES, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
-import type { AppState } from './state';
+import type { AppState, WorkspaceSearchState } from './state';
 import { hvyTemplates } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
+import type { HvyDocumentSearchMode, HvyDocumentSearchResult, SearchResultCategory } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
   newWorkspace(): void;
@@ -17,6 +18,12 @@ export interface UiHandlers {
   createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
   addFilesToWorkspace(workspacePath: string): void;
+  openWorkspaceSearch(): void;
+  closeWorkspaceSearch(): void;
+  setWorkspaceSearchMode(mode: HvyDocumentSearchMode): void;
+  updateWorkspaceSearchQuery(query: string): void;
+  submitWorkspaceSearch(): void;
+  selectWorkspaceSearchResult(resultId: string): void;
   openAbout(): void;
   closeAbout(): void;
   openAiSettings(): void;
@@ -70,6 +77,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         </div>
         <div class="sidebar-actions">
           <button type="button" data-action="open-file">Open File</button>
+          <button type="button" data-action="open-workspace-search" ${state.workspaces.length === 0 ? 'disabled' : ''}>Search Workspace</button>
         </div>
         <section class="workspaces-section">
           <div class="sidebar-section-heading">
@@ -97,6 +105,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderAiSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
+      ${renderWorkspaceSearchDialog(state.workspaceSearch)}
     </main>`;
 
   const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
@@ -122,6 +131,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         }
         if (backdrop.querySelector('.color-theme-dialog')) {
           handlers.closeColorTheme();
+          return;
+        }
+        if (backdrop.querySelector('.workspace-search-palette')) {
+          handlers.closeWorkspaceSearch();
           return;
         }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -150,6 +163,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
+    if (action === 'open-workspace-search') handlers.openWorkspaceSearch();
+    if (action === 'close-workspace-search') handlers.closeWorkspaceSearch();
+    if (action === 'set-workspace-search-mode' && isWorkspaceSearchMode(target.dataset.searchMode)) handlers.setWorkspaceSearchMode(target.dataset.searchMode);
+    if (action === 'select-workspace-search-result' && target.dataset.searchResultId) handlers.selectWorkspaceSearchResult(target.dataset.searchResultId);
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
@@ -184,9 +201,13 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
   root.addEventListener('input', (event) => {
-    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
     const field = target?.dataset.field;
     if (!target || !field || target.closest('#hvyMount')) return;
+    if (field === 'workspace-search-query') {
+      handlers.updateWorkspaceSearchQuery(target.value);
+      return;
+    }
     if (field === 'theme-color-filter') {
       const dialog = target.closest<HTMLElement>('.color-theme-dialog');
       const filter = target.value.trim().toLowerCase();
@@ -255,6 +276,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const data = new FormData(form);
       handlers.saveAiSettings(readAiSettingsForm(data));
     }
+    if (form.dataset.form === 'workspace-search') {
+      handlers.submitWorkspaceSearch();
+    }
   }, { signal });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -269,6 +293,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       handlers.closeColorTheme();
       return;
     }
+    if (root.querySelector('.workspace-search-palette')) {
+      event.preventDefault();
+      handlers.closeWorkspaceSearch();
+      return;
+    }
     const form = target?.closest<HTMLFormElement>('form[data-form="ai-settings"]')
       ?? root.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
     if (!form) return;
@@ -279,6 +308,157 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     updateNewWorkspaceSubmit(form);
     form.addEventListener('input', () => updateNewWorkspaceSubmit(form), { signal });
   });
+}
+
+function renderWorkspaceSearchDialog(search: WorkspaceSearchState): string {
+  if (!search.open) {
+    return '';
+  }
+  const count = search.results.length;
+  const status = search.isLoading
+    ? search.mode === 'semantic' ? 'Analyzing workspace...' : 'Searching workspace...'
+    : search.error
+    ? search.error
+    : search.submittedQuery.trim().length === 0
+    ? 'Press Enter to search'
+    : `${count} result${count === 1 ? '' : 's'}`;
+  const isSemantic = search.mode === 'semantic';
+  return `
+    <section class="workspace-search-overlay" aria-label="Workspace search">
+      <div class="search-backdrop" data-action="close-workspace-search"></div>
+      <form class="search-palette workspace-search-palette${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-search" role="dialog" aria-modal="true" aria-label="Search workspace">
+        <div class="search-tabbar" role="tablist" aria-label="Workspace search mode">
+          ${renderWorkspaceSearchModeButton('keyword', 'Search', search)}
+          ${renderWorkspaceSearchModeButton('semantic', 'Semantic', search)}
+          <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-search" aria-label="Close workspace search">${closeIcon()}</button>
+        </div>
+        <div class="search-input-row">
+          <span class="search-input-icon" aria-hidden="true">${magnifyingGlassIcon()}</span>
+          <label>
+            <span>${isSemantic ? 'Semantic workspace search' : 'Workspace search'}</span>
+            ${isSemantic
+              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-search-query" placeholder="Describe what you are looking for across open workspaces" rows="4" autofocus>${escapeHtml(search.queryDraft)}</textarea>`
+              : `<input class="search-input" data-field="workspace-search-query" value="${escapeAttr(search.queryDraft)}" placeholder="Find across open workspaces..." autocomplete="off" spellcheck="false" autofocus>`
+            }
+          </label>
+        </div>
+        <div class="workspace-search-actions">
+          <button type="submit" class="secondary" ${search.isLoading ? 'disabled' : ''}>Search</button>
+        </div>
+        <div class="search-status${search.error ? ' is-error' : ''}" role="status">${escapeHtml(status)}</div>
+        ${renderWorkspaceSearchResults(search)}
+      </form>
+    </section>`;
+}
+
+function renderWorkspaceSearchModeButton(mode: HvyDocumentSearchMode, label: string, search: WorkspaceSearchState): string {
+  const active = search.mode === mode;
+  return `
+    <button
+      type="button"
+      class="search-tab${active ? ' is-active' : ''}"
+      data-action="set-workspace-search-mode"
+      data-search-mode="${escapeAttr(mode)}"
+      role="tab"
+      aria-selected="${active ? 'true' : 'false'}"
+    >${mode === 'semantic' ? sparklesIcon() : magnifyingGlassIcon()}<span>${escapeHtml(label)}</span></button>`;
+}
+
+function renderWorkspaceSearchResults(search: WorkspaceSearchState): string {
+  if (search.isLoading) {
+    return '<div class="search-results search-results-empty">Searching open workspace files...</div>';
+  }
+  if (search.results.length === 0) {
+    const message = search.submittedQuery.trim().length > 0 ? 'No matches. Try another term or prompt.' : 'Workspace results will appear here.';
+    return `<div class="search-results search-results-empty">${escapeHtml(message)}</div>`;
+  }
+  const byDocument = groupWorkspaceSearchResults(search.results);
+  return `<div class="search-results workspace-search-results">
+    ${byDocument.map(([documentId, results]) => `
+      <section class="search-result-group">
+        <div class="search-result-group-title">${escapeHtml(results[0]?.documentTitle || fileNameFromPath(documentId))}</div>
+        ${groupResultsByCategory(results).map(([category, categoryResults]) => `
+          <div class="workspace-search-category">
+            <div class="workspace-search-category-title">${escapeHtml(searchCategoryLabel(category))}</div>
+            ${categoryResults.map((result) => renderWorkspaceSearchResult(result, search)).join('')}
+          </div>
+        `).join('')}
+      </section>
+    `).join('')}
+  </div>`;
+}
+
+function renderWorkspaceSearchResult(result: HvyDocumentSearchResult, search: WorkspaceSearchState): string {
+  const active = search.activeResultId === result.id;
+  const context = [result.contextLabel, result.sourceFile].filter(Boolean).join(' / ');
+  const fields = getWorkspaceResultFields(result);
+  return `
+    <button
+      type="button"
+      class="search-result${active ? ' is-active' : ''}"
+      data-action="select-workspace-search-result"
+      data-search-result-id="${escapeAttr(result.id)}"
+    >
+      <span class="search-result-main">
+        <span class="search-result-title">${highlightPlainText(result.locationLabel || result.label || result.preview || 'Search result', search.submittedQuery, search.mode === 'keyword')}</span>
+        ${context ? `<span class="search-result-context">${escapeHtml(context)}</span>` : ''}
+        ${fields.length ? `<span class="search-result-fields">${fields.map((field) => `<span>${escapeHtml(field)}</span>`).join('')}</span>` : ''}
+        <span class="search-result-snippets">
+          <span class="search-result-snippet">
+            ${result.category === 'semantic' ? '<span class="search-result-snippet-label">Reason</span>' : ''}
+            <span>${highlightPlainText(result.preview, search.submittedQuery, search.mode === 'keyword')}</span>
+          </span>
+        </span>
+      </span>
+    </button>`;
+}
+
+function groupWorkspaceSearchResults(results: HvyDocumentSearchResult[]): Array<[string, HvyDocumentSearchResult[]]> {
+  const groups = new Map<string, HvyDocumentSearchResult[]>();
+  for (const result of results) {
+    const group = groups.get(result.documentId) ?? [];
+    group.push(result);
+    groups.set(result.documentId, group);
+  }
+  return [...groups.entries()];
+}
+
+function groupResultsByCategory(results: HvyDocumentSearchResult[]): Array<[SearchResultCategory, HvyDocumentSearchResult[]]> {
+  const order: SearchResultCategory[] = ['semantic', 'tags', 'contents', 'description'];
+  return order
+    .map((category) => [category, results.filter((result) => result.category === category)] as [SearchResultCategory, HvyDocumentSearchResult[]])
+    .filter(([, categoryResults]) => categoryResults.length > 0);
+}
+
+function getWorkspaceResultFields(result: HvyDocumentSearchResult): string[] {
+  const fields = result.matches?.length
+    ? result.matches.map((match) => match.label)
+    : [result.sourceField];
+  return [...new Set(fields.filter(Boolean))];
+}
+
+function searchCategoryLabel(category: SearchResultCategory): string {
+  if (category === 'semantic') return 'Semantic';
+  if (category === 'tags') return 'Tags';
+  if (category === 'description') return 'Description';
+  return 'Contents';
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function highlightPlainText(value: string, query: string, shouldHighlight: boolean): string {
+  const source = escapeHtml(value);
+  if (!shouldHighlight || !query.trim()) {
+    return source;
+  }
+  const index = value.toLocaleLowerCase().indexOf(query.trim().toLocaleLowerCase());
+  if (index < 0) {
+    return source;
+  }
+  const length = query.trim().length;
+  return `${escapeHtml(value.slice(0, index))}<mark>${escapeHtml(value.slice(index, index + length))}</mark>${escapeHtml(value.slice(index + length))}`;
 }
 
 function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers): void {
@@ -396,6 +576,18 @@ function modeIcon(mode: HvyMode): string {
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg>';
   }
   return '';
+}
+
+function magnifyingGlassIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>';
+}
+
+function sparklesIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z"/><path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></svg>';
+}
+
+function closeIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 }
 
 function renderWorkspaces(state: AppState): string {
@@ -621,6 +813,7 @@ function renderAiSettingsDialog(state: AppState): string {
           ${renderActionConfigField('importPlanning', 'Import planning', settings)}
           ${renderActionConfigField('importWriting', 'Import writing', settings)}
           ${renderActionConfigField('importCleanup', 'Import cleanup', settings)}
+          ${renderActionConfigField('semanticFilter', 'Semantic search', settings)}
           ${renderActionConfigField('compaction', 'Compaction', settings)}
         </div>
         <div class="dialog-actions">
@@ -830,6 +1023,7 @@ function readActionSettings(data: FormData, fallbackProviderId: string): AiActio
     importPlanning: readActionConfig(data, 'importPlanning', fallbackProviderId),
     importWriting: readActionConfig(data, 'importWriting', fallbackProviderId),
     importCleanup: readActionConfig(data, 'importCleanup', fallbackProviderId),
+    semanticFilter: readActionConfig(data, 'semanticFilter', fallbackProviderId),
     compaction: readActionConfig(data, 'compaction', fallbackProviderId),
   };
 }
@@ -852,6 +1046,10 @@ function activeProviderConfig(settings: AiSettings): AiProviderConfig {
 
 function isHvyMode(value: string | undefined): value is HvyMode {
   return value === 'viewer' || value === 'ai' || value === 'editor' || value === 'hvy' || value === 'advanced';
+}
+
+function isWorkspaceSearchMode(value: string | undefined): value is HvyDocumentSearchMode {
+  return value === 'keyword' || value === 'semantic';
 }
 
 function formatBackupTimestamp(value: string): string {

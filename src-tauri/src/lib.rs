@@ -149,6 +149,8 @@ struct AiActionSettings {
     import_planning: AiActionConfig,
     import_writing: AiActionConfig,
     import_cleanup: AiActionConfig,
+    #[serde(default = "default_semantic_filter_action_config")]
+    semantic_filter: AiActionConfig,
     compaction: AiActionConfig,
 }
 
@@ -174,6 +176,7 @@ fn default_ai_action_settings() -> AiActionSettings {
         import_planning: AiActionConfig::new("default", "gpt-5.4-mini"),
         import_writing: AiActionConfig::new("default", "gpt-5.4-mini"),
         import_cleanup: AiActionConfig::new("default", "gpt-5.4-mini"),
+        semantic_filter: default_semantic_filter_action_config(),
         compaction: AiActionConfig::new("default", "gpt-5.4-nano"),
     }
 }
@@ -185,8 +188,13 @@ fn same_model_ai_action_settings(provider_id: &str, model: &str) -> AiActionSett
         import_planning: AiActionConfig::new(provider_id, model),
         import_writing: AiActionConfig::new(provider_id, model),
         import_cleanup: AiActionConfig::new(provider_id, model),
+        semantic_filter: AiActionConfig::new(provider_id, model),
         compaction: AiActionConfig::new(provider_id, model),
     }
+}
+
+fn default_semantic_filter_action_config() -> AiActionConfig {
+    AiActionConfig::new("default", "gpt-5.4-mini")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -260,6 +268,8 @@ struct AiTaskModelsLegacy {
     import_planning: String,
     import_writing: String,
     import_cleanup: String,
+    #[serde(default)]
+    semantic_filter: String,
     compaction: String,
 }
 
@@ -1230,6 +1240,7 @@ fn normalize_ai_actions(
         import_planning: normalize_ai_action(actions.import_planning, providers, active_provider_id),
         import_writing: normalize_ai_action(actions.import_writing, providers, active_provider_id),
         import_cleanup: normalize_ai_action(actions.import_cleanup, providers, active_provider_id),
+        semantic_filter: normalize_ai_action(actions.semantic_filter, providers, active_provider_id),
         compaction: normalize_ai_action(actions.compaction, providers, active_provider_id),
     }
 }
@@ -1283,6 +1294,7 @@ fn preset_ai_settings(settings: AiSettingsPresetFile) -> AiSettings {
             import_planning: AiActionConfig::new(&provider_id, active_models.import_planning.trim()),
             import_writing: AiActionConfig::new(&provider_id, active_models.import_writing.trim()),
             import_cleanup: AiActionConfig::new(&provider_id, active_models.import_cleanup.trim()),
+            semantic_filter: AiActionConfig::new(&provider_id, active_models.semantic_filter.trim()),
             compaction: AiActionConfig::new(&provider_id, active_models.compaction.trim()),
         },
     }
@@ -1510,6 +1522,7 @@ mod tests {
                 import_planning: AiActionConfig::new(" openai-compatible ", " planner "),
                 import_writing: AiActionConfig::new(" openai-compatible ", " writer "),
                 import_cleanup: AiActionConfig::new(" openai-compatible ", " cleanup "),
+                semantic_filter: AiActionConfig::new(" openai-compatible ", " semantic "),
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
         })
@@ -1522,5 +1535,7 @@ mod tests {
         assert_eq!(settings.actions.chat.provider_id, "openai-compatible");
         assert_eq!(settings.actions.chat.model, "llama3.2");
         assert_eq!(settings.actions.edit.provider_id, "openai-compatible");
+        assert_eq!(settings.actions.semantic_filter.provider_id, "openai-compatible");
+        assert_eq!(settings.actions.semantic_filter.model, "semantic");
     }
 }

@@ -1,6 +1,7 @@
 import { defaultAiSettings, type AiSettings, type DocumentBackup, type DocumentExtension, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
+import type { HvyDocumentSearchMode, HvyDocumentSearchResult } from '../../heavy-file-format/src/search/types';
 
 export interface OpenDocument {
   path: string;
@@ -35,6 +36,18 @@ export interface AppState {
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
+  workspaceSearch: WorkspaceSearchState;
+}
+
+export interface WorkspaceSearchState {
+  open: boolean;
+  queryDraft: string;
+  submittedQuery: string;
+  mode: HvyDocumentSearchMode;
+  isLoading: boolean;
+  error: string | null;
+  results: HvyDocumentSearchResult[];
+  activeResultId: string | null;
 }
 
 export const state: AppState = {
@@ -59,6 +72,16 @@ export const state: AppState = {
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
   recoveryBackups: [],
+  workspaceSearch: {
+    open: false,
+    queryDraft: '',
+    submittedQuery: '',
+    mode: 'keyword',
+    isLoading: false,
+    error: null,
+    results: [],
+    activeResultId: null,
+  },
 };
 
 export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {

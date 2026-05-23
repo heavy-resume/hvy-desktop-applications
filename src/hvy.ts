@@ -1,4 +1,6 @@
 import type { DocumentExtension } from './backend';
+import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
+import type { HvyDocumentSearchRequest, HvyDocumentSearchResponse } from '../../heavy-file-format/src/search/types';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
@@ -49,10 +51,19 @@ export async function mountHvyDocument(
     mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
+    semanticFilterProvider: chatSemanticFilterProvider,
     storageKey: mode === 'editor' || mode === 'advanced' ? null : options.storageKey,
     onDocumentChange: options.onDocumentChange,
   });
   return { mount, document };
+}
+
+export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {
+  const { searchDocuments } = await loadHvyEmbed();
+  return searchDocuments({
+    semanticFilterProvider: chatSemanticFilterProvider,
+    ...request,
+  });
 }
 
 async function mountRawHvyDocument(

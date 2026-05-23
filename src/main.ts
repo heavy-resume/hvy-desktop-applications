@@ -1,5 +1,6 @@
 import './styles.css';
 import { installAiChatClient } from './aiClient';
+import type { HvyDocumentSearchDocument, HvyDocumentSearchResult } from '../../heavy-file-format/src/search/types';
 import {
   addFilesToWorkspace,
   chooseWorkspaceFolder,
@@ -24,9 +25,11 @@ import {
   saveDocumentAsDialog,
   saveDocumentFile,
   type DocumentFile,
+  type WorkspaceFileNode,
+  type WorkspaceTreeNode,
 } from './backend';
 import { applyColorTheme, getPaletteById, isCssVariableName, loadColorThemeSettings, saveColorThemeSettings } from './colorTheme';
-import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
+import { deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, searchHvyDocuments, serializeMountedDocument, type HvyMode, type VisualDocument } from './hvy';
 import { state } from './state';
 import { getHvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
@@ -49,6 +52,7 @@ interface DocumentSession {
 }
 const documentSessions = new Map<string, DocumentSession>();
 const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
+let pendingWorkspaceSearchTarget: HvyDocumentSearchResult | null = null;
 
 const handlers: UiHandlers = {
   newWorkspace: () => {
@@ -152,6 +156,35 @@ const handlers: UiHandlers = {
     state.status = 'Added files to workspace';
     await refreshRecents();
   }),
+  openWorkspaceSearch: () => {
+    closeUiBeforeWorkspaceSearch();
+    state.workspaceSearch.open = true;
+    state.workspaceSearch.error = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-search-query"]')?.focus();
+    });
+  },
+  closeWorkspaceSearch: () => {
+    state.workspaceSearch.open = false;
+    state.workspaceSearch.isLoading = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  setWorkspaceSearchMode: (mode) => {
+    state.workspaceSearch.mode = mode;
+    state.workspaceSearch.error = null;
+    rerender({ preserveMountedDocument: true });
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-search-query"]')?.focus();
+    });
+  },
+  updateWorkspaceSearchQuery: (query) => {
+    state.workspaceSearch.queryDraft = query;
+  },
+  submitWorkspaceSearch: () => void submitWorkspaceSearch(),
+  selectWorkspaceSearchResult: (resultId) => void selectWorkspaceSearchResult(resultId),
   openAbout: () => {
     closeUiBeforeAbout();
     state.aboutDialogOpen = true;
@@ -455,6 +488,95 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
     state.status = 'Could not load HVY guide';
     mountRoot = render(state, handlers);
   }
+}
+
+async function submitWorkspaceSearch(): Promise<void> {
+  const query = state.workspaceSearch.queryDraft.trim();
+  state.workspaceSearch.submittedQuery = query;
+  state.workspaceSearch.activeResultId = null;
+  state.workspaceSearch.error = null;
+  state.workspaceSearch.results = [];
+  if (!query) {
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  if (state.workspaces.length === 0) {
+    state.workspaceSearch.error = 'Open a workspace before searching.';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+
+  state.workspaceSearch.isLoading = true;
+  rerender({ preserveMountedDocument: true });
+  try {
+    preserveCurrentDocumentSession();
+    const documents = await buildWorkspaceSearchDocuments();
+    const response = await searchHvyDocuments({
+      documents,
+      query,
+      mode: state.workspaceSearch.mode,
+    });
+    state.workspaceSearch.results = response.results;
+    state.workspaceSearch.error = null;
+    state.status = `Workspace search found ${response.results.length} result${response.results.length === 1 ? '' : 's'}`;
+  } catch (error) {
+    state.workspaceSearch.results = [];
+    state.workspaceSearch.error = error instanceof Error ? error.message : String(error);
+    state.status = 'Ready';
+  } finally {
+    state.workspaceSearch.isLoading = false;
+    rerender({ preserveMountedDocument: true });
+  }
+}
+
+async function selectWorkspaceSearchResult(resultId: string): Promise<void> {
+  const result = state.workspaceSearch.results.find((candidate) => candidate.id === resultId);
+  if (!result) return;
+  state.workspaceSearch.activeResultId = result.id;
+  pendingWorkspaceSearchTarget = result;
+  await runBusy('Opening search result...', async () => {
+    const file = await readDocumentFile(result.documentId);
+    state.workspaceSearch.open = false;
+    await openDocument(file, { deferMount: true });
+    await refreshRecents();
+  });
+}
+
+async function buildWorkspaceSearchDocuments(): Promise<HvyDocumentSearchDocument[]> {
+  const documents: HvyDocumentSearchDocument[] = [];
+  const files = state.workspaces.flatMap((workspace) => flattenWorkspaceFiles(workspace.files));
+  for (const file of files) {
+    const session = documentSessions.get(file.path);
+    const openDocument = state.document?.path === file.path ? state.document : null;
+    const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
+    if (liveDocument) {
+      documents.push({
+        documentId: file.path,
+        documentTitle: displaySearchDocumentTitle(file.name),
+        document: liveDocument,
+      });
+      continue;
+    }
+    try {
+      const documentFile = await readDocumentFile(file.path);
+      documents.push({
+        documentId: file.path,
+        documentTitle: displaySearchDocumentTitle(documentFile.name),
+        document: await deserializeHvy(new Uint8Array(documentFile.bytes), documentFile.extension),
+      });
+    } catch {
+      // Keep workspace search resilient if one file was moved, deleted, or cannot be parsed.
+    }
+  }
+  return documents;
+}
+
+function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
+}
+
+function displaySearchDocumentTitle(name: string): string {
+  return name.replace(/\.(t?hvy|md)$/i, '');
 }
 
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean } = {}): Promise<void> {
@@ -783,6 +905,7 @@ async function runBusy(label: string, task: () => Promise<void>): Promise<void> 
     pendingMountDocument = null;
     rerender();
     await mountCurrentDocument(documentToMount);
+    navigateToPendingWorkspaceSearchTarget();
   }
 }
 
@@ -861,6 +984,42 @@ function closeUiBeforeColorTheme(): void {
   closeMountedTransientUi();
 }
 
+function closeUiBeforeWorkspaceSearch(): void {
+  state.newWorkspaceDialogOpen = false;
+  state.newDocumentWorkspacePath = null;
+  state.aboutDialogOpen = false;
+  state.aiSettingsDialogOpen = false;
+  state.aiSettingsDraft = null;
+  state.aiSettingsDialogInitialJson = null;
+  state.colorThemeDialogOpen = false;
+  state.recoveryDialogOpen = false;
+  state.recoveryBackups = [];
+  state.openWorkspaceActionsPath = null;
+  closeMountedTransientUi();
+}
+
+function navigateToPendingWorkspaceSearchTarget(): void {
+  const target = pendingWorkspaceSearchTarget;
+  pendingWorkspaceSearchTarget = null;
+  if (!target || !mountRoot) return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const sectionKey = cssEscape(target.sectionKey);
+      const blockId = target.blockId ? cssEscape(target.blockId) : '';
+      const selector = target.blockId
+        ? `[data-section-key="${sectionKey}"][data-block-id="${blockId}"]`
+        : `[data-section-key="${sectionKey}"]`;
+      const element = mountRoot?.querySelector<HTMLElement>(selector);
+      if (!element) return;
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      element.classList.add('workspace-search-target-highlight');
+      window.setTimeout(() => {
+        element.classList.remove('workspace-search-target-highlight');
+      }, 1600);
+    });
+  });
+}
+
 function persistAndApplyColorTheme(): void {
   saveColorThemeSettings(state.colorTheme);
   applyColorTheme(state.colorTheme, mountRoot);
@@ -913,6 +1072,7 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
       importPlanning: settings.actions.importPlanning,
       importWriting: settings.actions.importWriting,
       importCleanup: settings.actions.importCleanup,
+      semanticFilter: settings.actions.semanticFilter,
       compaction: settings.actions.compaction,
     },
   };

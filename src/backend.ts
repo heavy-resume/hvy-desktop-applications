@@ -90,7 +90,7 @@ export interface DocumentBackup {
   createdAt: string;
 }
 
-export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'compaction';
+export type AiActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
 
 export interface AiProviderConfig {
   provider: string;
@@ -165,6 +165,7 @@ export function defaultAiActionSettings(providerId = 'default'): AiActionSetting
     importPlanning: { providerId, model: 'gpt-5.4-mini' },
     importWriting: { providerId, model: 'gpt-5.4-mini' },
     importCleanup: { providerId, model: 'gpt-5.4-mini' },
+    semanticFilter: { providerId, model: 'gpt-5.4-mini' },
     compaction: { providerId, model: 'gpt-5.4-nano' },
   };
 }
