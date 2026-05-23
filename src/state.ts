@@ -1,7 +1,7 @@
 import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
-import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
+import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface OpenDocument {
   path: string;
@@ -52,6 +52,7 @@ export interface WorkspaceFilterConfig {
   query: string;
   mode: HvyDocumentSearchMode;
   filterMode: SearchFilterMode;
+  snapshots: Record<string, HvySearchSnapshot>;
 }
 
 export interface WorkspaceFilterState {
@@ -62,6 +63,7 @@ export interface WorkspaceFilterState {
   mode: HvyDocumentSearchMode;
   filterMode: SearchFilterMode;
   isLoading: boolean;
+  status: string | null;
   error: string | null;
 }
 
@@ -102,6 +104,7 @@ export const state: AppState = {
     mode: 'keyword',
     filterMode: 'deprioritize',
     isLoading: false,
+    status: null,
     error: null,
   },
   workspaceFilters: {},

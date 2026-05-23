@@ -39,10 +39,12 @@ import {
   type DocumentFile,
   type McpClientInstallTarget,
   type McpSettings,
+  type WorkspaceFileNode,
+  type WorkspaceTreeNode,
   updateMcpWorkspaces,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
-import { createHvyDocumentSearchSnapshot, deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, searchHvyDocuments, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { createHvyDocumentFilterSnapshot, deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getHvyTemplate } from './templates';
 import { render, type UiHandlers } from './ui';
@@ -51,6 +53,8 @@ let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
 let backupTimer: number | null = null;
+let mountThemeReapplyCleanup: (() => void) | null = null;
+let workspaceFilterAbortController: AbortController | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
 interface DocumentSession {
@@ -65,6 +69,7 @@ interface DocumentSession {
   document: VisualDocument;
 }
 const documentSessions = new Map<string, DocumentSession>();
+const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
 
 const handlers: UiHandlers = {
@@ -175,6 +180,7 @@ const handlers: UiHandlers = {
     state.workspaceFilter.workspacePath = workspacePath;
     state.workspaceFilter.open = true;
     state.workspaceFilter.error = null;
+    state.workspaceFilter.status = null;
     state.workspaceFilter.queryDraft = activeFilter?.query ?? '';
     state.workspaceFilter.submittedQuery = activeFilter?.query ?? '';
     state.workspaceFilter.mode = activeFilter?.mode ?? 'keyword';
@@ -188,12 +194,14 @@ const handlers: UiHandlers = {
   closeWorkspaceFilter: () => {
     state.workspaceFilter.open = false;
     state.workspaceFilter.isLoading = false;
+    state.workspaceFilter.status = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
   setWorkspaceFilterMode: (mode) => {
     state.workspaceFilter.mode = mode;
     state.workspaceFilter.error = null;
+    state.workspaceFilter.status = null;
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-filter-query"]')?.focus();
@@ -202,6 +210,7 @@ const handlers: UiHandlers = {
   setWorkspaceFilterBehavior: (mode) => {
     state.workspaceFilter.filterMode = mode;
     state.workspaceFilter.error = null;
+    state.workspaceFilter.status = null;
     rerender({ preserveMountedDocument: true });
   },
   updateWorkspaceFilterQuery: (query) => {
@@ -689,10 +698,18 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
 }
 
 async function submitWorkspaceFilter(): Promise<void> {
+  if (state.workspaceFilter.isLoading) {
+    workspaceFilterAbortController?.abort();
+    state.workspaceFilter.status = 'Stopping filter...';
+    state.status = 'Stopping filter...';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   const workspacePath = state.workspaceFilter.workspacePath;
   const query = state.workspaceFilter.queryDraft.trim();
   state.workspaceFilter.submittedQuery = query;
   state.workspaceFilter.error = null;
+  state.workspaceFilter.status = null;
   if (!workspacePath || !state.workspaces.some((workspace) => workspace.path === workspacePath)) {
     state.workspaceFilter.error = 'Open a workspace before filtering.';
     rerender({ preserveMountedDocument: true });
@@ -700,29 +717,50 @@ async function submitWorkspaceFilter(): Promise<void> {
   }
   if (!query) {
     delete state.workspaceFilters[workspacePath];
+    clearWorkspaceFilterDocumentCache(workspacePath);
     await applyWorkspaceFilterToCurrentDocument();
     rerender({ preserveMountedDocument: true });
     return;
   }
 
-  const config: WorkspaceFilterConfig = {
-    query,
-    mode: state.workspaceFilter.mode,
-    filterMode: state.workspaceFilter.filterMode,
-  };
   state.workspaceFilter.isLoading = true;
+  const abortController = new AbortController();
+  workspaceFilterAbortController = abortController;
   rerender({ preserveMountedDocument: true });
   try {
     preserveCurrentDocumentSession();
+    const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+    if (!workspace) {
+      throw new Error('Open a workspace before filtering.');
+    }
+    const documents = await buildWorkspaceFilterDocuments(workspace);
+    const snapshots = await createWorkspaceFilterSnapshots(documents, {
+      query,
+      mode: state.workspaceFilter.mode,
+      filterMode: state.workspaceFilter.filterMode,
+      signal: abortController.signal,
+    });
+    const config: WorkspaceFilterConfig = {
+      query,
+      mode: state.workspaceFilter.mode,
+      filterMode: state.workspaceFilter.filterMode,
+      snapshots,
+    };
     state.workspaceFilters[workspacePath] = config;
+    cacheWorkspaceFilterDocuments(workspacePath, documents);
     await applyWorkspaceFilterToCurrentDocument();
     state.workspaceFilter.open = false;
     state.workspaceFilter.error = null;
+    state.workspaceFilter.status = null;
     state.status = `Filtered ${workspaceNameForPath(workspacePath)}`;
   } catch (error) {
-    state.workspaceFilter.error = error instanceof Error ? error.message : String(error);
-    state.status = 'Ready';
+    state.workspaceFilter.error = isAbortError(error) ? null : error instanceof Error ? error.message : String(error);
+    state.workspaceFilter.status = null;
+    state.status = isAbortError(error) ? 'Filter stopped' : 'Ready';
   } finally {
+    if (workspaceFilterAbortController === abortController) {
+      workspaceFilterAbortController = null;
+    }
     state.workspaceFilter.isLoading = false;
     rerender({ preserveMountedDocument: true });
   }
@@ -732,8 +770,10 @@ async function clearWorkspaceFilter(): Promise<void> {
   const workspacePath = state.workspaceFilter.workspacePath;
   if (!workspacePath) return;
   delete state.workspaceFilters[workspacePath];
+  clearWorkspaceFilterDocumentCache(workspacePath);
   state.workspaceFilter.submittedQuery = '';
   state.workspaceFilter.error = null;
+  state.workspaceFilter.status = null;
   state.workspaceFilter.open = false;
   await applyWorkspaceFilterToCurrentDocument();
   state.status = `Cleared filter for ${workspaceNameForPath(workspacePath)}`;
@@ -747,6 +787,7 @@ async function applyWorkspaceFilterToCurrentDocument(): Promise<void> {
   const snapshot = await createWorkspaceFilterSnapshotForDocument(openDocument.path, openDocument.name, document);
   if (openDocument.mounted) {
     setMountedSearchSnapshot(openDocument.mounted, snapshot);
+    applyColorTheme(state.colorTheme, mountRoot);
   }
 }
 
@@ -755,25 +796,110 @@ async function createWorkspaceFilterSnapshotForDocument(
   name: string,
   document: VisualDocument,
 ) {
+  void name;
+  void document;
   const workspacePath = workspacePathForFile(path);
   const filter = workspacePath ? state.workspaceFilters[workspacePath] : null;
   if (!filter || !filter.query.trim()) {
     return null;
   }
-  const documents: HvyDocumentSearchDocument[] = [{
-    documentId: path,
-    documentTitle: displayDocumentName(name),
-    document,
-  }];
-  const response = await searchHvyDocuments({
-    documents,
-    query: filter.query,
-    mode: filter.mode,
+  return findWorkspaceFilterSnapshot(filter, path);
+}
+
+function findWorkspaceFilterSnapshot(filter: WorkspaceFilterConfig, path: string) {
+  const direct = filter.snapshots[path];
+  if (direct) return direct;
+  const workspacePath = workspacePathForFile(path);
+  const candidates = new Set([
+    normalizeFilePath(path),
+    ...(workspacePath ? [normalizeWorkspaceRelativePath(path, workspacePath)] : []),
+  ]);
+  const match = Object.entries(filter.snapshots).find(([candidatePath]) => {
+    const normalizedCandidate = normalizeFilePath(candidatePath);
+    return candidates.has(normalizedCandidate)
+      || (workspacePath ? candidates.has(normalizeWorkspaceRelativePath(candidatePath, workspacePath)) : false);
   });
-  return createHvyDocumentSearchSnapshot(response, path, {
-    filterEnabled: true,
-    filterMode: filter.filterMode,
-  });
+  return match?.[1] ?? null;
+}
+
+function normalizeFilePath(path: string): string {
+  return path.replaceAll('\\', '/');
+}
+
+function normalizeWorkspaceRelativePath(path: string, workspacePath: string): string {
+  const normalizedPath = normalizeFilePath(path);
+  const normalizedWorkspacePath = normalizeFilePath(workspacePath).replace(/\/+$/, '');
+  return normalizedPath.startsWith(`${normalizedWorkspacePath}/`)
+    ? normalizedPath.slice(normalizedWorkspacePath.length + 1)
+    : normalizedPath;
+}
+
+async function createWorkspaceFilterSnapshots(
+  documents: HvyDocumentSearchDocument[],
+  filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
+): Promise<WorkspaceFilterConfig['snapshots']> {
+  const snapshots: WorkspaceFilterConfig['snapshots'] = {};
+  for (const [index, entry] of documents.entries()) {
+    const label = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
+    state.workspaceFilter.status = label;
+    state.status = label;
+    rerender({ preserveMountedDocument: true });
+    const snapshot = await createHvyDocumentFilterSnapshot({
+      document: entry.document,
+      query: filter.query,
+      mode: filter.mode,
+      view: 'viewer',
+      filterMode: filter.filterMode,
+      traceRunId: `workspace-filter:${Date.now().toString(36)}`,
+      signal: filter.signal,
+      onSemanticProgress: filter.mode === 'semantic'
+        ? (progress) => {
+          state.workspaceFilter.error = null;
+          state.workspaceFilter.status = `Semantic windows ${progress.completedWindows}/${progress.totalWindows}; ${progress.matchedCandidates} matches in ${entry.documentTitle ?? displayDocumentName(entry.documentId)}`;
+          state.status = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
+          rerender({ preserveMountedDocument: true });
+        }
+        : undefined,
+    });
+    snapshots[entry.documentId] = snapshot;
+  }
+  return snapshots;
+}
+
+async function buildWorkspaceFilterDocuments(workspace: Awaited<ReturnType<typeof loadWorkspace>>): Promise<HvyDocumentSearchDocument[]> {
+  const documents: HvyDocumentSearchDocument[] = [];
+  for (const file of flattenWorkspaceFiles(workspace.files)) {
+    const session = documentSessions.get(file.path);
+    const openDocument = state.document?.path === file.path ? state.document : null;
+    const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
+    if (liveDocument) {
+      documents.push({
+        documentId: file.path,
+        documentTitle: displayDocumentName(file.name),
+        document: liveDocument,
+      });
+      continue;
+    }
+    try {
+      const documentFile = await readDocumentFile(file.path);
+      documents.push({
+        documentId: file.path,
+        documentTitle: displayDocumentName(documentFile.name),
+        document: await deserializeHvy(new Uint8Array(documentFile.bytes), documentFile.extension),
+      });
+    } catch {
+      // Keep workspace filtering resilient if one file was moved, deleted, or cannot be parsed.
+    }
+  }
+  return documents;
+}
+
+function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function workspaceNameForPath(path: string): string {
@@ -790,7 +916,8 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(file.path);
   const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
   const bytes = new Uint8Array(file.bytes);
-  const document = session?.document ?? await deserializeHvy(bytes, file.extension);
+  const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
+  const document = session?.document ?? cachedFilterDocument ?? await deserializeHvy(bytes, file.extension);
   state.document = {
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
@@ -857,9 +984,32 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
   });
 }
 
+function cacheWorkspaceFilterDocuments(workspacePath: string, documents: HvyDocumentSearchDocument[]): void {
+  clearWorkspaceFilterDocumentCache(workspacePath);
+  for (const entry of documents) {
+    workspaceFilterDocumentCache.set(entry.documentId, entry.document);
+  }
+}
+
+function clearWorkspaceFilterDocumentCache(workspacePath: string): void {
+  for (const path of workspaceFilterDocumentCache.keys()) {
+    if (pathStartsWithWorkspace(path, workspacePath)) {
+      workspaceFilterDocumentCache.delete(path);
+    }
+  }
+}
+
+function pathStartsWithWorkspace(path: string, workspacePath: string): boolean {
+  const normalizedPath = normalizeFilePath(path);
+  const normalizedWorkspacePath = normalizeFilePath(workspacePath).replace(/\/+$/, '');
+  return normalizedPath === normalizedWorkspacePath || normalizedPath.startsWith(`${normalizedWorkspacePath}/`);
+}
+
 async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
   if (!state.document || !mountRoot || !document) return;
   state.document.mounted?.mount.destroy();
+  mountThemeReapplyCleanup?.();
+  mountThemeReapplyCleanup = null;
   const generation = ++mountGeneration;
   const searchSnapshot = await createWorkspaceFilterSnapshotForDocument(state.document.path, state.document.name, document);
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
@@ -871,8 +1021,31 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
     },
   });
   applyColorTheme(state.colorTheme, mountRoot);
+  mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
   state.document.mounted = mounted;
   setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
+}
+
+function bindMountThemeReapply(root: HTMLElement): () => void {
+  const controller = new AbortController();
+  let frame = 0;
+  const schedule = () => {
+    if (frame) window.cancelAnimationFrame(frame);
+    frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        applyColorTheme(state.colorTheme, root);
+      });
+    });
+  };
+  root.addEventListener('click', schedule, { signal: controller.signal });
+  root.addEventListener('input', schedule, { signal: controller.signal });
+  root.addEventListener('submit', schedule, { signal: controller.signal });
+  root.addEventListener('keydown', schedule, { signal: controller.signal });
+  return () => {
+    controller.abort();
+    if (frame) window.cancelAnimationFrame(frame);
+  };
 }
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {

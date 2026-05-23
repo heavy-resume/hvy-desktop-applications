@@ -291,6 +291,16 @@ button:disabled {
   white-space: nowrap;
 }
 
+.tree-file.is-filter-empty,
+.tree-item-filter-empty > details > summary {
+  opacity: 0.45;
+}
+
+.tree-file.is-filter-empty:hover,
+.tree-file.is-filter-empty:focus-visible {
+  opacity: 0.72;
+}
+
 .file-context-menu {
   position: fixed;
   z-index: 1000;

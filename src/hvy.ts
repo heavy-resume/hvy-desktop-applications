@@ -3,7 +3,6 @@ import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/s
 import type {
   HvyDocumentSearchRequest,
   HvyDocumentSearchResponse,
-  HvyDocumentSearchSnapshot,
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
 
@@ -77,13 +76,14 @@ export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Pro
   });
 }
 
-export async function createHvyDocumentSearchSnapshot(
-  response: HvyDocumentSearchResponse,
-  documentId: string,
-  options: { filterEnabled?: boolean; filterMode?: HvyDocumentSearchSnapshot['filterMode'] } = {},
-): Promise<HvyDocumentSearchSnapshot> {
-  const { createDocumentSearchSnapshot } = await loadHvyEmbed();
-  return createDocumentSearchSnapshot(response, documentId, options);
+export async function createHvyDocumentFilterSnapshot(
+  request: Parameters<HvyEmbedModule['createDocumentFilterSnapshot']>[0],
+): Promise<Awaited<ReturnType<HvyEmbedModule['createDocumentFilterSnapshot']>>> {
+  const { createDocumentFilterSnapshot } = await loadHvyEmbed();
+  return createDocumentFilterSnapshot({
+    semanticFilterProvider: chatSemanticFilterProvider,
+    ...request,
+  });
 }
 
 async function mountRawHvyDocument(

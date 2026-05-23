@@ -304,6 +304,8 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (!target || !field || target.closest('#hvyMount')) return;
     if (field === 'workspace-filter-query') {
       handlers.updateWorkspaceFilterQuery(target.value);
+      const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
+      if (form) updateWorkspaceFilterSubmit(form);
       return;
     }
     if (field === 'mcp-port' || field === 'mcp-token') {
@@ -436,6 +438,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     updateNewWorkspaceSubmit(form);
     form.addEventListener('input', () => updateNewWorkspaceSubmit(form), { signal });
   });
+  root.querySelectorAll<HTMLFormElement>('form[data-form="workspace-filter"]').forEach((form) => {
+    updateWorkspaceFilterSubmit(form);
+  });
 }
 
 function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
@@ -452,15 +457,17 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
       && activeFilter.filterMode === filter.filterMode
   );
   const isSemantic = filter.mode === 'semantic';
+  const stopSemanticFilter = filter.isLoading && isSemantic;
+  const submitLabel = stopSemanticFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
   const status = filter.isLoading
-    ? isSemantic ? `Analyzing ${workspaceName}...` : `Filtering ${workspaceName}...`
+    ? filter.status ?? (isSemantic ? `Analyzing ${workspaceName}...` : `Filtering ${workspaceName}...`)
     : filter.error
     ? filter.error
     : '';
   return `
     <section class="workspace-filter-overlay" aria-label="Workspace filter">
       <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
-      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" role="dialog" aria-modal="true" aria-label="Filter workspace">
+      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
         <div class="search-tabbar">
           <div class="workspace-filter-title">
             ${funnelIcon()}
@@ -494,9 +501,10 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           <button
             type="submit"
             class="secondary${applied ? ' is-active' : ''}"
+            data-role="workspace-filter-submit"
             aria-pressed="${applied ? 'true' : 'false'}"
-            ${filter.isLoading || filter.queryDraft.trim().length === 0 ? 'disabled' : ''}
-          >${applied ? 'Update filter' : 'Filter'}</button>
+            ${!stopSemanticFilter && (filter.isLoading || filter.queryDraft.trim().length === 0) ? 'disabled' : ''}
+          >${submitLabel}</button>
           ${activeFilter ? `<button type="button" class="ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
         </div>
       </form>
@@ -683,6 +691,9 @@ function renderWorkspace(
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
+  const matchedDocumentIds = filter
+    ? new Set(Object.entries(filter.snapshots).flatMap(([documentId, snapshot]) => snapshot.results.length > 0 ? [documentId] : []))
+    : null;
   const filterTitle = filter
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
@@ -699,27 +710,40 @@ function renderWorkspace(
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
         </div>
       </div>
-      ${workspace.files.length === 0 ? '' : `<ul class="tree">${workspace.files.map((node) => renderNode(node, selectedFilePath)).join('')}</ul>`}
+      ${workspace.files.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(workspace.files, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds)).join('')}</ul>`}
     </details>`;
 }
 
-function renderNode(node: WorkspaceTreeNode, selectedFilePath: string | null): string {
+function renderNode(node: WorkspaceTreeNode, selectedFilePath: string | null, matchedDocumentIds: Set<string> | null): string {
   if (node.kind === 'folder') {
+    const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds);
     return `
-      <li>
+      <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details open>
           <summary>${escapeHtml(node.name)}</summary>
-          <ul class="tree">${node.children.map((child) => renderNode(child, selectedFilePath)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds)).join('')}</ul>
         </details>
       </li>`;
   }
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
+  const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
   return `
     <li>
-      <button type="button" class="tree-file${selected}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}">
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}">
         <span>${escapeHtml(displayDocumentName(node.name))}</span>
       </button>
     </li>`;
+}
+
+function sortNodesForFilter(nodes: WorkspaceTreeNode[], matchedDocumentIds: Set<string> | null): WorkspaceTreeNode[] {
+  if (!matchedDocumentIds) return nodes;
+  return [...nodes].sort((left, right) => Number(nodeHasFilterMatch(right, matchedDocumentIds)) - Number(nodeHasFilterMatch(left, matchedDocumentIds)));
+}
+
+function nodeHasFilterMatch(node: WorkspaceTreeNode, matchedDocumentIds: Set<string> | null): boolean {
+  if (!matchedDocumentIds) return true;
+  if (node.kind === 'file') return matchedDocumentIds.has(node.path);
+  return node.children.some((child) => nodeHasFilterMatch(child, matchedDocumentIds));
 }
 
 function displayDocumentName(name: string): string {
@@ -791,6 +815,15 @@ function updateNewWorkspaceSubmit(form: HTMLFormElement): void {
       ? 'A workspace with that name is already open.'
       : 'Choose a unique name for a new app-managed workspace.';
     note.dataset.state = duplicate ? 'error' : 'neutral';
+  }
+}
+
+function updateWorkspaceFilterSubmit(form: HTMLFormElement): void {
+  const submit = form.querySelector<HTMLButtonElement>('[data-role="workspace-filter-submit"]');
+  const query = form.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-filter-query"]')?.value.trim() ?? '';
+  if (submit) {
+    const isSemanticLoading = form.classList.contains('is-semantic-mode') && form.dataset.loading === 'true';
+    submit.disabled = !isSemanticLoading && query.length === 0;
   }
 }
 
