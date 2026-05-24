@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
+    "electron": "electron src-electron/main.cjs",
+    "electron:dev": "node scripts/electron-dev.mjs",
     "build": "tsc && vite build",
     "build:universal": "tauri build --target universal-apple-darwin --bundles app",
     "build:universal:dmg": "tauri build --target universal-apple-darwin --bundles dmg",
@@ -21,6 +23,7 @@
     "@tauri-apps/cli": "^2.9.0",
     "@types/node": "^24.6.0",
     "brython": "^3.14.0",
+    "electron": "^37.9.0",
     "playwright": "^1.60.0",
     "typescript": "^5.8.3",
     "vite": "^6.3.3",

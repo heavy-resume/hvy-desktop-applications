@@ -1,6 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+declare global {
+  interface Window {
+    hvyElectron?: {
+      invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+      onMenuEvent(callback: (event: string) => void): () => void;
+    };
+  }
+}
+
 export type DocumentExtension = '.hvy' | '.thvy' | '.md';
 
 export interface WorkspaceManifest {
@@ -197,7 +206,14 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+export function isElectronRuntime(): boolean {
+  return typeof window !== 'undefined' && Boolean(window.hvyElectron);
+}
+
 function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (isElectronRuntime()) {
+    return window.hvyElectron!.invoke<T>(command, args);
+  }
   if (!isTauriRuntime()) {
     return Promise.reject(new Error(`Desktop command unavailable in browser: ${command}`));
   }
@@ -205,21 +221,21 @@ function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Prom
 }
 
 export function loadRecentState(): Promise<RecentState> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve({ workspaces: [], files: [] });
   }
   return invokeDesktop('load_recent_state');
 }
 
 export function loadAppEnvironment(): Promise<AppEnvironment> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultAppEnvironment());
   }
   return invokeDesktop('load_app_environment');
 }
 
 export function loadAiSettings(): Promise<AiSettings> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultAiSettings());
   }
   return invokeDesktop('load_ai_settings');
@@ -230,7 +246,7 @@ export function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
 }
 
 export function loadMcpSettings(): Promise<McpSettings> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpSettings());
   }
   return invokeDesktop('load_mcp_settings');
@@ -241,21 +257,21 @@ export function saveMcpSettings(settings: McpSettings): Promise<McpSettings> {
 }
 
 export function loadMcpServerStatus(): Promise<McpServerStatus> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpServerStatus());
   }
   return invokeDesktop('load_mcp_server_status');
 }
 
 export function loadMcpStdioLaunchConfig(): Promise<McpStdioLaunchConfig> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpStdioLaunchConfig());
   }
   return invokeDesktop('load_mcp_stdio_launch_config');
 }
 
 export function loadMcpClientInstallStatus(): Promise<McpClientInstallStatus[]> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpClientInstallStatus());
   }
   return invokeDesktop('load_mcp_client_install_status');
@@ -282,7 +298,7 @@ export function stopMcpServer(): Promise<McpServerStatus> {
 }
 
 export function updateMcpWorkspaces(paths: string[]): Promise<void> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve();
   }
   return invokeDesktop('update_mcp_workspaces', { paths });
@@ -454,7 +470,7 @@ export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<Do
 }
 
 export function listSavedTemplates(workspacePath?: string | null): Promise<SavedTemplate[]> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve([]);
   }
   return invokeDesktop('list_saved_templates', { workspacePath: workspacePath ?? null });
@@ -493,7 +509,7 @@ export function createDocumentBackup(request: DocumentBackupRequest): Promise<Do
 }
 
 export function listDocumentBackups(): Promise<DocumentBackup[]> {
-  if (!isTauriRuntime()) {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve([]);
   }
   return invokeDesktop('list_document_backups');
@@ -508,6 +524,9 @@ export function openExternalUrl(url: string): Promise<void> {
 }
 
 export function onMenuEvent(handler: (event: string) => void): Promise<() => void> {
+  if (isElectronRuntime()) {
+    return Promise.resolve(window.hvyElectron!.onMenuEvent(handler));
+  }
   if (!isTauriRuntime()) {
     void handler;
     return Promise.resolve(() => undefined);
