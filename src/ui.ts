@@ -1,9 +1,9 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpClientInstallTarget, type McpSettings, type Workspace, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpClientInstallTarget, type McpSettings, type TemplateScope, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceFilterState } from './state';
-import { hvyTemplates } from './templates';
+import { mergeSavedTemplates } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 import ufoLogoUrl from './assets/ufo-no-bg.svg';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
@@ -18,6 +18,12 @@ export interface UiHandlers {
   newDocumentInWorkspace(workspacePath: string): void;
   createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
+  openImportInWorkspace(workspacePath: string): void;
+  openImportIntoCurrent(): void;
+  chooseImportSource(): void;
+  createImportedDocument(name: string, templateId: string, instructions: string): void;
+  importIntoCurrent(instructions: string): void;
+  cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
   openWorkspaceFilter(workspacePath: string): void;
   closeWorkspaceFilter(): void;
@@ -70,6 +76,10 @@ export interface UiHandlers {
   openDocumentMeta(): void;
   save(): void;
   saveAs(): void;
+  openSaveTemplate(): void;
+  setSaveTemplateScope(scope: TemplateScope): void;
+  saveAsTemplate(name: string, scope: TemplateScope): void;
+  cancelSaveTemplate(): void;
   createFile(): void;
 }
 
@@ -119,6 +129,8 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       </section>
       ${renderNewWorkspaceDialog(state)}
       ${renderNewDocumentDialog(state)}
+      ${renderImportDialog(state)}
+      ${renderExportDialog(state)}
       ${renderAboutDialog(state)}
       ${renderAiSettingsDialog(state)}
       ${renderMcpSettingsDialog(state)}
@@ -186,6 +198,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     }
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
+    if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
     if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
     if (action === 'close-workspace-filter') handlers.closeWorkspaceFilter();
@@ -295,6 +308,12 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
+    if (action === 'import-into-current') handlers.openImportIntoCurrent();
+    if (action === 'choose-import-source') handlers.chooseImportSource();
+    if (action === 'cancel-import') handlers.cancelImport();
+    if (action === 'export-document') handlers.openSaveTemplate();
+    if (action === 'cancel-export') handlers.cancelSaveTemplate();
+    if (action === 'set-save-template-scope' && isTemplateScope(target.dataset.scope)) handlers.setSaveTemplateScope(target.dataset.scope);
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
@@ -391,6 +410,26 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         String(data.get('templateId') ?? '')
       );
     }
+    if (form.dataset.form === 'import-document') {
+      const data = new FormData(form);
+      handlers.createImportedDocument(
+        String(data.get('documentName') ?? ''),
+        String(data.get('templateId') ?? ''),
+        String(data.get('instructions') ?? '')
+      );
+    }
+    if (form.dataset.form === 'import-current') {
+      const data = new FormData(form);
+      handlers.importIntoCurrent(String(data.get('instructions') ?? ''));
+    }
+    if (form.dataset.form === 'export-document') {
+      const data = new FormData(form);
+      const scope = String(data.get('scope') ?? 'app');
+      handlers.saveAsTemplate(
+        String(data.get('templateName') ?? ''),
+        isTemplateScope(scope) ? scope : 'app'
+      );
+    }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
       handlers.saveAiSettings(readAiSettingsForm(data));
@@ -426,6 +465,16 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (root.querySelector('.workspace-filter-dialog')) {
       event.preventDefault();
       handlers.closeWorkspaceFilter();
+      return;
+    }
+    if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
+      event.preventDefault();
+      handlers.cancelImport();
+      return;
+    }
+    if (root.querySelector('form[data-form="export-document"]')) {
+      event.preventDefault();
+      handlers.cancelSaveTemplate();
       return;
     }
     const form = target?.closest<HTMLFormElement>('form[data-form="ai-settings"]')
@@ -607,6 +656,8 @@ function renderToolbar(state: AppState): string {
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
+      <button type="button" data-action="import-into-current" ${document.readOnly ? 'disabled' : ''}>Import</button>
+      <button type="button" data-action="export-document" ${document.readOnly ? 'disabled' : ''}>Export</button>
       <button type="button" data-action="create-file">New HVY</button>
     </div>`;
 }
@@ -707,6 +758,7 @@ function renderWorkspace(
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
           <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
+          <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
         </div>
       </div>
@@ -841,10 +893,15 @@ function isNewWorkspaceLocation(value: unknown): value is 'managed' | 'choose' {
   return value === 'managed' || value === 'choose';
 }
 
+function isTemplateScope(value: unknown): value is TemplateScope {
+  return value === 'app' || value === 'workspace';
+}
+
 function renderNewDocumentDialog(state: AppState): string {
   if (!state.newDocumentWorkspacePath) {
     return '';
   }
+  const templates = mergeSavedTemplates(state.savedTemplates);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-document">
@@ -856,7 +913,7 @@ function renderNewDocumentDialog(state: AppState): string {
         <label>
           <span>Template</span>
           <select name="templateId">
-            ${hvyTemplates.map((template) => `<option value="${escapeAttr(template.id)}">${escapeHtml(template.name)}</option>`).join('')}
+            ${templates.map(renderTemplateOption).join('')}
           </select>
         </label>
         <div class="dialog-actions">
@@ -865,6 +922,101 @@ function renderNewDocumentDialog(state: AppState): string {
         </div>
       </form>
     </div>`;
+}
+
+function renderImportDialog(state: AppState): string {
+  const workspacePath = state.importWorkspacePath;
+  const importCurrent = state.importIntoCurrentDialogOpen;
+  if (!workspacePath && !importCurrent) {
+    return '';
+  }
+  const templates = mergeSavedTemplates(state.savedTemplates);
+  const source = state.importSource;
+  const title = importCurrent ? 'Import Into Current' : 'Import Document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog wide-dialog" data-form="${importCurrent ? 'import-current' : 'import-document'}">
+        <h2>${escapeHtml(title)}</h2>
+        ${importCurrent ? '' : `
+          <label>
+            <span>Name</span>
+            <input name="documentName" type="text" autocomplete="off" autofocus required>
+          </label>
+          <label>
+            <span>Template</span>
+            <select name="templateId">
+              ${templates.map(renderTemplateOption).join('')}
+            </select>
+          </label>
+        `}
+        <div class="field-group">
+          <span>Source</span>
+          <div class="source-picker-row">
+            <button type="button" data-action="choose-import-source">Choose .txt or .md</button>
+            <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
+          </div>
+        </div>
+        <label>
+          <span>Instructions</span>
+          <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-import">Cancel</button>
+          <button type="submit" ${state.busy || !source || (!importCurrent && templates.length === 0) ? 'disabled' : ''}>Import</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderExportDialog(state: AppState): string {
+  if (!state.saveTemplateDialogOpen) {
+    return '';
+  }
+  const workspaceDisabled = !currentDocumentWorkspacePath(state);
+  const appActive = state.saveTemplateScope === 'app';
+  const workspaceActive = state.saveTemplateScope === 'workspace' && !workspaceDisabled;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="export-document">
+        <h2>Export</h2>
+        <label>
+          <span>Format</span>
+          <select name="format">
+            <option value="template">Template (.thvy)</option>
+          </select>
+        </label>
+        <label>
+          <span>Name</span>
+          <input name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|md)$/i, '') ?? '')}" autofocus required>
+        </label>
+        <div class="field-group">
+          <span>Scope</span>
+          <div class="segmented-control">
+            <button type="button" class="${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
+            <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          </div>
+        </div>
+        <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
+        <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'Saved templates use .thvy. App templates are available everywhere; workspace templates stay with this workspace.'}</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-export">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Export</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderTemplateOption(template: ReturnType<typeof mergeSavedTemplates>[number]): string {
+  const label = template.scope === 'bundled'
+    ? template.name
+    : `${template.name} (${template.scope})`;
+  return `<option value="${escapeAttr(template.id)}">${escapeHtml(label)}</option>`;
+}
+
+function currentDocumentWorkspacePath(state: AppState): string | null {
+  const path = state.document?.path;
+  if (!path) return null;
+  return state.workspaces.find((workspace) => path.startsWith(workspace.path))?.path ?? null;
 }
 
 function renderAboutDialog(state: AppState): string {

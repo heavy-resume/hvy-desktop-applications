@@ -9,12 +9,16 @@ import type {
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
 type HvyEmbedMount = ReturnType<HvyEmbedModule['mountHvy']>;
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty' | 'buildImportPlan' | 'importFromText'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
 };
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
+export type BuildImportPlanOptions = Parameters<HvyEmbedMount['buildImportPlan']>[0];
+export type BuildImportPlanResult = Awaited<ReturnType<HvyEmbedMount['buildImportPlan']>>;
+export type ImportFromTextOptions = Parameters<HvyEmbedMount['importFromText']>[0];
+export type ImportFromTextResult = Awaited<ReturnType<HvyEmbedMount['importFromText']>>;
 type HvyDocumentChangeCallback = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['onDocumentChange']>;
 
 export interface MountedDocument {
@@ -121,6 +125,9 @@ async function mountRawHvyDocument(
     destroy() {
       root.replaceChildren();
     },
+    getDocument() {
+      return currentDocument;
+    },
     serializeDocumentBytes() {
       currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
       return serializeDocumentBytes(currentDocument);
@@ -134,6 +141,12 @@ async function mountRawHvyDocument(
     isDirty() {
       return dirty || textarea.value !== lastSavedText;
     },
+    buildImportPlan() {
+      return Promise.resolve({ status: 'error', message: 'Import is unavailable in raw HVY mode.' });
+    },
+    importFromText() {
+      return Promise.resolve({ status: 'error', message: 'Import is unavailable in raw HVY mode.' });
+    },
   };
   return { mount, get document() { return currentDocument; } };
 }
@@ -144,6 +157,18 @@ function documentOwner(): Document {
 
 export function serializeMountedDocument(mounted: MountedDocument): Uint8Array {
   return mounted.mount.serializeDocumentBytes();
+}
+
+export function getMountedDocument(mounted: MountedDocument): VisualDocument {
+  return mounted.mount.getDocument();
+}
+
+export function importTextIntoMountedDocument(mounted: MountedDocument, options: ImportFromTextOptions): Promise<ImportFromTextResult> {
+  return mounted.mount.importFromText(options);
+}
+
+export function buildMountedImportPlan(mounted: MountedDocument, options: BuildImportPlanOptions): Promise<BuildImportPlanResult> {
+  return mounted.mount.buildImportPlan(options);
 }
 
 export function markMountedDocumentSaved(mounted: MountedDocument): void {

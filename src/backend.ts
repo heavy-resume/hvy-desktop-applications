@@ -54,6 +54,22 @@ export interface DocumentFile {
   bytes: number[];
 }
 
+export interface ImportSourceFile {
+  path: string;
+  name: string;
+  text: string;
+}
+
+export type TemplateScope = 'app' | 'workspace';
+
+export interface SavedTemplate {
+  id: string;
+  path: string;
+  name: string;
+  scope: TemplateScope;
+  bytes: number[];
+}
+
 export interface SaveDocumentRequest {
   path: string;
   bytes: number[];
@@ -90,6 +106,13 @@ export interface DocumentBackupRequest {
   documentPath: string;
   name: string;
   extension: DocumentExtension;
+  bytes: number[];
+}
+
+export interface SaveDocumentTemplateRequest {
+  scope: TemplateScope;
+  workspacePath?: string | null;
+  name: string;
   bytes: number[];
 }
 
@@ -383,6 +406,10 @@ export function openFileDialog(): Promise<DocumentFile | null> {
   return invokeDesktop('open_file_dialog');
 }
 
+export function openImportSourceDialog(): Promise<ImportSourceFile | null> {
+  return invokeDesktop('open_import_source_dialog');
+}
+
 export function readDocumentFile(path: string): Promise<DocumentFile> {
   return invokeDesktop('read_document_file', { path });
 }
@@ -393,6 +420,17 @@ export function saveDocumentFile(request: SaveDocumentRequest): Promise<void> {
 
 export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFile | null> {
   return invokeDesktop('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+}
+
+export function listSavedTemplates(workspacePath?: string | null): Promise<SavedTemplate[]> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve([]);
+  }
+  return invokeDesktop('list_saved_templates', { workspacePath: workspacePath ?? null });
+}
+
+export function saveDocumentTemplate(request: SaveDocumentTemplateRequest): Promise<SavedTemplate> {
+  return invokeDesktop('save_document_template', { request });
 }
 
 export function openColorThemeDialog(): Promise<ThemeFile | null> {

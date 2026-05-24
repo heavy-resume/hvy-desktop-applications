@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
@@ -26,6 +26,7 @@ export interface AppState {
   mcpStdioLaunchConfig: McpStdioLaunchConfig;
   mcpClientInstallStatus: McpClientInstallStatus[];
   colorTheme: ColorThemeSettings;
+  savedTemplates: SavedTemplate[];
   document: OpenDocument | null;
   status: string;
   error: string | null;
@@ -34,6 +35,11 @@ export interface AppState {
   openWorkspaceActionsPath: string | null;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
+  importWorkspacePath: string | null;
+  importIntoCurrentDialogOpen: boolean;
+  importSource: ImportSourceFile | null;
+  saveTemplateDialogOpen: boolean;
+  saveTemplateScope: TemplateScope;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -78,6 +84,7 @@ export const state: AppState = {
   mcpStdioLaunchConfig: defaultMcpStdioLaunchConfig(),
   mcpClientInstallStatus: defaultMcpClientInstallStatus(),
   colorTheme: defaultColorThemeSettings(),
+  savedTemplates: [],
   document: null,
   status: 'Ready',
   error: null,
@@ -86,6 +93,11 @@ export const state: AppState = {
   openWorkspaceActionsPath: null,
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,
+  importWorkspacePath: null,
+  importIntoCurrentDialogOpen: false,
+  importSource: null,
+  saveTemplateDialogOpen: false,
+  saveTemplateScope: 'app',
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

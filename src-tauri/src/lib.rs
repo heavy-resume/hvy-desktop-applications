@@ -127,6 +127,33 @@ struct DocumentFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct ImportSourceFile {
+    path: String,
+    name: String,
+    text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SavedTemplate {
+    id: String,
+    path: String,
+    name: String,
+    scope: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SaveDocumentTemplateRequest {
+    scope: String,
+    workspace_path: Option<String>,
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct ThemeFile {
     path: String,
     name: String,
@@ -815,6 +842,29 @@ fn open_file_dialog(app: AppHandle) -> AppResult<Option<DocumentFile>> {
 }
 
 #[tauri::command]
+fn open_import_source_dialog() -> AppResult<Option<ImportSourceFile>> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Text import sources", &["txt", "md"])
+        .add_filter("Markdown", &["md"])
+        .add_filter("Plain text", &["txt"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    import_source_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .txt and .md files can be imported.".into()))?;
+    Ok(Some(ImportSourceFile {
+        path: path_to_string(&path),
+        name: path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("source.txt")
+            .to_string(),
+        text: fs::read_to_string(&path)?,
+    }))
+}
+
+#[tauri::command]
 fn read_document_file(app: AppHandle, path: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     let file = read_document_at(&path)?;
@@ -851,6 +901,39 @@ fn save_document_as_dialog(
     write_file_atomically(&path, &bytes)?;
     add_recent_file(&app, &path)?;
     Ok(Some(read_document_at(&path)?))
+}
+
+#[tauri::command]
+fn list_saved_templates(app: AppHandle, workspace_path: Option<String>) -> AppResult<Vec<SavedTemplate>> {
+    let mut templates = Vec::new();
+    append_saved_templates(&mut templates, &app_templates_dir(&app)?, "app")?;
+    if let Some(workspace_path) = workspace_path {
+        let workspace_path = PathBuf::from(workspace_path);
+        ensure_workspace(&workspace_path)?;
+        append_saved_templates(&mut templates, &workspace_templates_dir(&workspace_path)?, "workspace")?;
+    }
+    templates.sort_by(|left, right| left.scope.cmp(&right.scope).then(left.name.cmp(&right.name)));
+    Ok(templates)
+}
+
+#[tauri::command]
+fn save_document_template(app: AppHandle, request: SaveDocumentTemplateRequest) -> AppResult<SavedTemplate> {
+    let directory = match request.scope.as_str() {
+        "app" => app_templates_dir(&app)?,
+        "workspace" => {
+            let workspace_path = request.workspace_path
+                .ok_or_else(|| AppError::Message("Workspace template requires a workspace path.".into()))?;
+            let workspace_path = PathBuf::from(workspace_path);
+            ensure_workspace(&workspace_path)?;
+            workspace_templates_dir(&workspace_path)?
+        }
+        _ => return Err(AppError::Message("Template scope must be app or workspace.".into())),
+    };
+    fs::create_dir_all(&directory)?;
+    let file_name = template_file_name(&request.name)?;
+    let path = directory.join(file_name);
+    write_file_atomically(&path, &request.bytes)?;
+    read_saved_template_at(&path, &request.scope)
 }
 
 #[tauri::command]
@@ -1059,6 +1142,8 @@ pub fn run() {
                         | "colors"
                         | "save"
                         | "save-as"
+                        | "export-document"
+                        | "import-current"
                         | "recover-backup"
                 )
                     || id.starts_with("recent-file:")
@@ -1093,9 +1178,12 @@ pub fn run() {
             load_workspace,
             add_files_to_workspace,
             open_file_dialog,
+            open_import_source_dialog,
             read_document_file,
             save_document_file,
             save_document_as_dialog,
+            list_saved_templates,
+            save_document_template,
             open_color_theme_dialog,
             save_color_theme_as_dialog,
             create_document_file,
@@ -1157,6 +1245,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
+        .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
+        .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Recover Backup...").id("recover-backup").build(app)?)
         .build()?;
@@ -1426,6 +1516,23 @@ fn document_extension(path: &Path) -> Option<String> {
     }
 }
 
+fn import_source_extension(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "txt" => Some(".txt".into()),
+        "md" => Some(".md".into()),
+        _ => None,
+    }
+}
+
+fn template_extension(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "thvy" => Some(".thvy".into()),
+        _ => None,
+    }
+}
+
 fn theme_extension(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -1535,6 +1642,83 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
         extension,
         bytes: fs::read(path)?,
     })
+}
+
+fn append_saved_templates(templates: &mut Vec<SavedTemplate>, directory: &Path, scope: &str) -> AppResult<()> {
+    if !directory.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && template_extension(&path).is_some() {
+            templates.push(read_saved_template_at(&path, scope)?);
+        }
+    }
+    Ok(())
+}
+
+fn read_saved_template_at(path: &Path, scope: &str) -> AppResult<SavedTemplate> {
+    template_extension(path)
+        .ok_or_else(|| AppError::Message("Only .thvy templates are supported.".into()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled.thvy")
+        .to_string();
+    Ok(SavedTemplate {
+        id: format!("{scope}:{}", path_to_string(path)),
+        path: path_to_string(path),
+        name,
+        scope: scope.to_string(),
+        bytes: fs::read(path)?,
+    })
+}
+
+fn template_file_name(name: &str) -> AppResult<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Message("Template name is required.".into()));
+    }
+    let path = Path::new(trimmed);
+    if trimmed.contains('/')
+        || trimmed.contains('\\')
+        || path.components().count() != 1
+        || path.file_name().and_then(|name| name.to_str()) != Some(trimmed)
+    {
+        return Err(AppError::Message("Template name cannot include folders.".into()));
+    }
+    if trimmed == "." || trimmed == ".." || trimmed.starts_with('.') {
+        return Err(AppError::Message("Template name is not valid.".into()));
+    }
+    let stem = if template_extension(path).is_some() || document_extension(path).is_some() {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(trimmed)
+            .trim()
+    } else {
+        trimmed
+    };
+    if stem.is_empty() {
+        return Err(AppError::Message("Template name is required.".into()));
+    }
+    Ok(format!("{stem}.thvy"))
+}
+
+fn app_templates_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("templates");
+    fs::create_dir_all(&directory)?;
+    Ok(directory)
+}
+
+fn workspace_templates_dir(workspace_path: &Path) -> AppResult<PathBuf> {
+    let directory = workspace_path.join(".hvy").join("templates");
+    fs::create_dir_all(&directory)?;
+    Ok(directory)
 }
 
 fn add_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
@@ -3150,6 +3334,29 @@ mod tests {
         assert!(normalized_rename_stem("folder/Draft").is_err());
         assert!(normalized_rename_stem(".Draft").is_err());
         assert!(normalized_rename_stem("   ").is_err());
+    }
+
+    #[test]
+    fn template_file_name_always_uses_thvy() {
+        assert_eq!(template_file_name("Draft").unwrap(), "Draft.thvy");
+        assert_eq!(template_file_name("Draft.hvy").unwrap(), "Draft.thvy");
+        assert_eq!(template_file_name("Draft.thvy").unwrap(), "Draft.thvy");
+        assert_eq!(template_file_name("Draft.md").unwrap(), "Draft.thvy");
+    }
+
+    #[test]
+    fn saved_template_scan_only_includes_thvy_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("alpha.thvy"), "template").unwrap();
+        fs::write(dir.path().join("regular.hvy"), "regular").unwrap();
+        fs::write(dir.path().join("notes.md"), "notes").unwrap();
+
+        let mut templates = Vec::new();
+        append_saved_templates(&mut templates, dir.path(), "app").unwrap();
+
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].name, "alpha.thvy");
+        assert_eq!(templates[0].scope, "app");
     }
 
     #[test]

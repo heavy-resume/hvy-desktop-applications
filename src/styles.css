@@ -993,6 +993,21 @@ button:disabled {
   font-weight: 650;
 }
 
+.source-picker-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.source-picker-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--hvy-text-muted, #66736f);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dialog-note[data-state="error"] {
   color: var(--hvy-danger, #8c291d);
 }

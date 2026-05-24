@@ -17,12 +17,14 @@ import {
   loadMcpSettings,
   loadMcpStdioLaunchConfig,
   loadWorkspace,
+  listSavedTemplates,
   listDocumentBackups,
   loadRecentState,
   onMenuEvent,
   openExternalUrl,
   openColorThemeDialog,
   openFileDialog,
+  openImportSourceDialog,
   readDocumentFile,
   removeMcpClient,
   renameDocumentFile,
@@ -34,6 +36,7 @@ import {
   saveColorThemeAsDialog,
   saveDocumentAsDialog,
   saveDocumentFile,
+  saveDocumentTemplate,
   startMcpServer,
   stopMcpServer,
   type DocumentFile,
@@ -44,9 +47,9 @@ import {
   updateMcpWorkspaces,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
-import { createHvyDocumentFilterSnapshot, deserializeHvy, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
-import { getHvyTemplate } from './templates';
+import { getTemplateById, mergeSavedTemplates } from './templates';
 import { render, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
@@ -134,7 +137,11 @@ const handlers: UiHandlers = {
   newDocumentInWorkspace: (workspacePath) => {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = workspacePath;
+    state.importWorkspacePath = null;
+    state.importIntoCurrentDialogOpen = false;
+    state.importSource = null;
     state.status = 'Ready';
+    void refreshSavedTemplates(workspacePath).then(() => rerender({ preserveMountedDocument: true }));
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
@@ -142,7 +149,7 @@ const handlers: UiHandlers = {
   },
   createDocumentInWorkspace: (name, templateId) => void runBusy('Creating HVY document...', async () => {
     const workspacePath = state.newDocumentWorkspacePath;
-    const template = getHvyTemplate(templateId);
+    const template = getTemplateById(mergeSavedTemplates(state.savedTemplates), templateId);
     const fileName = documentFileName(name);
     if (!workspacePath) return;
     if (!fileName) {
@@ -162,6 +169,136 @@ const handlers: UiHandlers = {
   }),
   cancelNewDocument: () => {
     state.newDocumentWorkspacePath = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  openImportInWorkspace: (workspacePath) => {
+    state.openWorkspaceActionsPath = null;
+    state.newDocumentWorkspacePath = null;
+    state.importWorkspacePath = workspacePath;
+    state.importIntoCurrentDialogOpen = false;
+    state.importSource = null;
+    state.status = 'Ready';
+    void refreshSavedTemplates(workspacePath).then(() => rerender({ preserveMountedDocument: true }));
+    rerender({ preserveMountedDocument: true });
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
+    });
+  },
+  openImportIntoCurrent: () => {
+    if (!state.document?.mounted || state.document.readOnly) return;
+    state.newDocumentWorkspacePath = null;
+    state.importWorkspacePath = null;
+    state.importIntoCurrentDialogOpen = true;
+    state.importSource = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  chooseImportSource: () => void runBusy('Choosing import source...', async () => {
+    const source = await openImportSourceDialog();
+    if (!source) {
+      state.status = 'Ready';
+      return;
+    }
+    state.importSource = source;
+    state.status = `Selected ${source.name}`;
+  }),
+  createImportedDocument: (name, templateId, instructions) => void runBusy('Importing document...', async () => {
+    const workspacePath = state.importWorkspacePath;
+    const source = state.importSource;
+    const fileName = documentFileName(name);
+    if (!workspacePath || !source) return;
+    if (!fileName) {
+      state.status = 'Document name is required';
+      return;
+    }
+    const template = getTemplateById(mergeSavedTemplates(state.savedTemplates), templateId);
+    state.importWorkspacePath = null;
+    state.importSource = null;
+    const file = await createDocumentFile({
+      workspacePath,
+      relativePath: fileName,
+      template: applyTemplateTitle(template.content, documentTitle(fileName)),
+    });
+    upsertWorkspace(await loadWorkspace(workspacePath));
+    state.selectedWorkspacePath = workspacePath;
+    await openDocument(file, { isNew: true, deferMount: true });
+    rerender();
+    await mountCurrentDocument(pendingMountDocument ?? undefined);
+    if (!state.document?.mounted) return;
+    const plan = await buildMountedImportPlan(state.document.mounted, {
+      sourceName: source.name,
+      sourceText: source.text,
+      instructions,
+      onProgress: (event) => {
+        if (event.message) state.status = event.message;
+        rerender({ preserveMountedDocument: true });
+      },
+    });
+    if (plan.status !== 'ready' || !plan.steps?.length) {
+      throw new Error(plan.message ?? 'Import planner did not return a usable plan.');
+    }
+    const result = await importTextIntoMountedDocument(state.document.mounted, {
+      sourceName: source.name,
+      sourceText: source.text,
+      instructions,
+      steps: plan.steps,
+      onProgress: (event) => {
+        if (event.message) state.status = event.message;
+        rerender({ preserveMountedDocument: true });
+      },
+    });
+    if (result.status !== 'complete') {
+      throw new Error(result.message ?? 'Import failed.');
+    }
+    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+    await saveDocumentFile({ path: state.document.path, bytes });
+    markMountedDocumentSaved(state.document.mounted);
+    state.document.dirty = false;
+    state.document.isNew = false;
+    updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+    await refreshOpenWorkspaceForFile(state.document.path);
+    await refreshRecents();
+    state.status = result.message ?? `Imported ${source.name}`;
+  }),
+  importIntoCurrent: (instructions) => void runBusy('Importing into current document...', async () => {
+    const source = state.importSource;
+    if (!state.document?.mounted || state.document.readOnly || !source) return;
+    state.importIntoCurrentDialogOpen = false;
+    state.importSource = null;
+    const plan = await buildMountedImportPlan(state.document.mounted, {
+      sourceName: source.name,
+      sourceText: source.text,
+      instructions,
+      onProgress: (event) => {
+        if (event.message) state.status = event.message;
+        rerender({ preserveMountedDocument: true });
+      },
+    });
+    if (plan.status !== 'ready' || !plan.steps?.length) {
+      throw new Error(plan.message ?? 'Import planner did not return a usable plan.');
+    }
+    const result = await importTextIntoMountedDocument(state.document.mounted, {
+      sourceName: source.name,
+      sourceText: source.text,
+      instructions,
+      steps: plan.steps,
+      onProgress: (event) => {
+        if (event.message) state.status = event.message;
+        rerender({ preserveMountedDocument: true });
+      },
+    });
+    if (result.status !== 'complete') {
+      throw new Error(result.message ?? 'Import failed.');
+    }
+    setDocumentDirty(true);
+    updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+    state.status = result.message ?? `Imported ${source.name}`;
+  }),
+  cancelImport: () => {
+    state.importWorkspacePath = null;
+    state.importIntoCurrentDialogOpen = false;
+    state.importSource = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -611,6 +748,35 @@ const handlers: UiHandlers = {
   },
   save: () => void saveCurrentDocument(),
   saveAs: () => void saveCurrentDocumentAs(),
+  openSaveTemplate: () => {
+    if (!state.document?.mounted || state.document.readOnly) return;
+    state.saveTemplateDialogOpen = true;
+    state.saveTemplateScope = workspacePathForFile(state.document.path) ? 'workspace' : 'app';
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  setSaveTemplateScope: (scope) => {
+    if (scope === 'workspace' && !workspacePathForFile(state.document?.path ?? '')) return;
+    state.saveTemplateScope = scope;
+    rerender({ preserveMountedDocument: true });
+  },
+  saveAsTemplate: (name, scope) => void runBusy('Saving template...', async () => {
+    if (!state.document?.mounted || state.document.readOnly) return;
+    const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.path) : null;
+    if (scope === 'workspace' && !workspacePath) {
+      throw new Error('Workspace template requires a document in an open workspace.');
+    }
+    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+    await saveDocumentTemplate({ scope, workspacePath, name, bytes });
+    state.saveTemplateDialogOpen = false;
+    await refreshSavedTemplates(workspacePath);
+    state.status = `Saved template ${templateFileName(name)}`;
+  }),
+  cancelSaveTemplate: () => {
+    state.saveTemplateDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   createFile: () => void createBlankDocument(),
 };
 
@@ -633,6 +799,7 @@ async function boot(): Promise<void> {
     applyColorTheme(state.colorTheme, mountRoot);
     installAiChatClient(state.aiSettings);
     await loadRecentWorkspaces();
+    await refreshSavedTemplates(state.selectedWorkspacePath);
     mountRoot = render(state, handlers);
     await openDefaultGuide();
     startBackupTimer();
@@ -652,6 +819,8 @@ async function boot(): Promise<void> {
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
+      if (event === 'import-current') handlers.openImportIntoCurrent();
+      if (event === 'export-document') handlers.openSaveTemplate();
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
     });
@@ -1241,6 +1410,10 @@ function workspacePathForFile(filePath: string): string | null {
   return state.workspaces.find((workspace) => filePath.startsWith(workspace.path))?.path ?? null;
 }
 
+async function refreshSavedTemplates(workspacePath?: string | null): Promise<void> {
+  state.savedTemplates = await listSavedTemplates(workspacePath ?? workspacePathForFile(state.document?.path ?? '') ?? state.selectedWorkspacePath);
+}
+
 function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): void {
   const index = state.workspaces.findIndex((candidate) => candidate.path === workspace.path);
   if (index >= 0) {
@@ -1318,6 +1491,12 @@ function documentTitle(fileName: string): string {
 
 function hasDocumentExtension(fileName: string): boolean {
   return /\.(t?hvy)$/i.test(fileName);
+}
+
+function templateFileName(name: string): string {
+  const trimmed = name.trim();
+  const base = trimmed.replace(/\.(t?hvy|hvy|md)$/i, '').trim() || 'Untitled';
+  return `${base}.thvy`;
 }
 
 function revealStatusLabel(): string {
