@@ -1312,6 +1312,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
 
 function bindMountThemeReapply(root: HTMLElement): () => void {
   const controller = new AbortController();
+  const overlayObserver = new MutationObserver(() => updateDocumentStageOverlayState(root));
   let frame = 0;
   const schedule = () => {
     if (frame) window.cancelAnimationFrame(frame);
@@ -1319,6 +1320,7 @@ function bindMountThemeReapply(root: HTMLElement): () => void {
       frame = window.requestAnimationFrame(() => {
         frame = 0;
         applyAppColorTheme(root);
+        updateDocumentStageOverlayState(root);
       });
     });
   };
@@ -1326,10 +1328,26 @@ function bindMountThemeReapply(root: HTMLElement): () => void {
   root.addEventListener('input', schedule, { signal: controller.signal });
   root.addEventListener('submit', schedule, { signal: controller.signal });
   root.addEventListener('keydown', schedule, { signal: controller.signal });
+  overlayObserver.observe(root, {
+    attributes: true,
+    attributeFilter: ['class', 'hidden', 'style'],
+    childList: true,
+    subtree: true,
+  });
+  updateDocumentStageOverlayState(root);
   return () => {
     controller.abort();
+    overlayObserver.disconnect();
+    root.closest<HTMLElement>('.document-stage')?.classList.remove('has-embedded-overlay', 'has-embedded-pullout');
     if (frame) window.cancelAnimationFrame(frame);
   };
+}
+
+function updateDocumentStageOverlayState(root: HTMLElement): void {
+  const stage = root.closest<HTMLElement>('.document-stage');
+  if (!stage) return;
+  const hasPullout = Boolean(root.querySelector('.viewer-shell.is-sidebar-open, .editor-shell.is-sidebar-open'));
+  stage.classList.toggle('has-embedded-pullout', hasPullout);
 }
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {
@@ -1733,8 +1751,24 @@ function closeUiBeforeWorkspaceFilter(): void {
 
 function persistAndApplyColorTheme(): void {
   saveColorThemeSettings(state.colorTheme);
+  const remountDocument = unmountDocumentForCompatibilityThemeSwap();
   applyAppColorTheme();
   state.status = 'Updated colors';
+  if (remountDocument) {
+    void mountCurrentDocument(remountDocument);
+  }
+}
+
+function unmountDocumentForCompatibilityThemeSwap(): VisualDocument | null {
+  if (!appEnvironment?.compatibilityMode || !state.document?.mounted) {
+    return null;
+  }
+  const document = getMountedDocument(state.document.mounted);
+  state.document.mounted.mount.destroy();
+  mountThemeReapplyCleanup?.();
+  mountThemeReapplyCleanup = null;
+  state.document.mounted = null;
+  return document;
 }
 
 function updateThemeRowChrome(name: string, value: string): void {

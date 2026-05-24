@@ -967,6 +967,15 @@ button:disabled {
   backdrop-filter: none;
 }
 
+.hvy-compatibility-mode .document-stage.has-embedded-pullout::before {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  background: rgba(20, 28, 29, 0.18);
+  content: "";
+  pointer-events: auto;
+}
+
 .hvy-compatibility-mode {
   --hvy-compat-bg: #fbfaf7;
   --hvy-compat-surface: #fffefb;
@@ -1010,6 +1019,11 @@ button:disabled {
 .hvy-compatibility-mode .hvy-document-host .hvy-form-meta-modal-backdrop {
   background: rgba(20, 28, 29, 0.18);
   backdrop-filter: none;
+}
+
+.hvy-compatibility-mode .document-stage.has-embedded-pullout .hvy-document-host .viewer-sidebar-backdrop,
+.hvy-compatibility-mode .document-stage.has-embedded-pullout .hvy-document-host .editor-sidebar-backdrop {
+  background: transparent;
 }
 
 .hvy-compatibility-mode .hvy-document-host .modal-panel,
@@ -1103,6 +1117,51 @@ button:disabled {
 
 .hvy-compatibility-mode .hvy-document-host .component-picker-pane-root .component-picker-row-description {
   color: var(--hvy-text-muted);
+}
+
+.hvy-compatibility-mode .hvy-document-host .component-picker-pane-root .component-picker-row:hover,
+.hvy-compatibility-mode .hvy-document-host .component-picker-pane-root .component-picker-row:focus-visible {
+  background: var(--hvy-surface-alt);
+  border: 1px solid var(--hvy-border);
+  box-shadow: 0 16px 34px var(--hvy-shadow-md), 0 0 0 2px var(--hvy-focus-ring);
+}
+
+.hvy-compatibility-mode .hvy-document-host .reader-section-preview::before {
+  background: var(--hvy-compat-hover);
+  opacity: 0.16;
+  backdrop-filter: none;
+}
+
+.hvy-compatibility-mode .hvy-document-host .reader-section-preview::after,
+.hvy-compatibility-mode .hvy-document-host .expandable-reader.has-empty-stub.is-collapsed .expandable-reader-body::after {
+  background: linear-gradient(to bottom, transparent, var(--hvy-surface));
+}
+
+.hvy-compatibility-mode .hvy-document-host .reader-section.is-collapsed-preview:hover,
+.hvy-compatibility-mode .hvy-document-host .reader-block-expandable[data-reader-action="toggle-expandable"]:hover,
+.hvy-compatibility-mode .hvy-document-host .editor-block-passive:hover,
+.hvy-compatibility-mode .hvy-document-host .expandable-collapsed-preview-button:hover {
+  background: var(--hvy-surface-alt);
+  background-color: var(--hvy-surface-alt);
+}
+
+.hvy-compatibility-mode .hvy-document-host .reader-section.is-uncontained.is-collapsed-preview:hover {
+  background: transparent;
+  background-color: transparent;
+}
+
+.hvy-compatibility-mode .hvy-document-host .hvy-floating-launcher,
+.hvy-compatibility-mode .hvy-document-host .ai-view-hint {
+  background: var(--hvy-surface);
+  border-color: var(--hvy-border);
+  backdrop-filter: none;
+}
+
+.hvy-compatibility-mode .hvy-document-host .hvy-floating-launcher:not(:disabled):hover,
+.hvy-compatibility-mode .hvy-document-host .hvy-floating-launcher.is-active,
+.hvy-compatibility-mode .hvy-document-host .ai-view-hint:hover,
+.hvy-compatibility-mode .hvy-document-host .ai-view-hint:focus-visible {
+  background: var(--hvy-surface-alt);
 }
 
 .hvy-compatibility-mode .hvy-document-host .image-camera-video {
