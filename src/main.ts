@@ -1338,7 +1338,11 @@ function bindMountThemeReapply(root: HTMLElement): () => void {
   return () => {
     controller.abort();
     overlayObserver.disconnect();
-    root.closest<HTMLElement>('.document-stage')?.classList.remove('has-embedded-overlay', 'has-embedded-pullout');
+    root.closest<HTMLElement>('.document-stage')?.classList.remove(
+      'has-embedded-overlay',
+      'has-embedded-pullout',
+      'has-embedded-context-popover',
+    );
     if (frame) window.cancelAnimationFrame(frame);
   };
 }
@@ -1347,7 +1351,9 @@ function updateDocumentStageOverlayState(root: HTMLElement): void {
   const stage = root.closest<HTMLElement>('.document-stage');
   if (!stage) return;
   const hasPullout = Boolean(root.querySelector('.viewer-shell.is-sidebar-open, .editor-shell.is-sidebar-open'));
+  const hasContextPopover = Boolean(root.querySelector('.hvy-context-popover-backdrop'));
   stage.classList.toggle('has-embedded-pullout', hasPullout);
+  stage.classList.toggle('has-embedded-context-popover', hasContextPopover);
 }
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {

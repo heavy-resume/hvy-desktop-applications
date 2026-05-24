@@ -967,7 +967,8 @@ button:disabled {
   backdrop-filter: none;
 }
 
-.hvy-compatibility-mode .document-stage.has-embedded-pullout::before {
+.hvy-compatibility-mode .document-stage.has-embedded-pullout::before,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover::before {
   position: absolute;
   inset: 0;
   z-index: 9;
@@ -1022,8 +1023,15 @@ button:disabled {
 }
 
 .hvy-compatibility-mode .document-stage.has-embedded-pullout .hvy-document-host .viewer-sidebar-backdrop,
-.hvy-compatibility-mode .document-stage.has-embedded-pullout .hvy-document-host .editor-sidebar-backdrop {
+.hvy-compatibility-mode .document-stage.has-embedded-pullout .hvy-document-host .editor-sidebar-backdrop,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover .hvy-document-host .hvy-context-popover-backdrop,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover .hvy-document-host .hvy-context-popover-backdrop::before,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover .hvy-document-host .hvy-context-popover-backdrop-top,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover .hvy-document-host .hvy-context-popover-backdrop-left,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover .hvy-document-host .hvy-context-popover-backdrop-right,
+.hvy-compatibility-mode .document-stage.has-embedded-context-popover .hvy-document-host .hvy-context-popover-backdrop-bottom {
   background: transparent;
+  backdrop-filter: none;
 }
 
 .hvy-compatibility-mode .hvy-document-host .modal-panel,
@@ -1039,6 +1047,14 @@ button:disabled {
 .hvy-compatibility-mode .hvy-document-host .viewer-sidebar-help-balloon,
 .hvy-compatibility-mode .hvy-document-host .component-picker-popover,
 .hvy-compatibility-mode .hvy-document-host .paragraph-style-modal {
+  background: var(--hvy-surface);
+  border-color: var(--hvy-border);
+  color: var(--hvy-text);
+  backdrop-filter: none;
+}
+
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-panel,
+.hvy-compatibility-mode .hvy-document-host .editor-sidebar-panel {
   background: var(--hvy-surface);
   border-color: var(--hvy-border);
   color: var(--hvy-text);
@@ -1067,13 +1083,24 @@ button:disabled {
 }
 
 .hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab {
+  display: inline-grid !important;
+  place-items: center !important;
   width: var(--hvy-sidebar-tab-size) !important;
   min-width: var(--hvy-sidebar-tab-size) !important;
   max-width: var(--hvy-sidebar-tab-size) !important;
-  height: auto !important;
-  max-height: none !important;
+  height: var(--hvy-sidebar-tab-size) !important;
+  max-height: var(--hvy-sidebar-tab-size) !important;
   min-height: var(--hvy-sidebar-tab-size) !important;
-  padding-block: 0.62rem !important;
+  padding: 0 !important;
+}
+
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab::before {
+  display: block;
+  width: 1.05rem;
+  height: 0.125rem;
+  background: currentColor;
+  box-shadow: 0 -0.33rem 0 currentColor, 0 0.33rem 0 currentColor;
+  content: "";
 }
 
 .hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab .sidebar-tab-hamburger {
@@ -1081,13 +1108,7 @@ button:disabled {
 }
 
 .hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab .sidebar-tab-label {
-  display: block;
-  max-height: calc(100vh - 6rem);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  transform: rotate(180deg);
-  white-space: nowrap;
-  writing-mode: vertical-rl;
+  display: none;
 }
 
 .hvy-compatibility-mode .hvy-document-host .editor-sidebar-help-balloon::before,
@@ -1152,7 +1173,8 @@ button:disabled {
 
 .hvy-compatibility-mode .hvy-document-host .hvy-floating-launcher,
 .hvy-compatibility-mode .hvy-document-host .ai-view-hint {
-  background: var(--hvy-surface);
+  background: var(--hvy-surface) !important;
+  background-color: var(--hvy-surface) !important;
   border-color: var(--hvy-border);
   backdrop-filter: none;
 }
@@ -1161,7 +1183,8 @@ button:disabled {
 .hvy-compatibility-mode .hvy-document-host .hvy-floating-launcher.is-active,
 .hvy-compatibility-mode .hvy-document-host .ai-view-hint:hover,
 .hvy-compatibility-mode .hvy-document-host .ai-view-hint:focus-visible {
-  background: var(--hvy-surface-alt);
+  background: var(--hvy-surface-alt) !important;
+  background-color: var(--hvy-surface-alt) !important;
 }
 
 .hvy-compatibility-mode .hvy-document-host .image-camera-video {
