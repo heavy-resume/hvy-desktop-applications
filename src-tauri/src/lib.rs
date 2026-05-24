@@ -1256,6 +1256,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .and_then(|path| read_compatibility_settings(&path).ok())
         .map(|settings| settings.forced)
         .unwrap_or(false);
+    let compatibility_checked = app_environment(app)
+        .map(|environment| environment.compatibility_mode)
+        .unwrap_or(forced_compatibility);
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
     let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
@@ -1321,7 +1324,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(
             &CheckMenuItemBuilder::new("Compatibility Mode")
                 .id("compatibility-mode")
-                .checked(forced_compatibility)
+                .checked(compatibility_checked)
                 .build(app)?,
         )
         .build()?;

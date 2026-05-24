@@ -963,7 +963,7 @@ button:disabled {
 
 .hvy-compatibility-mode .workspace-filter-backdrop,
 .hvy-compatibility-mode .modal-backdrop {
-  background: rgb(20 28 29 / 72%);
+  background: rgba(20, 28, 29, 0.18);
   backdrop-filter: none;
 }
 
@@ -1000,6 +1000,113 @@ button:disabled {
 .hvy-compatibility-mode .mode-button.is-active,
 .hvy-compatibility-mode .error-slot.has-error {
   background: var(--hvy-compat-hover);
+}
+
+.hvy-compatibility-mode .hvy-document-host .modal-overlay,
+.hvy-compatibility-mode .hvy-document-host .link-inline-overlay,
+.hvy-compatibility-mode .hvy-document-host .search-backdrop,
+.hvy-compatibility-mode .hvy-document-host .chat-backdrop,
+.hvy-compatibility-mode .hvy-document-host .hvy-context-popover-backdrop,
+.hvy-compatibility-mode .hvy-document-host .hvy-form-meta-modal-backdrop {
+  background: rgba(20, 28, 29, 0.18);
+  backdrop-filter: none;
+}
+
+.hvy-compatibility-mode .hvy-document-host .modal-panel,
+.hvy-compatibility-mode .hvy-document-host .theme-modal,
+.hvy-compatibility-mode .hvy-document-host .link-inline-card,
+.hvy-compatibility-mode .hvy-document-host .search-modal,
+.hvy-compatibility-mode .hvy-document-host .search-collapsed-bar,
+.hvy-compatibility-mode .hvy-document-host .chat-panel,
+.hvy-compatibility-mode .hvy-document-host .ai-edit-popover,
+.hvy-compatibility-mode .hvy-document-host .hvy-context-popover,
+.hvy-compatibility-mode .hvy-document-host .hvy-form-meta-modal,
+.hvy-compatibility-mode .hvy-document-host .editor-sidebar-help-balloon,
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-help-balloon,
+.hvy-compatibility-mode .hvy-document-host .component-picker-popover,
+.hvy-compatibility-mode .hvy-document-host .paragraph-style-modal {
+  background: var(--hvy-surface);
+  border-color: var(--hvy-border);
+  color: var(--hvy-text);
+  backdrop-filter: none;
+}
+
+.hvy-compatibility-mode .hvy-document-host .modal-panel input,
+.hvy-compatibility-mode .hvy-document-host .modal-panel select,
+.hvy-compatibility-mode .hvy-document-host .modal-panel textarea,
+.hvy-compatibility-mode .hvy-document-host .ai-edit-popover input,
+.hvy-compatibility-mode .hvy-document-host .ai-edit-popover select,
+.hvy-compatibility-mode .hvy-document-host .ai-edit-popover textarea {
+  background: var(--hvy-surface-alt);
+  color: var(--hvy-text);
+}
+
+.hvy-compatibility-mode .hvy-document-host .description-progress-track,
+.hvy-compatibility-mode .hvy-document-host .description-progress-last,
+.hvy-compatibility-mode .hvy-document-host .section-template-flavor-option,
+.hvy-compatibility-mode .hvy-document-host .raw-editor-diagnostic,
+.hvy-compatibility-mode .hvy-document-host .component-picker-row:hover,
+.hvy-compatibility-mode .hvy-document-host .component-picker-row:focus-visible,
+.hvy-compatibility-mode .hvy-document-host .component-picker-back:hover,
+.hvy-compatibility-mode .hvy-document-host .component-picker-back:focus-visible {
+  background: var(--hvy-surface-alt);
+}
+
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab {
+  width: var(--hvy-sidebar-tab-size) !important;
+  min-width: var(--hvy-sidebar-tab-size) !important;
+  max-width: var(--hvy-sidebar-tab-size) !important;
+  height: auto !important;
+  max-height: none !important;
+  min-height: var(--hvy-sidebar-tab-size) !important;
+  padding-block: 0.62rem !important;
+}
+
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab .sidebar-tab-hamburger {
+  display: block;
+}
+
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab .sidebar-tab-label {
+  display: block;
+  max-height: calc(100vh - 6rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: rotate(180deg);
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+}
+
+.hvy-compatibility-mode .hvy-document-host .editor-sidebar-help-balloon::before,
+.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-help-balloon::before {
+  border-right-color: var(--hvy-surface);
+}
+
+.hvy-compatibility-mode .hvy-document-host .component-picker-popover {
+  width: min(14rem, calc(100vw - 2rem), calc(100vh - 2rem));
+  height: min(14rem, calc(100vw - 2rem), calc(100vh - 2rem));
+  aspect-ratio: 1 / 1;
+  background: radial-gradient(circle at center, var(--hvy-surface-alt) 0 18%, var(--hvy-surface) 19% 100%);
+  border-radius: 50%;
+}
+
+.hvy-compatibility-mode .hvy-document-host .component-picker:not([data-active-pane="root"]) .component-picker-popover {
+  height: auto;
+  background: var(--hvy-surface);
+  border-radius: 8px;
+}
+
+.hvy-compatibility-mode .hvy-document-host .component-picker-pane-root .component-picker-row {
+  background: transparent;
+  border: 0;
+  color: var(--hvy-text);
+}
+
+.hvy-compatibility-mode .hvy-document-host .component-picker-pane-root .component-picker-row-description {
+  color: var(--hvy-text-muted);
+}
+
+.hvy-compatibility-mode .hvy-document-host .image-camera-video {
+  background: radial-gradient(circle at center, var(--hvy-surface-alt) 0 42%, var(--hvy-bg-alt) 43% 100%);
 }
 
 .dialog {

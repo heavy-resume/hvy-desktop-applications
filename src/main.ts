@@ -734,6 +734,16 @@ const handlers: UiHandlers = {
       void mountCurrentDocument();
       return;
     }
+    if (state.document.mounted && state.document.mode !== 'advanced') {
+      const opened = openMountedDocumentMeta(state.document.mounted);
+      if (opened) {
+        state.document.mode = 'advanced';
+        state.document.metaOpen = true;
+        updateCurrentDocumentSession(state.document.mounted.document);
+        updateModeMetaChrome();
+        return;
+      }
+    }
     if (state.document.mode === 'advanced') {
       if (state.document.mounted) {
         state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
@@ -1280,11 +1290,12 @@ function pathStartsWithWorkspace(path: string, workspacePath: string): boolean {
 
 async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
   if (!state.document || !mountRoot || !document) return;
+  const generation = ++mountGeneration;
+  const searchSnapshot = await createWorkspaceFilterSnapshotForDocument(state.document.path, state.document.name, document);
+  if (generation !== mountGeneration || !state.document || !mountRoot) return;
   state.document.mounted?.mount.destroy();
   mountThemeReapplyCleanup?.();
   mountThemeReapplyCleanup = null;
-  const generation = ++mountGeneration;
-  const searchSnapshot = await createWorkspaceFilterSnapshotForDocument(state.document.path, state.document.name, document);
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
     searchSnapshot,

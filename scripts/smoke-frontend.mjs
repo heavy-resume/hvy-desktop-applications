@@ -100,13 +100,48 @@ async function smokeViewport(viewport) {
         const element = document.createElement('div');
         element.className = className;
         document.body.append(element);
-        const background = getComputedStyle(element).backgroundColor;
+        const style = getComputedStyle(element);
+        const background = style.backgroundColor;
+        const backgroundImage = style.backgroundImage;
         element.remove();
-        const alpha = background.startsWith('rgba(')
+        const alpha = backgroundImage !== 'none'
+          ? 1
+          : background.startsWith('rgba(')
           ? Number.parseFloat(background.split(',').at(-1)?.replace(')', '').trim() ?? '1')
           : 1;
         return { className, background, alpha };
       });
+      const host = document.createElement('div');
+      host.className = 'hvy-document-host';
+      document.body.append(host);
+      const embeddedSamples = [
+        'modal-panel',
+        'search-modal',
+        'chat-panel',
+        'ai-edit-popover',
+        'component-picker-popover',
+        'viewer-sidebar-tab',
+      ].map((className) => {
+        const element = document.createElement('div');
+        element.className = className;
+        if (className === 'viewer-sidebar-tab') {
+          element.innerHTML = '<span class="sidebar-tab-label">Study Tools</span>';
+        }
+        host.append(element);
+        const style = getComputedStyle(element);
+        const background = style.backgroundColor;
+        const backgroundImage = style.backgroundImage;
+        const alpha = backgroundImage !== 'none'
+          ? 1
+          : background.startsWith('rgba(')
+          ? Number.parseFloat(background.split(',').at(-1)?.replace(')', '').trim() ?? '1')
+          : 1;
+        const rect = element.getBoundingClientRect();
+        element.remove();
+        return { className, background, alpha, height: rect.height };
+      });
+      host.remove();
+      samples.push(...embeddedSamples);
       return samples;
     });
     const transparent = compatibility.find((sample) => sample.alpha < 1);
