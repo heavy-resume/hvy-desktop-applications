@@ -38,6 +38,7 @@
     "shortDescription": "HVY Galaxy",
     "longDescription": "Cross-platform desktop app for viewing and editing HVY files.",
     "macOS": {
+      "infoPlist": "Info.plist",
       "minimumSystemVersion": "10.13"
     },
     "resources": [
