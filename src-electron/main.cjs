@@ -15,6 +15,8 @@ const RECENT_LIMIT = 12;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.md']);
 const TEMPLATE_EXTENSIONS = new Set(['.hvy', '.thvy']);
 const THEME_EXTENSIONS = new Set(['.hvytheme', '.json']);
+const APP_IDENTIFIER = 'com.heavyresume.hvy-galaxy';
+const APP_NAME = 'HVY Galaxy';
 
 let mainWindow = null;
 let mcpStatus = {
@@ -24,9 +26,14 @@ let mcpStatus = {
   lastError: null,
 };
 
-app.setName('HVY Galaxy');
+app.setName(APP_NAME);
+app.setAppUserModelId(APP_IDENTIFIER);
+app.setPath('userData', electronProfileDir());
 
 app.whenReady().then(async () => {
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(iconPath('icon.png'));
+  }
   mainWindow = createWindow();
   buildMenu();
   await loadRenderer(mainWindow);
@@ -52,8 +59,9 @@ function createWindow() {
     height: 860,
     minWidth: 920,
     minHeight: 640,
-    title: 'HVY Galaxy',
+    title: APP_NAME,
     backgroundColor: '#f7f3ea',
+    icon: iconPath(process.platform === 'darwin' ? 'icon.icns' : 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -237,11 +245,11 @@ async function handleCommand(command, args) {
 }
 
 function dataPath(fileName) {
-  return path.join(app.getPath('userData'), fileName);
+  return path.join(sharedAppDataDir(), fileName);
 }
 
 function appTemplatesDir() {
-  return path.join(app.getPath('userData'), 'templates');
+  return path.join(sharedAppDataDir(), 'templates');
 }
 
 function workspaceTemplatesDir(workspacePath) {
@@ -249,13 +257,45 @@ function workspaceTemplatesDir(workspacePath) {
 }
 
 function backupsDir() {
-  return path.join(app.getPath('userData'), 'backups');
+  return path.join(sharedAppDataDir(), 'backups');
 }
 
 function defaultGuidePath() {
   const packaged = path.join(process.resourcesPath || '', 'resources', 'hvy-guide.hvy');
   if (fs.existsSync(packaged)) return packaged;
   return path.join(__dirname, '..', 'src-tauri', 'resources', 'hvy-guide.hvy');
+}
+
+function sharedAppDataDir() {
+  if (process.env.HVY_GALAXY_APP_DATA_DIR) {
+    return process.env.HVY_GALAXY_APP_DATA_DIR;
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', APP_IDENTIFIER);
+  }
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), APP_IDENTIFIER);
+  }
+  return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), APP_IDENTIFIER);
+}
+
+function electronProfileDir() {
+  if (process.env.HVY_GALAXY_ELECTRON_PROFILE_DIR) {
+    return process.env.HVY_GALAXY_ELECTRON_PROFILE_DIR;
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', `${APP_NAME} Electron`);
+  }
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), `${APP_NAME} Electron`);
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), `${APP_NAME} Electron`);
+}
+
+function iconPath(fileName) {
+  const packaged = path.join(process.resourcesPath || '', 'icons', fileName);
+  if (fs.existsSync(packaged)) return packaged;
+  return path.join(__dirname, '..', 'src-tauri', 'icons', fileName);
 }
 
 function readJson(filePath, fallback) {
@@ -682,16 +722,25 @@ function documentExtension(filePath) {
 }
 
 function uniqueManagedWorkspacePath(name) {
-  const root = path.join(app.getPath('documents'), 'HVY Galaxy');
+  const root = path.join(sharedAppDataDir(), 'workspaces');
   fs.mkdirSync(root, { recursive: true });
-  const base = safeFileStem(name);
+  const base = workspaceFolderName(name);
   let candidate = path.join(root, base);
   let index = 2;
   while (fs.existsSync(candidate)) {
-    candidate = path.join(root, `${base} ${index}`);
+    candidate = path.join(root, `${base}-${index}`);
     index += 1;
   }
   return candidate;
+}
+
+function workspaceFolderName(name) {
+  const slug = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'workspace';
 }
 
 function uniqueCopyPath(root, fileName) {
@@ -803,7 +852,7 @@ function defaultMcpStdioLaunchConfig() {
   return {
     command: process.execPath,
     args: ['--mcp-stdio'],
-    workingDirectory: app.getPath('userData'),
+    workingDirectory: path.join(sharedAppDataDir(), 'mcp'),
   };
 }
 

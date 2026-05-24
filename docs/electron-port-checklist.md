@@ -2,10 +2,10 @@
 
 ## Runtime Routing
 
-- [ ] Add a tiny Rust launcher binary that handles process-level routing before any UI shell starts.
-- [ ] Route `--mcp-stdio` directly to the existing Tauri/Rust MCP implementation.
-- [ ] Route modern macOS to the Tauri app while it remains the best native shell there.
-- [ ] Route Windows, Linux, and legacy Intel macOS/macOS 11 to the Electron app.
+- [x] Add a tiny Rust launcher path that handles process-level routing before any UI shell starts.
+- [x] Route `--mcp-stdio` directly to the existing Tauri/Rust MCP implementation.
+- [x] Route modern macOS to the Tauri app while it remains the best native shell there.
+- [x] Route Windows, Linux, and legacy Intel macOS/macOS 11 to the Electron app.
 - [ ] Package the Electron runtime beside the launcher so the launcher can spawn the correct executable without depending on a system Electron install.
 - [ ] Preserve app identity, signing, file associations, icons, and update paths for both shells.
 
@@ -22,6 +22,9 @@
 - [x] Add a cross-platform `npm run electron:dev` launcher.
 - [x] Implement core menus and menu events.
 - [x] Implement compatibility mode persistence and Help menu toggle.
+- [x] Share Tauri app data for settings, recents, workspaces, templates, compatibility mode, and backups.
+- [x] Keep Electron browser profile/cache separate from shared HVY app data.
+- [x] Reuse the existing HVY Galaxy app icon in the Electron window and macOS Dock.
 - [x] Implement app environment detection.
 - [x] Implement open/save/read document flows.
 - [x] Implement recent files/workspaces.
