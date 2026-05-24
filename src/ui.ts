@@ -21,8 +21,8 @@ export interface UiHandlers {
   openImportInWorkspace(workspacePath: string): void;
   openImportIntoCurrent(): void;
   chooseImportSource(): void;
-  createImportedDocument(name: string, templateId: string, instructions: string): void;
-  importIntoCurrent(instructions: string): void;
+  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string): void;
+  importIntoCurrent(instructions: string, pastedSourceText: string): void;
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
   openWorkspaceFilter(workspacePath: string): void;
@@ -92,6 +92,7 @@ if (!app) {
 const appRoot = app;
 let bindController: AbortController | null = null;
 let activeFileContextMenuCleanup: (() => void) | null = null;
+const MIN_PASTED_IMPORT_CHARS = 50;
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   appRoot.innerHTML = `
@@ -327,6 +328,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       if (form) updateWorkspaceFilterSubmit(form);
       return;
     }
+    if (field === 'import-source-text') {
+      const form = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
+      if (form) updateImportSubmit(form);
+      return;
+    }
     if (field === 'mcp-port' || field === 'mcp-token') {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
       if (form) {
@@ -415,12 +421,16 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       handlers.createImportedDocument(
         String(data.get('documentName') ?? ''),
         String(data.get('templateId') ?? ''),
-        String(data.get('instructions') ?? '')
+        String(data.get('instructions') ?? ''),
+        String(data.get('importSourceText') ?? '')
       );
     }
     if (form.dataset.form === 'import-current') {
       const data = new FormData(form);
-      handlers.importIntoCurrent(String(data.get('instructions') ?? ''));
+      handlers.importIntoCurrent(
+        String(data.get('instructions') ?? ''),
+        String(data.get('importSourceText') ?? '')
+      );
     }
     if (form.dataset.form === 'export-document') {
       const data = new FormData(form);
@@ -489,6 +499,9 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   });
   root.querySelectorAll<HTMLFormElement>('form[data-form="workspace-filter"]').forEach((form) => {
     updateWorkspaceFilterSubmit(form);
+  });
+  root.querySelectorAll<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]').forEach((form) => {
+    updateImportSubmit(form);
   });
 }
 
@@ -933,6 +946,7 @@ function renderImportDialog(state: AppState): string {
   const templates = mergeSavedTemplates(state.savedTemplates);
   const source = state.importSource;
   const title = importCurrent ? 'Import Into Current' : 'Import Document';
+  const baseDisabled = state.busy || (!importCurrent && templates.length === 0);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="${importCurrent ? 'import-current' : 'import-document'}">
@@ -955,6 +969,8 @@ function renderImportDialog(state: AppState): string {
             <button type="button" data-action="choose-import-source">Choose .txt or .md</button>
             <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
           </div>
+          <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here"></textarea>
+          <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>
         </div>
         <label>
           <span>Instructions</span>
@@ -962,10 +978,31 @@ function renderImportDialog(state: AppState): string {
         </label>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-import">Cancel</button>
-          <button type="submit" ${state.busy || !source || (!importCurrent && templates.length === 0) ? 'disabled' : ''}>Import</button>
+          <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !source ? 'disabled' : ''}>Import</button>
         </div>
       </form>
     </div>`;
+}
+
+function updateImportSubmit(form: HTMLFormElement): void {
+  const submit = form.querySelector<HTMLButtonElement>('[data-role="import-submit"]');
+  if (!submit) return;
+  const pastedLength = form.querySelector<HTMLTextAreaElement>('[data-field="import-source-text"]')?.value.trim().length ?? 0;
+  const hasFileSource = submit.dataset.hasFileSource === 'true';
+  const baseDisabled = submit.dataset.baseDisabled === 'true';
+  const hasValidSource = hasFileSource || pastedLength >= MIN_PASTED_IMPORT_CHARS;
+  submit.disabled = baseDisabled || !hasValidSource;
+  const note = form.querySelector<HTMLElement>('[data-role="import-source-note"]');
+  if (note) {
+    note.textContent = hasFileSource
+      ? pastedLength > 0 && pastedLength < MIN_PASTED_IMPORT_CHARS
+        ? `Pasted text needs ${MIN_PASTED_IMPORT_CHARS} characters to replace the selected file.`
+        : 'Using selected file unless pasted text is provided.'
+      : pastedLength > 0
+      ? `${Math.min(pastedLength, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
+      : `Choose a file or paste at least ${MIN_PASTED_IMPORT_CHARS} characters.`;
+    note.dataset.state = !hasValidSource && pastedLength > 0 ? 'error' : 'neutral';
+  }
 }
 
 function renderExportDialog(state: AppState): string {

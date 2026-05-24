@@ -10,6 +10,7 @@ import {
   initializeWorkspacePath,
   isTauriRuntime,
   installMcpClient,
+  loadAppEnvironment,
   loadAiSettings,
   loadMcpClientInstallStatus,
   loadDefaultGuide,
@@ -39,7 +40,9 @@ import {
   saveDocumentTemplate,
   startMcpServer,
   stopMcpServer,
+  type AppEnvironment,
   type DocumentFile,
+  type ImportSourceFile,
   type McpClientInstallTarget,
   type McpSettings,
   type WorkspaceFileNode,
@@ -56,8 +59,10 @@ let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
 let backupTimer: number | null = null;
+let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = null;
 let mountThemeReapplyCleanup: (() => void) | null = null;
 let workspaceFilterAbortController: AbortController | null = null;
+let appEnvironment: AppEnvironment | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
 interface DocumentSession {
@@ -87,17 +92,13 @@ const handlers: UiHandlers = {
     });
   },
   toggleWorkspaceActions: (path) => {
-    const document = state.document?.mounted?.document;
     state.openWorkspaceActionsPath = state.openWorkspaceActionsPath === path ? null : path;
-    rerender();
-    void mountCurrentDocument(document);
+    rerender({ preserveMountedDocument: true });
   },
   closeWorkspaceActions: () => {
     if (!state.openWorkspaceActionsPath) return;
-    const document = state.document?.mounted?.document;
     state.openWorkspaceActionsPath = null;
-    rerender();
-    void mountCurrentDocument(document);
+    rerender({ preserveMountedDocument: true });
   },
   createWorkspace: (name, location) => void runBusy('Creating workspace...', async () => {
     const trimmed = name.trim();
@@ -203,11 +204,15 @@ const handlers: UiHandlers = {
     state.importSource = source;
     state.status = `Selected ${source.name}`;
   }),
-  createImportedDocument: (name, templateId, instructions) => void runBusy('Importing document...', async () => {
+  createImportedDocument: (name, templateId, instructions, pastedSourceText) => void runBusy('Importing document...', async () => {
     const workspacePath = state.importWorkspacePath;
-    const source = state.importSource;
+    const source = importSourceFrom(pastedSourceText);
     const fileName = documentFileName(name);
-    if (!workspacePath || !source) return;
+    if (!workspacePath) return;
+    if (!source) {
+      state.status = 'Import source is required';
+      return;
+    }
     if (!fileName) {
       state.status = 'Document name is required';
       return;
@@ -261,9 +266,13 @@ const handlers: UiHandlers = {
     await refreshRecents();
     state.status = result.message ?? `Imported ${source.name}`;
   }),
-  importIntoCurrent: (instructions) => void runBusy('Importing into current document...', async () => {
-    const source = state.importSource;
-    if (!state.document?.mounted || state.document.readOnly || !source) return;
+  importIntoCurrent: (instructions, pastedSourceText) => void runBusy('Importing into current document...', async () => {
+    const source = importSourceFrom(pastedSourceText);
+    if (!state.document?.mounted || state.document.readOnly) return;
+    if (!source) {
+      state.status = 'Import source is required';
+      return;
+    }
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
     const plan = await buildMountedImportPlan(state.document.mounted, {
@@ -728,7 +737,8 @@ const handlers: UiHandlers = {
     if (state.document.mode === 'advanced') {
       if (state.document.mounted) {
         state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
-        rerender({ preserveMountedDocument: true });
+        updateCurrentDocumentSession(state.document.mounted.document);
+        updateModeMetaChrome();
       }
       return;
     }
@@ -742,7 +752,8 @@ const handlers: UiHandlers = {
     void mountCurrentDocument(document).then(() => {
       if (state.document?.mode === 'advanced' && state.document.mounted) {
         state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
-        rerender({ preserveMountedDocument: true });
+        updateCurrentDocumentSession(state.document.mounted.document);
+        updateModeMetaChrome();
       }
     });
   },
@@ -784,8 +795,9 @@ void boot();
 
 async function boot(): Promise<void> {
   setupErrorSurface();
-  mountRoot = render(state, handlers);
   try {
+    await refreshAppEnvironment();
+    mountRoot = render(state, handlers);
     await refreshRecents();
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
@@ -796,7 +808,7 @@ async function boot(): Promise<void> {
       state.mcpServerStatus = await startMcpServer();
     }
     state.colorTheme = loadColorThemeSettings();
-    applyColorTheme(state.colorTheme, mountRoot);
+    applyAppColorTheme();
     installAiChatClient(state.aiSettings);
     await loadRecentWorkspaces();
     await refreshSavedTemplates(state.selectedWorkspacePath);
@@ -817,6 +829,10 @@ async function boot(): Promise<void> {
       }
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
+      if (event.startsWith('compatibility-mode:')) void refreshAppEnvironment().then(() => {
+        state.status = appEnvironment?.compatibilityMode ? 'Compatibility mode enabled' : 'Compatibility mode disabled';
+        rerender({ preserveMountedDocument: true });
+      });
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
       if (event === 'import-current') handlers.openImportIntoCurrent();
@@ -827,6 +843,86 @@ async function boot(): Promise<void> {
   } catch (error) {
     showStartupError(error);
   }
+}
+
+async function refreshAppEnvironment(): Promise<void> {
+  appEnvironment = await loadAppEnvironment();
+  document.documentElement.classList.toggle('hvy-compatibility-mode', appEnvironment.compatibilityMode);
+  applyCompatibilityThemeVariables();
+}
+
+function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
+  applyColorTheme(state.colorTheme, root);
+  applyCompatibilityThemeVariables();
+}
+
+function applyCompatibilityThemeVariables(): void {
+  const target = document.documentElement;
+  if (!target.classList.contains('hvy-compatibility-mode')) {
+    [
+      '--hvy-compat-bg',
+      '--hvy-compat-surface',
+      '--hvy-compat-surface-alt',
+      '--hvy-compat-hover',
+      '--hvy-compat-border',
+    ].forEach((name) => target.style.removeProperty(name));
+    return;
+  }
+
+  const styles = getComputedStyle(target);
+  const bg = opaqueThemeColor(styles, '--hvy-bg', '#fbfaf7');
+  const surface = opaqueThemeColor(styles, '--hvy-surface', '#fffefb', bg);
+  const surfaceAlt = opaqueThemeColor(styles, '--hvy-surface-alt', '#edf1ed', bg);
+  const hover = opaqueThemeColor(styles, '--hvy-button-bg', surface, surface);
+  const border = opaqueThemeColor(styles, '--hvy-border', '#c5cec8', surface);
+  target.style.setProperty('--hvy-compat-bg', bg);
+  target.style.setProperty('--hvy-compat-surface', surface);
+  target.style.setProperty('--hvy-compat-surface-alt', surfaceAlt);
+  target.style.setProperty('--hvy-compat-hover', hover);
+  target.style.setProperty('--hvy-compat-border', border);
+}
+
+function opaqueThemeColor(styles: CSSStyleDeclaration, name: string, fallback: string, backdrop = fallback): string {
+  const value = styles.getPropertyValue(name).trim();
+  return toOpaqueCssColor(value || fallback, backdrop) ?? fallback;
+}
+
+function toOpaqueCssColor(value: string, backdrop: string): string | null {
+  const color = parseCssColor(value);
+  if (!color) {
+    return value || null;
+  }
+  if (color.a >= 1) {
+    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+  }
+  const backdropColor = parseCssColor(backdrop) ?? { r: 255, g: 255, b: 255, a: 1 };
+  const alpha = Math.max(0, Math.min(1, color.a));
+  const blend = (channel: number, base: number) => Math.round(channel * alpha + base * (1 - alpha));
+  return `rgb(${blend(color.r, backdropColor.r)}, ${blend(color.g, backdropColor.g)}, ${blend(color.b, backdropColor.b)})`;
+}
+
+function parseCssColor(value: string): { r: number; g: number; b: number; a: number } | null {
+  const trimmed = value.trim();
+  const hex = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const raw = hex[1].length === 3
+      ? hex[1].split('').map((part) => `${part}${part}`).join('')
+      : hex[1];
+    return {
+      r: Number.parseInt(raw.slice(0, 2), 16),
+      g: Number.parseInt(raw.slice(2, 4), 16),
+      b: Number.parseInt(raw.slice(4, 6), 16),
+      a: 1,
+    };
+  }
+  const rgb = trimmed.match(/^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})(?:\s*[,/]\s*([\d.]+)\s*)?\)$/i);
+  if (!rgb) return null;
+  return {
+    r: Math.max(0, Math.min(255, Number.parseInt(rgb[1], 10))),
+    g: Math.max(0, Math.min(255, Number.parseInt(rgb[2], 10))),
+    b: Math.max(0, Math.min(255, Number.parseInt(rgb[3], 10))),
+    a: rgb[4] === undefined ? 1 : Math.max(0, Math.min(1, Number.parseFloat(rgb[4]))),
+  };
 }
 
 async function refreshRecents(): Promise<void> {
@@ -956,7 +1052,7 @@ async function applyWorkspaceFilterToCurrentDocument(): Promise<void> {
   const snapshot = await createWorkspaceFilterSnapshotForDocument(openDocument.path, openDocument.name, document);
   if (openDocument.mounted) {
     setMountedSearchSnapshot(openDocument.mounted, snapshot);
-    applyColorTheme(state.colorTheme, mountRoot);
+    applyAppColorTheme();
   }
 }
 
@@ -1079,6 +1175,14 @@ function displayDocumentName(name: string): string {
   return name.replace(/\.(t?hvy|md)$/i, '');
 }
 
+function importSourceFrom(pastedSourceText: string): ImportSourceFile | null {
+  const pasted = pastedSourceText.trim();
+  if (pasted.length >= 50) {
+    return { path: '', name: 'Pasted text', text: pasted };
+  }
+  return state.importSource;
+}
+
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean } = {}): Promise<void> {
   preserveCurrentDocumentSession();
   state.document?.mounted?.mount.destroy();
@@ -1189,7 +1293,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
       setDocumentDirty(event.dirty);
     },
   });
-  applyColorTheme(state.colorTheme, mountRoot);
+  applyAppColorTheme();
   mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
   state.document.mounted = mounted;
   setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
@@ -1203,7 +1307,7 @@ function bindMountThemeReapply(root: HTMLElement): () => void {
     frame = window.requestAnimationFrame(() => {
       frame = window.requestAnimationFrame(() => {
         frame = 0;
-        applyColorTheme(state.colorTheme, root);
+        applyAppColorTheme(root);
       });
     });
   };
@@ -1245,6 +1349,18 @@ function updateDirtyChrome(): void {
     saveButton?.setAttribute('disabled', '');
   }
   document.querySelector('.status-bar')?.replaceChildren(document.createTextNode(state.status));
+}
+
+function updateModeMetaChrome(): void {
+  const openDocument = state.document;
+  if (!openDocument) return;
+  const advancedButton = document.querySelector<HTMLButtonElement>('.mode-button[data-mode="advanced"]');
+  const metaButton = document.querySelector<HTMLButtonElement>('.mode-button-meta');
+  const advancedActive = openDocument.mode === 'advanced' && !openDocument.metaOpen;
+  advancedButton?.classList.toggle('is-active', advancedActive);
+  advancedButton?.setAttribute('aria-pressed', advancedActive ? 'true' : 'false');
+  metaButton?.classList.toggle('is-active', openDocument.metaOpen);
+  metaButton?.setAttribute('aria-pressed', openDocument.metaOpen ? 'true' : 'false');
 }
 
 async function saveCurrentDocument(): Promise<void> {
@@ -1318,8 +1434,21 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
 function startBackupTimer(): void {
   if (backupTimer !== null || !isTauriRuntime()) return;
   backupTimer = window.setInterval(() => {
-    void backupActiveDocument();
+    scheduleBackupActiveDocument();
   }, BACKUP_INTERVAL_MS);
+}
+
+function scheduleBackupActiveDocument(): void {
+  if (pendingBackupIdleHandle !== null) return;
+  const callback = () => {
+    pendingBackupIdleHandle = null;
+    void backupActiveDocument();
+  };
+  if ('requestIdleCallback' in window) {
+    pendingBackupIdleHandle = window.requestIdleCallback(callback, { timeout: 30_000 });
+    return;
+  }
+  pendingBackupIdleHandle = globalThis.setTimeout(callback, 1500);
 }
 
 async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
@@ -1447,7 +1576,7 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
     }
   }
   mountRoot = render(state, handlers, { preserveMount });
-  applyColorTheme(state.colorTheme, mountRoot);
+  applyAppColorTheme();
 }
 
 async function runBusy(label: string, task: () => Promise<void>): Promise<void> {
@@ -1593,7 +1722,7 @@ function closeUiBeforeWorkspaceFilter(): void {
 
 function persistAndApplyColorTheme(): void {
   saveColorThemeSettings(state.colorTheme);
-  applyColorTheme(state.colorTheme, mountRoot);
+  applyAppColorTheme();
   state.status = 'Updated colors';
 }
 

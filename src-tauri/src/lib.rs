@@ -14,7 +14,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 use tauri::menu::{
-    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+    CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
@@ -24,6 +24,7 @@ const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const AI_SETTINGS: &str = "ai-settings.json";
 const MCP_SETTINGS: &str = "mcp-settings.json";
+const COMPATIBILITY_SETTINGS: &str = "compatibility-settings.json";
 const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
 const DEFAULT_MCP_PORT: u16 = 8794;
 const RECENT_LIMIT: usize = 12;
@@ -114,6 +115,26 @@ struct RecentState {
     workspaces: Vec<String>,
     #[serde(default)]
     files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CompatibilitySettings {
+    #[serde(default)]
+    forced: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AppEnvironment {
+    platform: String,
+    arch: String,
+    macos_major: Option<i64>,
+    macos_minor: Option<i64>,
+    macos_patch: Option<i64>,
+    legacy_webview: bool,
+    forced_compatibility_mode: bool,
+    compatibility_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -508,6 +529,11 @@ struct AiSettingsLegacy {
 #[tauri::command]
 fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
     read_recent_state(&recent_state_path(&app)?)
+}
+
+#[tauri::command]
+fn load_app_environment(app: AppHandle) -> AppResult<AppEnvironment> {
+    app_environment(&app)
 }
 
 #[tauri::command]
@@ -1150,11 +1176,17 @@ pub fn run() {
                     || id.starts_with("recent-workspace:")
                 {
                     let _ = app.emit("menu-event", id.to_string());
+                } else if id == "compatibility-mode" {
+                    if let Ok(enabled) = toggle_forced_compatibility_mode(&app) {
+                        let _ = refresh_menu(&app);
+                        let _ = app.emit("menu-event", format!("compatibility-mode:{enabled}"));
+                    }
                 }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            load_app_environment,
             load_recent_state,
             load_ai_settings,
             save_ai_settings,
@@ -1219,6 +1251,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .ok()
         .and_then(|path| read_recent_state(&path).ok())
         .unwrap_or_default();
+    let forced_compatibility = compatibility_settings_path(app)
+        .ok()
+        .and_then(|path| read_compatibility_settings(&path).ok())
+        .map(|settings| settings.forced)
+        .unwrap_or(false);
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
     let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
@@ -1278,6 +1315,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
             &MenuItemBuilder::new("HVY Guide")
                 .id("open-guide")
                 .accelerator("F1")
+                .build(app)?,
+        )
+        .separator()
+        .item(
+            &CheckMenuItemBuilder::new("Compatibility Mode")
+                .id("compatibility-mode")
+                .checked(forced_compatibility)
                 .build(app)?,
         )
         .build()?;
@@ -1883,6 +1927,53 @@ fn read_mcp_settings(path: &Path) -> AppResult<McpSettings> {
     }
     let settings: McpSettings = serde_json::from_slice(&fs::read(path)?)?;
     normalize_mcp_settings(settings)
+}
+
+fn read_compatibility_settings(path: &Path) -> AppResult<CompatibilitySettings> {
+    if !path.exists() {
+        return Ok(CompatibilitySettings::default());
+    }
+    Ok(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+fn toggle_forced_compatibility_mode(app: &AppHandle) -> AppResult<bool> {
+    let path = compatibility_settings_path(app)?;
+    let mut settings = read_compatibility_settings(&path)?;
+    settings.forced = !settings.forced;
+    write_json_atomically(&path, &settings)?;
+    Ok(settings.forced)
+}
+
+fn app_environment(app: &AppHandle) -> AppResult<AppEnvironment> {
+    let settings = read_compatibility_settings(&compatibility_settings_path(app)?)?;
+    let (macos_major, macos_minor, macos_patch) = macos_version();
+    let legacy_webview = macos_major.map(|major| major < 13).unwrap_or(false);
+    Ok(AppEnvironment {
+        platform: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+        macos_major,
+        macos_minor,
+        macos_patch,
+        legacy_webview,
+        forced_compatibility_mode: settings.forced,
+        compatibility_mode: legacy_webview || settings.forced,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_version() -> (Option<i64>, Option<i64>, Option<i64>) {
+    use objc2_foundation::NSProcessInfo;
+    let version = NSProcessInfo::processInfo().operatingSystemVersion();
+    (
+        Some(version.majorVersion as i64),
+        Some(version.minorVersion as i64),
+        Some(version.patchVersion as i64),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_version() -> (Option<i64>, Option<i64>, Option<i64>) {
+    (None, None, None)
 }
 
 fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
@@ -2830,6 +2921,15 @@ fn mcp_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
         .map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     Ok(directory.join(MCP_SETTINGS))
+}
+
+fn compatibility_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(COMPATIBILITY_SETTINGS))
 }
 
 fn mcp_stdio_workspace_config_path(app: &AppHandle) -> AppResult<PathBuf> {

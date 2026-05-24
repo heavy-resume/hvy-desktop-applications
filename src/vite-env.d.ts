@@ -12,6 +12,9 @@ declare module 'virtual:hvy-brython-minimal-vfs' {
   export default source;
 }
 
+declare module 'pdfmake/build/pdfmake.js';
+declare module 'pdfmake/build/vfs_fonts.js';
+
 interface Window {
   HVY?: any;
   HVY_CHAT_CLIENT?: any;

@@ -47,6 +47,17 @@ export interface RecentState {
   files: string[];
 }
 
+export interface AppEnvironment {
+  platform: string;
+  arch: string;
+  macosMajor: number | null;
+  macosMinor: number | null;
+  macosPatch: number | null;
+  legacyWebview: boolean;
+  forcedCompatibilityMode: boolean;
+  compatibilityMode: boolean;
+}
+
 export interface DocumentFile {
   path: string;
   name: string;
@@ -200,6 +211,13 @@ export function loadRecentState(): Promise<RecentState> {
   return invokeDesktop('load_recent_state');
 }
 
+export function loadAppEnvironment(): Promise<AppEnvironment> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(defaultAppEnvironment());
+  }
+  return invokeDesktop('load_app_environment');
+}
+
 export function loadAiSettings(): Promise<AiSettings> {
   if (!isTauriRuntime()) {
     return Promise.resolve(defaultAiSettings());
@@ -323,6 +341,19 @@ export function defaultMcpClientInstallStatus(): McpClientInstallStatus[] {
       message: 'Claude config file was not found.',
     },
   ];
+}
+
+export function defaultAppEnvironment(): AppEnvironment {
+  return {
+    platform: typeof navigator === 'undefined' ? 'browser' : navigator.platform.toLowerCase(),
+    arch: 'unknown',
+    macosMajor: null,
+    macosMinor: null,
+    macosPatch: null,
+    legacyWebview: false,
+    forcedCompatibilityMode: false,
+    compatibilityMode: false,
+  };
 }
 
 export function generateMcpBearerToken(): string {
