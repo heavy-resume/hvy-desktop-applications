@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell } = require('electron');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -10,7 +10,6 @@ const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
 const RECENT_STATE = 'recent.json';
 const AI_SETTINGS = 'ai-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
-const COMPATIBILITY_SETTINGS = 'compatibility-settings.json';
 const RECENT_LIMIT = 12;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.md']);
 const TEMPLATE_EXTENSIONS = new Set(['.hvy', '.thvy']);
@@ -22,17 +21,23 @@ let mainWindow = null;
 let mcpStatus = {
   running: false,
   url: null,
-  message: 'MCP server is Tauri-only in this Electron build.',
+  message: 'MCP server is stopped.',
   lastError: null,
 };
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_IDENTIFIER);
+app.setAboutPanelOptions({
+  applicationName: APP_NAME,
+  applicationVersion: app.getVersion(),
+  iconPath: iconPath('icon.png'),
+});
 app.setPath('userData', electronProfileDir());
 
 app.whenReady().then(async () => {
   if (process.platform === 'darwin' && app.dock) {
-    app.dock.setIcon(iconPath('icon.png'));
+    const dockIcon = nativeImage.createFromPath(iconPath('icon.png'));
+    app.dock.setIcon(dockIcon);
   }
   mainWindow = createWindow();
   buildMenu();
@@ -81,35 +86,37 @@ async function loadRenderer(window) {
 
 function buildMenu() {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-  const compatibility = readJson(dataPath(COMPATIBILITY_SETTINGS), { forced: false });
+  const mcpToggleLabel = mcpStatus.running ? 'Stop MCP Server' : 'Start MCP Server';
   const template = [
     ...(process.platform === 'darwin' ? [{
-      label: app.name,
+      label: APP_NAME,
       submenu: [
-        { role: 'about' },
+        menuItem(`About ${APP_NAME}`, 'about'),
+        { type: 'separator' },
+        menuItem('AI Settings...', 'ai-settings', 'CmdOrCtrl+,'),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
-        { role: 'hide' },
+        { role: 'hide', label: `Hide ${APP_NAME}` },
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit' },
+        { role: 'quit', label: `Quit ${APP_NAME}` },
       ],
     }] : []),
     {
       label: 'File',
       submenu: [
-        menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+Shift+N'),
-        menuItem('Open Workspace...', 'open-workspace', 'CmdOrCtrl+O'),
-        menuItem('Open File...', 'open-file', 'CmdOrCtrl+Shift+O'),
-        recentSubmenu('Open Recent Workspace', recent.workspaces, 'recent-workspace:'),
-        recentSubmenu('Open Recent File', recent.files, 'recent-file:'),
+        menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),
+        menuItem('Open Workspace', 'open-workspace', 'CmdOrCtrl+O'),
+        menuItem('Open File', 'open-file', 'CmdOrCtrl+Shift+O'),
+        recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
+        recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
+        menuItem('Export...', 'export-document'),
         menuItem('Import Into Current...', 'import-current'),
-        menuItem('Export Document...', 'export-document'),
         { type: 'separator' },
         menuItem('Recover Backup...', 'recover-backup'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, { role: 'quit' }]),
@@ -124,6 +131,9 @@ function buildMenu() {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        { type: 'separator' },
+        menuItem('Colors', 'colors'),
+        { type: 'separator' },
         { role: 'selectAll' },
       ],
     },
@@ -141,26 +151,22 @@ function buildMenu() {
       ],
     },
     {
+      label: 'MCP Server',
+      submenu: [
+        {
+          label: mcpStatusMenuLabel(mcpStatus),
+          id: 'mcp-status',
+          enabled: false,
+        },
+        menuItem(mcpToggleLabel, 'mcp-toggle'),
+        { type: 'separator' },
+        menuItem('Server Settings...', 'mcp-settings'),
+      ],
+    },
+    {
       label: 'Help',
       submenu: [
-        menuItem('Open Guide', 'open-guide'),
-        menuItem('AI Settings...', 'ai-settings'),
-        menuItem('MCP Settings...', 'mcp-settings'),
-        menuItem('Color Theme...', 'colors'),
-        { type: 'separator' },
-        {
-          label: 'Compatibility Mode',
-          type: 'checkbox',
-          checked: Boolean(compatibility.forced),
-          click() {
-            const next = !readJson(dataPath(COMPATIBILITY_SETTINGS), { forced: false }).forced;
-            writeJson(dataPath(COMPATIBILITY_SETTINGS), { forced: next });
-            buildMenu();
-            emitMenu(`compatibility-mode:${next}`);
-          },
-        },
-        { type: 'separator' },
-        menuItem('About HVY Galaxy', 'about'),
+        menuItem('HVY Guide', 'open-guide', 'F1'),
       ],
     },
   ];
@@ -176,11 +182,19 @@ function menuItem(label, id, accelerator) {
   };
 }
 
-function recentSubmenu(label, entries, prefix) {
+function recentSubmenu(label, entries, prefix, emptyLabel = 'No Recent Items') {
   const submenu = entries.length
     ? entries.map((entry) => menuItem(menuLabel(entry), `${prefix}${entry}`))
-    : [{ label: 'No Recent Items', enabled: false }];
+    : [{ label: emptyLabel, enabled: false }];
   return { label, submenu };
+}
+
+function mcpStatusMenuLabel(status) {
+  if (!status.running) {
+    return 'Stopped';
+  }
+  const port = status.url?.split(':').pop()?.split('/')[0];
+  return port ? `Listening on port ${port}` : 'Listening';
 }
 
 function emitMenu(payload) {
@@ -205,12 +219,12 @@ async function handleCommand(command, args) {
     case 'save_mcp_settings': return writeJson(dataPath(MCP_SETTINGS), normalizeMcpSettings(args.settings));
     case 'load_mcp_server_status': return mcpStatus;
     case 'load_mcp_stdio_launch_config': return defaultMcpStdioLaunchConfig();
-    case 'load_mcp_client_install_status': return defaultMcpClientInstallStatus();
-    case 'install_mcp_client': return defaultMcpClientInstallStatus();
-    case 'remove_mcp_client': return defaultMcpClientInstallStatus();
-    case 'restore_mcp_client_backup': return defaultMcpClientInstallStatus();
+    case 'load_mcp_client_install_status': return mcpClientInstallStatuses();
+    case 'install_mcp_client': return installMcpClient(args.target);
+    case 'remove_mcp_client': return removeMcpClient(args.target);
+    case 'restore_mcp_client_backup': return restoreMcpClientBackup(args.target);
     case 'start_mcp_server':
-      mcpStatus = { running: false, url: null, message: 'MCP server is Tauri-only in this Electron build.', lastError: null };
+      mcpStatus = { running: false, url: null, message: 'MCP stdio is available through client install.', lastError: null };
       return mcpStatus;
     case 'stop_mcp_server':
       mcpStatus = { running: false, url: null, message: 'MCP server is stopped.', lastError: null };
@@ -314,7 +328,6 @@ function writeJson(filePath, value) {
 
 function loadAppEnvironment() {
   const version = macosVersion();
-  const forced = Boolean(readJson(dataPath(COMPATIBILITY_SETTINGS), { forced: false }).forced);
   return {
     platform: process.platform,
     arch: process.arch,
@@ -322,8 +335,8 @@ function loadAppEnvironment() {
     macosMinor: version?.minor ?? null,
     macosPatch: version?.patch ?? null,
     legacyWebview: false,
-    forcedCompatibilityMode: forced,
-    compatibilityMode: forced,
+    forcedCompatibilityMode: false,
+    compatibilityMode: false,
   };
 }
 
@@ -850,37 +863,263 @@ function normalizeMcpSettings(settings) {
 
 function defaultMcpStdioLaunchConfig() {
   return {
-    command: process.execPath,
+    command: mcpCommandPath(),
     args: ['--mcp-stdio'],
     workingDirectory: path.join(sharedAppDataDir(), 'mcp'),
   };
 }
 
-function defaultMcpClientInstallStatus() {
+function mcpCommandPath() {
+  if (process.env.HVY_GALAXY_MCP_COMMAND) {
+    return process.env.HVY_GALAXY_MCP_COMMAND;
+  }
+  const devRustLauncher = path.resolve('src-tauri', 'target', 'debug', process.platform === 'win32' ? 'hvy-galaxy.exe' : 'hvy-galaxy');
+  if (fs.existsSync(devRustLauncher)) {
+    return devRustLauncher;
+  }
+  return process.execPath;
+}
+
+function mcpClientInstallStatuses() {
+  const launch = defaultMcpStdioLaunchConfig();
   return [
-    {
-      target: 'codex',
-      label: 'Codex',
-      configPath: path.join(os.homedir(), '.codex', 'config.toml'),
-      configExists: false,
-      executableExists: false,
-      installed: false,
-      backupCount: 0,
-      latestBackupPath: null,
-      latestBackupLabel: null,
-      message: 'MCP install is Tauri-only in this Electron build.',
-    },
-    {
-      target: 'claude',
-      label: 'Claude',
-      configPath: path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
-      configExists: false,
-      executableExists: false,
-      installed: false,
-      backupCount: 0,
-      latestBackupPath: null,
-      latestBackupLabel: null,
-      message: 'MCP install is Tauri-only in this Electron build.',
-    },
+    mcpClientInstallStatus('codex', 'Codex', codexConfigPath(), launch, codexConfigHasHvyMcp),
+    mcpClientInstallStatus('claude', 'Claude', claudeConfigPath(), launch, claudeConfigHasHvyMcp),
   ];
+}
+
+function installMcpClient(target) {
+  const launch = defaultMcpStdioLaunchConfig();
+  const configPath = mcpTargetConfigPath(target);
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`${configPath} was not found.`);
+  }
+  if (target === 'codex') {
+    const current = fs.readFileSync(configPath, 'utf8');
+    backupFileBeforeOverwrite(configPath);
+    writeText(configPath, upsertCodexMcpBlock(current, launch));
+  } else if (target === 'claude') {
+    const current = fs.readFileSync(configPath, 'utf8');
+    backupFileBeforeOverwrite(configPath);
+    writeText(configPath, upsertClaudeMcpConfig(current, launch));
+  } else {
+    throw new Error(`Unknown MCP client target: ${target}`);
+  }
+  return mcpClientInstallStatuses();
+}
+
+function removeMcpClient(target) {
+  const configPath = mcpTargetConfigPath(target);
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`${configPath} was not found.`);
+  }
+  if (target === 'codex') {
+    const current = fs.readFileSync(configPath, 'utf8');
+    backupFileBeforeOverwrite(configPath);
+    writeText(configPath, removeCodexMcpBlock(current));
+  } else if (target === 'claude') {
+    const current = fs.readFileSync(configPath, 'utf8');
+    backupFileBeforeOverwrite(configPath);
+    writeText(configPath, removeClaudeMcpConfig(current));
+  } else {
+    throw new Error(`Unknown MCP client target: ${target}`);
+  }
+  return mcpClientInstallStatuses();
+}
+
+function restoreMcpClientBackup(target) {
+  const configPath = mcpTargetConfigPath(target);
+  const backupPath = latestMcpClientBackupPath(configPath);
+  if (!backupPath) {
+    throw new Error(`No HVY MCP backup was found for ${configPath}.`);
+  }
+  if (fs.existsSync(configPath)) {
+    backupFileBeforeOverwrite(configPath);
+  } else {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  }
+  fs.copyFileSync(backupPath, configPath);
+  return mcpClientInstallStatuses();
+}
+
+function mcpClientInstallStatus(target, label, configPath, launch, isInstalled) {
+  const configExists = fs.existsSync(configPath);
+  const executableExists = fs.existsSync(launch.command);
+  const installed = configExists && isInstalled(configPath, launch);
+  const backups = mcpClientBackupPaths(configPath);
+  const latestBackupPath = backups[0] || null;
+  const latestBackupLabel = latestBackupPath ? mcpClientBackupLabel(path.basename(latestBackupPath)) : null;
+  let message;
+  if (!configExists) {
+    message = backups.length
+      ? `${label} config file was not found. A backup can be restored.`
+      : `${label} config file was not found.`;
+  } else if (installed) {
+    message = executableExists
+      ? `HVY MCP is installed for ${label}. Refresh or remove it anytime.`
+      : 'HVY MCP is installed, but the HVY Galaxy executable was not found.';
+  } else if (!executableExists) {
+    message = 'HVY Galaxy executable was not found.';
+  } else {
+    message = `Ready to install HVY MCP for ${label}. A backup will be saved first.`;
+  }
+  return {
+    target,
+    label,
+    configPath,
+    configExists,
+    executableExists,
+    installed,
+    backupCount: backups.length,
+    latestBackupPath,
+    latestBackupLabel,
+    message,
+  };
+}
+
+function mcpTargetConfigPath(target) {
+  if (target === 'codex') return codexConfigPath();
+  if (target === 'claude') return claudeConfigPath();
+  throw new Error(`Unknown MCP client target: ${target}`);
+}
+
+function codexConfigPath() {
+  if (process.env.CODEX_HOME) {
+    return path.join(process.env.CODEX_HOME, 'config.toml');
+  }
+  return path.join(os.homedir(), '.codex', 'config.toml');
+}
+
+function claudeConfigPath() {
+  return path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+}
+
+function codexConfigHasHvyMcp(configPath, launch) {
+  if (!fs.existsSync(configPath)) return false;
+  const content = fs.readFileSync(configPath, 'utf8');
+  return (
+    (content.includes('[mcp_servers.hvy-galaxy]') || content.includes('[mcp_servers."hvy-galaxy"]')) &&
+    content.includes(tomlString(launch.command))
+  );
+}
+
+function claudeConfigHasHvyMcp(configPath, launch) {
+  if (!fs.existsSync(configPath)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    return config.mcpServers?.['hvy-galaxy']?.command === launch.command;
+  } catch {
+    return false;
+  }
+}
+
+function upsertCodexMcpBlock(content, launch) {
+  const next = removeCodexMcpBlock(content).trimEnd();
+  return `${next ? `${next}\n\n` : ''}${codexMcpBlock(launch)}\n`;
+}
+
+function removeCodexMcpBlock(content) {
+  const output = [];
+  let skipping = false;
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    const isHvyHeader = trimmed === '[mcp_servers.hvy-galaxy]' || trimmed === '[mcp_servers."hvy-galaxy"]';
+    if (isHvyHeader) {
+      skipping = true;
+      continue;
+    }
+    if (skipping && trimmed.startsWith('[')) {
+      skipping = false;
+    }
+    if (!skipping) {
+      output.push(line);
+    }
+  }
+  return `${output.join('\n').trimEnd()}\n`;
+}
+
+function codexMcpBlock(launch) {
+  return [
+    '[mcp_servers.hvy-galaxy]',
+    'type = "stdio"',
+    `command = ${tomlString(launch.command)}`,
+    `args = ${tomlStringArray(launch.args)}`,
+    `cwd = ${tomlString(launch.workingDirectory)}`,
+  ].join('\n');
+}
+
+function upsertClaudeMcpConfig(content, launch) {
+  const config = content.trim() ? JSON.parse(content) : {};
+  if (!config || Array.isArray(config) || typeof config !== 'object') {
+    throw new Error('Claude config must be a JSON object.');
+  }
+  const servers = config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)
+    ? config.mcpServers
+    : {};
+  servers['hvy-galaxy'] = {
+    type: 'stdio',
+    command: launch.command,
+    args: launch.args,
+    cwd: launch.workingDirectory,
+  };
+  config.mcpServers = servers;
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+function removeClaudeMcpConfig(content) {
+  const config = content.trim() ? JSON.parse(content) : {};
+  if (!config || Array.isArray(config) || typeof config !== 'object') {
+    throw new Error('Claude config must be a JSON object.');
+  }
+  if (config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)) {
+    delete config.mcpServers['hvy-galaxy'];
+  }
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
+function backupFileBeforeOverwrite(filePath) {
+  const directory = path.dirname(filePath);
+  const fileName = path.basename(filePath);
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  for (let index = 0; index < 100; index += 1) {
+    const suffix = index === 0 ? '' : `-${index}`;
+    const backupPath = path.join(directory, `${fileName}.hvy-galaxy-backup-${timestamp}${suffix}`);
+    if (!fs.existsSync(backupPath)) {
+      fs.copyFileSync(filePath, backupPath);
+      return backupPath;
+    }
+  }
+  throw new Error(`Could not create a backup for ${filePath}.`);
+}
+
+function latestMcpClientBackupPath(filePath) {
+  return mcpClientBackupPaths(filePath)[0] || null;
+}
+
+function mcpClientBackupPaths(filePath) {
+  const directory = path.dirname(filePath);
+  const prefix = `${path.basename(filePath)}.hvy-galaxy-backup-`;
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory)
+    .filter((name) => name.startsWith(prefix))
+    .sort()
+    .reverse()
+    .map((name) => path.join(directory, name));
+}
+
+function mcpClientBackupLabel(fileName) {
+  return fileName.split('.hvy-galaxy-backup-')[1] || fileName;
+}
+
+function tomlStringArray(values) {
+  return `[${values.map((value) => tomlString(value)).join(', ')}]`;
+}
+
+function tomlString(value) {
+  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')}"`;
+}
+
+function writeText(filePath, text) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, text);
 }

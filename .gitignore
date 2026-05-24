@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-electron/
+.electron-dev/
 src-tauri/target/
 *.log
 .DS_Store

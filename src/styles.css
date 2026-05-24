@@ -1094,15 +1094,6 @@ button:disabled {
   padding: 0 !important;
 }
 
-.hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab::before {
-  display: block;
-  width: 1.05rem;
-  height: 0.125rem;
-  background: currentColor;
-  box-shadow: 0 -0.33rem 0 currentColor, 0 0.33rem 0 currentColor;
-  content: "";
-}
-
 .hvy-compatibility-mode .hvy-document-host .viewer-sidebar-tab .sidebar-tab-hamburger {
   display: block;
 }

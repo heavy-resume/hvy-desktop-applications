@@ -1,11 +1,13 @@
 import http from 'node:http';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+const appName = 'HVY Galaxy';
+const appIdentifier = 'com.heavyresume.hvy-galaxy';
 const rendererUrl = process.env.ELECTRON_RENDERER_URL || 'http://127.0.0.1:1420';
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const require = createRequire(import.meta.url);
-const electronBin = require('electron');
 const electronEnv = {
   ...process.env,
   ELECTRON_RENDERER_URL: rendererUrl,
@@ -39,7 +41,8 @@ process.on('SIGTERM', () => {
 
 await waitForRenderer(rendererUrl);
 
-const electron = spawn(electronBin, ['src-electron/main.cjs'], {
+const electronLaunch = await electronLaunchCommand();
+const electron = spawn(electronLaunch.command, electronLaunch.args, {
   stdio: 'inherit',
   env: electronEnv,
 });
@@ -76,4 +79,45 @@ function canConnect(url) {
       resolve(false);
     });
   });
+}
+
+async function electronLaunchCommand() {
+  if (process.platform !== 'darwin') {
+    return { command: require('electron'), args: ['src-electron/main.cjs'] };
+  }
+  const command = await ensurePackagedMacDevApp();
+  return { command, args: [] };
+}
+
+async function ensurePackagedMacDevApp() {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const out = path.resolve('.electron-dev');
+  const appExecutable = path.join(out, `${appName}-darwin-${arch}`, `${appName}.app`, 'Contents', 'MacOS', appName);
+  const { packager } = await import('@electron/packager');
+
+  await packager({
+    dir: '.',
+    name: appName,
+    platform: 'darwin',
+    arch,
+    out,
+    overwrite: true,
+    icon: path.resolve('src-tauri', 'icons', 'icon.icns'),
+    appBundleId: appIdentifier,
+    appCategoryType: 'public.app-category.productivity',
+    executableName: appName,
+    asar: false,
+    prune: false,
+    ignore: [
+      /^\/\.electron-dev(?:\/|$)/,
+      /^\/\.git(?:\/|$)/,
+      /^\/src-tauri\/target(?:\/|$)/,
+    ],
+    extendInfo: {
+      CFBundleDisplayName: appName,
+      NSCameraUsageDescription: 'HVY Galaxy uses the camera to capture photos for image components in your HVY documents.',
+    },
+  });
+
+  return appExecutable;
 }

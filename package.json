@@ -1,12 +1,15 @@
 {
   "name": "hvy-galaxy-desktop",
   "version": "0.1.0",
+  "productName": "HVY Galaxy",
+  "main": "src-electron/main.cjs",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "electron": "electron src-electron/main.cjs",
     "electron:dev": "node scripts/electron-dev.mjs",
+    "build:electron": "npm run build && node scripts/electron-package.mjs",
     "build": "tsc && vite build",
     "build:universal": "tauri build --target universal-apple-darwin --bundles app",
     "build:universal:dmg": "tauri build --target universal-apple-darwin --bundles dmg",
@@ -20,6 +23,7 @@
     "heavy-file-format-ref-impl": "file:../heavy-file-format"
   },
   "devDependencies": {
+    "@electron/packager": "^20.0.0",
     "@tauri-apps/cli": "^2.9.0",
     "@types/node": "^24.6.0",
     "brython": "^3.14.0",
