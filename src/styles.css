@@ -224,6 +224,12 @@ button:disabled {
   --workspace-tool-reserved-space: calc((var(--workspace-tool-size) * 2) + var(--workspace-tool-gap) + 0.625rem);
 }
 
+.workspace-root.is-drag-over {
+  border-radius: 6px;
+  outline: 2px solid var(--hvy-accent-1, #477d7c);
+  outline-offset: 3px;
+}
+
 .sidebar-section-heading {
   display: flex;
   align-items: center;

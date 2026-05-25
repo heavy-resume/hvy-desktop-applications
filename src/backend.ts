@@ -45,6 +45,17 @@ export interface Workspace {
   files: WorkspaceTreeNode[];
 }
 
+export interface AddFilesResult {
+  workspace: Workspace;
+  copiedPaths: string[];
+  copiedTemplatePaths?: string[];
+}
+
+export interface DroppedWorkspaceFile {
+  name: string;
+  bytes: number[];
+}
+
 export interface WorkspaceOpenCandidate {
   path: string;
   hasManifest: boolean;
@@ -414,8 +425,12 @@ export function loadWorkspace(path: string): Promise<Workspace> {
   return invokeDesktop('load_workspace', { path });
 }
 
-export function addFilesToWorkspace(workspacePath: string): Promise<Workspace | null> {
+export function addFilesToWorkspace(workspacePath: string): Promise<AddFilesResult | null> {
   return invokeDesktop('add_files_to_workspace', { workspacePath });
+}
+
+export function addDroppedFilesToWorkspace(workspacePath: string, files: DroppedWorkspaceFile[]): Promise<AddFilesResult> {
+  return invokeDesktop('add_dropped_files_to_workspace', { workspacePath, files });
 }
 
 export function openFileDialog(): Promise<DocumentFile | null> {

@@ -82,6 +82,22 @@ struct Workspace {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct AddFilesResult {
+    workspace: Workspace,
+    copied_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    copied_template_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DroppedWorkspaceFile {
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceOpenCandidate {
     path: String,
     has_manifest: bool,
@@ -789,7 +805,7 @@ fn load_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
 }
 
 #[tauri::command]
-fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<Option<Workspace>> {
+fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<Option<AddFilesResult>> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let Some(paths) = rfd::FileDialog::new()
@@ -818,10 +834,58 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<O
 
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
-    for path in copied {
+    for path in &copied {
         add_recent_file(&app, &path)?;
     }
-    Ok(Some(load_workspace_from_path(&workspace_path)?))
+    Ok(Some(AddFilesResult {
+        workspace: load_workspace_from_path(&workspace_path)?,
+        copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
+        copied_template_paths: Vec::new(),
+    }))
+}
+
+#[tauri::command]
+fn add_dropped_files_to_workspace(
+    app: AppHandle,
+    workspace_path: String,
+    files: Vec<DroppedWorkspaceFile>,
+) -> AppResult<AddFilesResult> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let mut copied = Vec::new();
+    let mut copied_templates = Vec::new();
+
+    for file in files {
+        if document_extension(Path::new(&file.name)).is_none() {
+            return Err(AppError::Message(
+                "Only .hvy, .thvy, and .md documents can be added to a workspace.".into(),
+            ));
+        }
+        let is_template = template_extension(Path::new(&file.name)).is_some();
+        let destination_root = if is_template {
+            workspace_templates_dir(&workspace_path)?
+        } else {
+            workspace_path.clone()
+        };
+        let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file.name));
+        fs::write(&destination, file.bytes)?;
+        if is_template {
+            copied_templates.push(destination);
+        } else {
+            copied.push(destination);
+        }
+    }
+
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    for path in &copied {
+        add_recent_file(&app, path)?;
+    }
+    Ok(AddFilesResult {
+        workspace: load_workspace_from_path(&workspace_path)?,
+        copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
+        copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
+    })
 }
 
 #[tauri::command]
@@ -1175,6 +1239,7 @@ pub fn run() {
             initialize_workspace_path,
             load_workspace,
             add_files_to_workspace,
+            add_dropped_files_to_workspace,
             open_file_dialog,
             open_import_source_dialog,
             read_document_file,
@@ -1468,7 +1533,7 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<WorkspaceTreeN
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if should_ignore(&name) {
+        if should_ignore(root, &path, &name) {
             continue;
         }
         if path.is_dir() {
@@ -1497,10 +1562,11 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<WorkspaceTreeN
     Ok(folders)
 }
 
-fn should_ignore(name: &str) -> bool {
+fn should_ignore(root: &Path, path: &Path, name: &str) -> bool {
     name == WORKSPACE_MANIFEST
         || name == LEGACY_WORKSPACE_MANIFEST
         || name.starts_with('.')
+        || path == workspace_templates_dir_path(root)
         || matches!(name, "node_modules" | "dist" | "build" | "target" | ".git")
 }
 
@@ -1714,9 +1780,13 @@ fn app_templates_dir(app: &AppHandle) -> AppResult<PathBuf> {
 }
 
 fn workspace_templates_dir(workspace_path: &Path) -> AppResult<PathBuf> {
-    let directory = workspace_path.join(".hvy").join("templates");
+    let directory = workspace_templates_dir_path(workspace_path);
     fs::create_dir_all(&directory)?;
     Ok(directory)
+}
+
+fn workspace_templates_dir_path(workspace_path: &Path) -> PathBuf {
+    workspace_path.join("templates")
 }
 
 fn add_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {

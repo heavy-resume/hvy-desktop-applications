@@ -2,6 +2,7 @@ import './styles.css';
 import { installAiChatClient } from './aiClient';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
 import {
+  addDroppedFilesToWorkspace,
   addFilesToWorkspace,
   chooseWorkspaceFolder,
   createDocumentBackup,
@@ -39,7 +40,9 @@ import {
   saveDocumentTemplate,
   startMcpServer,
   stopMcpServer,
+  type AddFilesResult,
   type DocumentFile,
+  type DroppedWorkspaceFile,
   type ImportSourceFile,
   type McpClientInstallTarget,
   type McpSettings,
@@ -310,11 +313,15 @@ const handlers: UiHandlers = {
   },
   addFilesToWorkspace: (workspacePath) => void runBusy('Adding files...', async () => {
     state.openWorkspaceActionsPath = null;
-    const workspace = await addFilesToWorkspace(workspacePath);
-    if (!workspace) return;
-    upsertWorkspace(workspace);
-    state.selectedWorkspacePath = workspace.path;
-    state.status = 'Added files to workspace';
+    const result = await addFilesToWorkspace(workspacePath);
+    if (!result) return;
+    await finishAddingFilesToWorkspace(result, 'Added files to workspace');
+    await refreshRecents();
+  }),
+  addDroppedFilesToWorkspace: (workspacePath, files) => void runBusy('Adding files...', async () => {
+    const droppedFiles = await droppedWorkspaceFilesFrom(files);
+    const result = await addDroppedFilesToWorkspace(workspacePath, droppedFiles);
+    await finishAddingFilesToWorkspace(result, 'Added dropped files to workspace');
     await refreshRecents();
   }),
   openWorkspaceFilter: (workspacePath) => {
@@ -1484,6 +1491,29 @@ async function refreshOpenWorkspaceForFile(filePath: string): Promise<void> {
   const workspace = state.workspaces.find((candidate) => filePath.startsWith(candidate.path));
   if (!workspace) return;
   upsertWorkspace(await loadWorkspace(workspace.path));
+}
+
+async function finishAddingFilesToWorkspace(result: AddFilesResult, status: string): Promise<void> {
+  upsertWorkspace(result.workspace);
+  state.selectedWorkspacePath = result.workspace.path;
+  state.status = status;
+  if (result.copiedTemplatePaths?.length) {
+    await refreshSavedTemplates(result.workspace.path);
+  }
+  if (result.copiedPaths.length !== 1) return;
+  const file = await readDocumentFile(result.copiedPaths[0]);
+  await openDocument(file, { deferMount: true });
+}
+
+async function droppedWorkspaceFilesFrom(files: File[]): Promise<DroppedWorkspaceFile[]> {
+  const droppedFiles: DroppedWorkspaceFile[] = [];
+  for (const file of files) {
+    droppedFiles.push({
+      name: file.name,
+      bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+    });
+  }
+  return droppedFiles;
 }
 
 function workspacePathForFile(filePath: string): string | null {

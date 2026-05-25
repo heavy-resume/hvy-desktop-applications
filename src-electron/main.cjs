@@ -232,6 +232,7 @@ async function handleCommand(command, args) {
     case 'initialize_workspace_path': return initializeWorkspacePath(args.path);
     case 'load_workspace': return loadWorkspace(args.path);
     case 'add_files_to_workspace': return addFilesToWorkspace(args.workspacePath);
+    case 'add_dropped_files_to_workspace': return addDroppedFilesToWorkspace(args.workspacePath, args.files);
     case 'open_file_dialog': return openFileDialog();
     case 'open_import_source_dialog': return openImportSourceDialog();
     case 'read_document_file': return readDocumentFile(args.path);
@@ -261,7 +262,7 @@ function appTemplatesDir() {
 }
 
 function workspaceTemplatesDir(workspacePath) {
-  return path.join(workspacePath, '.hvy-templates');
+  return path.join(workspacePath, 'templates');
 }
 
 function backupsDir() {
@@ -384,15 +385,47 @@ async function addFilesToWorkspace(workspacePath) {
     ],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
+  const copiedPaths = [];
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, and .md documents can be added to a workspace.');
     const destination = uniqueCopyPath(workspacePath, path.basename(source));
     fs.copyFileSync(source, destination);
+    copiedPaths.push(destination);
     addRecentFile(destination);
   }
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
-  return loadWorkspaceFromPath(workspacePath);
+  return {
+    workspace: loadWorkspaceFromPath(workspacePath),
+    copiedPaths,
+    copiedTemplatePaths: [],
+  };
+}
+
+function addDroppedFilesToWorkspace(workspacePath, files) {
+  ensureWorkspace(workspacePath);
+  const copiedPaths = [];
+  const copiedTemplatePaths = [];
+  for (const file of files || []) {
+    if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, and .md documents can be added to a workspace.');
+    const isTemplate = path.extname(file.name).toLowerCase() === '.thvy';
+    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
+    const destination = uniqueCopyPath(destinationRoot, file.name);
+    writeBytes(destination, file.bytes);
+    if (isTemplate) {
+      copiedTemplatePaths.push(destination);
+    } else {
+      copiedPaths.push(destination);
+      addRecentFile(destination);
+    }
+  }
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  return {
+    workspace: loadWorkspaceFromPath(workspacePath),
+    copiedPaths,
+    copiedTemplatePaths,
+  };
 }
 
 async function openFileDialog() {
@@ -629,7 +662,7 @@ function touchWorkspaceManifest(workspacePath) {
 
 function readWorkspaceChildren(root, directory) {
   return fs.readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => !entry.name.startsWith('.'))
+    .filter((entry) => !entry.name.startsWith('.') && path.join(directory, entry.name) !== workspaceTemplatesDir(root))
     .map((entry) => {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {

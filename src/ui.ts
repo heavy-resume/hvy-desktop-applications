@@ -25,6 +25,7 @@ export interface UiHandlers {
   importIntoCurrent(instructions: string, pastedSourceText: string): void;
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
+  addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
   openWorkspaceFilter(workspacePath: string): void;
   closeWorkspaceFilter(): void;
   setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
@@ -318,6 +319,27 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
+  root.addEventListener('dragover', (event) => {
+    const workspaceRoot = workspaceRootFromEvent(event);
+    if (!workspaceRoot || !hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = 'copy';
+    workspaceRoot.classList.add('is-drag-over');
+  }, { signal });
+  root.addEventListener('dragleave', (event) => {
+    const workspaceRoot = workspaceRootFromEvent(event);
+    const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+    if (!workspaceRoot || (relatedTarget && workspaceRoot.contains(relatedTarget))) return;
+    workspaceRoot.classList.remove('is-drag-over');
+  }, { signal });
+  root.addEventListener('drop', (event) => {
+    const workspaceRoot = workspaceRootFromEvent(event);
+    const workspacePath = workspaceRoot?.dataset.workspacePath;
+    if (!workspaceRoot || !workspacePath || !event.dataTransfer?.files.length) return;
+    event.preventDefault();
+    workspaceRoot.classList.remove('is-drag-over');
+    handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files));
+  }, { signal });
   root.addEventListener('input', (event) => {
     const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
     const field = target?.dataset.field;
@@ -503,6 +525,14 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   root.querySelectorAll<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]').forEach((form) => {
     updateImportSubmit(form);
   });
+}
+
+function workspaceRootFromEvent(event: Event): HTMLElement | null {
+  return event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root') : null;
+}
+
+function hasDraggedFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files');
 }
 
 function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
@@ -771,8 +801,8 @@ function renderWorkspace(
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
           <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
-          <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
+          <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
         </div>
       </div>
       ${workspace.files.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(workspace.files, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds)).join('')}</ul>`}
