@@ -7,6 +7,7 @@ const path = require('node:path');
 const WORKSPACE_MANIFEST = '.hvyworkspace.json';
 const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
 const RECENT_STATE = 'recent.json';
+const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
 const RECENT_LIMIT = 12;
@@ -104,6 +105,7 @@ function buildMenu() {
       submenu: [
         menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),
         menuItem('Open Workspace', 'open-workspace', 'CmdOrCtrl+O'),
+        menuItem('Manage Workspaces...', 'manage-workspaces'),
         menuItem('Open File', 'open-file', 'CmdOrCtrl+Shift+O'),
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
@@ -232,6 +234,10 @@ async function handleCommand(command, args) {
     case 'new_workspace_dialog': return newWorkspaceDialog();
     case 'initialize_workspace_path': return initializeWorkspacePath(args.path);
     case 'load_workspace': return loadWorkspace(args.path);
+    case 'load_archived_workspaces': return loadArchivedWorkspaces();
+    case 'rename_workspace': return renameWorkspace(args.path, args.name);
+    case 'archive_workspace': return archiveWorkspace(args.path);
+    case 'unarchive_workspace': return unarchiveWorkspace(args.path);
     case 'add_files_to_workspace': return addFilesToWorkspace(args.workspacePath);
     case 'add_dropped_files_to_workspace': return addDroppedFilesToWorkspace(args.workspacePath, args.files);
     case 'open_file_dialog': return openFileDialog();
@@ -374,8 +380,45 @@ function initializeWorkspacePath(selectedPath) {
 
 function loadWorkspace(selectedPath) {
   const workspace = ensureWorkspace(selectedPath);
+  removeArchivedWorkspace(selectedPath);
   addRecentWorkspace(selectedPath);
   return workspace;
+}
+
+function renameWorkspace(workspacePath, name) {
+  ensureWorkspace(workspacePath);
+  const manifestPath = workspaceManifestPath(workspacePath);
+  const manifest = readJson(manifestPath, null);
+  const trimmed = String(name || '').trim();
+  if (!trimmed) throw new Error('Workspace name is required.');
+  manifest.name = trimmed;
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+  addRecentWorkspace(workspacePath);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function archiveWorkspace(workspacePath) {
+  const workspace = ensureWorkspace(workspacePath);
+  addArchivedWorkspace({
+    path: workspace.path,
+    name: workspace.manifest.name,
+    archivedAt: new Date().toISOString(),
+  });
+  removeRecentWorkspace(workspacePath);
+  return null;
+}
+
+function unarchiveWorkspace(workspacePath) {
+  const workspace = ensureWorkspace(workspacePath);
+  removeArchivedWorkspace(workspacePath);
+  addRecentWorkspace(workspacePath);
+  return workspace;
+}
+
+function loadArchivedWorkspaces() {
+  return readJson(dataPath(ARCHIVED_WORKSPACES), [])
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 async function addFilesToWorkspace(workspacePath) {
@@ -857,6 +900,31 @@ function addRecentWorkspace(entryPath) {
   recent.workspaces = pushRecent(recent.workspaces || [], entryPath);
   writeJson(dataPath(RECENT_STATE), recent);
   buildMenu();
+}
+
+function removeRecentWorkspace(entryPath) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  const normalized = path.resolve(entryPath);
+  recent.workspaces = (recent.workspaces || []).filter((entry) => path.resolve(entry) !== normalized);
+  writeJson(dataPath(RECENT_STATE), recent);
+  buildMenu();
+}
+
+function addArchivedWorkspace(entry) {
+  const archived = loadArchivedWorkspaces();
+  const normalized = path.resolve(entry.path);
+  const next = [
+    { ...entry, path: normalized },
+    ...archived.filter((item) => path.resolve(item.path) !== normalized),
+  ];
+  writeJson(dataPath(ARCHIVED_WORKSPACES), next);
+}
+
+function removeArchivedWorkspace(entryPath) {
+  const archived = loadArchivedWorkspaces();
+  const normalized = path.resolve(entryPath);
+  const next = archived.filter((entry) => path.resolve(entry.path) !== normalized);
+  writeJson(dataPath(ARCHIVED_WORKSPACES), next);
 }
 
 function addRecentFile(entryPath) {

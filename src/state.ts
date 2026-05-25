@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type DocumentBackup, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
@@ -17,6 +17,7 @@ export interface OpenDocument {
 
 export interface AppState {
   workspaces: Workspace[];
+  archivedWorkspaces: ArchivedWorkspace[];
   selectedWorkspacePath: string | null;
   selectedFilePath: string | null;
   recent: RecentState;
@@ -32,6 +33,7 @@ export interface AppState {
   error: string | null;
   busy: boolean;
   newWorkspaceDialogOpen: boolean;
+  workspaceManagerOpen: boolean;
   openWorkspaceActionsPath: string | null;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
@@ -86,6 +88,7 @@ export interface WorkspaceTransferState {
 
 export const state: AppState = {
   workspaces: [],
+  archivedWorkspaces: [],
   selectedWorkspacePath: null,
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
@@ -101,6 +104,7 @@ export const state: AppState = {
   error: null,
   busy: false,
   newWorkspaceDialogOpen: false,
+  workspaceManagerOpen: false,
   openWorkspaceActionsPath: null,
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,

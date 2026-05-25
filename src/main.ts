@@ -4,6 +4,7 @@ import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/sear
 import {
   addDroppedFilesToWorkspace,
   addFilesToWorkspace,
+  archiveWorkspace,
   chooseWorkspaceFolder,
   createDocumentBackup,
   createDocumentFile,
@@ -12,6 +13,7 @@ import {
   initializeWorkspacePath,
   isTauriRuntime,
   installMcpClient,
+  loadArchivedWorkspaces,
   loadAiSettings,
   loadMcpClientInstallStatus,
   loadDefaultGuide,
@@ -30,6 +32,7 @@ import {
   readDocumentFile,
   removeMcpClient,
   renameDocumentFile,
+  renameWorkspace,
   revealDocumentFile,
   restoreMcpClientBackup,
   restoreDocumentBackup,
@@ -43,6 +46,7 @@ import {
   moveDocumentToWorkspace,
   startMcpServer,
   stopMcpServer,
+  unarchiveWorkspace,
   type AddFilesResult,
   type DocumentFile,
   type DroppedWorkspaceFile,
@@ -94,6 +98,67 @@ const handlers: UiHandlers = {
       document.querySelector<HTMLInputElement>('input[name="workspaceName"]')?.focus();
     });
   },
+  openWorkspaceManager: () => {
+    state.openWorkspaceActionsPath = null;
+    state.workspaceManagerOpen = true;
+    state.status = 'Ready';
+    void refreshArchivedWorkspaces().then(() => rerender({ preserveMountedDocument: true }));
+    rerender({ preserveMountedDocument: true });
+  },
+  closeWorkspaceManager: () => {
+    state.workspaceManagerOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  renameWorkspace: (path, name) => void runBusy('Renaming workspace...', async () => {
+    const trimmed = name.trim();
+    if (!path || !trimmed) {
+      state.workspaceManagerOpen = true;
+      state.status = 'Workspace name is required';
+      return;
+    }
+    if (hasOpenWorkspaceNamed(trimmed, path)) {
+      state.workspaceManagerOpen = true;
+      state.status = 'Workspace name must be unique';
+      return;
+    }
+    const workspace = await renameWorkspace(path, trimmed);
+    upsertWorkspace(workspace);
+    state.workspaceManagerOpen = true;
+    state.status = `Renamed workspace to ${workspace.manifest.name}`;
+    await refreshRecents();
+  }),
+  archiveWorkspace: (path) => void runBusy('Archiving workspace...', async () => {
+    const workspace = state.workspaces.find((candidate) => candidate.path === path);
+    await archiveWorkspace(path);
+    state.workspaces = state.workspaces.filter((candidate) => candidate.path !== path);
+    delete state.workspaceFilters[path];
+    clearWorkspaceFilterDocumentCache(path);
+    if (state.workspaceFilter.workspacePath === path) {
+      state.workspaceFilter.open = false;
+      state.workspaceFilter.workspacePath = null;
+    }
+    if (state.selectedWorkspacePath === path) {
+      state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
+    }
+    if (state.selectedFilePath && pathStartsWithWorkspace(state.selectedFilePath, path)) {
+      state.selectedFilePath = null;
+    }
+    syncMcpWorkspaces();
+    state.archivedWorkspaces = await loadArchivedWorkspaces();
+    state.workspaceManagerOpen = true;
+    state.status = `Archived ${workspace?.manifest.name ?? 'workspace'}`;
+    await refreshRecents();
+  }),
+  unarchiveWorkspace: (path) => void runBusy('Unarchiving workspace...', async () => {
+    const workspace = await unarchiveWorkspace(path);
+    upsertWorkspace(workspace);
+    state.selectedWorkspacePath = workspace.path;
+    state.archivedWorkspaces = await loadArchivedWorkspaces();
+    state.workspaceManagerOpen = true;
+    state.status = `Unarchived ${workspace.manifest.name}`;
+    await refreshRecents();
+  }),
   toggleWorkspaceActions: (path) => {
     state.openWorkspaceActionsPath = state.openWorkspaceActionsPath === path ? null : path;
     rerender({ preserveMountedDocument: true });
@@ -640,6 +705,7 @@ const handlers: UiHandlers = {
     upsertWorkspace(workspace);
     state.selectedWorkspacePath = workspace.path;
     await refreshRecents();
+    await refreshArchivedWorkspaces();
     rerender();
   }),
   openFile: () => void runBusy('Opening file...', async () => {
@@ -652,6 +718,7 @@ const handlers: UiHandlers = {
     upsertWorkspace(await loadWorkspace(path));
     state.selectedWorkspacePath = path;
     await refreshRecents();
+    await refreshArchivedWorkspaces();
     rerender();
   }),
   openRecentFile: (path) => void runBusy('Opening recent file...', async () => {
@@ -876,6 +943,7 @@ async function boot(): Promise<void> {
   try {
     mountRoot = render(state, handlers);
     await refreshRecents();
+    await refreshArchivedWorkspaces();
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
     state.mcpServerStatus = await loadMcpServerStatus();
@@ -894,6 +962,7 @@ async function boot(): Promise<void> {
     startBackupTimer();
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();
+      if (event === 'manage-workspaces') handlers.openWorkspaceManager();
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
       if (event === 'open-guide') void openDefaultGuide({ force: true });
@@ -925,6 +994,10 @@ function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
 
 async function refreshRecents(): Promise<void> {
   state.recent = await loadRecentState();
+}
+
+async function refreshArchivedWorkspaces(): Promise<void> {
+  state.archivedWorkspaces = await loadArchivedWorkspaces();
 }
 
 async function refreshMcpClientInstallStatus(): Promise<void> {
@@ -1685,9 +1758,9 @@ function syncMcpWorkspaces(): void {
   void updateMcpWorkspaces(state.workspaces.map((workspace) => workspace.path));
 }
 
-function hasOpenWorkspaceNamed(name: string): boolean {
+function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = null): boolean {
   const normalized = name.trim().toLowerCase();
-  return state.workspaces.some((workspace) => workspace.manifest.name.trim().toLowerCase() === normalized);
+  return state.workspaces.some((workspace) => workspace.path !== exceptPath && workspace.manifest.name.trim().toLowerCase() === normalized);
 }
 
 function rerender(options: { preserveMountedDocument?: boolean } = {}): void {

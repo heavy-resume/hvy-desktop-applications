@@ -1,5 +1,5 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpClientInstallTarget, type McpSettings, type TemplateScope, type Workspace, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type McpClientInstallTarget, type McpSettings, type TemplateScope, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceFilterState } from './state';
@@ -10,6 +10,11 @@ import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-f
 
 export interface UiHandlers {
   newWorkspace(): void;
+  openWorkspaceManager(): void;
+  closeWorkspaceManager(): void;
+  renameWorkspace(path: string, name: string): void;
+  archiveWorkspace(path: string): void;
+  unarchiveWorkspace(path: string): void;
   toggleWorkspaceActions(path: string): void;
   closeWorkspaceActions(): void;
   createWorkspace(name: string, location: 'managed' | 'choose'): void;
@@ -119,6 +124,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         <section class="workspaces-section">
           <div class="sidebar-section-heading">
             <h2>Workspaces</h2>
+            <button type="button" class="icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
             <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
           </div>
           ${renderWorkspaces(state)}
@@ -137,6 +143,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         </div>
       </section>
       ${renderNewWorkspaceDialog(state)}
+      ${renderWorkspaceManagerDialog(state)}
       ${renderNewDocumentDialog(state)}
       ${renderImportDialog(state)}
       ${renderExportDialog(state)}
@@ -169,6 +176,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       if (backdrop && backdrop === event.target) {
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
+          return;
+        }
+        if (backdrop.querySelector('.workspace-manager-dialog')) {
+          handlers.closeWorkspaceManager();
           return;
         }
         if (backdrop.querySelector('.color-theme-dialog')) {
@@ -207,6 +218,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'new-workspace') handlers.newWorkspace();
+    if (action === 'manage-workspaces') handlers.openWorkspaceManager();
+    if (action === 'close-workspace-manager') handlers.closeWorkspaceManager();
+    if (action === 'show-workspace-in-folder' && target.dataset.workspacePath) handlers.showFileInFolder(target.dataset.workspacePath);
+    if (action === 'archive-workspace' && target.dataset.workspacePath) handlers.archiveWorkspace(target.dataset.workspacePath);
+    if (action === 'unarchive-workspace' && target.dataset.workspacePath) handlers.unarchiveWorkspace(target.dataset.workspacePath);
     if (action === 'toggle-workspace-actions' && target.dataset.workspacePath) {
       event.preventDefault();
       event.stopPropagation();
@@ -457,6 +473,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         isNewWorkspaceLocation(location) ? location : 'managed'
       );
     }
+    if (form.dataset.form === 'workspace-manager-rename') {
+      const data = new FormData(form);
+      handlers.renameWorkspace(String(data.get('workspacePath') ?? ''), String(data.get('workspaceName') ?? ''));
+    }
     if (form.dataset.form === 'new-document') {
       const data = new FormData(form);
       handlers.createDocumentInWorkspace(
@@ -514,6 +534,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.about-dialog')) {
       event.preventDefault();
       handlers.closeAbout();
+      return;
+    }
+    if (root.querySelector('.workspace-manager-dialog')) {
+      event.preventDefault();
+      handlers.closeWorkspaceManager();
       return;
     }
     if (root.querySelector('.color-theme-dialog')) {
@@ -875,11 +900,80 @@ function copyIcon(): string {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';
 }
 
+function gearIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 .9-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6.9h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>';
+}
+
 function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
   return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters)).join('')}</div>`;
+}
+
+function renderWorkspaceManagerDialog(state: AppState): string {
+  if (!state.workspaceManagerOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog workspace-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceManagerTitle">
+        <h2 id="workspaceManagerTitle">Manage Workspaces</h2>
+        <div class="workspace-manager-section">
+          <h3>Open</h3>
+          <div class="workspace-manager-list">
+            ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaces.map(renderWorkspaceManagerRow).join('')}
+          </div>
+        </div>
+        <div class="workspace-manager-section">
+          <h3>Archived</h3>
+          <div class="workspace-manager-list">
+            ${state.archivedWorkspaces.length === 0 ? '<div class="empty-panel compact">No archived workspaces.</div>' : state.archivedWorkspaces.map(renderArchivedWorkspaceRow).join('')}
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="close-workspace-manager">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWorkspaceManagerRow(workspace: Workspace): string {
+  return `
+    <form class="workspace-manager-row" data-form="workspace-manager-rename">
+      <input name="workspacePath" type="hidden" value="${escapeAttr(workspace.path)}">
+      <label>
+        <span>Name</span>
+        <input name="workspaceName" type="text" autocomplete="off" value="${escapeAttr(workspace.manifest.name)}" required>
+      </label>
+      <div class="workspace-manager-location">
+        <span>Location</span>
+        <code title="${escapeAttr(workspace.path)}">${escapeHtml(workspace.path)}</code>
+      </div>
+      <div class="workspace-manager-actions">
+        <button type="submit">Save</button>
+        <button type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
+        <button type="button" class="danger-button" data-action="archive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Archive</button>
+      </div>
+    </form>`;
+}
+
+function renderArchivedWorkspaceRow(workspace: ArchivedWorkspace): string {
+  return `
+    <div class="workspace-manager-row workspace-manager-row-archived">
+      <div class="workspace-manager-name">
+        <span>Name</span>
+        <strong>${escapeHtml(workspace.name)}</strong>
+      </div>
+      <div class="workspace-manager-location">
+        <span>Location</span>
+        <code title="${escapeAttr(workspace.path)}">${escapeHtml(workspace.path)}</code>
+      </div>
+      <div class="workspace-manager-actions">
+        <button type="button" data-action="unarchive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Unarchive</button>
+        <button type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
+      </div>
+    </div>`;
 }
 
 function renderWorkspace(

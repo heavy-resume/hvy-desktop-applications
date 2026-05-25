@@ -20,6 +20,7 @@ use thiserror::Error;
 const WORKSPACE_MANIFEST: &str = ".hvyworkspace.json";
 const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
+const ARCHIVED_WORKSPACES: &str = "archived-workspaces.json";
 const AI_SETTINGS: &str = "ai-settings.json";
 const MCP_SETTINGS: &str = "mcp-settings.json";
 const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
@@ -128,6 +129,14 @@ struct RecentState {
     workspaces: Vec<String>,
     #[serde(default)]
     files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ArchivedWorkspace {
+    path: String,
+    name: String,
+    archived_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -525,6 +534,11 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
 }
 
 #[tauri::command]
+fn load_archived_workspaces(app: AppHandle) -> AppResult<Vec<ArchivedWorkspace>> {
+    read_archived_workspaces(&archived_workspaces_path(&app)?)
+}
+
+#[tauri::command]
 fn load_ai_settings(app: AppHandle) -> AppResult<AiSettings> {
     read_ai_settings(&ai_settings_path(&app)?)
 }
@@ -800,6 +814,49 @@ fn initialize_workspace_path(app: AppHandle, path: String) -> AppResult<Workspac
 fn load_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
+    remove_archived_workspace(&app, &path)?;
+    add_recent_workspace(&app, &path)?;
+    Ok(workspace)
+}
+
+#[tauri::command]
+fn rename_workspace(app: AppHandle, path: String, name: String) -> AppResult<Workspace> {
+    let path = PathBuf::from(path);
+    ensure_workspace(&path)?;
+    let manifest_path = workspace_manifest_path(&path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Message("Workspace name is required.".into()));
+    }
+    let mut manifest = read_manifest(&manifest_path)?;
+    manifest.name = name.to_string();
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)?;
+    add_recent_workspace(&app, &path)?;
+    load_workspace_from_path(&path)
+}
+
+#[tauri::command]
+fn archive_workspace(app: AppHandle, path: String) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    let workspace = ensure_workspace(&path)?;
+    add_archived_workspace(
+        &app,
+        ArchivedWorkspace {
+            path: workspace.path,
+            name: workspace.manifest.name,
+            archived_at: Utc::now().to_rfc3339(),
+        },
+    )?;
+    remove_recent_workspace(&app, &path)
+}
+
+#[tauri::command]
+fn unarchive_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
+    let path = PathBuf::from(path);
+    let workspace = ensure_workspace(&path)?;
+    remove_archived_workspace(&app, &path)?;
     add_recent_workspace(&app, &path)?;
     Ok(workspace)
 }
@@ -1262,6 +1319,7 @@ pub fn run() {
                     id,
                     "new-workspace"
                         | "open-workspace"
+                        | "manage-workspaces"
                         | "open-file"
                         | "open-guide"
                         | "about"
@@ -1293,6 +1351,7 @@ pub fn run() {
             load_mcp_server_status,
             load_mcp_stdio_launch_config,
             load_mcp_client_install_status,
+            load_archived_workspaces,
             install_mcp_client,
             remove_mcp_client,
             restore_mcp_client_backup,
@@ -1306,6 +1365,9 @@ pub fn run() {
             new_workspace_dialog,
             initialize_workspace_path,
             load_workspace,
+            rename_workspace,
+            archive_workspace,
+            unarchive_workspace,
             add_files_to_workspace,
             add_dropped_files_to_workspace,
             open_file_dialog,
@@ -1373,6 +1435,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let file = SubmenuBuilder::new(app, "File")
         .item(&MenuItemBuilder::new("New Workspace").id("new-workspace").accelerator("CmdOrCtrl+N").build(app)?)
         .item(&MenuItemBuilder::new("Open Workspace").id("open-workspace").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
         .item(&MenuItemBuilder::new("Open File").id("open-file").accelerator("CmdOrCtrl+Shift+O").build(app)?)
         .item(&recent_workspaces)
         .item(&recent_files)
@@ -1877,6 +1940,31 @@ fn add_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
     refresh_menu(app)
 }
 
+fn remove_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
+    let recent_path = recent_state_path(app)?;
+    let mut state = read_recent_state(&recent_path)?;
+    let normalized = path_to_string(path);
+    state.workspaces.retain(|entry| entry != &normalized);
+    write_json_atomically(&recent_path, &state)?;
+    refresh_menu(app)
+}
+
+fn add_archived_workspace(app: &AppHandle, workspace: ArchivedWorkspace) -> AppResult<()> {
+    let archive_path = archived_workspaces_path(app)?;
+    let mut archived = read_archived_workspaces(&archive_path)?;
+    archived.retain(|entry| entry.path != workspace.path);
+    archived.insert(0, workspace);
+    write_json_atomically(&archive_path, &archived)
+}
+
+fn remove_archived_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
+    let archive_path = archived_workspaces_path(app)?;
+    let mut archived = read_archived_workspaces(&archive_path)?;
+    let normalized = path_to_string(path);
+    archived.retain(|entry| entry.path != normalized);
+    write_json_atomically(&archive_path, &archived)
+}
+
 fn add_recent_file(app: &AppHandle, path: &Path) -> AppResult<()> {
     let recent_path = recent_state_path(app)?;
     let mut state = read_recent_state(&recent_path)?;
@@ -2011,6 +2099,15 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
             .take(RECENT_LIMIT)
             .collect(),
     })
+}
+
+fn read_archived_workspaces(path: &Path) -> AppResult<Vec<ArchivedWorkspace>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut archived: Vec<ArchivedWorkspace> = serde_json::from_slice(&fs::read(path)?)?;
+    archived.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(archived)
 }
 
 fn read_ai_settings(path: &Path) -> AppResult<AiSettings> {
@@ -2959,6 +3056,15 @@ fn recent_state_path(app: &AppHandle) -> AppResult<PathBuf> {
         .map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     Ok(directory.join(RECENT_STATE))
+}
+
+fn archived_workspaces_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(ARCHIVED_WORKSPACES))
 }
 
 fn ai_settings_path(app: &AppHandle) -> AppResult<PathBuf> {

@@ -67,6 +67,12 @@ export interface RecentState {
   files: string[];
 }
 
+export interface ArchivedWorkspace {
+  path: string;
+  name: string;
+  archivedAt: string;
+}
+
 export interface DocumentFile {
   path: string;
   name: string;
@@ -434,6 +440,25 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
 
 export function loadWorkspace(path: string): Promise<Workspace> {
   return invokeDesktop('load_workspace', { path });
+}
+
+export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve([]);
+  }
+  return invokeDesktop('load_archived_workspaces');
+}
+
+export function renameWorkspace(path: string, name: string): Promise<Workspace> {
+  return invokeDesktop('rename_workspace', { path, name });
+}
+
+export function archiveWorkspace(path: string): Promise<void> {
+  return invokeDesktop('archive_workspace', { path });
+}
+
+export function unarchiveWorkspace(path: string): Promise<Workspace> {
+  return invokeDesktop('unarchive_workspace', { path });
 }
 
 export function addFilesToWorkspace(workspacePath: string): Promise<AddFilesResult | null> {
