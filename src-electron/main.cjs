@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -30,15 +30,11 @@ app.setAppUserModelId(APP_IDENTIFIER);
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
   applicationVersion: app.getVersion(),
-  iconPath: iconPath('icon.png'),
+  iconPath: iconPath(appIconFileName()),
 });
 app.setPath('userData', electronProfileDir());
 
 app.whenReady().then(async () => {
-  if (process.platform === 'darwin' && app.dock) {
-    const dockIcon = nativeImage.createFromPath(iconPath('icon.png'));
-    app.dock.setIcon(dockIcon);
-  }
   mainWindow = createWindow();
   buildMenu();
   await loadRenderer(mainWindow);
@@ -66,7 +62,7 @@ function createWindow() {
     minHeight: 640,
     title: APP_NAME,
     backgroundColor: '#f7f3ea',
-    icon: iconPath(process.platform === 'darwin' ? 'icon.icns' : 'icon.png'),
+    icon: iconPath(appIconFileName()),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -310,6 +306,10 @@ function iconPath(fileName) {
   const packaged = path.join(process.resourcesPath || '', 'icons', fileName);
   if (fs.existsSync(packaged)) return packaged;
   return path.join(__dirname, '..', 'src-tauri', 'icons', fileName);
+}
+
+function appIconFileName() {
+  return process.platform === 'darwin' ? 'icon.icns' : 'icon.png';
 }
 
 function readJson(filePath, fallback) {

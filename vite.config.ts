@@ -106,6 +106,7 @@ function createBrythonMinimalVfsPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: './',
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   build: {
     target: ['safari13'],
