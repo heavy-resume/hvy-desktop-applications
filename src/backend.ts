@@ -78,6 +78,7 @@ export interface DocumentFile {
   name: string;
   extension: DocumentExtension;
   bytes: number[];
+  recoveryState?: string | null;
 }
 
 export interface ImportSourceFile {
@@ -144,6 +145,12 @@ export interface DocumentBackupRequest {
   name: string;
   extension: DocumentExtension;
   bytes: number[];
+  recoveryState?: string | null;
+}
+
+export interface DocumentRecoveryDraftRequest {
+  documentPath: string;
+  name: string;
 }
 
 export interface SaveDocumentTemplateRequest {
@@ -553,6 +560,13 @@ export function listDocumentBackups(): Promise<DocumentBackup[]> {
 
 export function restoreDocumentBackup(id: string): Promise<DocumentFile> {
   return invokeDesktop('restore_document_backup', { id });
+}
+
+export function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraftRequest): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('clear_document_recovery_drafts', { request });
 }
 
 export function openExternalUrl(url: string): Promise<void> {

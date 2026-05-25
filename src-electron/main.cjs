@@ -11,6 +11,7 @@ const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
 const RECENT_LIMIT = 12;
+const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.md']);
 const TEMPLATE_EXTENSIONS = new Set(['.hvy', '.thvy']);
 const THEME_EXTENSIONS = new Set(['.hvytheme', '.json']);
@@ -110,13 +111,14 @@ function buildMenu() {
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
+        menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
         menuItem('Export...', 'export-document'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
-        menuItem('Recover Backup...', 'recover-backup'),
+        menuItem('Recover Unsaved Edits...', 'recover-backup'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, { role: 'quit' }]),
       ],
     },
@@ -258,6 +260,7 @@ async function handleCommand(command, args) {
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
+    case 'clear_document_recovery_drafts': return clearDocumentRecoveryDrafts(args.request);
     case 'open_external_url': return openExternalUrl(args.url);
     default: throw new Error(`Unknown Electron command: ${command}`);
   }
@@ -651,8 +654,9 @@ function moveDocumentToWorkspace(filePath, workspacePath) {
 }
 
 function createDocumentBackup(request) {
-  if (!documentExtension(request.name)) throw new Error('Backup document name must end in .hvy, .thvy, or .md.');
+  if (!documentExtension(request.name)) throw new Error('Recovery draft document name must end in .hvy, .thvy, or .md.');
   fs.mkdirSync(backupsDir(), { recursive: true });
+  pruneDocumentBackups();
   const createdAt = new Date().toISOString();
   const id = crypto.createHash('sha256')
     .update(`${request.documentPath}|${request.name}|${createdAt}`)
@@ -664,30 +668,92 @@ function createDocumentBackup(request) {
 }
 
 function listDocumentBackups() {
+  pruneDocumentBackups();
   if (!fs.existsSync(backupsDir())) return [];
-  return fs.readdirSync(backupsDir())
+  const seenDocuments = new Set();
+  const backups = [];
+  for (const snapshot of fs.readdirSync(backupsDir())
     .filter((name) => name.endsWith('.json'))
     .map((name) => readJson(path.join(backupsDir(), name), null))
     .filter(Boolean)
-    .map((snapshot) => ({
+    .filter((snapshot) => !documentBackupMatchesSavedFile(snapshot))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))) {
+    const documentKey = documentBackupKey(snapshot);
+    if (seenDocuments.has(documentKey)) continue;
+    seenDocuments.add(documentKey);
+    backups.push({
       id: snapshot.id,
       documentPath: snapshot.documentPath,
       name: snapshot.name,
       extension: snapshot.extension,
       createdAt: snapshot.createdAt,
-    }))
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    });
+  }
+  return backups;
 }
 
 function restoreDocumentBackup(id) {
+  pruneDocumentBackups();
   const snapshot = readJson(path.join(backupsDir(), `${id}.json`), null);
-  if (!snapshot) throw new Error('Backup was not found.');
+  if (!snapshot) throw new Error('Recovery draft was not found.');
   return {
     path: snapshot.documentPath,
     name: snapshot.name,
     extension: snapshot.extension,
     bytes: snapshot.bytes,
+    recoveryState: snapshot.recoveryState ?? null,
   };
+}
+
+function documentBackupMatchesSavedFile(snapshot) {
+  if (!snapshot.documentPath || !fs.existsSync(snapshot.documentPath)) return false;
+  const savedAt = fs.statSync(snapshot.documentPath).mtimeMs;
+  const createdAt = Date.parse(snapshot.createdAt);
+  if (Number.isFinite(createdAt) && savedAt >= createdAt) return true;
+  const savedBytes = fs.readFileSync(snapshot.documentPath);
+  return Buffer.compare(savedBytes, Buffer.from(snapshot.bytes || [])) === 0;
+}
+
+function documentBackupKey(snapshot) {
+  return snapshot.documentPath || `untitled:${snapshot.name}`;
+}
+
+function pruneDocumentBackups() {
+  const directory = backupsDir();
+  if (!fs.existsSync(directory)) return;
+  const cutoff = Date.now() - BACKUP_RETENTION_MS;
+  for (const entry of fs.readdirSync(directory)) {
+    if (!entry.endsWith('.json')) continue;
+    const backupPath = path.join(directory, entry);
+    const snapshot = readJson(backupPath, null);
+    const createdAt = snapshot?.createdAt ? Date.parse(snapshot.createdAt) : NaN;
+    if (!Number.isFinite(createdAt) || createdAt < cutoff) {
+      try {
+        fs.unlinkSync(backupPath);
+      } catch {
+        // Best effort cleanup; stale recovery drafts should not block recovery.
+      }
+    }
+  }
+}
+
+function clearDocumentRecoveryDrafts(request) {
+  const directory = backupsDir();
+  if (!fs.existsSync(directory)) return null;
+  const key = documentBackupKey(request);
+  for (const entry of fs.readdirSync(directory)) {
+    if (!entry.endsWith('.json')) continue;
+    const draftPath = path.join(directory, entry);
+    const snapshot = readJson(draftPath, null);
+    if (snapshot && documentBackupKey(snapshot) === key) {
+      try {
+        fs.unlinkSync(draftPath);
+      } catch {
+        // Best effort cleanup.
+      }
+    }
+  }
+  return null;
 }
 
 async function openExternalUrl(url) {

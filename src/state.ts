@@ -51,6 +51,7 @@ export interface AppState {
   colorThemeDialogOpen: boolean;
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
+  closeDocumentDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
@@ -122,6 +123,7 @@ export const state: AppState = {
   colorThemeDialogOpen: false,
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
+  closeDocumentDialogOpen: false,
   recoveryBackups: [],
   renameFilePath: null,
   renameFileCurrentName: null,

@@ -26,7 +26,7 @@ const MCP_SETTINGS: &str = "mcp-settings.json";
 const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
 const DEFAULT_MCP_PORT: u16 = 8794;
 const RECENT_LIMIT: usize = 12;
-const BACKUP_RETENTION_HOURS: i64 = 2;
+const BACKUP_RETENTION_HOURS: i64 = 24 * 7;
 
 #[derive(Debug, Error)]
 enum AppError {
@@ -146,6 +146,8 @@ struct DocumentFile {
     name: String,
     extension: String,
     bytes: Vec<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -190,6 +192,15 @@ struct DocumentBackupRequest {
     name: String,
     extension: String,
     bytes: Vec<u8>,
+    #[serde(default)]
+    recovery_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentRecoveryDraftRequest {
+    document_path: String,
+    name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -211,6 +222,8 @@ struct DocumentBackupSnapshot {
     extension: String,
     created_at: String,
     bytes: Vec<u8>,
+    #[serde(default)]
+    recovery_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1236,7 +1249,7 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
 #[tauri::command]
 fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
     if document_extension(Path::new(&request.name)).is_none() {
-        return Err(AppError::Message("Backup document name must end in .hvy, .thvy, or .md.".into()));
+        return Err(AppError::Message("Recovery draft document name must end in .hvy, .thvy, or .md.".into()));
     }
     prune_document_backups(&app)?;
     let created_at = Utc::now().to_rfc3339();
@@ -1248,6 +1261,7 @@ fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> App
         extension: request.extension,
         created_at,
         bytes: request.bytes,
+        recovery_state: request.recovery_state,
     };
     write_json_atomically(&document_backup_path(&app, &id)?, &snapshot)?;
     Ok(Some(snapshot_metadata(&snapshot)))
@@ -1256,11 +1270,21 @@ fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> App
 #[tauri::command]
 fn list_document_backups(app: AppHandle) -> AppResult<Vec<DocumentBackup>> {
     prune_document_backups(&app)?;
+    let mut snapshots = read_document_backup_snapshots(&app)?;
+    snapshots.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    let mut seen_documents = HashSet::new();
     let mut backups = Vec::new();
-    for snapshot in read_document_backup_snapshots(&app)? {
+    for snapshot in snapshots {
+        if document_backup_matches_saved_file(&snapshot) {
+            continue;
+        }
+        let document_key = document_backup_key(&snapshot);
+        if seen_documents.contains(&document_key) {
+            continue;
+        }
+        seen_documents.insert(document_key);
         backups.push(snapshot_metadata(&snapshot));
     }
-    backups.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     Ok(backups)
 }
 
@@ -1273,7 +1297,30 @@ fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile
         name: snapshot.name,
         extension: snapshot.extension,
         bytes: snapshot.bytes,
+        recovery_state: snapshot.recovery_state,
     })
+}
+
+#[tauri::command]
+fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraftRequest) -> AppResult<()> {
+    let directory = document_backups_dir(&app)?;
+    if !directory.exists() {
+        return Ok(());
+    }
+    let key = document_recovery_draft_key(&request.document_path, &request.name);
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(snapshot) = read_document_backup_snapshot(&path) else {
+            continue;
+        };
+        if document_backup_key(&snapshot) == key {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1327,6 +1374,7 @@ pub fn run() {
                         | "mcp-settings"
                         | "mcp-toggle"
                         | "colors"
+                        | "close-document"
                         | "save"
                         | "save-as"
                         | "save-to-workspace"
@@ -1388,6 +1436,7 @@ pub fn run() {
             create_document_backup,
             list_document_backups,
             restore_document_backup,
+            clear_document_recovery_drafts,
             open_external_url
         ])
         .run(tauri::generate_context!())
@@ -1440,13 +1489,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&recent_workspaces)
         .item(&recent_files)
         .separator()
+        .item(&MenuItemBuilder::new("Close Document").id("close-document").accelerator("CmdOrCtrl+W").build(app)?)
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
         .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").build(app)?)
         .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("Recover Backup...").id("recover-backup").build(app)?)
+        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
         .build()?;
     let mcp = SubmenuBuilder::new(app, "MCP Server")
         .item(
@@ -1847,6 +1897,7 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
             .to_string(),
         extension,
         bytes: fs::read(path)?,
+        recovery_state: None,
     })
 }
 
@@ -1981,6 +2032,38 @@ fn snapshot_metadata(snapshot: &DocumentBackupSnapshot) -> DocumentBackup {
         name: snapshot.name.clone(),
         extension: snapshot.extension.clone(),
         created_at: snapshot.created_at.clone(),
+    }
+}
+
+fn document_backup_matches_saved_file(snapshot: &DocumentBackupSnapshot) -> bool {
+    if snapshot.document_path.is_empty() {
+        return false;
+    }
+    if let (Ok(metadata), Ok(created_at)) = (
+        fs::metadata(&snapshot.document_path),
+        DateTime::parse_from_rfc3339(&snapshot.created_at),
+    ) {
+        if let Ok(modified) = metadata.modified() {
+            if DateTime::<Utc>::from(modified) >= created_at.with_timezone(&Utc) {
+                return true;
+            }
+        }
+    }
+    let Ok(saved_bytes) = fs::read(&snapshot.document_path) else {
+        return false;
+    };
+    saved_bytes == snapshot.bytes
+}
+
+fn document_backup_key(snapshot: &DocumentBackupSnapshot) -> String {
+    document_recovery_draft_key(&snapshot.document_path, &snapshot.name)
+}
+
+fn document_recovery_draft_key(document_path: &str, name: &str) -> String {
+    if document_path.is_empty() {
+        format!("untitled:{name}")
+    } else {
+        document_path.to_string()
     }
 }
 

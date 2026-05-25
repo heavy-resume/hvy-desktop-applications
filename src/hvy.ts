@@ -13,6 +13,8 @@ type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocume
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
+  getRecoveryState?: HvyEmbedMount['getRecoveryState'];
+  applyRecoveryState?: HvyEmbedMount['applyRecoveryState'];
 };
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 export type BuildImportPlanOptions = Parameters<HvyEmbedMount['buildImportPlan']>[0];
@@ -157,6 +159,14 @@ function documentOwner(): Document {
 
 export function serializeMountedDocument(mounted: MountedDocument): Uint8Array {
   return mounted.mount.serializeDocumentBytes();
+}
+
+export function getMountedRecoveryState(mounted: MountedDocument): string | null {
+  return mounted.mount.getRecoveryState?.() ?? null;
+}
+
+export function applyMountedRecoveryState(mounted: MountedDocument, recoveryState?: string | null): void {
+  mounted.mount.applyRecoveryState?.(recoveryState);
 }
 
 export function getMountedDocument(mounted: MountedDocument): VisualDocument {

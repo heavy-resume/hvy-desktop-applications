@@ -6,6 +6,7 @@ import {
   addFilesToWorkspace,
   archiveWorkspace,
   chooseWorkspaceFolder,
+  clearDocumentRecoveryDrafts,
   createDocumentBackup,
   createDocumentFile,
   createWorkspace,
@@ -58,7 +59,7 @@ import {
   updateMcpWorkspaces,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
-import { buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, getMountedRecoveryState, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates } from './templates';
 import { render, type UiHandlers } from './ui';
@@ -66,11 +67,13 @@ import { render, type UiHandlers } from './ui';
 let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
+let pendingMountRecoveryState: string | null = null;
 let backupTimer: number | null = null;
 let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = null;
 let mountThemeReapplyCleanup: (() => void) | null = null;
 let workspaceFilterAbortController: AbortController | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
+const BACKUP_DEBOUNCE_MS = 1500;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
 interface DocumentSession {
   path: string;
@@ -82,6 +85,7 @@ interface DocumentSession {
   isNew: boolean;
   metaOpen: boolean;
   document: VisualDocument;
+  recoveryState: string | null;
 }
 const documentSessions = new Map<string, DocumentSession>();
 const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
@@ -330,6 +334,7 @@ const handlers: UiHandlers = {
     state.document.dirty = false;
     state.document.isNew = false;
     updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+    await clearRecoveryDraftsForDocument(state.document.path, state.document.name);
     await refreshOpenWorkspaceForFile(state.document.path);
     await refreshRecents();
     state.status = result.message ?? `Imported ${source.name}`;
@@ -681,14 +686,25 @@ const handlers: UiHandlers = {
     persistAndApplyColorTheme();
     rerender({ preserveMountedDocument: true });
   },
-  restoreBackup: (id) => void runBusy('Restoring backup...', async () => {
+  restoreBackup: (id) => void runBusy('Restoring unsaved edits...', async () => {
     const file = await restoreDocumentBackup(id);
+    if (file.path) {
+      documentSessions.delete(file.path);
+      workspaceFilterDocumentCache.delete(file.path);
+      backupSnapshots.delete(backupDocumentKey(file.path, file.name));
+    }
     state.recoveryDialogOpen = false;
     state.recoveryBackups = [];
     await openDocument(file, { recovered: true, deferMount: true });
   }),
   cancelRecovery: () => {
     state.recoveryDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  confirmCloseDocument: () => void closeCurrentDocument({ discard: true }),
+  cancelCloseDocument: () => {
+    state.closeDocumentDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -934,6 +950,7 @@ const handlers: UiHandlers = {
     rerender({ preserveMountedDocument: true });
   },
   createFile: () => void createBlankDocument(),
+  closeDocument: () => void closeCurrentDocument(),
 };
 
 void boot();
@@ -959,7 +976,9 @@ async function boot(): Promise<void> {
     await refreshSavedTemplates(state.selectedWorkspacePath);
     mountRoot = render(state, handlers);
     await openDefaultGuide();
+    await openRecoveryDialogOnBoot();
     startBackupTimer();
+    setupRecoveryLifecycle();
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
@@ -975,6 +994,7 @@ async function boot(): Promise<void> {
       }
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
+      if (event === 'close-document') handlers.closeDocument();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
       if (event === 'save-to-workspace') handlers.saveCurrentToWorkspace();
@@ -1262,6 +1282,7 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   const bytes = new Uint8Array(file.bytes);
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
   const document = session?.document ?? cachedFilterDocument ?? await deserializeHvy(bytes, file.extension);
+  const recoveryState = options.recovered ? file.recoveryState ?? null : session?.recoveryState ?? null;
   state.document = {
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
@@ -1279,16 +1300,20 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     : session
     ? `Restored unsaved session for ${file.name}`
     : options.recovered
-    ? `Restored backup of ${file.name}`
+    ? `Restored unsaved edits for ${file.name}`
     : options.isNew
     ? 'Created blank HVY document'
     : `Opened ${file.name}`;
   if (options.deferMount) {
     pendingMountDocument = document;
+    pendingMountRecoveryState = recoveryState;
     return;
   }
   rerender();
   await mountCurrentDocument(document);
+  if (recoveryState && state.document?.mounted) {
+    applyMountedRecoveryState(state.document.mounted, recoveryState);
+  }
 }
 
 function preserveCurrentDocumentSession(): void {
@@ -1309,6 +1334,7 @@ function preserveCurrentDocumentSession(): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
+    recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
   });
 }
 
@@ -1325,6 +1351,7 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
+    recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
   });
 }
 
@@ -1365,6 +1392,10 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
       setDocumentDirty(event.dirty);
     },
   });
+  if (pendingMountRecoveryState) {
+    applyMountedRecoveryState(mounted, pendingMountRecoveryState);
+    pendingMountRecoveryState = null;
+  }
   applyAppColorTheme();
   mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
   state.document.mounted = mounted;
@@ -1428,6 +1459,9 @@ function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } 
   if (document) {
     updateCurrentDocumentSession(document);
   }
+  if (dirty) {
+    scheduleBackupActiveDocument();
+  }
   updateDirtyChrome();
 }
 
@@ -1460,29 +1494,29 @@ function updateModeMetaChrome(): void {
 }
 
 async function saveCurrentDocument(): Promise<void> {
+  const openDocument = state.document;
+  const mounted = openDocument?.mounted;
+  if (!openDocument || !mounted) return;
+  if (openDocument.isNew || !openDocument.path) {
+    await saveCurrentDocumentAs();
+    return;
+  }
   await runBusy('Saving...', async () => {
-    if (!state.document?.mounted) return;
-    if (state.document.readOnly) {
+    if (openDocument.readOnly) {
       state.status = 'The HVY guide is read-only';
-      rerender();
       return;
     }
-    if (state.document.isNew || !state.document.path) {
-      await performSaveCurrentDocumentAs();
-      return;
-    }
-    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
-    await saveDocumentFile({ path: state.document.path, bytes });
-    markMountedDocumentSaved(state.document.mounted);
-    state.document.dirty = false;
-    state.status = `Saved ${state.document.name}`;
-    const document = state.document.mounted.document;
+    const bytes = Array.from(serializeMountedDocument(mounted));
+    await saveDocumentFile({ path: openDocument.path, bytes });
+    markMountedDocumentSaved(mounted);
+    openDocument.dirty = false;
+    state.status = `Saved ${openDocument.name}`;
+    const document = mounted.document;
     updateCurrentDocumentSession(document);
-    await refreshOpenWorkspaceForFile(state.document.path);
+    await refreshOpenWorkspaceForFile(openDocument.path);
     await refreshRecents();
-    rerender();
-    await mountCurrentDocument(document);
-  });
+    await clearRecoveryDraftsForDocument(openDocument.path, openDocument.name);
+  }, { preserveMountedDocument: true });
 }
 
 async function saveCurrentDocumentAs(): Promise<void> {
@@ -1500,6 +1534,7 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
   }
   const bytes = Array.from(serializeMountedDocument(state.document.mounted));
   const previousPath = state.document.path;
+  const previousName = state.document.name;
   const previousMode = state.document.mode;
   const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
   if (!file) return;
@@ -1523,12 +1558,44 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
   state.status = `Saved ${file.name}`;
   await refreshOpenWorkspaceForFile(file.path);
   await refreshRecents();
+  await clearRecoveryDraftsForDocument(previousPath, previousName);
+  await clearRecoveryDraftsForDocument(file.path, file.name);
   rerender();
   await mountCurrentDocument(document);
 }
 
+async function closeCurrentDocument(options: { discard?: boolean } = {}): Promise<void> {
+  const openDocument = state.document;
+  if (!openDocument) return;
+  if (!openDocument.readOnly && openDocument.dirty && !options.discard) {
+    state.closeDocumentDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  const path = openDocument.path;
+  const name = openDocument.name;
+  openDocument.mounted?.mount.destroy();
+  mountThemeReapplyCleanup?.();
+  mountThemeReapplyCleanup = null;
+  pendingMountDocument = null;
+  pendingMountRecoveryState = null;
+  mountGeneration += 1;
+  if (path) {
+    documentSessions.delete(path);
+    workspaceFilterDocumentCache.delete(path);
+  }
+  backupSnapshots.delete(backupDocumentKey(path, name));
+  await clearRecoveryDraftsForDocument(path, name);
+  state.closeDocumentDialogOpen = false;
+  state.document = null;
+  state.selectedFilePath = null;
+  state.status = 'Closed document';
+  rerender();
+}
+
 function startBackupTimer(): void {
-  if (backupTimer !== null || !isTauriRuntime()) return;
+  if (backupTimer !== null) return;
   backupTimer = window.setInterval(() => {
     scheduleBackupActiveDocument();
   }, BACKUP_INTERVAL_MS);
@@ -1540,29 +1607,41 @@ function scheduleBackupActiveDocument(): void {
     pendingBackupIdleHandle = null;
     void backupActiveDocument();
   };
-  if ('requestIdleCallback' in window) {
-    pendingBackupIdleHandle = window.requestIdleCallback(callback, { timeout: 30_000 });
-    return;
-  }
-  pendingBackupIdleHandle = globalThis.setTimeout(callback, 1500);
+  pendingBackupIdleHandle = globalThis.setTimeout(callback, BACKUP_DEBOUNCE_MS);
+}
+
+function setupRecoveryLifecycle(): void {
+  window.addEventListener('pagehide', () => {
+    void backupActiveDocument({ force: true }).catch(() => undefined);
+  });
+  window.addEventListener('beforeunload', () => {
+    void backupActiveDocument({ force: true }).catch(() => undefined);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      void backupActiveDocument({ force: true }).catch(() => undefined);
+    }
+  });
 }
 
 async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
   if (!state.document?.mounted || state.document.readOnly) return;
   if (!state.document.dirty) return;
   const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const recoveryState = getMountedRecoveryState(state.document.mounted);
   const documentKey = backupDocumentKey(state.document.path, state.document.name);
   const bytesKey = backupBytesKey(bytes);
   const previousBackup = backupSnapshots.get(documentKey);
   const now = Date.now();
   if (previousBackup?.bytesKey === bytesKey) return;
-  if (previousBackup && now - previousBackup.createdAtMs < MIN_BACKUP_SPACING_MS) return;
+  if (!options.force && previousBackup && now - previousBackup.createdAtMs < MIN_BACKUP_SPACING_MS) return;
   try {
     const backup = await createDocumentBackup({
       documentPath: state.document.path,
       name: state.document.name,
       extension: state.document.extension,
       bytes,
+      recoveryState,
     });
     if (backup) {
       backupSnapshots.set(documentKey, { bytesKey, createdAtMs: Date.parse(backup.createdAt) || now });
@@ -1571,7 +1650,7 @@ async function backupActiveDocument(options: { force?: boolean } = {}): Promise<
     if (options.force) {
       throw error;
     }
-    // Keep timed backups quiet; explicit recovery will surface failures.
+    // Keep timed recovery drafts quiet; explicit recovery will surface failures.
   }
 }
 
@@ -1588,21 +1667,25 @@ function backupBytesKey(bytes: number[]): string {
   return `${bytes.length}:${hash >>> 0}`;
 }
 
+async function clearRecoveryDraftsForDocument(documentPath: string, name: string): Promise<void> {
+  backupSnapshots.delete(backupDocumentKey(documentPath, name));
+  try {
+    await clearDocumentRecoveryDrafts({ documentPath, name });
+  } catch {
+    // Recovery drafts are best-effort cleanup after an explicit save or discard.
+  }
+}
+
 async function openRecoveryDialog(): Promise<void> {
   if (state.busy) return;
   const document = state.document?.mounted?.document;
   state.busy = true;
   state.error = null;
-  state.status = 'Loading backups...';
+  state.status = 'Loading recoverable edits...';
   try {
-    try {
-      await backupActiveDocument({ force: true });
-    } catch (error) {
-      state.error = error instanceof Error ? error.message : String(error);
-    }
     state.recoveryBackups = await listDocumentBackups();
     state.recoveryDialogOpen = true;
-    state.status = state.recoveryBackups.length > 0 ? 'Loaded backups' : 'No backups available';
+    state.status = state.recoveryBackups.length > 0 ? 'Loaded recoverable edits' : 'No recoverable edits available';
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error);
     state.status = 'Ready';
@@ -1610,6 +1693,18 @@ async function openRecoveryDialog(): Promise<void> {
     state.busy = false;
     rerender();
     await mountCurrentDocument(document);
+  }
+}
+
+async function openRecoveryDialogOnBoot(): Promise<void> {
+  try {
+    state.recoveryBackups = await listDocumentBackups();
+    if (state.recoveryBackups.length === 0) return;
+    state.recoveryDialogOpen = true;
+    state.status = 'Recoverable edits found';
+    rerender({ preserveMountedDocument: true });
+  } catch {
+    state.recoveryBackups = [];
   }
 }
 
@@ -1662,6 +1757,8 @@ function workspaceTransferBusyLabel(mode: NonNullable<typeof state.workspaceTran
 
 async function saveCurrentDocumentToWorkspace(workspacePath: string, name: string): Promise<void> {
   if (!state.document?.mounted) return;
+  const previousPath = state.document.path;
+  const previousName = state.document.name;
   const bytes = Array.from(serializeMountedDocument(state.document.mounted));
   const file = await saveDocumentToWorkspace({
     workspacePath,
@@ -1671,6 +1768,8 @@ async function saveCurrentDocumentToWorkspace(workspacePath: string, name: strin
   await openDocument(file, { deferMount: true });
   upsertWorkspace(await loadWorkspace(workspacePath));
   await refreshRecents();
+  await clearRecoveryDraftsForDocument(previousPath, previousName);
+  await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;
 }
 
@@ -1775,7 +1874,7 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
   applyAppColorTheme();
 }
 
-async function runBusy(label: string, task: () => Promise<void>): Promise<void> {
+async function runBusy(label: string, task: () => Promise<void>, options: { preserveMountedDocument?: boolean } = {}): Promise<void> {
   if (state.busy) return;
   const document = state.document?.mounted?.document;
   state.busy = true;
@@ -1790,8 +1889,12 @@ async function runBusy(label: string, task: () => Promise<void>): Promise<void> 
     state.busy = false;
     const documentToMount = pendingMountDocument ?? state.document?.mounted?.document ?? document;
     pendingMountDocument = null;
-    rerender();
-    await mountCurrentDocument(documentToMount);
+    if (options.preserveMountedDocument) {
+      rerender({ preserveMountedDocument: true });
+    } else {
+      rerender();
+      await mountCurrentDocument(documentToMount);
+    }
   }
 }
 

@@ -70,6 +70,8 @@ export interface UiHandlers {
   applyColorThemePalette(id: string | null): void;
   restoreBackup(id: string): void;
   cancelRecovery(): void;
+  confirmCloseDocument(): void;
+  cancelCloseDocument(): void;
   openWorkspace(): void;
   openFile(): void;
   openRecentWorkspace(path: string): void;
@@ -89,6 +91,7 @@ export interface UiHandlers {
   openDocumentMeta(): void;
   save(): void;
   saveAs(): void;
+  closeDocument(): void;
   openSaveTemplate(): void;
   setSaveTemplateScope(scope: TemplateScope): void;
   saveAsTemplate(name: string, scope: TemplateScope): void;
@@ -152,6 +155,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderMcpSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
+      ${renderCloseDocumentDialog(state)}
       ${renderRenameFileDialog(state)}
       ${renderWorkspaceTransferDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
@@ -193,6 +197,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
           handlers.closeWorkspaceFilter();
+          return;
+        }
+        if (backdrop.querySelector('.close-document-dialog')) {
+          handlers.cancelCloseDocument();
           return;
         }
         if (backdrop.querySelector('form[data-form="rename-file"]')) {
@@ -345,6 +353,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
+    if (action === 'close-document') handlers.closeDocument();
+    if (action === 'confirm-close-document') handlers.confirmCloseDocument();
+    if (action === 'cancel-close-document') handlers.cancelCloseDocument();
     if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
     if (action === 'choose-import-source') handlers.chooseImportSource();
@@ -566,6 +577,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('form[data-form="workspace-transfer"]')) {
       event.preventDefault();
       handlers.cancelWorkspaceTransfer();
+      return;
+    }
+    if (root.querySelector('.close-document-dialog')) {
+      event.preventDefault();
+      handlers.cancelCloseDocument();
       return;
     }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
@@ -831,6 +847,7 @@ function renderToolbar(state: AppState): string {
       ${showSaveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
       <button type="button" data-action="import-into-current" ${document.readOnly ? 'disabled' : ''}>Import</button>
       <button type="button" data-action="export-document" ${document.readOnly ? 'disabled' : ''}>Export</button>
+      <button type="button" data-action="close-document">Close</button>
       <button type="button" data-action="create-file">New HVY</button>
     </div>`;
 }
@@ -1703,11 +1720,11 @@ function renderRecoveryDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
-        <h2 id="recoveryTitle">Recover Backup</h2>
-        <p class="dialog-note">Backups are kept for two hours and refreshed every five minutes while a document has edits.</p>
+        <h2 id="recoveryTitle">Recover Unsaved Edits</h2>
+        <p class="dialog-note">Recoverable edits are kept for seven days and refreshed while a document has edits.</p>
         ${
           backups.length === 0
-            ? '<div class="empty-panel compact">No backups are available yet.</div>'
+            ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
             : `<div class="recovery-list">
                 ${backups.map((backup) => `
                   <article class="recovery-item">
@@ -1716,13 +1733,30 @@ function renderRecoveryDialog(state: AppState): string {
                       <span>${escapeHtml(formatBackupTimestamp(backup.createdAt))}</span>
                       ${backup.documentPath ? `<small>${escapeHtml(backup.documentPath)}</small>` : '<small>Unsaved document</small>'}
                     </div>
-                    <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore</button>
+                    <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
                   </article>
                 `).join('')}
               </div>`
         }
         <div class="dialog-actions">
           <button type="button" data-action="cancel-recovery">Close</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderCloseDocumentDialog(state: AppState): string {
+  if (!state.closeDocumentDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentTitle">
+        <h2 id="closeDocumentTitle">Discard Unsaved Edits?</h2>
+        <p class="dialog-note">Closing this document will discard unsaved edits and remove its recovery draft.</p>
+        <div class="dialog-actions">
+          <button type="button" class="danger-button" data-action="confirm-close-document">Discard Edits</button>
+          <button type="button" data-action="cancel-close-document">Cancel</button>
         </div>
       </section>
     </div>`;
