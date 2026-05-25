@@ -409,6 +409,12 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     event.preventDefault();
     showFileContextMenu(event, path, name, handlers);
   }, { signal });
+  root.addEventListener('mousedown', (event) => {
+    if (event.button !== 2) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target?.closest('.tree-file, .tree summary')) return;
+    event.preventDefault();
+  }, { signal });
   root.addEventListener('click', (event) => {
     const summary = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root > summary') : null;
     const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
@@ -1259,7 +1265,6 @@ function renderMcpSettingsDialog(state: AppState): string {
             </div>
             <div class="mcp-setup-grid">
               ${renderMcpReadonlyField('Connection URL', endpointUrl, 'mcp-http-url')}
-              ${renderMcpReadonlyField('Bearer token state', settings.bearerToken.trim() ? 'Configured' : 'None', 'mcp-http-token-state')}
             </div>
           </section>
         </div>
@@ -1567,8 +1572,6 @@ function updateMcpConnectionPreview(form: HTMLFormElement): void {
   const nextUrl = mcpConnectionUrl(settings);
   const httpUrl = form.querySelector<HTMLInputElement>('[data-role="mcp-http-url"]');
   if (httpUrl) httpUrl.value = nextUrl;
-  const token = form.querySelector<HTMLInputElement>('[data-role="mcp-http-token-state"]');
-  if (token) token.value = settings.bearerToken.trim() ? 'Configured' : 'None';
 }
 
 function updateMcpUrlPreview(form: HTMLFormElement): void {

@@ -278,12 +278,16 @@ button:disabled {
   margin: 0;
   padding-left: 12px;
   list-style: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tree summary {
   color: var(--hvy-text-alt, #394744);
   cursor: pointer;
   padding: 4px 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tree-file {
@@ -296,6 +300,8 @@ button:disabled {
   border-color: transparent;
   background: transparent;
   text-align: left;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .tree-file span {
