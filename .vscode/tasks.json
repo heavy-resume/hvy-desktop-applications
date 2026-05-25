@@ -11,6 +11,15 @@
       "problemMatcher": []
     },
     {
+      "label": "HVY Galaxy: Electron Dev (Hot Reload)",
+      "type": "shell",
+      "command": "npm run electron:dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "HVY Galaxy: Build Universal DMG",
       "type": "shell",
       "command": ". \"$HOME/.cargo/env\" && npm run build:universal:dmg",

@@ -10,7 +10,6 @@ import {
   initializeWorkspacePath,
   isTauriRuntime,
   installMcpClient,
-  loadAppEnvironment,
   loadAiSettings,
   loadMcpClientInstallStatus,
   loadDefaultGuide,
@@ -40,7 +39,6 @@ import {
   saveDocumentTemplate,
   startMcpServer,
   stopMcpServer,
-  type AppEnvironment,
   type DocumentFile,
   type ImportSourceFile,
   type McpClientInstallTarget,
@@ -62,7 +60,6 @@ let backupTimer: number | null = null;
 let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = null;
 let mountThemeReapplyCleanup: (() => void) | null = null;
 let workspaceFilterAbortController: AbortController | null = null;
-let appEnvironment: AppEnvironment | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
 interface DocumentSession {
@@ -806,7 +803,6 @@ void boot();
 async function boot(): Promise<void> {
   setupErrorSurface();
   try {
-    await refreshAppEnvironment();
     mountRoot = render(state, handlers);
     await refreshRecents();
     state.aiSettings = await loadAiSettings();
@@ -839,10 +835,6 @@ async function boot(): Promise<void> {
       }
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
-      if (event.startsWith('compatibility-mode:')) void refreshAppEnvironment().then(() => {
-        state.status = appEnvironment?.compatibilityMode ? 'Compatibility mode enabled' : 'Compatibility mode disabled';
-        rerender({ preserveMountedDocument: true });
-      });
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
       if (event === 'import-current') handlers.openImportIntoCurrent();
@@ -855,84 +847,8 @@ async function boot(): Promise<void> {
   }
 }
 
-async function refreshAppEnvironment(): Promise<void> {
-  appEnvironment = await loadAppEnvironment();
-  document.documentElement.classList.toggle('hvy-compatibility-mode', appEnvironment.compatibilityMode);
-  applyCompatibilityThemeVariables();
-}
-
 function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
   applyColorTheme(state.colorTheme, root);
-  applyCompatibilityThemeVariables();
-}
-
-function applyCompatibilityThemeVariables(): void {
-  const target = document.documentElement;
-  if (!target.classList.contains('hvy-compatibility-mode')) {
-    [
-      '--hvy-compat-bg',
-      '--hvy-compat-surface',
-      '--hvy-compat-surface-alt',
-      '--hvy-compat-hover',
-      '--hvy-compat-border',
-    ].forEach((name) => target.style.removeProperty(name));
-    return;
-  }
-
-  const styles = getComputedStyle(target);
-  const bg = opaqueThemeColor(styles, '--hvy-bg', '#fbfaf7');
-  const surface = opaqueThemeColor(styles, '--hvy-surface', '#fffefb', bg);
-  const surfaceAlt = opaqueThemeColor(styles, '--hvy-surface-alt', '#edf1ed', bg);
-  const hover = opaqueThemeColor(styles, '--hvy-button-bg', surface, surface);
-  const border = opaqueThemeColor(styles, '--hvy-border', '#c5cec8', surface);
-  target.style.setProperty('--hvy-compat-bg', bg);
-  target.style.setProperty('--hvy-compat-surface', surface);
-  target.style.setProperty('--hvy-compat-surface-alt', surfaceAlt);
-  target.style.setProperty('--hvy-compat-hover', hover);
-  target.style.setProperty('--hvy-compat-border', border);
-}
-
-function opaqueThemeColor(styles: CSSStyleDeclaration, name: string, fallback: string, backdrop = fallback): string {
-  const value = styles.getPropertyValue(name).trim();
-  return toOpaqueCssColor(value || fallback, backdrop) ?? fallback;
-}
-
-function toOpaqueCssColor(value: string, backdrop: string): string | null {
-  const color = parseCssColor(value);
-  if (!color) {
-    return value || null;
-  }
-  if (color.a >= 1) {
-    return `rgb(${color.r}, ${color.g}, ${color.b})`;
-  }
-  const backdropColor = parseCssColor(backdrop) ?? { r: 255, g: 255, b: 255, a: 1 };
-  const alpha = Math.max(0, Math.min(1, color.a));
-  const blend = (channel: number, base: number) => Math.round(channel * alpha + base * (1 - alpha));
-  return `rgb(${blend(color.r, backdropColor.r)}, ${blend(color.g, backdropColor.g)}, ${blend(color.b, backdropColor.b)})`;
-}
-
-function parseCssColor(value: string): { r: number; g: number; b: number; a: number } | null {
-  const trimmed = value.trim();
-  const hex = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
-  if (hex) {
-    const raw = hex[1].length === 3
-      ? hex[1].split('').map((part) => `${part}${part}`).join('')
-      : hex[1];
-    return {
-      r: Number.parseInt(raw.slice(0, 2), 16),
-      g: Number.parseInt(raw.slice(2, 4), 16),
-      b: Number.parseInt(raw.slice(4, 6), 16),
-      a: 1,
-    };
-  }
-  const rgb = trimmed.match(/^rgba?\(\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})\s*[,\s]\s*(\d{1,3})(?:\s*[,/]\s*([\d.]+)\s*)?\)$/i);
-  if (!rgb) return null;
-  return {
-    r: Math.max(0, Math.min(255, Number.parseInt(rgb[1], 10))),
-    g: Math.max(0, Math.min(255, Number.parseInt(rgb[2], 10))),
-    b: Math.max(0, Math.min(255, Number.parseInt(rgb[3], 10))),
-    a: rgb[4] === undefined ? 1 : Math.max(0, Math.min(1, Number.parseFloat(rgb[4]))),
-  };
 }
 
 async function refreshRecents(): Promise<void> {
@@ -1757,24 +1673,8 @@ function closeUiBeforeWorkspaceFilter(): void {
 
 function persistAndApplyColorTheme(): void {
   saveColorThemeSettings(state.colorTheme);
-  const remountDocument = unmountDocumentForCompatibilityThemeSwap();
   applyAppColorTheme();
   state.status = 'Updated colors';
-  if (remountDocument) {
-    void mountCurrentDocument(remountDocument);
-  }
-}
-
-function unmountDocumentForCompatibilityThemeSwap(): VisualDocument | null {
-  if (!appEnvironment?.compatibilityMode || !state.document?.mounted) {
-    return null;
-  }
-  const document = getMountedDocument(state.document.mounted);
-  state.document.mounted.mount.destroy();
-  mountThemeReapplyCleanup?.();
-  mountThemeReapplyCleanup = null;
-  state.document.mounted = null;
-  return document;
 }
 
 function updateThemeRowChrome(name: string, value: string): void {

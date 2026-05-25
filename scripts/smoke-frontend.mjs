@@ -94,61 +94,6 @@ async function smokeViewport(viewport) {
       throw new Error('Status text is leaking below the document.');
     }
 
-    const compatibility = await page.evaluate(() => {
-      document.documentElement.classList.add('hvy-compatibility-mode');
-      const samples = ['dialog', 'workspace-action-popover', 'workspace-filter-dialog'].map((className) => {
-        const element = document.createElement('div');
-        element.className = className;
-        document.body.append(element);
-        const style = getComputedStyle(element);
-        const background = style.backgroundColor;
-        const backgroundImage = style.backgroundImage;
-        element.remove();
-        const alpha = backgroundImage !== 'none'
-          ? 1
-          : background.startsWith('rgba(')
-          ? Number.parseFloat(background.split(',').at(-1)?.replace(')', '').trim() ?? '1')
-          : 1;
-        return { className, background, alpha };
-      });
-      const host = document.createElement('div');
-      host.className = 'hvy-document-host';
-      document.body.append(host);
-      const embeddedSamples = [
-        'modal-panel',
-        'search-modal',
-        'chat-panel',
-        'ai-edit-popover',
-        'component-picker-popover',
-        'viewer-sidebar-tab',
-      ].map((className) => {
-        const element = document.createElement('div');
-        element.className = className;
-        if (className === 'viewer-sidebar-tab') {
-          element.innerHTML = '<span class="sidebar-tab-label">Study Tools</span>';
-        }
-        host.append(element);
-        const style = getComputedStyle(element);
-        const background = style.backgroundColor;
-        const backgroundImage = style.backgroundImage;
-        const alpha = backgroundImage !== 'none'
-          ? 1
-          : background.startsWith('rgba(')
-          ? Number.parseFloat(background.split(',').at(-1)?.replace(')', '').trim() ?? '1')
-          : 1;
-        const rect = element.getBoundingClientRect();
-        element.remove();
-        return { className, background, alpha, height: rect.height };
-      });
-      host.remove();
-      samples.push(...embeddedSamples);
-      return samples;
-    });
-    const transparent = compatibility.find((sample) => sample.alpha < 1);
-    if (transparent) {
-      throw new Error(`Compatibility surface is transparent at ${viewport.width}x${viewport.height}: ${JSON.stringify(transparent)}`);
-    }
-
     const hasErrorBanner = await page.locator('.error-banner').count() > 0;
     const failed = messages.some((message) => message.startsWith('pageerror:'))
       || hasErrorBanner

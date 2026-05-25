@@ -12,58 +12,6 @@
       </main>
     </div>
     <script>
-      (function installCompatibilityPolyfills() {
-        function at(index) {
-          var length = this == null ? 0 : this.length >>> 0;
-          var offset = Math.trunc(index) || 0;
-          if (offset < 0) offset += length;
-          if (offset < 0 || offset >= length) return undefined;
-          return this[offset];
-        }
-        if (!Array.prototype.at) {
-          Object.defineProperty(Array.prototype, 'at', {
-            value: at,
-            configurable: true,
-            writable: true,
-          });
-        }
-        if (!String.prototype.at) {
-          Object.defineProperty(String.prototype, 'at', {
-            value: function stringAt(index) {
-              var value = String(this);
-              var length = value.length;
-              var offset = Math.trunc(index) || 0;
-              if (offset < 0) offset += length;
-              if (offset < 0 || offset >= length) return undefined;
-              return value.charAt(offset);
-            },
-            configurable: true,
-            writable: true,
-          });
-        }
-        [
-          Int8Array,
-          Uint8Array,
-          Uint8ClampedArray,
-          Int16Array,
-          Uint16Array,
-          Int32Array,
-          Uint32Array,
-          Float32Array,
-          Float64Array,
-          typeof BigInt64Array === 'undefined' ? null : BigInt64Array,
-          typeof BigUint64Array === 'undefined' ? null : BigUint64Array,
-        ].forEach(function installTypedArrayAt(TypedArray) {
-          if (TypedArray && !TypedArray.prototype.at) {
-            Object.defineProperty(TypedArray.prototype, 'at', {
-              value: at,
-              configurable: true,
-              writable: true,
-            });
-          }
-        });
-      })();
-
       function showStartupError(error) {
         const root = document.getElementById('app');
         if (!root) return;
