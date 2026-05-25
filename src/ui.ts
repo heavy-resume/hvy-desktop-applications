@@ -73,6 +73,8 @@ export interface UiHandlers {
   refreshWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
+  submitRenameFile(name: string): void;
+  cancelRenameFile(): void;
   setMode(mode: HvyMode): void;
   openDocumentMeta(): void;
   save(): void;
@@ -138,6 +140,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderMcpSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
+      ${renderRenameFileDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
 
@@ -173,6 +176,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
           handlers.closeWorkspaceFilter();
+          return;
+        }
+        if (backdrop.querySelector('form[data-form="rename-file"]')) {
+          handlers.cancelRenameFile();
           return;
         }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -304,6 +311,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
+    if (action === 'cancel-rename-file') handlers.cancelRenameFile();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
@@ -479,6 +487,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (form.dataset.form === 'workspace-filter') {
       handlers.submitWorkspaceFilter();
     }
+    if (form.dataset.form === 'rename-file') {
+      const data = new FormData(form);
+      handlers.submitRenameFile(String(data.get('fileName') ?? ''));
+    }
   }, { signal });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -503,6 +515,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (root.querySelector('.workspace-filter-dialog')) {
       event.preventDefault();
       handlers.closeWorkspaceFilter();
+      return;
+    }
+    if (root.querySelector('form[data-form="rename-file"]')) {
+      event.preventDefault();
+      handlers.cancelRenameFile();
       return;
     }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
@@ -531,6 +548,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   root.querySelectorAll<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]').forEach((form) => {
     updateImportSubmit(form);
   });
+  root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
 }
 
 function workspaceRootFromEvent(event: Event): HTMLElement | null {
@@ -607,6 +625,26 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
         </div>
       </form>
     </section>`;
+}
+
+function renderRenameFileDialog(state: AppState): string {
+  if (!state.renameFilePath || !state.renameFileCurrentName) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="rename-file">
+        <h2>Rename</h2>
+        <label>
+          <span>Name</span>
+          <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(displayDocumentName(state.renameFileCurrentName))}" required>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-rename-file">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
+        </div>
+      </form>
+    </div>`;
 }
 
 function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {

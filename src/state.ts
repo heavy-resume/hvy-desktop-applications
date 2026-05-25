@@ -50,6 +50,8 @@ export interface AppState {
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
+  renameFilePath: string | null;
+  renameFileCurrentName: string | null;
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
 }
@@ -108,6 +110,8 @@ export const state: AppState = {
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
   recoveryBackups: [],
+  renameFilePath: null,
+  renameFileCurrentName: null,
   workspaceFilter: {
     open: false,
     workspacePath: null,

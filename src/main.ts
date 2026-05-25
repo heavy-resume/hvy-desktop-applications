@@ -669,16 +669,30 @@ const handlers: UiHandlers = {
     state.status = revealStatusLabel();
   }),
   renameFile: (path, currentName) => {
+    state.renameFilePath = path;
+    state.renameFileCurrentName = currentName;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  submitRenameFile: (name) => {
+    const path = state.renameFilePath;
+    const currentName = state.renameFileCurrentName;
+    if (!path || !currentName) return;
     const currentStem = documentTitle(currentName);
-    const nextName = window.prompt('Rename', currentStem);
-    if (nextName === null) return;
-    const trimmed = nextName.trim();
+    const trimmed = name.trim();
     if (!trimmed) {
       state.status = 'Document name is required';
       rerender({ preserveMountedDocument: true });
       return;
     }
-    if (trimmed === currentStem) return;
+    if (trimmed === currentStem) {
+      state.renameFilePath = null;
+      state.renameFileCurrentName = null;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    state.renameFilePath = null;
+    state.renameFileCurrentName = null;
     void runBusy('Renaming file...', async () => {
       const workspacePath = workspacePathForFile(path);
       const currentDocument = state.document?.path === path ? state.document : null;
@@ -712,6 +726,12 @@ const handlers: UiHandlers = {
       await refreshRecents();
       state.status = `Renamed to ${file.name}`;
     });
+  },
+  cancelRenameFile: () => {
+    state.renameFilePath = null;
+    state.renameFileCurrentName = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
   },
   setMode: (mode) => {
     if (!state.document) return;
