@@ -73,8 +73,13 @@ export interface UiHandlers {
   refreshWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
+  copyFileToWorkspace(path: string, currentName: string): void;
+  moveFileToWorkspace(path: string, currentName: string): void;
   submitRenameFile(name: string): void;
   cancelRenameFile(): void;
+  saveCurrentToWorkspace(): void;
+  submitWorkspaceTransfer(workspacePath: string, name: string): void;
+  cancelWorkspaceTransfer(): void;
   setMode(mode: HvyMode): void;
   openDocumentMeta(): void;
   save(): void;
@@ -141,6 +146,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
       ${renderRenameFileDialog(state)}
+      ${renderWorkspaceTransferDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
 
@@ -148,11 +154,11 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
   if (options.preserveMount && state.document) {
     nextMount.replaceWith(options.preserveMount);
   }
-  bind(appRoot, handlers);
+  bind(appRoot, handlers, state);
   return options.preserveMount && state.document ? options.preserveMount : nextMount;
 }
 
-function bind(root: HTMLElement, handlers: UiHandlers): void {
+function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindController?.abort();
   bindController = new AbortController();
   const { signal } = bindController;
@@ -180,6 +186,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         }
         if (backdrop.querySelector('form[data-form="rename-file"]')) {
           handlers.cancelRenameFile();
+          return;
+        }
+        if (backdrop.querySelector('form[data-form="workspace-transfer"]')) {
+          handlers.cancelWorkspaceTransfer();
           return;
         }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -312,12 +322,14 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
+    if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
     if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
+    if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
     if (action === 'choose-import-source') handlers.chooseImportSource();
     if (action === 'cancel-import') handlers.cancelImport();
@@ -415,7 +427,7 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     const name = fileButton?.dataset.name;
     if (!fileButton || !path || !name) return;
     event.preventDefault();
-    showFileContextMenu(event, path, name, handlers);
+    showFileContextMenu(event, path, name, handlers, state.workspaces.length > 1);
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
@@ -491,6 +503,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       const data = new FormData(form);
       handlers.submitRenameFile(String(data.get('fileName') ?? ''));
     }
+    if (form.dataset.form === 'workspace-transfer') {
+      const data = new FormData(form);
+      handlers.submitWorkspaceTransfer(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+    }
   }, { signal });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -520,6 +536,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (root.querySelector('form[data-form="rename-file"]')) {
       event.preventDefault();
       handlers.cancelRenameFile();
+      return;
+    }
+    if (root.querySelector('form[data-form="workspace-transfer"]')) {
+      event.preventDefault();
+      handlers.cancelWorkspaceTransfer();
       return;
     }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
@@ -647,6 +668,41 @@ function renderRenameFileDialog(state: AppState): string {
     </div>`;
 }
 
+function renderWorkspaceTransferDialog(state: AppState): string {
+  const transfer = state.workspaceTransfer;
+  if (!transfer) return '';
+  const workspaces = state.workspaces.filter((workspace) => workspace.path !== transfer.excludedWorkspacePath);
+  const title = transfer.mode === 'saveCurrent'
+    ? 'Save to Workspace'
+    : transfer.mode === 'copyFile'
+    ? 'Copy to Workspace'
+    : 'Move to Workspace';
+  const submitLabel = transfer.mode === 'moveFile' ? 'Move' : transfer.mode === 'copyFile' ? 'Copy' : 'Save';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="workspace-transfer">
+        <h2>${escapeHtml(title)}</h2>
+        <label>
+          <span>Workspace</span>
+          <select name="workspacePath" required>
+            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+          </select>
+        </label>
+        ${transfer.mode === 'saveCurrent' ? `
+          <label>
+            <span>Name</span>
+            <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(transfer.nameDraft)}" required>
+          </label>
+        ` : ''}
+        <p class="dialog-note">${escapeHtml(transfer.fileName)}</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-workspace-transfer">Cancel</button>
+          <button type="submit" ${state.busy || workspaces.length === 0 ? 'disabled' : ''}>${escapeHtml(submitLabel)}</button>
+        </div>
+      </form>
+    </div>`;
+}
+
 function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {
   const active = filter.mode === mode;
   return `
@@ -671,7 +727,7 @@ function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: stri
     >${escapeHtml(label)}</button>`;
 }
 
-function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers): void {
+function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers, showWorkspaceActions: boolean): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
   menu.className = 'file-context-menu';
@@ -680,6 +736,7 @@ function showFileContextMenu(event: MouseEvent, path: string, name: string, hand
   menu.innerHTML = `
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button type="button" data-menu-action="rename">Rename</button>
+    ${showWorkspaceActions ? '<button type="button" data-menu-action="copy-to-workspace">Copy to...</button><button type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -699,6 +756,8 @@ function showFileContextMenu(event: MouseEvent, path: string, name: string, hand
     cleanup();
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
+    if (button.dataset.menuAction === 'copy-to-workspace') handlers.copyFileToWorkspace(path, name);
+    if (button.dataset.menuAction === 'move-to-workspace') handlers.moveFileToWorkspace(path, name);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -736,13 +795,15 @@ function renderToolbar(state: AppState): string {
   }
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
+  const showSaveToWorkspace = isDocumentOrphanedFromWorkspace(state);
   return `
     <div class="toolbar-title">
-      <strong>${escapeHtml(document.name)}</strong>
-      <span>${document.readOnly ? 'Read-only guide' : document.isNew ? 'Unsaved document' : escapeHtml(document.path)}</span>
+      <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
+      <span>${document.readOnly ? 'Read-only guide' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
+      ${showSaveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
       <button type="button" data-action="import-into-current" ${document.readOnly ? 'disabled' : ''}>Import</button>
       <button type="button" data-action="export-document" ${document.readOnly ? 'disabled' : ''}>Export</button>
       <button type="button" data-action="create-file">New HVY</button>
@@ -1128,6 +1189,10 @@ function currentDocumentWorkspacePath(state: AppState): string | null {
   const path = state.document?.path;
   if (!path) return null;
   return state.workspaces.find((workspace) => path.startsWith(workspace.path))?.path ?? null;
+}
+
+function isDocumentOrphanedFromWorkspace(state: AppState): boolean {
+  return Boolean(state.document && !state.document.readOnly && state.workspaces.length > 0 && !currentDocumentWorkspacePath(state));
 }
 
 function renderAboutDialog(state: AppState): string {

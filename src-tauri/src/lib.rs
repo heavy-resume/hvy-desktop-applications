@@ -1110,6 +1110,73 @@ fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult
 }
 
 #[tauri::command]
+fn save_document_to_workspace(
+    app: AppHandle,
+    workspace_path: String,
+    name: String,
+    bytes: Vec<u8>,
+) -> AppResult<DocumentFile> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let file_name = document_file_name(&name)?;
+    let destination = unique_copy_path(&workspace_path, std::ffi::OsStr::new(&file_name));
+    write_file_atomically(&destination, &bytes)?;
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    add_recent_file(&app, &destination)?;
+    read_document_at(&destination)
+}
+
+#[tauri::command]
+fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: String) -> AppResult<DocumentFile> {
+    let path = PathBuf::from(path);
+    document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents can be copied.".into()))?;
+    if !path.is_file() {
+        return Err(AppError::Message("Document file does not exist.".into()));
+    }
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
+    let destination = unique_copy_path(&workspace_path, file_name);
+    fs::copy(&path, &destination)?;
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    add_recent_file(&app, &destination)?;
+    read_document_at(&destination)
+}
+
+#[tauri::command]
+fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: String) -> AppResult<DocumentFile> {
+    let path = PathBuf::from(path);
+    document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents can be moved.".into()))?;
+    if !path.is_file() {
+        return Err(AppError::Message("Document file does not exist.".into()));
+    }
+    let source_parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let source_workspace = workspace_root_for_document(source_parent);
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
+    let destination = unique_copy_path(&workspace_path, file_name);
+    fs::rename(&path, &destination)?;
+    if let Some(source_workspace) = source_workspace {
+        touch_workspace_manifest(&source_workspace)?;
+    }
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    add_recent_file(&app, &destination)?;
+    read_document_at(&destination)
+}
+
+#[tauri::command]
 fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
     if document_extension(Path::new(&request.name)).is_none() {
         return Err(AppError::Message("Backup document name must end in .hvy, .thvy, or .md.".into()));
@@ -1204,6 +1271,7 @@ pub fn run() {
                         | "colors"
                         | "save"
                         | "save-as"
+                        | "save-to-workspace"
                         | "export-document"
                         | "import-current"
                         | "recover-backup"
@@ -1252,6 +1320,9 @@ pub fn run() {
             create_document_file,
             reveal_document_file,
             rename_document_file,
+            save_document_to_workspace,
+            copy_document_to_workspace,
+            move_document_to_workspace,
             create_document_backup,
             list_document_backups,
             restore_document_backup,
@@ -1308,6 +1379,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
+        .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").build(app)?)
         .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
         .separator()
@@ -1661,6 +1733,13 @@ fn normalized_rename_stem(name: &str) -> AppResult<String> {
         return Err(AppError::Message("Document name is required.".into()));
     }
     Ok(stem.into())
+}
+
+fn document_file_name(name: &str) -> AppResult<String> {
+    let stem = normalized_rename_stem(name)?;
+    let path = Path::new(name.trim());
+    let extension = document_extension(path).unwrap_or_else(|| ".hvy".into());
+    Ok(format!("{stem}{extension}"))
 }
 
 fn workspace_root_for_document(parent: &Path) -> Option<PathBuf> {

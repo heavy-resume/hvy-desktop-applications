@@ -52,6 +52,7 @@ export interface AppState {
   recoveryBackups: DocumentBackup[];
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
+  workspaceTransfer: WorkspaceTransferState | null;
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
 }
@@ -73,6 +74,14 @@ export interface WorkspaceFilterState {
   isLoading: boolean;
   status: string | null;
   error: string | null;
+}
+
+export interface WorkspaceTransferState {
+  mode: 'saveCurrent' | 'copyFile' | 'moveFile';
+  sourcePath: string | null;
+  fileName: string;
+  nameDraft: string;
+  excludedWorkspacePath: string | null;
 }
 
 export const state: AppState = {
@@ -112,6 +121,7 @@ export const state: AppState = {
   recoveryBackups: [],
   renameFilePath: null,
   renameFileCurrentName: null,
+  workspaceTransfer: null,
   workspaceFilter: {
     open: false,
     workspacePath: null,

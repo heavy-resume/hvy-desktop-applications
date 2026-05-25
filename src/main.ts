@@ -8,6 +8,7 @@ import {
   createDocumentBackup,
   createDocumentFile,
   createWorkspace,
+  copyDocumentToWorkspace,
   initializeWorkspacePath,
   isTauriRuntime,
   installMcpClient,
@@ -34,10 +35,12 @@ import {
   restoreDocumentBackup,
   saveMcpSettings,
   saveAiSettings,
+  saveDocumentToWorkspace,
   saveColorThemeAsDialog,
   saveDocumentAsDialog,
   saveDocumentFile,
   saveDocumentTemplate,
+  moveDocumentToWorkspace,
   startMcpServer,
   stopMcpServer,
   type AddFilesResult,
@@ -674,6 +677,12 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  copyFileToWorkspace: (path, currentName) => {
+    openWorkspaceTransfer('copyFile', currentName, path, workspacePathForFile(path));
+  },
+  moveFileToWorkspace: (path, currentName) => {
+    openWorkspaceTransfer('moveFile', currentName, path, workspacePathForFile(path));
+  },
   submitRenameFile: (name) => {
     const path = state.renameFilePath;
     const currentName = state.renameFileCurrentName;
@@ -730,6 +739,41 @@ const handlers: UiHandlers = {
   cancelRenameFile: () => {
     state.renameFilePath = null;
     state.renameFileCurrentName = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  saveCurrentToWorkspace: () => {
+    if (!currentDocumentCanSaveToWorkspace()) return;
+    openWorkspaceTransfer('saveCurrent', state.document!.name, null, null);
+  },
+  submitWorkspaceTransfer: (workspacePath, name) => {
+    if (!workspacePath || !state.workspaceTransfer) return;
+    const transfer = state.workspaceTransfer;
+    if (transfer.mode === 'saveCurrent' && !name.trim()) {
+      state.status = 'Document name is required';
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    transfer.nameDraft = name.trim();
+    state.workspaceTransfer = null;
+    void runBusy(`${workspaceTransferBusyLabel(transfer.mode)}...`, async () => {
+      if (transfer.mode === 'saveCurrent') {
+        await saveCurrentDocumentToWorkspace(workspacePath, transfer.nameDraft);
+        return;
+      }
+      if (!transfer.sourcePath) return;
+      if (transfer.mode === 'copyFile') {
+        const file = await copyDocumentToWorkspace({ path: transfer.sourcePath, workspacePath });
+        upsertWorkspace(await loadWorkspace(workspacePath));
+        state.status = `Copied to ${file.name}`;
+        await refreshRecents();
+        return;
+      }
+      await moveOpenWorkspaceFileToWorkspace(transfer.sourcePath, workspacePath);
+    });
+  },
+  cancelWorkspaceTransfer: () => {
+    state.workspaceTransfer = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -864,6 +908,7 @@ async function boot(): Promise<void> {
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
+      if (event === 'save-to-workspace') handlers.saveCurrentToWorkspace();
       if (event === 'import-current') handlers.openImportIntoCurrent();
       if (event === 'export-document') handlers.openSaveTemplate();
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
@@ -1511,6 +1556,83 @@ async function refreshOpenWorkspaceForFile(filePath: string): Promise<void> {
   const workspace = state.workspaces.find((candidate) => filePath.startsWith(candidate.path));
   if (!workspace) return;
   upsertWorkspace(await loadWorkspace(workspace.path));
+}
+
+function currentDocumentCanSaveToWorkspace(): boolean {
+  return Boolean(state.document && !state.document.readOnly && state.workspaces.length > 0 && !workspacePathForFile(state.document.path));
+}
+
+function openWorkspaceTransfer(
+  mode: NonNullable<typeof state.workspaceTransfer>['mode'],
+  fileName: string,
+  sourcePath: string | null,
+  excludedWorkspacePath: string | null,
+): void {
+  const availableWorkspaces = state.workspaces.filter((workspace) => workspace.path !== excludedWorkspacePath);
+  if (availableWorkspaces.length === 0) return;
+  state.workspaceTransfer = {
+    mode,
+    sourcePath,
+    fileName,
+    nameDraft: displayDocumentName(fileName),
+    excludedWorkspacePath,
+  };
+  state.status = 'Ready';
+  rerender({ preserveMountedDocument: true });
+}
+
+function workspaceTransferBusyLabel(mode: NonNullable<typeof state.workspaceTransfer>['mode']): string {
+  if (mode === 'saveCurrent') return 'Saving to workspace';
+  if (mode === 'copyFile') return 'Copying file';
+  return 'Moving file';
+}
+
+async function saveCurrentDocumentToWorkspace(workspacePath: string, name: string): Promise<void> {
+  if (!state.document?.mounted) return;
+  const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const file = await saveDocumentToWorkspace({
+    workspacePath,
+    name,
+    bytes,
+  });
+  await openDocument(file, { deferMount: true });
+  upsertWorkspace(await loadWorkspace(workspacePath));
+  await refreshRecents();
+  state.status = `Saved to ${file.name}`;
+}
+
+async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string): Promise<void> {
+  const sourceWorkspacePath = workspacePathForFile(path);
+  const currentDocument = state.document?.path === path ? state.document : null;
+  const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
+  const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
+  const file = await moveDocumentToWorkspace({ path, workspacePath });
+  documentSessions.delete(path);
+  if (state.selectedFilePath === path) {
+    state.selectedFilePath = file.path;
+  }
+  state.selectedWorkspacePath = workspacePath;
+  if (currentDocument) {
+    currentDocument.path = file.path;
+    currentDocument.name = file.name;
+    currentDocument.extension = file.extension;
+    if (mountedDocument) {
+      updateCurrentDocumentSession(mountedDocument);
+    }
+    if (oldBackupKey) {
+      const backup = backupSnapshots.get(oldBackupKey);
+      if (backup) {
+        backupSnapshots.delete(oldBackupKey);
+        backupSnapshots.set(backupDocumentKey(file.path, file.name), backup);
+      }
+    }
+  }
+  if (sourceWorkspacePath) {
+    upsertWorkspace(await loadWorkspace(sourceWorkspacePath));
+  }
+  upsertWorkspace(await loadWorkspace(workspacePath));
+  await refreshRecents();
+  state.status = `Moved to ${file.name}`;
 }
 
 async function finishAddingFilesToWorkspace(result: AddFilesResult, status: string): Promise<void> {

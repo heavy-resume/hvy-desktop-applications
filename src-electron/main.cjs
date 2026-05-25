@@ -110,6 +110,7 @@ function buildMenu() {
         { type: 'separator' },
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
+        menuItem('Save to Workspace...', 'save-to-workspace'),
         menuItem('Export...', 'export-document'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
@@ -245,6 +246,9 @@ async function handleCommand(command, args) {
     case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template);
     case 'reveal_document_file': return revealDocumentFile(args.path);
     case 'rename_document_file': return renameDocumentFile(args.path, args.name);
+    case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes);
+    case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath);
+    case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath);
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
@@ -568,6 +572,41 @@ function renameDocumentFile(filePath, name) {
   return readDocumentAt(destination);
 }
 
+function saveDocumentToWorkspace(workspacePath, name, bytes) {
+  ensureWorkspace(workspacePath);
+  const fileName = ensureDocumentFileName(name);
+  const destination = uniqueCopyPath(workspacePath, fileName);
+  writeBytes(destination, bytes);
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  addRecentFile(destination);
+  return readDocumentAt(destination);
+}
+
+function copyDocumentToWorkspace(filePath, workspacePath) {
+  ensureWorkspace(workspacePath);
+  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, and .md documents can be copied.');
+  const destination = uniqueCopyPath(workspacePath, path.basename(filePath));
+  fs.copyFileSync(filePath, destination);
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  addRecentFile(destination);
+  return readDocumentAt(destination);
+}
+
+function moveDocumentToWorkspace(filePath, workspacePath) {
+  ensureWorkspace(workspacePath);
+  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, and .md documents can be moved.');
+  const sourceWorkspacePath = workspaceRootForDocument(path.dirname(filePath));
+  const destination = uniqueCopyPath(workspacePath, path.basename(filePath));
+  fs.renameSync(filePath, destination);
+  if (sourceWorkspacePath) touchWorkspaceManifest(sourceWorkspacePath);
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  addRecentFile(destination);
+  return readDocumentAt(destination);
+}
+
 function createDocumentBackup(request) {
   if (!documentExtension(request.name)) throw new Error('Backup document name must end in .hvy, .thvy, or .md.');
   fs.mkdirSync(backupsDir(), { recursive: true });
@@ -738,6 +777,11 @@ function writeBytes(filePath, bytes) {
 function documentExtension(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   return DOCUMENT_EXTENSIONS.has(extension) ? extension : null;
+}
+
+function ensureDocumentFileName(name) {
+  const base = safeFileStem(name || 'Untitled');
+  return DOCUMENT_EXTENSIONS.has(path.extname(base).toLowerCase()) ? base : `${base}.hvy`;
 }
 
 function uniqueManagedWorkspacePath(name) {

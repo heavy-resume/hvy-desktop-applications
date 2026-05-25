@@ -122,6 +122,17 @@ export interface RenameDocumentRequest {
   name: string;
 }
 
+export interface WorkspaceDocumentRequest {
+  workspacePath: string;
+  name: string;
+  bytes: number[];
+}
+
+export interface WorkspaceDocumentMoveRequest {
+  path: string;
+  workspacePath: string;
+}
+
 export interface DocumentBackupRequest {
   documentPath: string;
   name: string;
@@ -486,6 +497,22 @@ export function revealDocumentFile(path: string): Promise<void> {
 
 export function renameDocumentFile(request: RenameDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('rename_document_file', { path: request.path, name: request.name });
+}
+
+export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFile> {
+  return invokeDesktop('save_document_to_workspace', {
+    workspacePath: request.workspacePath,
+    name: request.name,
+    bytes: request.bytes,
+  });
+}
+
+export function copyDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
+  return invokeDesktop('copy_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
+}
+
+export function moveDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
+  return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
 }
 
 export function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {
