@@ -3,7 +3,6 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 const WORKSPACE_MANIFEST = '.hvyworkspace.json';
 const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
@@ -207,7 +206,6 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
 
 async function handleCommand(command, args) {
   switch (command) {
-    case 'load_app_environment': return loadAppEnvironment();
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
     case 'load_ai_settings': return readJson(dataPath(AI_SETTINGS), defaultAiSettings());
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
@@ -324,31 +322,6 @@ function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
   return value;
-}
-
-function loadAppEnvironment() {
-  const version = macosVersion();
-  return {
-    platform: process.platform,
-    arch: process.arch,
-    macosMajor: version?.major ?? null,
-    macosMinor: version?.minor ?? null,
-    macosPatch: version?.patch ?? null,
-    legacyWebview: false,
-    forcedCompatibilityMode: false,
-    compatibilityMode: false,
-  };
-}
-
-function macosVersion() {
-  if (process.platform !== 'darwin') return null;
-  try {
-    const value = execFileSync('sw_vers', ['-productVersion'], { encoding: 'utf8' }).trim();
-    const [major, minor = '0', patch = '0'] = value.split('.').map((part) => Number.parseInt(part, 10));
-    return { major, minor, patch };
-  } catch {
-    return null;
-  }
 }
 
 async function openWorkspaceDialog() {
