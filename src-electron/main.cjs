@@ -286,6 +286,7 @@ async function handleCommand(command, args) {
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
+    case 'discard_document_backup': return discardDocumentBackup(args.id);
     case 'clear_document_recovery_drafts': return clearDocumentRecoveryDrafts(args.request);
     case 'open_external_url': return openExternalUrl(args.url);
     default: throw new Error(`Unknown Electron command: ${command}`);
@@ -816,6 +817,14 @@ function restoreDocumentBackup(id) {
     bytes: snapshot.bytes,
     recoveryState: snapshot.recoveryState ?? null,
   };
+}
+
+function discardDocumentBackup(id) {
+  const backupPath = path.join(backupsDir(), `${id}.json`);
+  if (fs.existsSync(backupPath)) {
+    fs.unlinkSync(backupPath);
+  }
+  return null;
 }
 
 function documentBackupMatchesSavedFile(snapshot) {

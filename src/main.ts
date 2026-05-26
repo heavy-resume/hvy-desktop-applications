@@ -10,6 +10,7 @@ import {
   createDocumentBackup,
   createDocumentFile,
   createWorkspace,
+  discardDocumentBackup,
   copyDocumentToWorkspace,
   initializeWorkspacePath,
   isTauriRuntime,
@@ -50,6 +51,7 @@ import {
   stopMcpServer,
   unarchiveWorkspace,
   type AddFilesResult,
+  type DocumentBackup,
   type DocumentFile,
   type DroppedWorkspaceFile,
   type ImportSourceFile,
@@ -699,6 +701,16 @@ const handlers: UiHandlers = {
     state.recoveryBackups = [];
     await openDocument(file, { recovered: true, deferMount: true });
   }),
+  discardBackup: (id) => void runBusy('Discarding recovery draft...', async () => {
+    const backup = state.recoveryBackups.find((candidate) => candidate.id === id);
+    await discardDocumentBackup(id);
+    if (backup) {
+      await discardRecoveryStateForBackup(backup);
+    }
+    state.recoveryBackups = state.recoveryBackups.filter((candidate) => candidate.id !== id);
+    state.status = state.recoveryBackups.length > 0 ? 'Discarded recovery draft' : 'No recoverable edits available';
+    rerender({ preserveMountedDocument: true });
+  }, { preserveMountedDocument: true }),
   cancelRecovery: () => {
     state.recoveryDialogOpen = false;
     state.status = 'Ready';
@@ -1724,6 +1736,44 @@ async function clearRecoveryDraftsForDocument(documentPath: string, name: string
     await clearDocumentRecoveryDrafts({ documentPath, name });
   } catch {
     // Recovery drafts are best-effort cleanup after an explicit save or discard.
+  }
+}
+
+async function discardRecoveryStateForBackup(backup: DocumentBackup): Promise<void> {
+  const key = backupDocumentKey(backup.documentPath, backup.name);
+  backupSnapshots.delete(key);
+  if (backup.documentPath) {
+    documentSessions.delete(backup.documentPath);
+    workspaceFilterDocumentCache.delete(backup.documentPath);
+  }
+  if (!state.document || state.document.path !== backup.documentPath || state.document.name !== backup.name) {
+    return;
+  }
+  if (!state.document.path) {
+    state.document.dirty = false;
+    state.document.isNew = false;
+    pendingMountDocument = null;
+    pendingMountRecoveryState = null;
+    return;
+  }
+  const file = await readDocumentFile(state.document.path);
+  const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
+  const wasMounted = Boolean(state.document.mounted);
+  state.document = {
+    ...state.document,
+    name: file.name,
+    extension: file.extension,
+    dirty: false,
+    isNew: false,
+    mounted: null,
+  };
+  pendingMountRecoveryState = null;
+  if (wasMounted) {
+    rerender();
+    await mountCurrentDocument(document);
+  } else {
+    pendingMountDocument = document;
+    updateDirtyChrome();
   }
 }
 

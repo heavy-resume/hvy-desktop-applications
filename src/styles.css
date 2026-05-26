@@ -1840,10 +1840,15 @@ button:disabled {
   padding: 10px;
 }
 
-.recovery-item > div {
+.recovery-item > div:not(.recovery-item-actions) {
   display: grid;
   min-width: 0;
   gap: 3px;
+}
+
+.recovery-item-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .recovery-item strong,

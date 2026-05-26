@@ -578,6 +578,13 @@ export function restoreDocumentBackup(id: string): Promise<DocumentFile> {
   return invokeDesktop('restore_document_backup', { id });
 }
 
+export function discardDocumentBackup(id: string): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('discard_document_backup', { id });
+}
+
 export function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraftRequest): Promise<void> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve();

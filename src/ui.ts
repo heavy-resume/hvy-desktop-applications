@@ -69,6 +69,7 @@ export interface UiHandlers {
   resetColorTheme(name: string): void;
   applyColorThemePalette(id: string | null): void;
   restoreBackup(id: string): void;
+  discardBackup(id: string): void;
   cancelRecovery(): void;
   confirmCloseDocument(): void;
   cancelCloseDocument(): void;
@@ -356,6 +357,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
+    if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
@@ -724,6 +726,7 @@ function applyWorkspaceSidebarWidth(root: HTMLElement): void {
 function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState, handlers: UiHandlers): boolean {
   const key = event.key.toLowerCase();
   if (key !== 'c' && key !== 'x' && key !== 'v') return false;
+  if ((key === 'c' || key === 'x') && hasActiveTextSelection()) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
   if (target && (target.closest('#hvyMount') || isTextEditingTarget(target))) return false;
   const selectedFile = state.selectedFilePath ? findWorkspaceFileByPath(state.workspaces, state.selectedFilePath) : null;
@@ -741,6 +744,11 @@ function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState,
     return true;
   }
   return false;
+}
+
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
 }
 
 function isTextEditingTarget(target: HTMLElement): boolean {
@@ -1960,7 +1968,10 @@ function renderRecoveryDialog(state: AppState): string {
                       <span>${escapeHtml(formatBackupTimestamp(backup.createdAt))}</span>
                       ${backup.documentPath ? `<small>${escapeHtml(backup.documentPath)}</small>` : '<small>Unsaved document</small>'}
                     </div>
-                    <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
+                    <div class="recovery-item-actions">
+                      <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
+                      <button type="button" class="danger-button" data-action="discard-backup" data-backup-id="${escapeAttr(backup.id)}">Discard</button>
+                    </div>
                   </article>
                 `).join('')}
               </div>`

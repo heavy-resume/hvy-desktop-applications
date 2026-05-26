@@ -1415,6 +1415,15 @@ fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile
 }
 
 #[tauri::command]
+fn discard_document_backup(app: AppHandle, id: String) -> AppResult<()> {
+    let path = document_backup_path(&app, &id)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraftRequest) -> AppResult<()> {
     let directory = document_backups_dir(&app)?;
     if !directory.exists() {
@@ -1552,6 +1561,7 @@ pub fn run() {
             create_document_backup,
             list_document_backups,
             restore_document_backup,
+            discard_document_backup,
             clear_document_recovery_drafts,
             open_external_url
         ])
