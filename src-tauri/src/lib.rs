@@ -1232,6 +1232,12 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let source_workspace = workspace_root_for_document(source_parent);
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
+    if fs::canonicalize(source_parent)? == fs::canonicalize(&workspace_path)? {
+        touch_workspace_manifest(&workspace_path)?;
+        add_recent_workspace(&app, &workspace_path)?;
+        add_recent_file(&app, &path)?;
+        return read_document_at(&path);
+    }
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;

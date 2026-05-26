@@ -53,6 +53,7 @@ export interface AppState {
   recoveryDialogOpen: boolean;
   closeDocumentDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
+  workspaceClipboard: WorkspaceClipboardState | null;
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
   workspaceTransfer: WorkspaceTransferState | null;
@@ -85,6 +86,12 @@ export interface WorkspaceTransferState {
   fileName: string;
   nameDraft: string;
   excludedWorkspacePath: string | null;
+}
+
+export interface WorkspaceClipboardState {
+  mode: 'copy' | 'cut';
+  path: string;
+  name: string;
 }
 
 export const state: AppState = {
@@ -125,6 +132,7 @@ export const state: AppState = {
   recoveryDialogOpen: false,
   closeDocumentDialogOpen: false,
   recoveryBackups: [],
+  workspaceClipboard: null,
   renameFilePath: null,
   renameFileCurrentName: null,
   workspaceTransfer: null,

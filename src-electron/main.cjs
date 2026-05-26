@@ -644,6 +644,12 @@ function moveDocumentToWorkspace(filePath, workspacePath) {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, and .md documents can be moved.');
   const sourceWorkspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (path.resolve(path.dirname(filePath)) === path.resolve(workspacePath)) {
+    touchWorkspaceManifest(workspacePath);
+    addRecentWorkspace(workspacePath);
+    addRecentFile(filePath);
+    return readDocumentAt(filePath);
+  }
   const destination = uniqueCopyPath(workspacePath, path.basename(filePath));
   fs.renameSync(filePath, destination);
   if (sourceWorkspacePath) touchWorkspaceManifest(sourceWorkspacePath);

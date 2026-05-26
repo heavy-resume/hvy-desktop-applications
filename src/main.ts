@@ -760,6 +760,32 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  copyWorkspaceFile: (path, currentName) => {
+    state.workspaceClipboard = { mode: 'copy', path, name: currentName };
+    state.status = `Copied ${currentName}`;
+    rerender({ preserveMountedDocument: true });
+  },
+  cutWorkspaceFile: (path, currentName) => {
+    state.workspaceClipboard = { mode: 'cut', path, name: currentName };
+    state.status = `Cut ${currentName}`;
+    rerender({ preserveMountedDocument: true });
+  },
+  pasteWorkspaceClipboard: (workspacePath) => {
+    const clipboard = state.workspaceClipboard;
+    if (!clipboard) return;
+    void runBusy(`${clipboard.mode === 'cut' ? 'Moving' : 'Copying'} file...`, async () => {
+      if (clipboard.mode === 'copy') {
+        const file = await copyDocumentToWorkspace({ path: clipboard.path, workspacePath });
+        upsertWorkspace(await loadWorkspace(workspacePath));
+        state.selectedWorkspacePath = workspacePath;
+        state.status = `Pasted ${file.name}`;
+        await refreshRecents();
+        return;
+      }
+      await moveOpenWorkspaceFileToWorkspace(clipboard.path, workspacePath);
+      state.workspaceClipboard = null;
+    });
+  },
   copyFileToWorkspace: (path, currentName) => {
     openWorkspaceTransfer('copyFile', currentName, path, workspacePathForFile(path));
   },

@@ -2,7 +2,7 @@ import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type McpClientInstallTarget, type McpSettings, type TemplateScope, type Workspace, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import type { HvyMode } from './hvy';
-import type { AppState, WorkspaceFilterState } from './state';
+import type { AppState, WorkspaceClipboardState, WorkspaceFilterState } from './state';
 import { mergeSavedTemplates } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 import ufoLogoUrl from './assets/ufo-no-bg.svg';
@@ -80,6 +80,9 @@ export interface UiHandlers {
   refreshWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
+  copyWorkspaceFile(path: string, currentName: string): void;
+  cutWorkspaceFile(path: string, currentName: string): void;
+  pasteWorkspaceClipboard(workspacePath: string): void;
   copyFileToWorkspace(path: string, currentName: string): void;
   moveFileToWorkspace(path: string, currentName: string): void;
   submitRenameFile(name: string): void;
@@ -452,9 +455,20 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const fileButton = target?.closest<HTMLButtonElement>('.tree-file');
     const path = fileButton?.dataset.path;
     const name = fileButton?.dataset.name;
-    if (!fileButton || !path || !name) return;
+    if (fileButton && path && name) {
+      const workspacePath = workspacePathForTreeTarget(fileButton, state);
+      if (!workspacePath) return;
+      event.preventDefault();
+      showFileContextMenu(event, path, name, workspacePath, state.workspaceClipboard, handlers, state.workspaces.length > 1);
+      return;
+    }
+    const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
+    const workspacePath = workspaceSummary?.parentElement instanceof HTMLDetailsElement
+      ? workspaceSummary.parentElement.dataset.workspacePath
+      : null;
+    if (!workspaceSummary || !workspacePath) return;
     event.preventDefault();
-    showFileContextMenu(event, path, name, handlers, state.workspaces.length > 1);
+    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers);
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
@@ -540,6 +554,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
   }, { signal });
   document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && handleWorkspaceClipboardShortcut(event, state, handlers)) {
+      return;
+    }
     if (event.key !== 'Escape') return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (root.querySelector('.about-dialog')) {
@@ -611,6 +628,63 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     updateImportSubmit(form);
   });
   root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
+}
+
+function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState, handlers: UiHandlers): boolean {
+  const key = event.key.toLowerCase();
+  if (key !== 'c' && key !== 'x' && key !== 'v') return false;
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (target && (target.closest('#hvyMount') || isTextEditingTarget(target))) return false;
+  const selectedFile = state.selectedFilePath ? findWorkspaceFileByPath(state.workspaces, state.selectedFilePath) : null;
+  if ((key === 'c' || key === 'x') && selectedFile) {
+    event.preventDefault();
+    if (key === 'c') handlers.copyWorkspaceFile(selectedFile.path, selectedFile.name);
+    else handlers.cutWorkspaceFile(selectedFile.path, selectedFile.name);
+    return true;
+  }
+  if (key === 'v' && state.workspaceClipboard) {
+    const workspacePath = selectedFile ? workspacePathForFileNode(state.workspaces, selectedFile.path) : state.selectedWorkspacePath;
+    if (!workspacePath) return false;
+    event.preventDefault();
+    handlers.pasteWorkspaceClipboard(workspacePath);
+    return true;
+  }
+  return false;
+}
+
+function isTextEditingTarget(target: HTMLElement): boolean {
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable;
+}
+
+function workspacePathForTreeTarget(target: HTMLElement, state: AppState): string | null {
+  return target.closest<HTMLElement>('.workspace-root')?.dataset.workspacePath
+    ?? workspacePathForFileNode(state.workspaces, target.dataset.path ?? '');
+}
+
+function workspacePathForFileNode(workspaces: AppState['workspaces'], filePath: string): string | null {
+  return workspaces.find((workspace) => filePath.startsWith(workspace.path))?.path ?? null;
+}
+
+function findWorkspaceFileByPath(workspaces: AppState['workspaces'], filePath: string): { path: string; name: string } | null {
+  for (const workspace of workspaces) {
+    const node = findWorkspaceFileNode(workspace.files, filePath);
+    if (node) return node;
+  }
+  return null;
+}
+
+function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { path: string; name: string } | null {
+  for (const node of nodes) {
+    if (node.kind === 'file' && node.path === filePath) return { path: node.path, name: node.name };
+    if (node.kind === 'folder') {
+      const match = findWorkspaceFileNode(node.children, filePath);
+      if (match) return match;
+    }
+  }
+  return null;
 }
 
 function workspaceRootFromEvent(event: Event): HTMLElement | null {
@@ -768,7 +842,15 @@ function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: stri
     >${escapeHtml(label)}</button>`;
 }
 
-function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers, showWorkspaceActions: boolean): void {
+function showFileContextMenu(
+  event: MouseEvent,
+  path: string,
+  name: string,
+  workspacePath: string,
+  clipboard: WorkspaceClipboardState | null,
+  handlers: UiHandlers,
+  showWorkspaceActions: boolean,
+): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
   menu.className = 'file-context-menu';
@@ -777,6 +859,9 @@ function showFileContextMenu(event: MouseEvent, path: string, name: string, hand
   menu.innerHTML = `
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button type="button" data-menu-action="rename">Rename</button>
+    <button type="button" data-menu-action="copy">Copy</button>
+    <button type="button" data-menu-action="cut">Cut</button>
+    <button type="button" data-menu-action="paste" ${clipboard ? '' : 'disabled'}>Paste</button>
     ${showWorkspaceActions ? '<button type="button" data-menu-action="copy-to-workspace">Copy to...</button><button type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   `;
   const cleanup = () => {
@@ -797,8 +882,54 @@ function showFileContextMenu(event: MouseEvent, path: string, name: string, hand
     cleanup();
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
+    if (button.dataset.menuAction === 'copy') handlers.copyWorkspaceFile(path, name);
+    if (button.dataset.menuAction === 'cut') handlers.cutWorkspaceFile(path, name);
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
     if (button.dataset.menuAction === 'copy-to-workspace') handlers.copyFileToWorkspace(path, name);
     if (button.dataset.menuAction === 'move-to-workspace') handlers.moveFileToWorkspace(path, name);
+  });
+  document.body.append(menu);
+  activeFileContextMenuCleanup = cleanup;
+  requestAnimationFrame(() => {
+    const rect = menu.getBoundingClientRect();
+    const left = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+    const top = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+  });
+}
+
+function showWorkspaceContextMenu(
+  event: MouseEvent,
+  workspacePath: string,
+  clipboard: WorkspaceClipboardState | null,
+  handlers: UiHandlers,
+): void {
+  closeFileContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'file-context-menu';
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  menu.innerHTML = `<button type="button" data-menu-action="paste" ${clipboard ? '' : 'disabled'}>Paste</button>`;
+  const cleanup = () => {
+    menu.remove();
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    if (activeFileContextMenuCleanup === cleanup) activeFileContextMenuCleanup = null;
+  };
+  const onPointerDown = (pointerEvent: PointerEvent) => {
+    if (!menu.contains(pointerEvent.target as Node)) cleanup();
+  };
+  const onKeyDown = (keyEvent: KeyboardEvent) => {
+    if (keyEvent.key === 'Escape') cleanup();
+  };
+  menu.addEventListener('click', (clickEvent) => {
+    const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
+    if (!button || button.disabled) return;
+    cleanup();
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
