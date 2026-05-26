@@ -19,6 +19,7 @@ const APP_IDENTIFIER = 'com.heavyresume.hvy-galaxy';
 const APP_NAME = 'HVY Galaxy';
 
 let mainWindow = null;
+let appCloseAllowed = false;
 let mcpStatus = {
   running: false,
   url: null,
@@ -37,12 +38,14 @@ app.setPath('userData', electronProfileDir());
 
 app.whenReady().then(async () => {
   mainWindow = createWindow();
+  bindWindowShortcuts(mainWindow);
   buildMenu();
   await loadRenderer(mainWindow);
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
+      bindWindowShortcuts(mainWindow);
       buildMenu();
       await loadRenderer(mainWindow);
     }
@@ -56,7 +59,7 @@ app.on('window-all-closed', () => {
 });
 
 function createWindow() {
-  return new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 920,
@@ -71,6 +74,35 @@ function createWindow() {
       sandbox: false,
     },
   });
+  window.on('close', (event) => {
+    if (appCloseAllowed) return;
+    event.preventDefault();
+    window.webContents.send('hvy:app-close-requested');
+  });
+  return window;
+}
+
+function bindWindowShortcuts(window) {
+  window.webContents.on('before-input-event', (event, input) => {
+    const command = shortcutCommand(input);
+    if (!command) return;
+    event.preventDefault();
+    emitMenu(command);
+  });
+}
+
+function shortcutCommand(input) {
+  if (!input.control && !input.meta) return null;
+  if (input.alt || input.isAutoRepeat) return null;
+  const key = String(input.key ?? '').toLowerCase();
+  if (key === 's' && !input.shift) return 'save';
+  if (key === 's' && input.shift) return 'save-as';
+  if (key === 'w' && !input.shift) return 'close-document';
+  if (key === 'n' && !input.shift) return 'new-workspace';
+  if (key === 'o' && !input.shift) return 'open-workspace';
+  if (key === 'o' && input.shift) return 'open-file';
+  if (key === ',' && !input.shift) return 'ai-settings';
+  return null;
 }
 
 async function loadRenderer(window) {
@@ -94,10 +126,6 @@ function buildMenu() {
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
-        { role: 'hide', label: `Hide ${APP_NAME}` },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
         { role: 'quit', label: `Quit ${APP_NAME}` },
       ],
     }] : []),
@@ -111,6 +139,8 @@ function buildMenu() {
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
+        ...(process.platform === 'darwin' ? [] : [menuItem('AI Settings...', 'ai-settings', 'CmdOrCtrl+,')]),
+        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }]),
         menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
@@ -167,6 +197,7 @@ function buildMenu() {
       label: 'Help',
       submenu: [
         menuItem('HVY Guide', 'open-guide', 'F1'),
+        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem(`About ${APP_NAME}`, 'about')]),
       ],
     },
   ];
@@ -262,10 +293,22 @@ async function handleCommand(command, args) {
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
+    case 'discard_document_backup': return discardDocumentBackup(args.id);
     case 'clear_document_recovery_drafts': return clearDocumentRecoveryDrafts(args.request);
     case 'open_external_url': return openExternalUrl(args.url);
+    case 'close_app_window': return closeAppWindow();
     default: throw new Error(`Unknown Electron command: ${command}`);
   }
+}
+
+function closeAppWindow() {
+  appCloseAllowed = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+    return null;
+  }
+  app.quit();
+  return null;
 }
 
 function dataPath(fileName) {
@@ -323,7 +366,9 @@ function iconPath(fileName) {
 }
 
 function appIconFileName() {
-  return process.platform === 'darwin' ? 'icon.icns' : 'icon.png';
+  if (process.platform === 'darwin') return 'icon.icns';
+  if (process.platform === 'win32') return 'icon.ico';
+  return 'icon.png';
 }
 
 function readJson(filePath, fallback) {
@@ -792,6 +837,14 @@ function restoreDocumentBackup(id) {
   };
 }
 
+function discardDocumentBackup(id) {
+  const backupPath = path.join(backupsDir(), `${id}.json`);
+  if (fs.existsSync(backupPath)) {
+    fs.unlinkSync(backupPath);
+  }
+  return null;
+}
+
 function documentBackupMatchesSavedFile(snapshot) {
   if (!snapshot.documentPath || !fs.existsSync(snapshot.documentPath)) return false;
   const savedAt = fs.statSync(snapshot.documentPath).mtimeMs;
@@ -1162,7 +1215,7 @@ function mcpClientInstallStatuses() {
 function installMcpClient(target) {
   const launch = defaultMcpStdioLaunchConfig();
   const configPath = mcpTargetConfigPath(target);
-  if (!fs.existsSync(configPath)) {
+  if (!fs.existsSync(configPath) && !(target === 'claude' && claudeConfigCanBeCreated(configPath))) {
     throw new Error(`${configPath} was not found.`);
   }
   if (target === 'codex') {
@@ -1170,8 +1223,10 @@ function installMcpClient(target) {
     backupFileBeforeOverwrite(configPath);
     writeText(configPath, upsertCodexMcpBlock(current, launch));
   } else if (target === 'claude') {
-    const current = fs.readFileSync(configPath, 'utf8');
-    backupFileBeforeOverwrite(configPath);
+    const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
+    if (fs.existsSync(configPath)) {
+      backupFileBeforeOverwrite(configPath);
+    }
     writeText(configPath, upsertClaudeMcpConfig(current, launch));
   } else {
     throw new Error(`Unknown MCP client target: ${target}`);
@@ -1214,7 +1269,7 @@ function restoreMcpClientBackup(target) {
 }
 
 function mcpClientInstallStatus(target, label, configPath, launch, isInstalled) {
-  const configExists = fs.existsSync(configPath);
+  const configExists = fs.existsSync(configPath) || (target === 'claude' && claudeConfigCanBeCreated(configPath));
   const executableExists = fs.existsSync(launch.command);
   const installed = configExists && isInstalled(configPath, launch);
   const backups = mcpClientBackupPaths(configPath);
@@ -1262,7 +1317,47 @@ function codexConfigPath() {
 }
 
 function claudeConfigPath() {
+  if (process.platform === 'win32') {
+    const packagedConfigDir = packagedClaudeConfigDir();
+    if (packagedConfigDir) {
+      return path.join(packagedConfigDir, 'claude_desktop_config.json');
+    }
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Claude', 'claude_desktop_config.json');
+  }
   return path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+}
+
+function claudeConfigCanBeCreated(configPath) {
+  if (fs.existsSync(path.dirname(configPath))) {
+    return true;
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return Boolean(packagedClaudeConfigDir()) || fs.existsSync(path.join(localAppData, 'Claude'));
+  }
+  return false;
+}
+
+function packagedClaudeConfigDir() {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const packagesDir = path.join(localAppData, 'Packages');
+  if (!fs.existsSync(packagesDir)) {
+    return null;
+  }
+  for (const entry of fs.readdirSync(packagesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('Claude_')) {
+      continue;
+    }
+    const configDir = path.join(packagesDir, entry.name, 'LocalCache', 'Roaming', 'Claude');
+    if (fs.existsSync(configDir)) {
+      return configDir;
+    }
+  }
+  return null;
 }
 
 function codexConfigHasHvyMcp(configPath, launch) {

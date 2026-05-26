@@ -69,9 +69,13 @@ export interface UiHandlers {
   resetColorTheme(name: string): void;
   applyColorThemePalette(id: string | null): void;
   restoreBackup(id: string): void;
+  discardBackup(id: string): void;
   cancelRecovery(): void;
   confirmCloseDocument(): void;
   cancelCloseDocument(): void;
+  saveAndCloseApp(): void;
+  closeAppWithoutSaving(): void;
+  cancelAppClose(): void;
   openWorkspace(): void;
   openFile(): void;
   openRecentWorkspace(path: string): void;
@@ -111,7 +115,10 @@ if (!app) {
 const appRoot = app;
 let bindController: AbortController | null = null;
 let activeFileContextMenuCleanup: (() => void) | null = null;
+let workspaceSidebarWidth = 320;
 const MIN_PASTED_IMPORT_CHARS = 50;
+const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
+const MAX_WORKSPACE_SIDEBAR_WIDTH = 560;
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   appRoot.innerHTML = `
@@ -135,6 +142,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
           </div>
           ${renderWorkspaces(state)}
         </section>
+        <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>
       </aside>
       <section class="document-shell">
         <header class="document-toolbar">
@@ -159,10 +167,12 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
       ${renderCloseDocumentDialog(state)}
+      ${renderAppCloseDialog(state)}
       ${renderRenameFileDialog(state)}
       ${renderWorkspaceTransferDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
+  applyWorkspaceSidebarWidth(appRoot);
 
   const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
   if (options.preserveMount && state.document) {
@@ -176,6 +186,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindController?.abort();
   bindController = new AbortController();
   const { signal } = bindController;
+  bindWorkspaceSidebarResize(root, signal);
+  document.addEventListener('keydown', (event) => {
+    handleApplicationShortcut(event, root, handlers);
+  }, { signal, capture: true });
   root.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) {
@@ -204,6 +218,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.close-document-dialog')) {
           handlers.cancelCloseDocument();
+          return;
+        }
+        if (backdrop.querySelector('.app-close-dialog')) {
+          handlers.cancelAppClose();
           return;
         }
         if (backdrop.querySelector('form[data-form="rename-file"]')) {
@@ -347,6 +365,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
+    if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
@@ -359,6 +378,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'close-document') handlers.closeDocument();
     if (action === 'confirm-close-document') handlers.confirmCloseDocument();
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
+    if (action === 'save-and-close-app') handlers.saveAndCloseApp();
+    if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
+    if (action === 'cancel-app-close') handlers.cancelAppClose();
     if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
     if (action === 'choose-import-source') handlers.chooseImportSource();
@@ -601,6 +623,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.cancelCloseDocument();
       return;
     }
+    if (root.querySelector('.app-close-dialog')) {
+      event.preventDefault();
+      handlers.cancelAppClose();
+      return;
+    }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
       event.preventDefault();
       handlers.cancelImport();
@@ -630,9 +657,92 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
 }
 
+function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
+  if (event.isComposing || event.altKey || event.defaultPrevented) return false;
+  if (root.querySelector('.modal-backdrop')) return false;
+
+  const key = event.key.toLowerCase();
+  const meta = event.metaKey || event.ctrlKey;
+  if (!meta) return false;
+
+  if (!event.shiftKey && key === 's') {
+    event.preventDefault();
+    handlers.save();
+    return true;
+  }
+  if (event.shiftKey && key === 's') {
+    event.preventDefault();
+    handlers.saveAs();
+    return true;
+  }
+  if (!event.shiftKey && key === 'w') {
+    event.preventDefault();
+    handlers.closeDocument();
+    return true;
+  }
+  if (!event.shiftKey && key === 'n') {
+    event.preventDefault();
+    handlers.newWorkspace();
+    return true;
+  }
+  if (!event.shiftKey && key === 'o') {
+    event.preventDefault();
+    handlers.openWorkspace();
+    return true;
+  }
+  if (event.shiftKey && key === 'o') {
+    event.preventDefault();
+    handlers.openFile();
+    return true;
+  }
+  if (!event.shiftKey && key === ',') {
+    event.preventDefault();
+    handlers.openAiSettings();
+    return true;
+  }
+  return false;
+}
+
+function bindWorkspaceSidebarResize(root: HTMLElement, signal: AbortSignal): void {
+  root.querySelector<HTMLElement>('.workspace-sidebar-resizer')?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    const shell = root.querySelector<HTMLElement>('.app-shell');
+    const sidebar = root.querySelector<HTMLElement>('.workspace-sidebar');
+    if (!shell || !sidebar) return;
+
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebar.getBoundingClientRect().width;
+    const maxWidth = Math.min(MAX_WORKSPACE_SIDEBAR_WIDTH, Math.max(MIN_WORKSPACE_SIDEBAR_WIDTH, shell.getBoundingClientRect().width - 420));
+    sidebar.classList.add('is-resizing');
+    sidebar.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      workspaceSidebarWidth = Math.round(Math.min(maxWidth, Math.max(MIN_WORKSPACE_SIDEBAR_WIDTH, startWidth + moveEvent.clientX - startX)));
+      applyWorkspaceSidebarWidth(root);
+    };
+    const onEnd = () => {
+      sidebar.classList.remove('is-resizing');
+      sidebar.releasePointerCapture(event.pointerId);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd, { once: true });
+    window.addEventListener('pointercancel', onEnd, { once: true });
+  }, { signal });
+}
+
+function applyWorkspaceSidebarWidth(root: HTMLElement): void {
+  root.style.setProperty('--workspace-sidebar-width', `${workspaceSidebarWidth}px`);
+}
+
 function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState, handlers: UiHandlers): boolean {
   const key = event.key.toLowerCase();
   if (key !== 'c' && key !== 'x' && key !== 'v') return false;
+  if ((key === 'c' || key === 'x') && hasActiveTextSelection()) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
   if (target && (target.closest('#hvyMount') || isTextEditingTarget(target))) return false;
   const selectedFile = state.selectedFilePath ? findWorkspaceFileByPath(state.workspaces, state.selectedFilePath) : null;
@@ -650,6 +760,11 @@ function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState,
     return true;
   }
   return false;
+}
+
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
 }
 
 function isTextEditingTarget(target: HTMLElement): boolean {
@@ -1209,10 +1324,6 @@ function renderEmptyState(state: AppState): string {
     <div class="empty-state">
       <h2>Choose a file from a workspace</h2>
       <p>Open a workspace folder or a standalone HVY file to start viewing and editing.</p>
-      <div>
-        <button type="button" data-action="open-workspace">Open Workspace</button>
-        <button type="button" data-action="new-workspace">New Workspace</button>
-      </div>
     </div>`;
 }
 
@@ -1873,7 +1984,10 @@ function renderRecoveryDialog(state: AppState): string {
                       <span>${escapeHtml(formatBackupTimestamp(backup.createdAt))}</span>
                       ${backup.documentPath ? `<small>${escapeHtml(backup.documentPath)}</small>` : '<small>Unsaved document</small>'}
                     </div>
-                    <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
+                    <div class="recovery-item-actions">
+                      <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
+                      <button type="button" class="danger-button" data-action="discard-backup" data-backup-id="${escapeAttr(backup.id)}">Discard</button>
+                    </div>
                   </article>
                 `).join('')}
               </div>`
@@ -1897,6 +2011,25 @@ function renderCloseDocumentDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" class="danger-button" data-action="confirm-close-document">Discard Edits</button>
           <button type="button" data-action="cancel-close-document">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderAppCloseDialog(state: AppState): string {
+  if (!state.appCloseDialogOpen) {
+    return '';
+  }
+  const documentName = state.document?.name ?? 'this document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog app-close-dialog" role="dialog" aria-modal="true" aria-labelledby="appCloseTitle">
+        <h2 id="appCloseTitle">Save Changes Before Closing?</h2>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}. HVY Galaxy tries to save a recovery draft before closing, but saving now writes the document to its file.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="save-and-close-app">Save and Close</button>
+          <button type="button" class="danger-button" data-action="close-app-without-saving">Close Without Saving</button>
+          <button type="button" data-action="cancel-app-close">Cancel</button>
         </div>
       </section>
     </div>`;

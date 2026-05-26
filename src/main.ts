@@ -10,6 +10,7 @@ import {
   createDocumentBackup,
   createDocumentFile,
   createWorkspace,
+  discardDocumentBackup,
   copyDocumentToWorkspace,
   initializeWorkspacePath,
   installMcpClient,
@@ -25,11 +26,13 @@ import {
   listDocumentBackups,
   loadRecentState,
   onMenuEvent,
+  onAppCloseRequest,
   openExternalUrl,
   openColorThemeDialog,
   openFileDialog,
   openImportSourceDialog,
   readDocumentFile,
+  requestAppClose,
   removeMcpClient,
   renameDocumentFile,
   renameWorkspace,
@@ -49,6 +52,7 @@ import {
   stopMcpServer,
   unarchiveWorkspace,
   type AddFilesResult,
+  type DocumentBackup,
   type DocumentFile,
   type DroppedWorkspaceFile,
   type ImportSourceFile,
@@ -698,6 +702,16 @@ const handlers: UiHandlers = {
     state.recoveryBackups = [];
     await openDocument(file, { recovered: true, deferMount: true });
   }),
+  discardBackup: (id) => void runBusy('Discarding recovery draft...', async () => {
+    const backup = state.recoveryBackups.find((candidate) => candidate.id === id);
+    await discardDocumentBackup(id);
+    if (backup) {
+      await discardRecoveryStateForBackup(backup);
+    }
+    state.recoveryBackups = state.recoveryBackups.filter((candidate) => candidate.id !== id);
+    state.status = state.recoveryBackups.length > 0 ? 'Discarded recovery draft' : 'No recoverable edits available';
+    rerender({ preserveMountedDocument: true });
+  }, { preserveMountedDocument: true }),
   cancelRecovery: () => {
     state.recoveryDialogOpen = false;
     state.status = 'Ready';
@@ -706,6 +720,13 @@ const handlers: UiHandlers = {
   confirmCloseDocument: () => void closeCurrentDocument({ discard: true }),
   cancelCloseDocument: () => {
     state.closeDocumentDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  saveAndCloseApp: () => void saveAndCloseApp(),
+  closeAppWithoutSaving: () => void closeAppWithoutSaving(),
+  cancelAppClose: () => {
+    state.appCloseDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -1018,6 +1039,9 @@ async function boot(): Promise<void> {
     await openRecoveryDialogOnBoot();
     startBackupTimer();
     setupRecoveryLifecycle();
+    await onAppCloseRequest(() => {
+      void handleAppCloseRequest();
+    });
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
@@ -1649,6 +1673,49 @@ async function closeCurrentDocument(options: { discard?: boolean } = {}): Promis
   rerender();
 }
 
+async function handleAppCloseRequest(): Promise<void> {
+  if (state.appCloseDialogOpen) return;
+  if (!hasUnsavedWritableDocument()) {
+    await requestAppClose();
+    return;
+  }
+  try {
+    await backupActiveDocument({ force: true });
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+  }
+  state.appCloseDialogOpen = true;
+  state.status = 'Ready';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function saveAndCloseApp(): Promise<void> {
+  state.appCloseDialogOpen = false;
+  await saveCurrentDocument();
+  if (!hasUnsavedWritableDocument()) {
+    await requestAppClose();
+  } else {
+    state.appCloseDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  }
+}
+
+async function closeAppWithoutSaving(): Promise<void> {
+  state.appCloseDialogOpen = false;
+  try {
+    await backupActiveDocument({ force: true });
+  } catch {
+    // The user chose to close without saving; the normal timed drafts may still exist.
+  }
+  await requestAppClose();
+}
+
+function hasUnsavedWritableDocument(): boolean {
+  const openDocument = state.document;
+  if (!openDocument?.mounted || openDocument.readOnly) return false;
+  return openDocument.dirty || isMountedDocumentDirty(openDocument.mounted);
+}
+
 function startBackupTimer(): void {
   if (backupTimer !== null) return;
   backupTimer = window.setInterval(() => {
@@ -1728,6 +1795,44 @@ async function clearRecoveryDraftsForDocument(documentPath: string, name: string
     await clearDocumentRecoveryDrafts({ documentPath, name });
   } catch {
     // Recovery drafts are best-effort cleanup after an explicit save or discard.
+  }
+}
+
+async function discardRecoveryStateForBackup(backup: DocumentBackup): Promise<void> {
+  const key = backupDocumentKey(backup.documentPath, backup.name);
+  backupSnapshots.delete(key);
+  if (backup.documentPath) {
+    documentSessions.delete(backup.documentPath);
+    workspaceFilterDocumentCache.delete(backup.documentPath);
+  }
+  if (!state.document || state.document.path !== backup.documentPath || state.document.name !== backup.name) {
+    return;
+  }
+  if (!state.document.path) {
+    state.document.dirty = false;
+    state.document.isNew = false;
+    pendingMountDocument = null;
+    pendingMountRecoveryState = null;
+    return;
+  }
+  const file = await readDocumentFile(state.document.path);
+  const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
+  const wasMounted = Boolean(state.document.mounted);
+  state.document = {
+    ...state.document,
+    name: file.name,
+    extension: file.extension,
+    dirty: false,
+    isNew: false,
+    mounted: null,
+  };
+  pendingMountRecoveryState = null;
+  if (wasMounted) {
+    rerender();
+    await mountCurrentDocument(document);
+  } else {
+    pendingMountDocument = document;
+    updateDirtyChrome();
   }
 }
 

@@ -624,7 +624,7 @@ fn install_mcp_client(app: AppHandle, target: String) -> AppResult<Vec<McpClient
         "claude" => claude_config_path()?,
         _ => return Err(AppError::Message(format!("Unknown MCP client target: {target}"))),
     };
-    if !path.exists() {
+    if !path.exists() && !(target == "claude" && claude_config_can_be_created(&path)) {
         return Err(AppError::Message(format!("{} was not found.", path_to_string(&path))));
     }
     if !Path::new(&launch.command).exists() {
@@ -1415,6 +1415,15 @@ fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile
 }
 
 #[tauri::command]
+fn discard_document_backup(app: AppHandle, id: String) -> AppResult<()> {
+    let path = document_backup_path(&app, &id)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraftRequest) -> AppResult<()> {
     let directory = document_backups_dir(&app)?;
     if !directory.exists() {
@@ -1464,6 +1473,12 @@ fn open_external_url(url: String) -> AppResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn close_app_window(app: AppHandle) -> AppResult<()> {
+    app.exit(0);
+    Ok(())
+}
+
 pub fn run() {
     set_native_process_name();
 
@@ -1471,6 +1486,7 @@ pub fn run() {
         .manage(McpRuntime::default())
         .setup(|app| {
             set_native_process_name();
+            install_camera_permission_handler(app.handle());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
@@ -1526,8 +1542,10 @@ pub fn run() {
             create_document_backup,
             list_document_backups,
             restore_document_backup,
+            discard_document_backup,
             clear_document_recovery_drafts,
-            open_external_url
+            open_external_url,
+            close_app_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running HVY Galaxy");
@@ -1549,6 +1567,45 @@ fn set_native_process_name() {
 #[cfg(not(target_os = "macos"))]
 fn set_native_process_name() {}
 
+#[cfg(target_os = "windows")]
+fn install_camera_permission_handler(app: &AppHandle) {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_PERMISSION_KIND,
+            COREWEBVIEW2_PERMISSION_KIND_CAMERA,
+            COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+        },
+        PermissionRequestedEventHandler,
+    };
+
+    let Some(webview) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = webview.with_webview(|webview| unsafe {
+        let Ok(core_webview) = webview.controller().CoreWebView2() else {
+            return;
+        };
+        let mut token = 0;
+        let _ = core_webview.add_PermissionRequested(
+            &PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                args.PermissionKind(&mut kind)?;
+                if kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                }
+                Ok(())
+            })),
+            &mut token,
+        );
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_camera_permission_handler(_app: &AppHandle) {}
+
 fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let recent = recent_state_path(app)
         .ok()
@@ -1558,36 +1615,47 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
     let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
     let mcp_toggle_label = if mcp_status.running { "Stop MCP Server" } else { "Start MCP Server" };
+    #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
+        .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Galaxy"))?)
-        .item(&PredefinedMenuItem::hide_others(app, Some("Hide Others"))?)
-        .item(&PredefinedMenuItem::show_all(app, Some("Show All"))?)
-        .separator()
         .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
         .build()?;
-    let file = SubmenuBuilder::new(app, "File")
-        .item(&MenuItemBuilder::new("New Workspace").id("new-workspace").accelerator("CmdOrCtrl+N").build(app)?)
-        .item(&MenuItemBuilder::new("Open Workspace").id("open-workspace").accelerator("CmdOrCtrl+O").build(app)?)
+
+    let mut file_builder = SubmenuBuilder::new(app, "File")
+        .item(&app_shortcut_menu_item(app, "New Workspace", "new-workspace", "CmdOrCtrl+N")?)
+        .item(&app_shortcut_menu_item(app, "Open Workspace", "open-workspace", "CmdOrCtrl+O")?)
         .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
-        .item(&MenuItemBuilder::new("Open File").id("open-file").accelerator("CmdOrCtrl+Shift+O").build(app)?)
+        .item(&app_shortcut_menu_item(app, "Open File", "open-file", "CmdOrCtrl+Shift+O")?)
         .item(&recent_workspaces)
         .item(&recent_files)
-        .separator()
-        .item(&MenuItemBuilder::new("Close Document").id("close-document").accelerator("CmdOrCtrl+W").build(app)?)
-        .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
-        .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
+        .separator();
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_builder = file_builder
+            .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
+            .separator();
+    }
+    let mut file_builder = file_builder
+        .item(&app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
+        .item(&app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
+        .item(&app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
         .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").build(app)?)
         .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
-        .build()?;
+        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_builder = file_builder
+            .separator()
+            .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?);
+    }
+    let file = file_builder.build()?;
     let mcp = SubmenuBuilder::new(app, "MCP Server")
         .item(
             &MenuItemBuilder::new(mcp_status_menu_label(&mcp_status))
@@ -1611,16 +1679,39 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
         .build()?;
-    let help = SubmenuBuilder::new(app, "Help")
+    let mut help_builder = SubmenuBuilder::new(app, "Help")
         .item(
             &MenuItemBuilder::new("HVY Guide")
                 .id("open-guide")
                 .accelerator("F1")
                 .build(app)?,
-        )
-        .build()?;
+        );
+    #[cfg(not(target_os = "macos"))]
+    {
+        help_builder = help_builder
+            .separator()
+            .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?);
+    }
+    let help = help_builder.build()?;
 
-    MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&mcp).item(&help).build()
+    let builder = MenuBuilder::new(app);
+    #[cfg(target_os = "macos")]
+    let builder = builder.item(&app_menu);
+    builder.item(&file).item(&edit).item(&mcp).item(&help).build()
+}
+
+fn app_shortcut_menu_item(
+    app: &AppHandle,
+    label: &str,
+    id: &str,
+    accelerator: &str,
+) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
+    let builder = MenuItemBuilder::new(label).id(id);
+    #[cfg(target_os = "macos")]
+    let builder = builder.accelerator(accelerator);
+    #[cfg(not(target_os = "macos"))]
+    let _ = accelerator;
+    builder.build(app)
 }
 
 fn mcp_status_menu_label(status: &McpServerStatus) -> String {
@@ -3309,7 +3400,7 @@ fn mcp_client_install_status(
     launch: &McpStdioLaunchConfig,
     is_installed: fn(&Path, &McpStdioLaunchConfig) -> bool,
 ) -> McpClientInstallStatus {
-    let config_exists = path.exists();
+    let config_exists = path.exists() || (target == "claude" && claude_config_can_be_created(&path));
     let executable_exists = Path::new(&launch.command).exists();
     let installed = config_exists && is_installed(&path, launch);
     let backups = mcp_client_backup_paths(&path);
@@ -3358,6 +3449,23 @@ fn codex_config_path() -> AppResult<PathBuf> {
 }
 
 fn claude_config_path() -> AppResult<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(config_dir) = packaged_claude_config_dir() {
+            return Ok(config_dir.join("claude_desktop_config.json"));
+        }
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(app_data)
+                .join("Claude")
+                .join("claude_desktop_config.json"));
+        }
+        return Ok(user_home_dir()?
+            .join("AppData")
+            .join("Roaming")
+            .join("Claude")
+            .join("claude_desktop_config.json"));
+    }
+    #[cfg(not(windows))]
     Ok(user_home_dir()?
         .join("Library")
         .join("Application Support")
@@ -3365,7 +3473,72 @@ fn claude_config_path() -> AppResult<PathBuf> {
         .join("claude_desktop_config.json"))
 }
 
+fn claude_config_can_be_created(path: &Path) -> bool {
+    if path.parent().is_some_and(Path::exists) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return packaged_claude_config_dir().is_some()
+            || if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                PathBuf::from(local_app_data).join("Claude").exists()
+            } else {
+                user_home_dir()
+                    .map(|home| home.join("AppData").join("Local").join("Claude").exists())
+                    .unwrap_or(false)
+            };
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn packaged_claude_config_dir() -> Option<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            user_home_dir()
+                .map(|home| home.join("AppData").join("Local"))
+                .unwrap_or_else(|_| PathBuf::from("."))
+        });
+    let packages_dir = local_app_data.join("Packages");
+    let entries = fs::read_dir(packages_dir).ok()?;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("Claude_") {
+            continue;
+        }
+        let config_dir = entry.path().join("LocalCache").join("Roaming").join("Claude");
+        if config_dir.exists() {
+            return Some(config_dir);
+        }
+    }
+    None
+}
+
 fn user_home_dir() -> AppResult<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(home));
+        }
+        if let (Some(drive), Some(path)) = (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH")) {
+            return Ok(PathBuf::from(format!(
+                "{}{}",
+                drive.to_string_lossy(),
+                path.to_string_lossy()
+            )));
+        }
+    }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| AppError::Message("Could not determine the home directory.".into()))
@@ -3379,9 +3552,15 @@ fn install_mcp_for_codex(path: &Path, launch: &McpStdioLaunchConfig) -> AppResul
 }
 
 fn install_mcp_for_claude(path: &Path, launch: &McpStdioLaunchConfig) -> AppResult<()> {
-    let current = fs::read_to_string(path)?;
+    let current = if path.exists() {
+        fs::read_to_string(path)?
+    } else {
+        "{}\n".into()
+    };
     let next = upsert_claude_mcp_config(&current, launch)?;
-    backup_file_before_overwrite(path)?;
+    if path.exists() {
+        backup_file_before_overwrite(path)?;
+    }
     write_file_atomically(path, next.as_bytes())
 }
 

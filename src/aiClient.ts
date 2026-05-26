@@ -19,11 +19,6 @@ interface HvyProxyRequest {
 
 interface HvyHostChatResponse {
   output: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
-  };
 }
 
 interface HvyHostChatClient {
@@ -79,20 +74,13 @@ async function requestOpenAiCompatibleCompletion(
   });
   const payload = await response.json().catch(() => null) as any;
   if (!response.ok) {
-    throw new Error(readProviderError(payload) || `AI request failed with HTTP ${response.status}.`);
+    throw new Error(formatProviderHttpError(response.status, payload));
   }
   const output = String(payload?.choices?.[0]?.message?.content ?? '').trim();
   if (!output) {
     throw new Error('AI provider returned no assistant text.');
   }
-  return {
-    output,
-    usage: {
-      inputTokens: numberOrUndefined(payload?.usage?.prompt_tokens),
-      outputTokens: numberOrUndefined(payload?.usage?.completion_tokens),
-      totalTokens: numberOrUndefined(payload?.usage?.total_tokens),
-    },
-  };
+  return { output };
 }
 
 function aiProviderConfig(settings: AiSettings, providerId: string): AiProviderConfig {
@@ -141,6 +129,11 @@ function readProviderError(payload: any): string {
   return String(payload?.error?.message ?? payload?.message ?? '').trim();
 }
 
-function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === 'number' ? value : undefined;
+function formatProviderHttpError(status: number, payload: any): string {
+  const providerMessage = readProviderError(payload);
+  const message = providerMessage || `AI request failed with HTTP ${status}.`;
+  if (status === 401) {
+    return `${message} Check the API key for the selected AI provider.`;
+  }
+  return message;
 }

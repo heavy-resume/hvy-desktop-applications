@@ -11,21 +11,25 @@
     "electron:dev": "node scripts/electron-dev.mjs",
     "build:electron": "npm run build && node scripts/electron-package.mjs",
     "build:electron:dmg": "npm run build:electron && node scripts/electron-dmg.mjs",
-    "build:electron:arm64": "ELECTRON_ARCH=arm64 npm run build:electron",
-    "build:electron:x64": "ELECTRON_ARCH=x64 npm run build:electron",
-    "build:electron:dmg:arm64": "ELECTRON_ARCH=arm64 npm run build:electron:dmg",
-    "build:electron:dmg:x64": "ELECTRON_ARCH=x64 npm run build:electron:dmg",
+    "build:electron:arm64": "npm run build && node scripts/electron-package.mjs --arch arm64",
+    "build:electron:x64": "npm run build && node scripts/electron-package.mjs --arch x64",
+    "build:electron:windows": "npm run build && node scripts/electron-package.mjs --platform win32 --arch x64",
+    "build:electron:windows:arm64": "npm run build && node scripts/electron-package.mjs --platform win32 --arch arm64",
+    "build:electron:dmg:arm64": "npm run build && node scripts/electron-package.mjs --platform darwin --arch arm64 && node scripts/electron-dmg.mjs --platform darwin --arch arm64",
+    "build:electron:dmg:x64": "npm run build && node scripts/electron-package.mjs --platform darwin --arch x64 && node scripts/electron-dmg.mjs --platform darwin --arch x64",
     "build": "tsc && vite build",
+    "build:windows": "node scripts/tauri-cli.mjs build --bundles nsis,msi",
     "build:universal": "tauri build --target universal-apple-darwin --bundles app",
     "build:universal:dmg": "tauri build --target universal-apple-darwin --bundles dmg",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri-cli.mjs",
     "smoke:frontend": "node scripts/smoke-frontend.mjs",
     "test:unit": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
-    "heavy-file-format-ref-impl": "file:../heavy-file-format"
+    "heavy-file-format-ref-impl": "file:../heavy-file-format",
+    "pdfmake": "^0.3.9"
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
