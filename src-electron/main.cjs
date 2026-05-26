@@ -107,6 +107,8 @@ function buildMenu() {
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
+        ...(process.platform === 'darwin' ? [] : [menuItem('AI Settings...', 'ai-settings', 'CmdOrCtrl+,')]),
+        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }]),
         menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
@@ -163,6 +165,7 @@ function buildMenu() {
       label: 'Help',
       submenu: [
         menuItem('HVY Guide', 'open-guide', 'F1'),
+        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem(`About ${APP_NAME}`, 'about')]),
       ],
     },
   ];

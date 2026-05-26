@@ -1583,6 +1583,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
     let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
     let mcp_toggle_label = if mcp_status.running { "Stop MCP Server" } else { "Start MCP Server" };
+    #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
         .separator()
@@ -1592,14 +1593,22 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
         .build()?;
-    let file = SubmenuBuilder::new(app, "File")
+
+    let mut file_builder = SubmenuBuilder::new(app, "File")
         .item(&MenuItemBuilder::new("New Workspace").id("new-workspace").accelerator("CmdOrCtrl+N").build(app)?)
         .item(&MenuItemBuilder::new("Open Workspace").id("open-workspace").accelerator("CmdOrCtrl+O").build(app)?)
         .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
         .item(&MenuItemBuilder::new("Open File").id("open-file").accelerator("CmdOrCtrl+Shift+O").build(app)?)
         .item(&recent_workspaces)
         .item(&recent_files)
-        .separator()
+        .separator();
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_builder = file_builder
+            .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
+            .separator();
+    }
+    let mut file_builder = file_builder
         .item(&MenuItemBuilder::new("Close Document").id("close-document").accelerator("CmdOrCtrl+W").build(app)?)
         .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
         .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
@@ -1607,8 +1616,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
-        .build()?;
+        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
+    #[cfg(not(target_os = "macos"))]
+    {
+        file_builder = file_builder
+            .separator()
+            .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?);
+    }
+    let file = file_builder.build()?;
     let mcp = SubmenuBuilder::new(app, "MCP Server")
         .item(
             &MenuItemBuilder::new(mcp_status_menu_label(&mcp_status))
@@ -1632,16 +1647,25 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
         .build()?;
-    let help = SubmenuBuilder::new(app, "Help")
+    let mut help_builder = SubmenuBuilder::new(app, "Help")
         .item(
             &MenuItemBuilder::new("HVY Guide")
                 .id("open-guide")
                 .accelerator("F1")
                 .build(app)?,
-        )
-        .build()?;
+        );
+    #[cfg(not(target_os = "macos"))]
+    {
+        help_builder = help_builder
+            .separator()
+            .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?);
+    }
+    let help = help_builder.build()?;
 
-    MenuBuilder::new(app).item(&app_menu).item(&file).item(&edit).item(&mcp).item(&help).build()
+    let builder = MenuBuilder::new(app);
+    #[cfg(target_os = "macos")]
+    let builder = builder.item(&app_menu);
+    builder.item(&file).item(&edit).item(&mcp).item(&help).build()
 }
 
 fn mcp_status_menu_label(status: &McpServerStatus) -> String {
