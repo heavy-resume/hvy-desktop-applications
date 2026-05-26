@@ -1471,6 +1471,7 @@ pub fn run() {
         .manage(McpRuntime::default())
         .setup(|app| {
             set_native_process_name();
+            install_camera_permission_handler(app.handle());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
@@ -1573,6 +1574,45 @@ fn set_native_process_name() {
 
 #[cfg(not(target_os = "macos"))]
 fn set_native_process_name() {}
+
+#[cfg(target_os = "windows")]
+fn install_camera_permission_handler(app: &AppHandle) {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::{
+            COREWEBVIEW2_PERMISSION_KIND,
+            COREWEBVIEW2_PERMISSION_KIND_CAMERA,
+            COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+        },
+        PermissionRequestedEventHandler,
+    };
+
+    let Some(webview) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = webview.with_webview(|webview| unsafe {
+        let Ok(core_webview) = webview.controller().CoreWebView2() else {
+            return;
+        };
+        let mut token = 0;
+        let _ = core_webview.add_PermissionRequested(
+            &PermissionRequestedEventHandler::create(Box::new(|_, args| {
+                let Some(args) = args else {
+                    return Ok(());
+                };
+                let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+                args.PermissionKind(&mut kind)?;
+                if kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA {
+                    args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+                }
+                Ok(())
+            })),
+            &mut token,
+        );
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_camera_permission_handler(_app: &AppHandle) {}
 
 fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let recent = recent_state_path(app)
