@@ -1,4 +1,5 @@
 import type { DocumentExtension } from './backend';
+import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import type {
   HvyDocumentSearchRequest,
@@ -73,7 +74,8 @@ export async function mountHvyDocument(
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
-  return { mount: withChatPanelResize(root, mount), document };
+  const mounted = withChatPanelResize(root, mount);
+  return { mount: mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted, document };
 }
 
 export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {
@@ -167,6 +169,38 @@ function withChatPanelResize(root: HTMLElement, mount: HvyMount): HvyMount {
       cleanup();
       mount.destroy();
     },
+  };
+}
+
+function withViewerCarouselInteractions(root: HTMLElement, mount: HvyMount): HvyMount {
+  const cleanup = installViewerCarouselInteractions(root);
+  return {
+    ...mount,
+    destroy() {
+      cleanup();
+      mount.destroy();
+    },
+  };
+}
+
+function installViewerCarouselInteractions(root: HTMLElement): () => void {
+  let frame = 0;
+  const bind = () => {
+    frame = 0;
+    bindCarouselInteractions(root);
+  };
+  const scheduleBind = () => {
+    if (frame) return;
+    frame = window.requestAnimationFrame(bind);
+  };
+  const observer = new MutationObserver(scheduleBind);
+  bindCarouselInteractions(root);
+  observer.observe(root, { childList: true, subtree: true });
+  return () => {
+    observer.disconnect();
+    if (frame) {
+      window.cancelAnimationFrame(frame);
+    }
   };
 }
 
