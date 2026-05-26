@@ -1587,7 +1587,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
+        .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
@@ -1595,23 +1595,23 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .build()?;
 
     let mut file_builder = SubmenuBuilder::new(app, "File")
-        .item(&MenuItemBuilder::new("New Workspace").id("new-workspace").accelerator("CmdOrCtrl+N").build(app)?)
-        .item(&MenuItemBuilder::new("Open Workspace").id("open-workspace").accelerator("CmdOrCtrl+O").build(app)?)
+        .item(&app_shortcut_menu_item(app, "New Workspace", "new-workspace", "CmdOrCtrl+N")?)
+        .item(&app_shortcut_menu_item(app, "Open Workspace", "open-workspace", "CmdOrCtrl+O")?)
         .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
-        .item(&MenuItemBuilder::new("Open File").id("open-file").accelerator("CmdOrCtrl+Shift+O").build(app)?)
+        .item(&app_shortcut_menu_item(app, "Open File", "open-file", "CmdOrCtrl+Shift+O")?)
         .item(&recent_workspaces)
         .item(&recent_files)
         .separator();
     #[cfg(not(target_os = "macos"))]
     {
         file_builder = file_builder
-            .item(&MenuItemBuilder::new("AI Settings...").id("ai-settings").accelerator("CmdOrCtrl+,").build(app)?)
+            .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
             .separator();
     }
     let mut file_builder = file_builder
-        .item(&MenuItemBuilder::new("Close Document").id("close-document").accelerator("CmdOrCtrl+W").build(app)?)
-        .item(&MenuItemBuilder::new("Save").id("save").accelerator("CmdOrCtrl+S").build(app)?)
-        .item(&MenuItemBuilder::new("Save As...").id("save-as").accelerator("CmdOrCtrl+Shift+S").build(app)?)
+        .item(&app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
+        .item(&app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
+        .item(&app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
         .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").build(app)?)
         .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
@@ -1666,6 +1666,20 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
     builder.item(&file).item(&edit).item(&mcp).item(&help).build()
+}
+
+fn app_shortcut_menu_item(
+    app: &AppHandle,
+    label: &str,
+    id: &str,
+    accelerator: &str,
+) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
+    let builder = MenuItemBuilder::new(label).id(id);
+    #[cfg(target_os = "macos")]
+    let builder = builder.accelerator(accelerator);
+    #[cfg(not(target_os = "macos"))]
+    let _ = accelerator;
+    builder.build(app)
 }
 
 fn mcp_status_menu_label(status: &McpServerStatus) -> String {

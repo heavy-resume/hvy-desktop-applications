@@ -37,12 +37,14 @@ app.setPath('userData', electronProfileDir());
 
 app.whenReady().then(async () => {
   mainWindow = createWindow();
+  bindWindowShortcuts(mainWindow);
   buildMenu();
   await loadRenderer(mainWindow);
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
+      bindWindowShortcuts(mainWindow);
       buildMenu();
       await loadRenderer(mainWindow);
     }
@@ -71,6 +73,29 @@ function createWindow() {
       sandbox: false,
     },
   });
+}
+
+function bindWindowShortcuts(window) {
+  window.webContents.on('before-input-event', (event, input) => {
+    const command = shortcutCommand(input);
+    if (!command) return;
+    event.preventDefault();
+    emitMenu(command);
+  });
+}
+
+function shortcutCommand(input) {
+  if (!input.control && !input.meta) return null;
+  if (input.alt || input.isAutoRepeat) return null;
+  const key = String(input.key ?? '').toLowerCase();
+  if (key === 's' && !input.shift) return 'save';
+  if (key === 's' && input.shift) return 'save-as';
+  if (key === 'w' && !input.shift) return 'close-document';
+  if (key === 'n' && !input.shift) return 'new-workspace';
+  if (key === 'o' && !input.shift) return 'open-workspace';
+  if (key === 'o' && input.shift) return 'open-file';
+  if (key === ',' && !input.shift) return 'ai-settings';
+  return null;
 }
 
 async function loadRenderer(window) {
