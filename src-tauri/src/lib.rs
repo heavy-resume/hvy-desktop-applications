@@ -198,6 +198,13 @@ struct DocumentBackupRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct SystemFileClipboardRequest {
+    paths: Vec<String>,
+    operation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct DocumentRecoveryDraftRequest {
     document_path: String,
     name: String,
@@ -1253,6 +1260,106 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
 }
 
 #[tauri::command]
+fn write_system_file_clipboard(request: SystemFileClipboardRequest) -> AppResult<()> {
+    let files: Vec<PathBuf> = request
+        .paths
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| document_extension(path).is_some() && path.exists())
+        .collect();
+    if files.is_empty() {
+        return Err(AppError::Message("No supported document files to copy.".into()));
+    }
+    if !cfg!(target_os = "macos") {
+        return Err(AppError::Message("System file clipboard is currently supported on macOS only.".into()));
+    }
+    run_apple_script(&mac_file_clipboard_write_script(&files))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<AddFilesResult> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    if !cfg!(target_os = "macos") {
+        return Err(AppError::Message("System file paste is currently supported on macOS only.".into()));
+    }
+    let output = run_apple_script(mac_file_clipboard_read_script())?;
+    let source_paths: Vec<PathBuf> = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if source_paths.is_empty() {
+        return Err(AppError::Message("No files are available to paste.".into()));
+    }
+    let mut copied_paths = Vec::new();
+    for source in source_paths {
+        if document_extension(&source).is_none() || !source.is_file() {
+            continue;
+        }
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
+        let destination = unique_copy_path(&workspace_path, file_name);
+        fs::copy(&source, &destination)?;
+        add_recent_file(&app, &destination)?;
+        copied_paths.push(destination.to_string_lossy().to_string());
+    }
+    if copied_paths.is_empty() {
+        return Err(AppError::Message("No supported .hvy, .thvy, or .md files are available to paste.".into()));
+    }
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    Ok(AddFilesResult {
+        workspace: load_workspace_from_path(&workspace_path)?,
+        copied_paths,
+        copied_template_paths: Vec::new(),
+    })
+}
+
+fn mac_file_clipboard_write_script(files: &[PathBuf]) -> String {
+    let file_items = files
+        .iter()
+        .map(|file| format!("POSIX file {}", apple_script_string(&file.to_string_lossy())))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("set the clipboard to {{{file_items}}}")
+}
+
+fn mac_file_clipboard_read_script() -> &'static str {
+    r#"
+use framework "AppKit"
+use scripting additions
+set pasteboard to current application's NSPasteboard's generalPasteboard()
+set urls to pasteboard's readObjectsForClasses:{current application's NSURL} options:(missing value)
+set filePaths to {}
+if urls is not missing value then
+  repeat with fileUrl in urls
+    if (fileUrl's isFileURL()) as boolean then set end of filePaths to (fileUrl's |path|()) as text
+  end repeat
+end if
+set AppleScript's text item delimiters to linefeed
+return filePaths as text
+"#
+}
+
+fn apple_script_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn run_apple_script(script: &str) -> AppResult<String> {
+    let output = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
+    if !output.status.success() {
+        return Err(AppError::Message(
+            String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
 fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
     if document_extension(Path::new(&request.name)).is_none() {
         return Err(AppError::Message("Recovery draft document name must end in .hvy, .thvy, or .md.".into()));
@@ -1439,6 +1546,8 @@ pub fn run() {
             save_document_to_workspace,
             copy_document_to_workspace,
             move_document_to_workspace,
+            write_system_file_clipboard,
+            paste_system_files_to_workspace,
             create_document_backup,
             list_document_backups,
             restore_document_backup,

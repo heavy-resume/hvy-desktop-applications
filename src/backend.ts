@@ -140,6 +140,11 @@ export interface WorkspaceDocumentMoveRequest {
   workspacePath: string;
 }
 
+export interface SystemFileClipboardRequest {
+  paths: string[];
+  operation: 'copy' | 'cut';
+}
+
 export interface DocumentBackupRequest {
   documentPath: string;
   name: string;
@@ -545,6 +550,17 @@ export function copyDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): 
 
 export function moveDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
   return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
+}
+
+export function writeSystemFileClipboard(request: SystemFileClipboardRequest): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('write_system_file_clipboard', { request });
+}
+
+export function pasteSystemFilesToWorkspace(workspacePath: string): Promise<AddFilesResult> {
+  return invokeDesktop('paste_system_files_to_workspace', { workspacePath });
 }
 
 export function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {

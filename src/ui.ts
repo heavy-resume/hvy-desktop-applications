@@ -642,7 +642,7 @@ function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState,
     else handlers.cutWorkspaceFile(selectedFile.path, selectedFile.name);
     return true;
   }
-  if (key === 'v' && state.workspaceClipboard) {
+  if (key === 'v') {
     const workspacePath = selectedFile ? workspacePathForFileNode(state.workspaces, selectedFile.path) : state.selectedWorkspacePath;
     if (!workspacePath) return false;
     event.preventDefault();
@@ -851,6 +851,7 @@ function showFileContextMenu(
   handlers: UiHandlers,
   showWorkspaceActions: boolean,
 ): void {
+  void clipboard;
   closeFileContextMenu();
   const menu = document.createElement('div');
   menu.className = 'file-context-menu';
@@ -861,7 +862,7 @@ function showFileContextMenu(
     <button type="button" data-menu-action="rename">Rename</button>
     <button type="button" data-menu-action="copy">Copy</button>
     <button type="button" data-menu-action="cut">Cut</button>
-    <button type="button" data-menu-action="paste" ${clipboard ? '' : 'disabled'}>Paste</button>
+    <button type="button" data-menu-action="paste">Paste</button>
     ${showWorkspaceActions ? '<button type="button" data-menu-action="copy-to-workspace">Copy to...</button><button type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   `;
   const cleanup = () => {
@@ -912,7 +913,8 @@ function showWorkspaceContextMenu(
   menu.className = 'file-context-menu';
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
-  menu.innerHTML = `<button type="button" data-menu-action="paste" ${clipboard ? '' : 'disabled'}>Paste</button>`;
+  void clipboard;
+  menu.innerHTML = '<button type="button" data-menu-action="paste">Paste</button>';
   const cleanup = () => {
     menu.remove();
     document.removeEventListener('pointerdown', onPointerDown, true);

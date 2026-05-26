@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard } = require('electron');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -257,6 +257,8 @@ async function handleCommand(command, args) {
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes);
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath);
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath);
+    case 'write_system_file_clipboard': return writeSystemFileClipboard(args.request);
+    case 'paste_system_files_to_workspace': return pasteSystemFilesToWorkspace(args.workspacePath);
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
@@ -657,6 +659,85 @@ function moveDocumentToWorkspace(filePath, workspacePath) {
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
   return readDocumentAt(destination);
+}
+
+async function writeSystemFileClipboard(request) {
+  const paths = Array.isArray(request?.paths) ? request.paths : [];
+  const files = paths.map((entry) => String(entry)).filter((entry) => entry && documentExtension(entry) && fs.existsSync(entry));
+  if (files.length === 0) throw new Error('No supported document files to copy.');
+  if (process.platform !== 'darwin') {
+    throw new Error('System file clipboard is currently supported on macOS only.');
+  }
+  clipboard.clear();
+  clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(macFileListPlist(files), 'utf8'));
+  clipboard.writeText(files.join('\n'));
+}
+
+async function pasteSystemFilesToWorkspace(workspacePath) {
+  ensureWorkspace(workspacePath);
+  if (process.platform !== 'darwin') {
+    throw new Error('System file paste is currently supported on macOS only.');
+  }
+  const sourcePaths = readMacClipboardFilePaths();
+  if (sourcePaths.length === 0) throw new Error('No files are available to paste.');
+  const copiedPaths = [];
+  for (const source of sourcePaths) {
+    if (!documentExtension(source)) continue;
+    if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
+    const destination = uniqueCopyPath(workspacePath, path.basename(source));
+    fs.copyFileSync(source, destination);
+    copiedPaths.push(destination);
+    addRecentFile(destination);
+  }
+  if (copiedPaths.length === 0) {
+    throw new Error('No supported .hvy, .thvy, or .md files are available to paste.');
+  }
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  return {
+    workspace: loadWorkspaceFromPath(workspacePath),
+    copiedPaths,
+  };
+}
+
+function macFileListPlist(files) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+${files.map((file) => `  <string>${xmlEscape(file)}</string>`).join('\n')}
+</array>
+</plist>`;
+}
+
+function readMacClipboardFilePaths() {
+  const plist = clipboard.readBuffer('NSFilenamesPboardType').toString('utf8');
+  const paths = Array.from(plist.matchAll(/<string>([\s\S]*?)<\/string>/g))
+    .map((match) => xmlUnescape(match[1]).trim())
+    .filter(Boolean);
+  if (paths.length > 0) return paths;
+  return clipboard.readText()
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.startsWith('/'));
+}
+
+function xmlEscape(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function xmlUnescape(value) {
+  return String(value)
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&');
 }
 
 function createDocumentBackup(request) {

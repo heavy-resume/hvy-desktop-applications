@@ -45,6 +45,7 @@ import {
   saveDocumentFile,
   saveDocumentTemplate,
   moveDocumentToWorkspace,
+  pasteSystemFilesToWorkspace,
   startMcpServer,
   stopMcpServer,
   unarchiveWorkspace,
@@ -57,6 +58,7 @@ import {
   type WorkspaceFileNode,
   type WorkspaceTreeNode,
   updateMcpWorkspaces,
+  writeSystemFileClipboard,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, getMountedRecoveryState, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
@@ -764,16 +766,28 @@ const handlers: UiHandlers = {
     state.workspaceClipboard = { mode: 'copy', path, name: currentName };
     state.status = `Copied ${currentName}`;
     rerender({ preserveMountedDocument: true });
+    void writeSystemFileClipboard({ paths: [path], operation: 'copy' }).catch((error) => {
+      state.status = `Copied in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
+      rerender({ preserveMountedDocument: true });
+    });
   },
   cutWorkspaceFile: (path, currentName) => {
     state.workspaceClipboard = { mode: 'cut', path, name: currentName };
     state.status = `Cut ${currentName}`;
     rerender({ preserveMountedDocument: true });
+    void writeSystemFileClipboard({ paths: [path], operation: 'cut' }).catch((error) => {
+      state.status = `Cut in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
+      rerender({ preserveMountedDocument: true });
+    });
   },
   pasteWorkspaceClipboard: (workspacePath) => {
     const clipboard = state.workspaceClipboard;
-    if (!clipboard) return;
-    void runBusy(`${clipboard.mode === 'cut' ? 'Moving' : 'Copying'} file...`, async () => {
+    void runBusy(`${clipboard?.mode === 'cut' ? 'Moving' : 'Copying'} file...`, async () => {
+      if (!clipboard) {
+        const result = await pasteSystemFilesToWorkspace(workspacePath);
+        await finishAddingFilesToWorkspace(result, `Pasted ${result.copiedPaths.length} file${result.copiedPaths.length === 1 ? '' : 's'}`);
+        return;
+      }
       if (clipboard.mode === 'copy') {
         const file = await copyDocumentToWorkspace({ path: clipboard.path, workspacePath });
         upsertWorkspace(await loadWorkspace(workspacePath));
