@@ -1501,7 +1501,12 @@ async function saveCurrentDocument(): Promise<void> {
     await saveCurrentDocumentAs();
     return;
   }
-  await runBusy('Saving...', async () => {
+  if (state.busy) return;
+  state.busy = true;
+  state.error = null;
+  state.status = 'Saving...';
+  updateDirtyChrome();
+  try {
     if (openDocument.readOnly) {
       state.status = 'The HVY guide is read-only';
       return;
@@ -1516,7 +1521,13 @@ async function saveCurrentDocument(): Promise<void> {
     await refreshOpenWorkspaceForFile(openDocument.path);
     await refreshRecents();
     await clearRecoveryDraftsForDocument(openDocument.path, openDocument.name);
-  }, { preserveMountedDocument: true });
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+    state.status = 'Ready';
+  } finally {
+    state.busy = false;
+    updateDirtyChrome();
+  }
 }
 
 async function saveCurrentDocumentAs(): Promise<void> {
