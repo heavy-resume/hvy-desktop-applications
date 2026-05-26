@@ -115,6 +115,7 @@ if (!app) {
 const appRoot = app;
 let bindController: AbortController | null = null;
 let activeFileContextMenuCleanup: (() => void) | null = null;
+let dismissBackdropPointerStart: HTMLElement | null = null;
 let workspaceSidebarWidth = 320;
 const MIN_PASTED_IMPORT_CHARS = 50;
 const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
@@ -190,11 +191,17 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   document.addEventListener('keydown', (event) => {
     handleApplicationShortcut(event, root, handlers);
   }, { signal, capture: true });
+  root.addEventListener('pointerdown', (event) => {
+    dismissBackdropPointerStart = dismissBackdropFromTarget(event.target);
+  }, { signal, capture: true });
   root.addEventListener('click', (event) => {
+    const clickedDismissBackdrop = dismissBackdropFromTarget(event.target);
+    const dismissBackdropClick = Boolean(clickedDismissBackdrop && clickedDismissBackdrop === dismissBackdropPointerStart);
+    dismissBackdropPointerStart = null;
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) {
       const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
-      if (backdrop && backdrop === event.target) {
+      if (backdrop && backdrop === event.target && dismissBackdropClick) {
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
           return;
@@ -246,6 +253,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (target.closest('#hvyMount')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
+    if (action === 'close-workspace-filter' && clickedDismissBackdrop && !dismissBackdropClick) return;
     if (action === 'new-workspace') handlers.newWorkspace();
     if (action === 'manage-workspaces') handlers.openWorkspaceManager();
     if (action === 'close-workspace-manager') handlers.closeWorkspaceManager();
@@ -655,6 +663,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     updateImportSubmit(form);
   });
   root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
+}
+
+function dismissBackdropFromTarget(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement)) return null;
+  return target.classList.contains('modal-backdrop') || target.classList.contains('workspace-filter-backdrop')
+    ? target
+    : null;
 }
 
 function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
@@ -2112,7 +2127,7 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
       <label>
         <span>Provider</span>
         <select name="${action}ProviderId">
-          <option value="default" ${config.providerId === 'default' ? 'selected' : ''}>Default</option>
+          <option value="default" ${config.providerId === 'default' ? 'selected' : ''}>Default (${escapeHtml(provider.name)})</option>
           ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === config.providerId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
         </select>
       </label>
