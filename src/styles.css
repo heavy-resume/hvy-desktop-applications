@@ -329,6 +329,21 @@ button:disabled {
   opacity: 0.72;
 }
 
+.tree-file.is-cut-pending {
+  border-color: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 35%, transparent);
+  background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 7%, var(--hvy-surface, #ffffff));
+  opacity: 0.58;
+}
+
+.tree-file.is-cut-pending span {
+  font-style: italic;
+}
+
+.tree-file.is-cut-pending:hover,
+.tree-file.is-cut-pending:focus-visible {
+  opacity: 0.78;
+}
+
 .file-context-menu {
   position: fixed;
   z-index: 1000;

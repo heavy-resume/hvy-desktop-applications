@@ -1056,7 +1056,7 @@ function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard)).join('')}</div>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {
@@ -1129,6 +1129,7 @@ function renderWorkspace(
   selectedFilePath: string | null,
   openWorkspaceActionsPath: string | null,
   activeFilters: AppState['workspaceFilters'],
+  workspaceClipboard: WorkspaceClipboardState | null,
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
@@ -1152,26 +1153,32 @@ function renderWorkspace(
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
         </div>
       </div>
-      ${workspace.files.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(workspace.files, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds)).join('')}</ul>`}
+      ${workspace.files.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(workspace.files, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>`}
     </details>`;
 }
 
-function renderNode(node: WorkspaceTreeNode, selectedFilePath: string | null, matchedDocumentIds: Set<string> | null): string {
+function renderNode(
+  node: WorkspaceTreeNode,
+  selectedFilePath: string | null,
+  matchedDocumentIds: Set<string> | null,
+  workspaceClipboard: WorkspaceClipboardState | null,
+): string {
   if (node.kind === 'folder') {
     const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds);
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details open>
           <summary>${escapeHtml(node.name)}</summary>
-          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>
         </details>
       </li>`;
   }
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
   const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
+  const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}">
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span>${escapeHtml(displayDocumentName(node.name))}</span>
       </button>
     </li>`;
