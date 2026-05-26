@@ -52,6 +52,7 @@ export interface AppState {
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   closeDocumentDialogOpen: boolean;
+  appCloseDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
   workspaceClipboard: WorkspaceClipboardState | null;
   renameFilePath: string | null;
@@ -131,6 +132,7 @@ export const state: AppState = {
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
   closeDocumentDialogOpen: false,
+  appCloseDialogOpen: false,
   recoveryBackups: [],
   workspaceClipboard: null,
   renameFilePath: null,

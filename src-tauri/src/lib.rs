@@ -1473,6 +1473,12 @@ fn open_external_url(url: String) -> AppResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn close_app_window(app: AppHandle) -> AppResult<()> {
+    app.exit(0);
+    Ok(())
+}
+
 pub fn run() {
     set_native_process_name();
 
@@ -1563,7 +1569,8 @@ pub fn run() {
             restore_document_backup,
             discard_document_backup,
             clear_document_recovery_drafts,
-            open_external_url
+            open_external_url,
+            close_app_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running HVY Galaxy");

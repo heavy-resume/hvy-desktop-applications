@@ -27,11 +27,13 @@ import {
   listDocumentBackups,
   loadRecentState,
   onMenuEvent,
+  onAppCloseRequest,
   openExternalUrl,
   openColorThemeDialog,
   openFileDialog,
   openImportSourceDialog,
   readDocumentFile,
+  requestAppClose,
   removeMcpClient,
   renameDocumentFile,
   renameWorkspace,
@@ -722,6 +724,13 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  saveAndCloseApp: () => void saveAndCloseApp(),
+  closeAppWithoutSaving: () => void closeAppWithoutSaving(),
+  cancelAppClose: () => {
+    state.appCloseDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   openWorkspace: () => void runBusy('Opening workspace...', async () => {
     const candidate = await chooseWorkspaceFolder();
     if (!candidate) return;
@@ -1031,6 +1040,9 @@ async function boot(): Promise<void> {
     await openRecoveryDialogOnBoot();
     startBackupTimer();
     setupRecoveryLifecycle();
+    await onAppCloseRequest(() => {
+      void handleAppCloseRequest();
+    });
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
@@ -1655,6 +1667,49 @@ async function closeCurrentDocument(options: { discard?: boolean } = {}): Promis
   state.selectedFilePath = null;
   state.status = 'Closed document';
   rerender();
+}
+
+async function handleAppCloseRequest(): Promise<void> {
+  if (state.appCloseDialogOpen) return;
+  if (!hasUnsavedWritableDocument()) {
+    await requestAppClose();
+    return;
+  }
+  try {
+    await backupActiveDocument({ force: true });
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+  }
+  state.appCloseDialogOpen = true;
+  state.status = 'Ready';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function saveAndCloseApp(): Promise<void> {
+  state.appCloseDialogOpen = false;
+  await saveCurrentDocument();
+  if (!hasUnsavedWritableDocument()) {
+    await requestAppClose();
+  } else {
+    state.appCloseDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  }
+}
+
+async function closeAppWithoutSaving(): Promise<void> {
+  state.appCloseDialogOpen = false;
+  try {
+    await backupActiveDocument({ force: true });
+  } catch {
+    // The user chose to close without saving; the normal timed drafts may still exist.
+  }
+  await requestAppClose();
+}
+
+function hasUnsavedWritableDocument(): boolean {
+  const openDocument = state.document;
+  if (!openDocument?.mounted || openDocument.readOnly) return false;
+  return openDocument.dirty || isMountedDocumentDirty(openDocument.mounted);
 }
 
 function startBackupTimer(): void {

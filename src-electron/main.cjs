@@ -19,6 +19,7 @@ const APP_IDENTIFIER = 'com.heavyresume.hvy-galaxy';
 const APP_NAME = 'HVY Galaxy';
 
 let mainWindow = null;
+let appCloseAllowed = false;
 let mcpStatus = {
   running: false,
   url: null,
@@ -58,7 +59,7 @@ app.on('window-all-closed', () => {
 });
 
 function createWindow() {
-  return new BrowserWindow({
+  const window = new BrowserWindow({
     width: 1280,
     height: 860,
     minWidth: 920,
@@ -73,6 +74,12 @@ function createWindow() {
       sandbox: false,
     },
   });
+  window.on('close', (event) => {
+    if (appCloseAllowed) return;
+    event.preventDefault();
+    window.webContents.send('hvy:app-close-requested');
+  });
+  return window;
 }
 
 function bindWindowShortcuts(window) {
@@ -289,8 +296,19 @@ async function handleCommand(command, args) {
     case 'discard_document_backup': return discardDocumentBackup(args.id);
     case 'clear_document_recovery_drafts': return clearDocumentRecoveryDrafts(args.request);
     case 'open_external_url': return openExternalUrl(args.url);
+    case 'close_app_window': return closeAppWindow();
     default: throw new Error(`Unknown Electron command: ${command}`);
   }
+}
+
+function closeAppWindow() {
+  appCloseAllowed = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+    return null;
+  }
+  app.quit();
+  return null;
 }
 
 function dataPath(fileName) {

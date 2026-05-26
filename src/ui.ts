@@ -73,6 +73,9 @@ export interface UiHandlers {
   cancelRecovery(): void;
   confirmCloseDocument(): void;
   cancelCloseDocument(): void;
+  saveAndCloseApp(): void;
+  closeAppWithoutSaving(): void;
+  cancelAppClose(): void;
   openWorkspace(): void;
   openFile(): void;
   openRecentWorkspace(path: string): void;
@@ -164,6 +167,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
       ${renderCloseDocumentDialog(state)}
+      ${renderAppCloseDialog(state)}
       ${renderRenameFileDialog(state)}
       ${renderWorkspaceTransferDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
@@ -214,6 +218,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.close-document-dialog')) {
           handlers.cancelCloseDocument();
+          return;
+        }
+        if (backdrop.querySelector('.app-close-dialog')) {
+          handlers.cancelAppClose();
           return;
         }
         if (backdrop.querySelector('form[data-form="rename-file"]')) {
@@ -370,6 +378,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'close-document') handlers.closeDocument();
     if (action === 'confirm-close-document') handlers.confirmCloseDocument();
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
+    if (action === 'save-and-close-app') handlers.saveAndCloseApp();
+    if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
+    if (action === 'cancel-app-close') handlers.cancelAppClose();
     if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
     if (action === 'choose-import-source') handlers.chooseImportSource();
@@ -610,6 +621,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.close-document-dialog')) {
       event.preventDefault();
       handlers.cancelCloseDocument();
+      return;
+    }
+    if (root.querySelector('.app-close-dialog')) {
+      event.preventDefault();
+      handlers.cancelAppClose();
       return;
     }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
@@ -1995,6 +2011,25 @@ function renderCloseDocumentDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" class="danger-button" data-action="confirm-close-document">Discard Edits</button>
           <button type="button" data-action="cancel-close-document">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderAppCloseDialog(state: AppState): string {
+  if (!state.appCloseDialogOpen) {
+    return '';
+  }
+  const documentName = state.document?.name ?? 'this document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog app-close-dialog" role="dialog" aria-modal="true" aria-labelledby="appCloseTitle">
+        <h2 id="appCloseTitle">Save Changes Before Closing?</h2>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}. HVY Galaxy tries to save a recovery draft before closing, but saving now writes the document to its file.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="save-and-close-app">Save and Close</button>
+          <button type="button" class="danger-button" data-action="close-app-without-saving">Close Without Saving</button>
+          <button type="button" data-action="cancel-app-close">Cancel</button>
         </div>
       </section>
     </div>`;

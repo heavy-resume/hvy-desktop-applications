@@ -1,11 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 declare global {
   interface Window {
     hvyElectron?: {
       invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
       onMenuEvent(callback: (event: string) => void): () => void;
+      onAppCloseRequest(callback: () => void): () => void;
     };
   }
 }
@@ -594,6 +596,27 @@ export function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraftReques
 
 export function openExternalUrl(url: string): Promise<void> {
   return invokeDesktop('open_external_url', { url });
+}
+
+export function requestAppClose(): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    window.close();
+    return Promise.resolve();
+  }
+  return invokeDesktop('close_app_window');
+}
+
+export async function onAppCloseRequest(handler: () => void): Promise<() => void> {
+  if (isElectronRuntime()) {
+    return window.hvyElectron!.onAppCloseRequest(handler);
+  }
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return getCurrentWindow().onCloseRequested((event) => {
+    event.preventDefault();
+    handler();
+  });
 }
 
 export function onMenuEvent(handler: (event: string) => void): Promise<() => void> {
