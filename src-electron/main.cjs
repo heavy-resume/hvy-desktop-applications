@@ -214,10 +214,16 @@ function menuItem(label, id, accelerator) {
 }
 
 function recentSubmenu(label, entries, prefix, emptyLabel = 'No Recent Items') {
-  const submenu = entries.length
-    ? entries.map((entry) => menuItem(menuLabel(entry), `${prefix}${entry}`))
-    : [{ label: emptyLabel, enabled: false }];
-  return { label, submenu };
+  const submenu = [
+    { id: `${prefix}empty`, label: emptyLabel, enabled: false, visible: entries.length === 0 },
+    ...Array.from({ length: RECENT_LIMIT }, (_value, index) => ({
+      id: `${prefix}${index}`,
+      label: entries[index] ? menuLabel(entries[index]) : emptyLabel,
+      visible: Boolean(entries[index]),
+      click: () => emitRecent(prefix, index),
+    })),
+  ];
+  return { id: `${prefix}menu`, label, submenu };
 }
 
 function mcpStatusMenuLabel(status) {
@@ -230,6 +236,40 @@ function mcpStatusMenuLabel(status) {
 
 function emitMenu(payload) {
   mainWindow?.webContents.send('hvy:menu-event', payload);
+}
+
+function emitRecent(prefix, index) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  const entries = prefix === 'recent-file:' ? recent.files : recent.workspaces;
+  const entry = entries?.[index];
+  if (entry) emitMenu(`${prefix}${entry}`);
+}
+
+function refreshMenu() {
+  const menu = Menu.getApplicationMenu();
+  if (!menu) {
+    buildMenu();
+    return;
+  }
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  refreshRecentSubmenu(menu, 'recent-file:', recent.files || [], 'No Recent Files');
+  refreshRecentSubmenu(menu, 'recent-workspace:', recent.workspaces || [], 'No Recent Workspaces');
+  const status = menu.getMenuItemById('mcp-status');
+  if (status) status.label = mcpStatusMenuLabel(mcpStatus);
+  const toggle = menu.getMenuItemById('mcp-toggle');
+  if (toggle) toggle.label = mcpStatus.running ? 'Stop MCP Server' : 'Start MCP Server';
+}
+
+function refreshRecentSubmenu(menu, prefix, entries, emptyLabel) {
+  const empty = menu.getMenuItemById(`${prefix}empty`);
+  if (empty) empty.visible = entries.length === 0;
+  for (let index = 0; index < RECENT_LIMIT; index += 1) {
+    const item = menu.getMenuItemById(`${prefix}${index}`);
+    if (!item) continue;
+    const entry = entries[index];
+    item.label = entry ? menuLabel(entry) : emptyLabel;
+    item.visible = Boolean(entry);
+  }
 }
 
 ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
@@ -255,9 +295,11 @@ async function handleCommand(command, args) {
     case 'restore_mcp_client_backup': return restoreMcpClientBackup(args.target);
     case 'start_mcp_server':
       mcpStatus = { running: false, url: null, message: 'MCP stdio is available through client install.', lastError: null };
+      refreshMenu();
       return mcpStatus;
     case 'stop_mcp_server':
       mcpStatus = { running: false, url: null, message: 'MCP server is stopped.', lastError: null };
+      refreshMenu();
       return mcpStatus;
     case 'update_mcp_workspaces': return null;
     case 'load_default_guide': return readDocumentAt(defaultGuidePath());
@@ -1105,7 +1147,7 @@ function addRecentWorkspace(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   recent.workspaces = pushRecent(recent.workspaces || [], entryPath);
   writeJson(dataPath(RECENT_STATE), recent);
-  buildMenu();
+  refreshMenu();
 }
 
 function removeRecentWorkspace(entryPath) {
@@ -1113,7 +1155,7 @@ function removeRecentWorkspace(entryPath) {
   const normalized = path.resolve(entryPath);
   recent.workspaces = (recent.workspaces || []).filter((entry) => path.resolve(entry) !== normalized);
   writeJson(dataPath(RECENT_STATE), recent);
-  buildMenu();
+  refreshMenu();
 }
 
 function addArchivedWorkspace(entry) {
@@ -1137,7 +1179,7 @@ function addRecentFile(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   recent.files = pushRecent(recent.files || [], entryPath);
   writeJson(dataPath(RECENT_STATE), recent);
-  buildMenu();
+  refreshMenu();
 }
 
 function pushRecent(entries, entryPath) {

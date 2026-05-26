@@ -13,7 +13,7 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
-use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
+use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, Submenu, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 
@@ -1626,7 +1626,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
         .build()?;
 
-    let mut file_builder = SubmenuBuilder::new(app, "File")
+    let mut file_builder = SubmenuBuilder::with_id(app, "file-menu", "File")
         .item(&app_shortcut_menu_item(app, "New Workspace", "new-workspace", "CmdOrCtrl+N")?)
         .item(&app_shortcut_menu_item(app, "Open Workspace", "open-workspace", "CmdOrCtrl+O")?)
         .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
@@ -1656,7 +1656,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
             .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?);
     }
     let file = file_builder.build()?;
-    let mcp = SubmenuBuilder::new(app, "MCP Server")
+    let mcp = SubmenuBuilder::with_id(app, "mcp-menu", "MCP Server")
         .item(
             &MenuItemBuilder::new(mcp_status_menu_label(&mcp_status))
                 .id("mcp-status")
@@ -1667,7 +1667,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Server Settings...").id("mcp-settings").build(app)?)
         .build()?;
-    let edit = SubmenuBuilder::new(app, "Edit")
+    let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
         .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
         .item(&PredefinedMenuItem::redo(app, Some("Redo"))?)
         .separator()
@@ -1679,7 +1679,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
         .build()?;
-    let mut help_builder = SubmenuBuilder::new(app, "Help")
+    let mut help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
             &MenuItemBuilder::new("HVY Guide")
                 .id("open-guide")
@@ -1734,7 +1734,7 @@ fn build_recent_files_menu(
     app: &AppHandle,
     recent: &RecentState,
 ) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
-    let mut builder = SubmenuBuilder::new(app, "Recent Files");
+    let mut builder = SubmenuBuilder::with_id(app, "recent-files", "Recent Files");
     if recent.files.is_empty() {
         builder = builder.item(&MenuItemBuilder::new("No Recent Files").id("recent-files-empty").build(app)?);
     } else {
@@ -1753,7 +1753,7 @@ fn build_recent_workspaces_menu(
     app: &AppHandle,
     recent: &RecentState,
 ) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
-    let mut builder = SubmenuBuilder::new(app, "Recent Workspaces");
+    let mut builder = SubmenuBuilder::with_id(app, "recent-workspaces", "Recent Workspaces");
     if recent.workspaces.is_empty() {
         builder = builder.item(&MenuItemBuilder::new("No Recent Workspaces").id("recent-workspaces-empty").build(app)?);
     } else {
@@ -2327,10 +2327,91 @@ fn document_backups_dir(app: &AppHandle) -> AppResult<PathBuf> {
 }
 
 fn refresh_menu(app: &AppHandle) -> AppResult<()> {
+    if let Some(menu) = app.menu() {
+        refresh_menu_items(app, &menu)?;
+        return Ok(());
+    }
     let menu = build_menu(app).map_err(|error| AppError::Message(error.to_string()))?;
     app.set_menu(menu)
         .map(|_| ())
         .map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> AppResult<()> {
+    let recent_path = recent_state_path(app)?;
+    let recent = read_recent_state(&recent_path)?;
+    let file = menu
+        .get("file-menu")
+        .and_then(|item| item.as_submenu().cloned())
+        .ok_or_else(|| AppError::Message("File menu is unavailable.".into()))?;
+    let recent_files = file
+        .get("recent-files")
+        .and_then(|item| item.as_submenu().cloned())
+        .ok_or_else(|| AppError::Message("Recent Files menu is unavailable.".into()))?;
+    let recent_workspaces = file
+        .get("recent-workspaces")
+        .and_then(|item| item.as_submenu().cloned())
+        .ok_or_else(|| AppError::Message("Recent Workspaces menu is unavailable.".into()))?;
+    replace_recent_menu_items(app, &recent_files, &recent.files, "recent-file:", "No Recent Files")?;
+    replace_recent_menu_items(
+        app,
+        &recent_workspaces,
+        &recent.workspaces,
+        "recent-workspace:",
+        "No Recent Workspaces",
+    )?;
+
+    let mcp = menu
+        .get("mcp-menu")
+        .and_then(|item| item.as_submenu().cloned())
+        .ok_or_else(|| AppError::Message("MCP menu is unavailable.".into()))?;
+    let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
+    if let Some(item) = mcp.get("mcp-status").and_then(|item| item.as_menuitem().cloned()) {
+        item.set_text(mcp_status_menu_label(&mcp_status))
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    if let Some(item) = mcp.get("mcp-toggle").and_then(|item| item.as_menuitem().cloned()) {
+        let label = if mcp_status.running { "Stop MCP Server" } else { "Start MCP Server" };
+        item.set_text(label)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn replace_recent_menu_items(
+    app: &AppHandle,
+    menu: &Submenu<tauri::Wry>,
+    entries: &[String],
+    prefix: &str,
+    empty_label: &str,
+) -> AppResult<()> {
+    while !menu
+        .items()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .is_empty()
+    {
+        menu.remove_at(0)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    if entries.is_empty() {
+        let item = MenuItemBuilder::new(empty_label)
+            .id(format!("{prefix}empty"))
+            .enabled(false)
+            .build(app)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        menu.append(&item)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        return Ok(());
+    }
+    for path in entries {
+        let item = MenuItemBuilder::new(menu_label(path))
+            .id(format!("{prefix}{path}"))
+            .build(app)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        menu.append(&item)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn push_recent(entries: &mut Vec<String>, path: &Path) {
