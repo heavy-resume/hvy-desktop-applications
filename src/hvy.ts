@@ -9,13 +9,15 @@ import type {
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
 type HvyEmbedMount = ReturnType<HvyEmbedModule['mountHvy']>;
+type HvyRecoveryStateMount = {
+  getRecoveryState?: () => string | null;
+  applyRecoveryState?: (recoveryState?: string | null) => void;
+};
 type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty' | 'buildImportPlan' | 'importFromText'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
-  getRecoveryState?: HvyEmbedMount['getRecoveryState'];
-  applyRecoveryState?: HvyEmbedMount['applyRecoveryState'];
-};
+} & HvyRecoveryStateMount;
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 export type BuildImportPlanOptions = Parameters<HvyEmbedMount['buildImportPlan']>[0];
 export type BuildImportPlanResult = Awaited<ReturnType<HvyEmbedMount['buildImportPlan']>>;

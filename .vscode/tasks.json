@@ -5,6 +5,9 @@
       "label": "HVY Galaxy: Tauri Dev (Hot Reload)",
       "type": "shell",
       "command": ". \"$HOME/.cargo/env\" && npm run tauri -- dev",
+      "windows": {
+        "command": "npm.cmd run tauri -- dev"
+      },
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -14,6 +17,43 @@
       "label": "HVY Galaxy: Electron Dev (Hot Reload)",
       "type": "shell",
       "command": "npm run electron:dev",
+      "windows": {
+        "command": "npm.cmd run electron:dev"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Host Installer",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && npm run build:universal:dmg",
+      "windows": {
+        "command": "npm.cmd run build:windows"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Windows Installers",
+      "type": "shell",
+      "command": "npm.cmd run build:windows",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Electron Windows App",
+      "type": "shell",
+      "command": "npm.cmd run build:electron:windows",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -23,10 +63,6 @@
       "label": "HVY Galaxy: Build Universal DMG",
       "type": "shell",
       "command": ". \"$HOME/.cargo/env\" && npm run build:universal:dmg",
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
       "options": {
         "cwd": "${workspaceFolder}"
       },

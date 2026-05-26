@@ -323,7 +323,9 @@ function iconPath(fileName) {
 }
 
 function appIconFileName() {
-  return process.platform === 'darwin' ? 'icon.icns' : 'icon.png';
+  if (process.platform === 'darwin') return 'icon.icns';
+  if (process.platform === 'win32') return 'icon.ico';
+  return 'icon.png';
 }
 
 function readJson(filePath, fallback) {
@@ -1162,7 +1164,7 @@ function mcpClientInstallStatuses() {
 function installMcpClient(target) {
   const launch = defaultMcpStdioLaunchConfig();
   const configPath = mcpTargetConfigPath(target);
-  if (!fs.existsSync(configPath)) {
+  if (!fs.existsSync(configPath) && !(target === 'claude' && claudeConfigCanBeCreated(configPath))) {
     throw new Error(`${configPath} was not found.`);
   }
   if (target === 'codex') {
@@ -1170,8 +1172,10 @@ function installMcpClient(target) {
     backupFileBeforeOverwrite(configPath);
     writeText(configPath, upsertCodexMcpBlock(current, launch));
   } else if (target === 'claude') {
-    const current = fs.readFileSync(configPath, 'utf8');
-    backupFileBeforeOverwrite(configPath);
+    const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '{}\n';
+    if (fs.existsSync(configPath)) {
+      backupFileBeforeOverwrite(configPath);
+    }
     writeText(configPath, upsertClaudeMcpConfig(current, launch));
   } else {
     throw new Error(`Unknown MCP client target: ${target}`);
@@ -1214,7 +1218,7 @@ function restoreMcpClientBackup(target) {
 }
 
 function mcpClientInstallStatus(target, label, configPath, launch, isInstalled) {
-  const configExists = fs.existsSync(configPath);
+  const configExists = fs.existsSync(configPath) || (target === 'claude' && claudeConfigCanBeCreated(configPath));
   const executableExists = fs.existsSync(launch.command);
   const installed = configExists && isInstalled(configPath, launch);
   const backups = mcpClientBackupPaths(configPath);
@@ -1262,7 +1266,47 @@ function codexConfigPath() {
 }
 
 function claudeConfigPath() {
+  if (process.platform === 'win32') {
+    const packagedConfigDir = packagedClaudeConfigDir();
+    if (packagedConfigDir) {
+      return path.join(packagedConfigDir, 'claude_desktop_config.json');
+    }
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, 'Claude', 'claude_desktop_config.json');
+  }
   return path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+}
+
+function claudeConfigCanBeCreated(configPath) {
+  if (fs.existsSync(path.dirname(configPath))) {
+    return true;
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return Boolean(packagedClaudeConfigDir()) || fs.existsSync(path.join(localAppData, 'Claude'));
+  }
+  return false;
+}
+
+function packagedClaudeConfigDir() {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+  const packagesDir = path.join(localAppData, 'Packages');
+  if (!fs.existsSync(packagesDir)) {
+    return null;
+  }
+  for (const entry of fs.readdirSync(packagesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('Claude_')) {
+      continue;
+    }
+    const configDir = path.join(packagesDir, entry.name, 'LocalCache', 'Roaming', 'Claude');
+    if (fs.existsSync(configDir)) {
+      return configDir;
+    }
+  }
+  return null;
 }
 
 function codexConfigHasHvyMcp(configPath, launch) {

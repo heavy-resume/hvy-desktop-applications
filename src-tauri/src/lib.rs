@@ -624,7 +624,7 @@ fn install_mcp_client(app: AppHandle, target: String) -> AppResult<Vec<McpClient
         "claude" => claude_config_path()?,
         _ => return Err(AppError::Message(format!("Unknown MCP client target: {target}"))),
     };
-    if !path.exists() {
+    if !path.exists() && !(target == "claude" && claude_config_can_be_created(&path)) {
         return Err(AppError::Message(format!("{} was not found.", path_to_string(&path))));
     }
     if !Path::new(&launch.command).exists() {
@@ -3334,7 +3334,7 @@ fn mcp_client_install_status(
     launch: &McpStdioLaunchConfig,
     is_installed: fn(&Path, &McpStdioLaunchConfig) -> bool,
 ) -> McpClientInstallStatus {
-    let config_exists = path.exists();
+    let config_exists = path.exists() || (target == "claude" && claude_config_can_be_created(&path));
     let executable_exists = Path::new(&launch.command).exists();
     let installed = config_exists && is_installed(&path, launch);
     let backups = mcp_client_backup_paths(&path);
@@ -3383,6 +3383,23 @@ fn codex_config_path() -> AppResult<PathBuf> {
 }
 
 fn claude_config_path() -> AppResult<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(config_dir) = packaged_claude_config_dir() {
+            return Ok(config_dir.join("claude_desktop_config.json"));
+        }
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(app_data)
+                .join("Claude")
+                .join("claude_desktop_config.json"));
+        }
+        return Ok(user_home_dir()?
+            .join("AppData")
+            .join("Roaming")
+            .join("Claude")
+            .join("claude_desktop_config.json"));
+    }
+    #[cfg(not(windows))]
     Ok(user_home_dir()?
         .join("Library")
         .join("Application Support")
@@ -3390,7 +3407,72 @@ fn claude_config_path() -> AppResult<PathBuf> {
         .join("claude_desktop_config.json"))
 }
 
+fn claude_config_can_be_created(path: &Path) -> bool {
+    if path.parent().is_some_and(Path::exists) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return packaged_claude_config_dir().is_some()
+            || if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+                PathBuf::from(local_app_data).join("Claude").exists()
+            } else {
+                user_home_dir()
+                    .map(|home| home.join("AppData").join("Local").join("Claude").exists())
+                    .unwrap_or(false)
+            };
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn packaged_claude_config_dir() -> Option<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            user_home_dir()
+                .map(|home| home.join("AppData").join("Local"))
+                .unwrap_or_else(|_| PathBuf::from("."))
+        });
+    let packages_dir = local_app_data.join("Packages");
+    let entries = fs::read_dir(packages_dir).ok()?;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("Claude_") {
+            continue;
+        }
+        let config_dir = entry.path().join("LocalCache").join("Roaming").join("Claude");
+        if config_dir.exists() {
+            return Some(config_dir);
+        }
+    }
+    None
+}
+
 fn user_home_dir() -> AppResult<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            return Ok(PathBuf::from(home));
+        }
+        if let (Some(drive), Some(path)) = (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH")) {
+            return Ok(PathBuf::from(format!(
+                "{}{}",
+                drive.to_string_lossy(),
+                path.to_string_lossy()
+            )));
+        }
+    }
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| AppError::Message("Could not determine the home directory.".into()))
@@ -3404,9 +3486,15 @@ fn install_mcp_for_codex(path: &Path, launch: &McpStdioLaunchConfig) -> AppResul
 }
 
 fn install_mcp_for_claude(path: &Path, launch: &McpStdioLaunchConfig) -> AppResult<()> {
-    let current = fs::read_to_string(path)?;
+    let current = if path.exists() {
+        fs::read_to_string(path)?
+    } else {
+        "{}\n".into()
+    };
     let next = upsert_claude_mcp_config(&current, launch)?;
-    backup_file_before_overwrite(path)?;
+    if path.exists() {
+        backup_file_before_overwrite(path)?;
+    }
     write_file_atomically(path, next.as_bytes())
 }
 

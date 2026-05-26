@@ -6,7 +6,6 @@ import { createRequire } from 'node:module';
 const appName = 'HVY Galaxy';
 const appIdentifier = 'com.heavyresume.hvy-galaxy';
 const rendererUrl = process.env.ELECTRON_RENDERER_URL || 'http://127.0.0.1:1420';
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const require = createRequire(import.meta.url);
 const electronEnv = {
   ...process.env,
@@ -17,7 +16,7 @@ delete electronEnv.ELECTRON_RUN_AS_NODE;
 let vite = null;
 
 if (!(await canConnect(rendererUrl))) {
-  vite = spawn(npmCommand, ['run', 'dev'], {
+  vite = spawn(process.execPath, [path.resolve('node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', '1420'], {
     stdio: 'inherit',
     env: process.env,
   });

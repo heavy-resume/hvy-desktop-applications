@@ -6,8 +6,9 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const appName = 'HVY Galaxy';
-const arch = process.env.ELECTRON_ARCH || process.arch;
-const platform = process.env.ELECTRON_PLATFORM || process.platform;
+const args = parseArgs(process.argv.slice(2));
+const arch = args.arch || process.env.ELECTRON_ARCH || process.arch;
+const platform = args.platform || process.env.ELECTRON_PLATFORM || process.platform;
 
 if (platform !== 'darwin') {
   throw new Error('Electron DMG builds are only supported on macOS.');
@@ -45,4 +46,23 @@ try {
   console.log(dmgPath);
 } finally {
   fs.rmSync(stagingDir, { recursive: true, force: true });
+}
+
+function parseArgs(argv) {
+  const parsed = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--platform') {
+      parsed.platform = argv[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--platform=')) {
+      parsed.platform = arg.slice('--platform='.length);
+    } else if (arg === '--arch') {
+      parsed.arch = argv[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--arch=')) {
+      parsed.arch = arg.slice('--arch='.length);
+    }
+  }
+  return parsed;
 }

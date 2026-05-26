@@ -369,7 +369,7 @@ export function defaultMcpClientInstallStatus(): McpClientInstallStatus[] {
     {
       target: 'claude',
       label: 'Claude',
-      configPath: '~/Library/Application Support/Claude/claude_desktop_config.json',
+      configPath: 'Claude/claude_desktop_config.json',
       configExists: false,
       executableExists: false,
       installed: false,
