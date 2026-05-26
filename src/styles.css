@@ -156,11 +156,12 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: var(--workspace-sidebar-width, 320px) minmax(0, 1fr);
   height: 100vh;
 }
 
 .workspace-sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -168,6 +169,36 @@ button:disabled {
   overflow: hidden;
   background: var(--hvy-surface-alt, #e8ece7);
   padding: 18px;
+}
+
+.workspace-sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 18px;
+  cursor: col-resize;
+}
+
+.workspace-sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 18px;
+  right: 0;
+  bottom: 18px;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.workspace-sidebar-resizer:hover::after,
+.workspace-sidebar.is-resizing .workspace-sidebar-resizer::after {
+  background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 55%, var(--hvy-border, #c5cec8) 45%);
+}
+
+.workspace-sidebar.is-resizing {
+  user-select: none;
 }
 
 .sidebar-header {
@@ -1917,6 +1948,29 @@ button:disabled {
   min-height: 0;
 }
 
+.hvy-document-host .chat-dock {
+  width: var(--hvy-chat-panel-width, min(30rem, calc(100% - 4rem)));
+}
+
+.hvy-document-host .chat-panel.is-question-answer {
+  flex-basis: var(--hvy-chat-panel-height, 38rem);
+}
+
+.hvy-document-host .chat-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  cursor: nwse-resize;
+}
+
+.hvy-document-host .chat-panel.is-resizing {
+  user-select: none;
+}
+
 .hvy-document-host .rich-toolbar .icon-button {
   overflow: hidden;
   font-size: 0.875rem;
@@ -1965,6 +2019,10 @@ button:disabled {
 .hvy-document-host .chat-panel-close .hvy-ui-icon {
   width: 1.05rem;
   height: 1.05rem;
+}
+
+.hvy-document-host .chat-token-usage {
+  display: none;
 }
 
 .empty-state {

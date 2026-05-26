@@ -27,7 +27,7 @@ export const aiProviderPresets: AiProviderPreset[] = [
   {
     id: 'unsloth',
     name: 'Unsloth',
-    baseUrl: 'http://127.0.0.1:8001/v1',
+    baseUrl: 'http://127.0.0.1:8888/v1',
     apiKeyPlaceholder: 'optional',
     modelPlaceholder: 'unsloth/GLM-4.7-Flash',
     docsUrl: 'https://unsloth.ai/docs/basics/codex',

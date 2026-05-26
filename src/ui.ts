@@ -111,7 +111,10 @@ if (!app) {
 const appRoot = app;
 let bindController: AbortController | null = null;
 let activeFileContextMenuCleanup: (() => void) | null = null;
+let workspaceSidebarWidth = 320;
 const MIN_PASTED_IMPORT_CHARS = 50;
+const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
+const MAX_WORKSPACE_SIDEBAR_WIDTH = 560;
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   appRoot.innerHTML = `
@@ -135,6 +138,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
           </div>
           ${renderWorkspaces(state)}
         </section>
+        <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>
       </aside>
       <section class="document-shell">
         <header class="document-toolbar">
@@ -163,6 +167,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderWorkspaceTransferDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
+  applyWorkspaceSidebarWidth(appRoot);
 
   const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
   if (options.preserveMount && state.document) {
@@ -176,6 +181,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindController?.abort();
   bindController = new AbortController();
   const { signal } = bindController;
+  bindWorkspaceSidebarResize(root, signal);
+  document.addEventListener('keydown', (event) => {
+    handleApplicationShortcut(event, root, handlers);
+  }, { signal, capture: true });
   root.addEventListener('click', (event) => {
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) {
@@ -628,6 +637,88 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     updateImportSubmit(form);
   });
   root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
+}
+
+function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
+  if (event.isComposing || event.altKey || event.defaultPrevented) return false;
+  if (root.querySelector('.modal-backdrop')) return false;
+
+  const key = event.key.toLowerCase();
+  const meta = event.metaKey || event.ctrlKey;
+  if (!meta) return false;
+
+  if (!event.shiftKey && key === 's') {
+    event.preventDefault();
+    handlers.save();
+    return true;
+  }
+  if (event.shiftKey && key === 's') {
+    event.preventDefault();
+    handlers.saveAs();
+    return true;
+  }
+  if (!event.shiftKey && key === 'w') {
+    event.preventDefault();
+    handlers.closeDocument();
+    return true;
+  }
+  if (!event.shiftKey && key === 'n') {
+    event.preventDefault();
+    handlers.newWorkspace();
+    return true;
+  }
+  if (!event.shiftKey && key === 'o') {
+    event.preventDefault();
+    handlers.openWorkspace();
+    return true;
+  }
+  if (event.shiftKey && key === 'o') {
+    event.preventDefault();
+    handlers.openFile();
+    return true;
+  }
+  if (!event.shiftKey && key === ',') {
+    event.preventDefault();
+    handlers.openAiSettings();
+    return true;
+  }
+  return false;
+}
+
+function bindWorkspaceSidebarResize(root: HTMLElement, signal: AbortSignal): void {
+  root.querySelector<HTMLElement>('.workspace-sidebar-resizer')?.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    const shell = root.querySelector<HTMLElement>('.app-shell');
+    const sidebar = root.querySelector<HTMLElement>('.workspace-sidebar');
+    if (!shell || !sidebar) return;
+
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebar.getBoundingClientRect().width;
+    const maxWidth = Math.min(MAX_WORKSPACE_SIDEBAR_WIDTH, Math.max(MIN_WORKSPACE_SIDEBAR_WIDTH, shell.getBoundingClientRect().width - 420));
+    sidebar.classList.add('is-resizing');
+    sidebar.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      workspaceSidebarWidth = Math.round(Math.min(maxWidth, Math.max(MIN_WORKSPACE_SIDEBAR_WIDTH, startWidth + moveEvent.clientX - startX)));
+      applyWorkspaceSidebarWidth(root);
+    };
+    const onEnd = () => {
+      sidebar.classList.remove('is-resizing');
+      sidebar.releasePointerCapture(event.pointerId);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd, { once: true });
+    window.addEventListener('pointercancel', onEnd, { once: true });
+  }, { signal });
+}
+
+function applyWorkspaceSidebarWidth(root: HTMLElement): void {
+  root.style.setProperty('--workspace-sidebar-width', `${workspaceSidebarWidth}px`);
 }
 
 function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState, handlers: UiHandlers): boolean {
