@@ -1986,8 +1986,3 @@ button:disabled {
   max-width: 34rem;
   margin: 0;
 }
-
-.empty-state div {
-  display: flex;
-  gap: 8px;
-}

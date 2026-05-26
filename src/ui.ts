@@ -1209,10 +1209,6 @@ function renderEmptyState(state: AppState): string {
     <div class="empty-state">
       <h2>Choose a file from a workspace</h2>
       <p>Open a workspace folder or a standalone HVY file to start viewing and editing.</p>
-      <div>
-        <button type="button" data-action="open-workspace">Open Workspace</button>
-        <button type="button" data-action="new-workspace">New Workspace</button>
-      </div>
     </div>`;
 }
 
