@@ -1474,32 +1474,7 @@ pub fn run() {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
-                let id = event.id().as_ref();
-                if matches!(
-                    id,
-                    "new-workspace"
-                        | "open-workspace"
-                        | "manage-workspaces"
-                        | "open-file"
-                        | "open-guide"
-                        | "about"
-                        | "ai-settings"
-                        | "mcp-settings"
-                        | "mcp-toggle"
-                        | "colors"
-                        | "close-document"
-                        | "save"
-                        | "save-as"
-                        | "save-to-workspace"
-                        | "export-document"
-                        | "import-current"
-                        | "recover-backup"
-                )
-                    || id.starts_with("recent-file:")
-                    || id.starts_with("recent-workspace:")
-                {
-                    let _ = app.emit("menu-event", id.to_string());
-                }
+                let _ = app.emit("menu-event", event.id().as_ref().to_string());
             });
             Ok(())
         })

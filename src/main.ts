@@ -12,7 +12,6 @@ import {
   createWorkspace,
   copyDocumentToWorkspace,
   initializeWorkspacePath,
-  isTauriRuntime,
   installMcpClient,
   loadArchivedWorkspaces,
   loadAiSettings,
@@ -1024,7 +1023,7 @@ async function boot(): Promise<void> {
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
-      if (event === 'open-guide') void openDefaultGuide({ force: true });
+      if (event === 'open-guide') void openGuide();
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
@@ -1082,7 +1081,6 @@ async function loadRecentWorkspaces(): Promise<void> {
 }
 
 async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
-  if (!isTauriRuntime()) return;
   if (!options.force && (state.document || state.selectedFilePath)) return;
   try {
     await openDocument(await loadDefaultGuide(), { defaultDocument: true });
@@ -1091,6 +1089,12 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
     state.status = 'Could not load HVY guide';
     mountRoot = render(state, handlers);
   }
+}
+
+async function openGuide(): Promise<void> {
+  await runBusy('Opening HVY guide...', async () => {
+    await openDefaultGuide({ force: true });
+  });
 }
 
 async function submitWorkspaceFilter(): Promise<void> {
