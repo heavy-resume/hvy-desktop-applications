@@ -1590,10 +1590,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
-        .item(&PredefinedMenuItem::hide(app, Some("Hide HVY Galaxy"))?)
-        .item(&PredefinedMenuItem::hide_others(app, Some("Hide Others"))?)
-        .item(&PredefinedMenuItem::show_all(app, Some("Show All"))?)
-        .separator()
         .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
         .build()?;
     let file = SubmenuBuilder::new(app, "File")
