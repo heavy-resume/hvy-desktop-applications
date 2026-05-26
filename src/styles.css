@@ -296,7 +296,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 0.375rem;
   border-bottom: 1px solid var(--hvy-border, #c5cec8);
   padding-bottom: 7px;
 }
