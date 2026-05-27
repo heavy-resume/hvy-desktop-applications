@@ -282,15 +282,17 @@ const handlers: UiHandlers = {
     state.importDocumentType = type;
     rerender({ preserveMountedDocument: true });
   },
-  openImportIntoCurrent: () => {
-    if (!state.document?.mounted || state.document.readOnly) return;
+  openImportIntoCurrent: () => void (async () => {
+    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    await ensureCurrentDocumentMounted();
+    if (!state.document?.mounted) return;
     state.newDocumentWorkspacePath = null;
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = true;
     state.importSource = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
-  },
+  })(),
   chooseImportSource: () => void runBusy('Choosing import source...', async () => {
     const source = await openImportSourceDialog();
     if (!source) {
@@ -365,7 +367,9 @@ const handlers: UiHandlers = {
   }),
   importIntoCurrent: (instructions, pastedSourceText) => void runBusy('Importing into current document...', async () => {
     const source = importSourceFrom(pastedSourceText);
-    if (!state.document?.mounted || state.document.readOnly) return;
+    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    await ensureCurrentDocumentMounted();
+    if (!state.document?.mounted) return;
     if (!source) {
       state.status = 'Import source is required';
       return;
@@ -1015,13 +1019,15 @@ const handlers: UiHandlers = {
   save: () => void saveCurrentDocument(),
   saveAs: () => void saveCurrentDocumentAs(),
   saveAndCloseDocument: () => void saveAndCloseDocument(),
-  openSaveTemplate: () => {
-    if (!state.document?.mounted || state.document.readOnly) return;
+  openSaveTemplate: () => void (async () => {
+    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    await ensureCurrentDocumentMounted();
+    if (!state.document?.mounted) return;
     state.saveTemplateDialogOpen = true;
     state.saveTemplateScope = workspacePathForFile(state.document.path) ? 'workspace' : 'app';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
-  },
+  })(),
   exportPdf: () => void exportCurrentDocumentPdf(),
   saveBeforeExportPdf: () => void saveBeforeExportPdf(),
   cancelExportPdfSavePrompt: () => {
@@ -1035,7 +1041,9 @@ const handlers: UiHandlers = {
     rerender({ preserveMountedDocument: true });
   },
   saveAsTemplate: (name, scope, extension: TemplateExtension) => void runBusy('Saving template...', async () => {
-    if (!state.document?.mounted || state.document.readOnly) return;
+    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    await ensureCurrentDocumentMounted();
+    if (!state.document?.mounted) return;
     const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.path) : null;
     if (scope === 'workspace' && !workspacePath) {
       throw new Error('Workspace template requires a document in an open workspace.');
@@ -1402,7 +1410,7 @@ function workspaceNameForPath(path: string): string {
 }
 
 function displayDocumentName(name: string): string {
-  return name.replace(/\.(t?hvy|md)$/i, '');
+  return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
 function importSourceFrom(pastedSourceText: string): ImportSourceFile | null {
@@ -1434,6 +1442,13 @@ function getTabStackIndex(): number {
   const count = state.documentTabs.length;
   if (count === 0) return 0;
   return ((state.tabStackIndex % count) + count) % count;
+}
+
+function defaultDocumentMode(extension: DocumentFile['extension'], options: { defaultDocument?: boolean } = {}): HvyMode {
+  if (options.defaultDocument) return 'viewer';
+  if (extension === '.thvy' || extension === '.phvy') return 'editor';
+  if (extension === '.hvy') return 'ai';
+  return 'viewer';
 }
 
 function syncDocumentTabs(): void {
@@ -1493,7 +1508,7 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
     extension: session?.extension ?? file.extension,
-    mode: session?.mode ?? (options.isNew ? 'editor' : 'viewer'),
+    mode: session?.mode ?? defaultDocumentMode(file.extension, options),
     dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
     readOnly: session?.readOnly ?? options.defaultDocument === true,
     isNew: session?.isNew ?? options.isNew === true,
@@ -1609,6 +1624,11 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
   state.document.mounted = mounted;
   setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
+}
+
+async function ensureCurrentDocumentMounted(): Promise<void> {
+  if (!state.document || state.document.mounted) return;
+  await mountCurrentDocument(pendingMountDocument ?? undefined);
 }
 
 function bindMountThemeReapply(root: HTMLElement): () => void {
@@ -2265,7 +2285,7 @@ async function restoreBackupsToTabs(backups: DocumentBackup[]): Promise<void> {
       path: file.path,
       name: file.name,
       extension: file.extension,
-      mode: 'editor',
+      mode: defaultDocumentMode(file.extension),
       dirty: true,
       readOnly: false,
       isNew: false,
@@ -2333,7 +2353,7 @@ async function saveCurrentDocumentToWorkspace(workspacePath: string, name: strin
   const bytes = Array.from(serializeMountedDocument(state.document.mounted));
   const file = await saveDocumentToWorkspace({
     workspacePath,
-    name,
+    name: documentFileName(name, documentTypeForExtension(state.document.extension)) ?? name,
     bytes,
   });
   await openDocument(file, { deferMount: true });
@@ -2520,6 +2540,12 @@ function documentFileName(name: string, documentType: DocumentCreationType = 'hv
     return trimmed.replace(/\.(hvy|thvy|phvy)$/i, targetExtension);
   }
   return `${trimmed}${targetExtension}`;
+}
+
+function documentTypeForExtension(extension: DocumentFile['extension']): DocumentCreationType {
+  if (extension === '.phvy') return 'phvy';
+  if (extension === '.thvy') return 'thvy';
+  return 'hvy';
 }
 
 function documentTitle(fileName: string): string {

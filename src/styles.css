@@ -375,10 +375,36 @@ button:disabled {
   -webkit-user-select: none;
 }
 
-.tree-file span {
+.tree-file-name {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tree-file-extension {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 78%, transparent);
+  color: var(--hvy-text-muted, #65716d);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  text-transform: uppercase;
+}
+
+.tree-file-extension[data-extension=".thvy"] {
+  background: color-mix(in srgb, var(--hvy-accent-2, #7b8f86) 16%, var(--hvy-surface, #ffffff));
+  color: var(--hvy-accent-1-alt, #356f6c);
+}
+
+.tree-file-extension[data-extension=".phvy"] {
+  background: color-mix(in srgb, var(--hvy-warning, #d47a00) 16%, var(--hvy-surface, #ffffff));
+  color: var(--hvy-warning-text, #8a4d00);
 }
 
 .tree-file.is-filter-empty,
@@ -397,7 +423,8 @@ button:disabled {
   opacity: 0.58;
 }
 
-.tree-file.is-cut-pending span {
+.tree-file.is-cut-pending .tree-file-name,
+.tree-file.is-cut-pending .tree-file-extension {
   font-style: italic;
 }
 

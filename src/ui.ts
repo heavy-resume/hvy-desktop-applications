@@ -1049,15 +1049,15 @@ function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVi
       <div class="workspace-filter-visibility-list">
         <label class="checkbox-row">
           <input type="checkbox" name="hvyDocuments" ${visibility.hvyDocuments ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-          <span>HVY documents</span>
+          <span>HVY</span>
         </label>
         <label class="checkbox-row">
           <input type="checkbox" name="thvyTemplates" ${visibility.thvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-          <span>THVY templates</span>
+          <span>THVY</span>
         </label>
         <label class="checkbox-row">
           <input type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-          <span>PHVY templates</span>
+          <span>PHVY</span>
         </label>
       </div>
       <div class="workspace-filter-actions">
@@ -1462,10 +1462,14 @@ function renderNode(
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
   const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
   const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
+  const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
+    ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
+    : '';
   return `
     <li>
       <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
-        <span>${escapeHtml(displayDocumentName(node.name))}</span>
+        <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
+        ${extensionBadge}
       </button>
     </li>`;
 }
@@ -1482,7 +1486,7 @@ function nodeHasFilterMatch(node: WorkspaceTreeNode, matchedDocumentIds: Set<str
 }
 
 function displayDocumentName(name: string): string {
-  return name.replace(/\.(t?hvy|md)$/i, '');
+  return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
 function renderEmptyState(state: AppState): string {
