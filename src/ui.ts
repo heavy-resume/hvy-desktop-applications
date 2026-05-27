@@ -74,11 +74,18 @@ export interface UiHandlers {
   restoreBackup(id: string): void;
   discardBackup(id: string): void;
   cancelRecovery(): void;
-  confirmCloseDocument(): void;
   cancelCloseDocument(): void;
+  closeDocumentWithoutSaving(): void;
+  discardCloseDocumentDraft(): void;
+  reviewCloseDocumentLater(): void;
   saveAndCloseApp(): void;
   closeAppWithoutSaving(): void;
   cancelAppClose(): void;
+  selectDocumentTab(path: string): void;
+  closeDocumentTab(path: string): void;
+  cycleTabStack(direction: 1 | -1): void;
+  commitTabStack(): void;
+  cancelTabStack(): void;
   openWorkspace(): void;
   openFile(): void;
   openRecentWorkspace(path: string): void;
@@ -102,6 +109,7 @@ export interface UiHandlers {
   save(): void;
   saveAs(): void;
   closeDocument(): void;
+  saveAndCloseDocument(): void;
   openSaveTemplate(): void;
   exportPdf(): void;
   saveBeforeExportPdf(): void;
@@ -155,6 +163,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
         <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>
       </aside>
       <section class="document-shell">
+        ${renderDocumentTabs(state)}
         <header class="document-toolbar">
           ${renderToolbar(state)}
         </header>
@@ -178,7 +187,9 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderMcpSettingsDialog(state)}
       ${renderColorThemeDialog(state)}
       ${renderRecoveryDialog(state)}
+      ${renderTabStackPopover(state)}
       ${renderCloseDocumentDialog(state)}
+      ${renderCloseDocumentDraftDialog(state)}
       ${renderAppCloseDialog(state)}
       ${renderRenameFileDialog(state)}
       ${renderWorkspaceTransferDialog(state)}
@@ -201,6 +212,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindWorkspaceSidebarResize(root, signal);
   document.addEventListener('keydown', (event) => {
     handleApplicationShortcut(event, root, handlers);
+  }, { signal, capture: true });
+  document.addEventListener('keyup', (event) => {
+    if (!state.tabStackOpen) return;
+    if (event.key === 'Meta' || event.key === 'Control') {
+      event.preventDefault();
+      handlers.commitTabStack();
+    }
   }, { signal, capture: true });
   root.addEventListener('pointerdown', (event) => {
     dismissBackdropPointerStart = dismissBackdropFromTarget(event.target);
@@ -397,8 +415,17 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
+    if (action === 'select-document-tab' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
+    if (action === 'close-document-tab' && target.dataset.path !== undefined) {
+      event.stopPropagation();
+      handlers.closeDocumentTab(target.dataset.path);
+    }
+    if (action === 'select-tab-stack-item' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
     if (action === 'close-document') handlers.closeDocument();
-    if (action === 'confirm-close-document') handlers.confirmCloseDocument();
+    if (action === 'save-and-close-document') handlers.saveAndCloseDocument();
+    if (action === 'close-document-without-saving') handlers.closeDocumentWithoutSaving();
+    if (action === 'discard-close-document-draft') handlers.discardCloseDocumentDraft();
+    if (action === 'review-close-document-later') handlers.reviewCloseDocumentLater();
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
     if (action === 'save-and-close-app') handlers.saveAndCloseApp();
     if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
@@ -704,12 +731,20 @@ function dismissBackdropFromTarget(target: EventTarget | null): HTMLElement | nu
 
 function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
   if (event.isComposing || event.altKey || event.defaultPrevented) return false;
+  if (event.key === 'Escape') {
+    handlers.cancelTabStack();
+  }
   if (root.querySelector('.modal-backdrop')) return false;
 
   const key = event.key.toLowerCase();
   const meta = event.metaKey || event.ctrlKey;
   if (!meta) return false;
 
+  if (key === 'p') {
+    event.preventDefault();
+    handlers.cycleTabStack(event.shiftKey ? -1 : 1);
+    return true;
+  }
   if (!event.shiftKey && key === 's') {
     event.preventDefault();
     handlers.save();
@@ -1157,6 +1192,37 @@ function revealMenuLabel(): string {
   if (platform.includes('mac')) return 'Show in Finder';
   if (platform.includes('win')) return 'Open in Explorer';
   return 'Open Containing Folder';
+}
+
+function renderDocumentTabs(state: AppState): string {
+  return `
+    <nav class="document-tabs${state.documentTabs.length === 0 ? ' is-empty' : ''}" aria-label="Open documents">
+      ${state.documentTabs.map((tab) => `
+        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}">
+          <button type="button" class="document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.path)}" title="${escapeAttr(tab.path)}" aria-current="${tab.active ? 'page' : 'false'}">
+            <span class="document-tab-dirty" aria-hidden="true"></span>
+            <span class="document-tab-name">${escapeHtml(tab.name)}</span>
+          </button>
+          <button type="button" class="document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.path)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
+        </div>
+      `).join('')}
+    </nav>`;
+}
+
+function renderTabStackPopover(state: AppState): string {
+  if (!state.tabStackOpen || state.documentTabs.length === 0) {
+    return '';
+  }
+  const activeIndex = ((state.tabStackIndex % state.documentTabs.length) + state.documentTabs.length) % state.documentTabs.length;
+  return `
+    <div class="tab-stack-popover" role="listbox" aria-label="Open documents">
+      ${state.documentTabs.map((tab, index) => `
+        <button type="button" class="tab-stack-item${index === activeIndex ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}" role="option" aria-selected="${index === activeIndex ? 'true' : 'false'}" data-action="select-tab-stack-item" data-path="${escapeAttr(tab.path)}">
+          <span class="tab-stack-dirty" aria-hidden="true"></span>
+          <span>${escapeHtml(tab.name)}</span>
+        </button>
+      `).join('')}
+    </div>`;
 }
 
 function renderToolbar(state: AppState): string {
@@ -2186,13 +2252,38 @@ function renderCloseDocumentDialog(state: AppState): string {
   if (!state.closeDocumentDialogOpen) {
     return '';
   }
+  const targetPath = state.closeDocumentTargetPath;
+  const target = state.documentTabs.find((tab) => tab.path === targetPath) ?? state.documentTabs.find((tab) => tab.active);
+  const documentName = target?.name ?? state.document?.name ?? 'this document';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentTitle">
-        <h2 id="closeDocumentTitle">Discard Unsaved Edits?</h2>
-        <p class="dialog-note">Closing this document will discard unsaved edits and remove its recovery draft.</p>
+        <h2 id="closeDocumentTitle">Save Changes Before Closing?</h2>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}.</p>
         <div class="dialog-actions">
-          <button type="button" class="danger-button" data-action="confirm-close-document">Discard Edits</button>
+          <button type="button" data-action="save-and-close-document">Save and Close</button>
+          <button type="button" data-action="close-document-without-saving">Don't Save</button>
+          <button type="button" data-action="cancel-close-document">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderCloseDocumentDraftDialog(state: AppState): string {
+  if (!state.closeDocumentDraftDialogOpen) {
+    return '';
+  }
+  const targetPath = state.closeDocumentTargetPath;
+  const target = state.documentTabs.find((tab) => tab.path === targetPath) ?? state.documentTabs.find((tab) => tab.active);
+  const documentName = target?.name ?? state.document?.name ?? 'this document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentDraftTitle">
+        <h2 id="closeDocumentDraftTitle">Keep Recovery Draft?</h2>
+        <p class="dialog-note">You can discard the unsaved edits in ${escapeHtml(documentName)} or keep the recovery draft to review later.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="review-close-document-later">Review Later</button>
+          <button type="button" class="danger-button" data-action="discard-close-document-draft">Discard Draft</button>
           <button type="button" data-action="cancel-close-document">Cancel</button>
         </div>
       </section>

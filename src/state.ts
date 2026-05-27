@@ -13,6 +13,15 @@ export interface OpenDocument {
   isNew: boolean;
   metaOpen: boolean;
   mounted: MountedDocument | null;
+  recoveryBackupId: string | null;
+}
+
+export interface OpenDocumentTab {
+  path: string;
+  name: string;
+  dirty: boolean;
+  readOnly: boolean;
+  active: boolean;
 }
 
 export interface AppState {
@@ -29,6 +38,7 @@ export interface AppState {
   colorTheme: ColorThemeSettings;
   savedTemplates: SavedTemplate[];
   document: OpenDocument | null;
+  documentTabs: OpenDocumentTab[];
   status: string;
   error: string | null;
   busy: boolean;
@@ -56,6 +66,10 @@ export interface AppState {
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
   closeDocumentDialogOpen: boolean;
+  closeDocumentTargetPath: string | null;
+  closeDocumentDraftDialogOpen: boolean;
+  tabStackOpen: boolean;
+  tabStackIndex: number;
   appCloseDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
   workspaceClipboard: WorkspaceClipboardState | null;
@@ -113,6 +127,7 @@ export const state: AppState = {
   colorTheme: defaultColorThemeSettings(),
   savedTemplates: [],
   document: null,
+  documentTabs: [],
   status: 'Ready',
   error: null,
   busy: false,
@@ -140,6 +155,10 @@ export const state: AppState = {
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
   closeDocumentDialogOpen: false,
+  closeDocumentTargetPath: null,
+  closeDocumentDraftDialogOpen: false,
+  tabStackOpen: false,
+  tabStackIndex: 0,
   appCloseDialogOpen: false,
   recoveryBackups: [],
   workspaceClipboard: null,
