@@ -12,8 +12,9 @@ const AI_SETTINGS = 'ai-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
 const RECENT_LIMIT = 12;
 const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.md']);
-const TEMPLATE_EXTENSIONS = new Set(['.hvy', '.thvy']);
+const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.md']);
+const TEMPLATE_EXTENSIONS = new Set(['.thvy', '.phvy']);
+const PDF_EXTENSIONS = new Set(['.pdf']);
 const THEME_EXTENSIONS = new Set(['.hvytheme', '.json']);
 const APP_IDENTIFIER = 'com.heavyresume.hvy-galaxy';
 const APP_NAME = 'HVY Galaxy';
@@ -151,7 +152,8 @@ function buildMenu() {
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
-        menuItem('Export...', 'export-document'),
+        menuItem('Export PDF...', 'export-pdf'),
+        menuItem('Save as Template...', 'save-template'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
@@ -326,8 +328,10 @@ async function handleCommand(command, args) {
     case 'read_document_file': return readDocumentFile(args.path);
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
+    case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
     case 'list_saved_templates': return listSavedTemplates(args.workspacePath);
     case 'save_document_template': return saveDocumentTemplate(args.request);
+    case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
     case 'open_color_theme_dialog': return openColorThemeDialog();
     case 'save_color_theme_as_dialog': return saveColorThemeAsDialog(args.suggestedName, args.bytes);
     case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template);
@@ -496,6 +500,16 @@ function renameWorkspace(workspacePath, name) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
+function updateWorkspaceTemplateVisibility(workspacePath, templateVisibility) {
+  ensureWorkspace(workspacePath);
+  const manifestPath = workspaceManifestPath(workspacePath);
+  const manifest = readJson(manifestPath, null);
+  manifest.templateVisibility = normalizeTemplateVisibility(templateVisibility);
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
 function archiveWorkspace(workspacePath) {
   const workspace = ensureWorkspace(workspacePath);
   addArchivedWorkspace({
@@ -524,26 +538,33 @@ async function addFilesToWorkspace(workspacePath) {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: 'Supported documents', extensions: ['hvy', 'thvy', 'md'] },
-      { name: 'HVY documents', extensions: ['hvy', 'thvy'] },
+      { name: 'Supported documents', extensions: ['hvy', 'thvy', 'phvy', 'md'] },
+      { name: 'HVY documents', extensions: ['hvy', 'thvy', 'phvy'] },
       { name: 'Markdown', extensions: ['md'] },
     ],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   const copiedPaths = [];
+  const copiedTemplatePaths = [];
   for (const source of result.filePaths) {
-    if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, and .md documents can be added to a workspace.');
-    const destination = uniqueCopyPath(workspacePath, path.basename(source));
+    if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
+    const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
+    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
+    const destination = uniqueCopyPath(destinationRoot, path.basename(source));
     fs.copyFileSync(source, destination);
-    copiedPaths.push(destination);
-    addRecentFile(destination);
+    if (isTemplate) {
+      copiedTemplatePaths.push(destination);
+    } else {
+      copiedPaths.push(destination);
+      addRecentFile(destination);
+    }
   }
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   return {
     workspace: loadWorkspaceFromPath(workspacePath),
     copiedPaths,
-    copiedTemplatePaths: [],
+    copiedTemplatePaths,
   };
 }
 
@@ -552,8 +573,8 @@ function addDroppedFilesToWorkspace(workspacePath, files) {
   const copiedPaths = [];
   const copiedTemplatePaths = [];
   for (const file of files || []) {
-    if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, and .md documents can be added to a workspace.');
-    const isTemplate = path.extname(file.name).toLowerCase() === '.thvy';
+    if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
+    const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
     const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
     const destination = uniqueCopyPath(destinationRoot, file.name);
     writeBytes(destination, file.bytes);
@@ -577,8 +598,8 @@ async function openFileDialog() {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: [
-      { name: 'Supported documents', extensions: ['hvy', 'thvy', 'md'] },
-      { name: 'HVY documents', extensions: ['hvy', 'thvy'] },
+      { name: 'Supported documents', extensions: ['hvy', 'thvy', 'phvy', 'md'] },
+      { name: 'HVY documents', extensions: ['hvy', 'thvy', 'phvy'] },
       { name: 'Markdown', extensions: ['md'] },
     ],
   });
@@ -622,13 +643,13 @@ async function saveDocumentAsDialog(suggestedName, bytes) {
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: suggestedName,
     filters: [
-      { name: 'Supported documents', extensions: ['hvy', 'thvy', 'md'] },
-      { name: 'HVY documents', extensions: ['hvy', 'thvy'] },
+      { name: 'Supported documents', extensions: ['hvy', 'thvy', 'phvy', 'md'] },
+      { name: 'HVY documents', extensions: ['hvy', 'thvy', 'phvy'] },
       { name: 'Markdown', extensions: ['md'] },
     ],
   });
   if (result.canceled || !result.filePath) return null;
-  if (!documentExtension(result.filePath)) throw new Error('Save As path must end in .hvy, .thvy, or .md.');
+  if (!documentExtension(result.filePath)) throw new Error('Save As path must end in .hvy, .thvy, .phvy, or .md.');
   writeBytes(result.filePath, bytes);
   addRecentFile(result.filePath);
   return readDocumentAt(result.filePath);
@@ -647,10 +668,25 @@ function saveDocumentTemplate(request) {
     ? workspaceTemplatesDir(request.workspacePath)
     : appTemplatesDir();
   fs.mkdirSync(directory, { recursive: true });
-  const fileName = ensureTemplateFileName(request.name);
+  const fileName = ensureTemplateFileName(request.name, request.extension);
   const filePath = path.join(directory, fileName);
   writeBytes(filePath, request.bytes);
   return readSavedTemplateAt(filePath, request.scope);
+}
+
+async function savePdfAsDialog(suggestedName, bytes) {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: ensurePdfFileName(suggestedName),
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  let selected = result.filePath;
+  if (!path.extname(selected)) selected = `${selected}.pdf`;
+  if (!PDF_EXTENSIONS.has(path.extname(selected).toLowerCase())) {
+    throw new Error('PDF export path must end in .pdf.');
+  }
+  writeBytes(selected, bytes);
+  return selected;
 }
 
 async function openColorThemeDialog() {
@@ -700,7 +736,7 @@ async function revealDocumentFile(filePath) {
 
 function renameDocumentFile(filePath, name) {
   const extension = documentExtension(filePath);
-  if (!extension) throw new Error('Only .hvy, .thvy, and .md documents can be renamed.');
+  if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be renamed.');
   const parent = path.dirname(filePath);
   const stem = normalizedStem(name);
   const destination = path.join(parent, `${stem}${extension}`);
@@ -726,7 +762,7 @@ function saveDocumentToWorkspace(workspacePath, name, bytes) {
 
 function copyDocumentToWorkspace(filePath, workspacePath) {
   ensureWorkspace(workspacePath);
-  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, and .md documents can be copied.');
+  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be copied.');
   const destination = uniqueCopyPath(workspacePath, path.basename(filePath));
   fs.copyFileSync(filePath, destination);
   touchWorkspaceManifest(workspacePath);
@@ -737,7 +773,7 @@ function copyDocumentToWorkspace(filePath, workspacePath) {
 
 function moveDocumentToWorkspace(filePath, workspacePath) {
   ensureWorkspace(workspacePath);
-  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, and .md documents can be moved.');
+  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be moved.');
   const sourceWorkspacePath = workspaceRootForDocument(path.dirname(filePath));
   if (path.resolve(path.dirname(filePath)) === path.resolve(workspacePath)) {
     touchWorkspaceManifest(workspacePath);
@@ -783,7 +819,7 @@ async function pasteSystemFilesToWorkspace(workspacePath) {
     addRecentFile(destination);
   }
   if (copiedPaths.length === 0) {
-    throw new Error('No supported .hvy, .thvy, or .md files are available to paste.');
+    throw new Error('No supported .hvy, .thvy, .phvy, or .md files are available to paste.');
   }
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
@@ -834,7 +870,7 @@ function xmlUnescape(value) {
 }
 
 function createDocumentBackup(request) {
-  if (!documentExtension(request.name)) throw new Error('Recovery draft document name must end in .hvy, .thvy, or .md.');
+  if (!documentExtension(request.name)) throw new Error('Recovery draft document name must end in .hvy, .thvy, .phvy, or .md.');
   fs.mkdirSync(backupsDir(), { recursive: true });
   pruneDocumentBackups();
   const createdAt = new Date().toISOString();
@@ -964,6 +1000,7 @@ function initializeWorkspaceWithName(workspacePath, name) {
     updatedAt: now,
     rootFiles: [],
     expandedPaths: [],
+    templateVisibility: normalizeTemplateVisibility(null),
   };
   writeJson(manifestPath, manifest);
   return loadWorkspaceFromPath(workspacePath);
@@ -1029,7 +1066,7 @@ function readWorkspaceChildren(root, directory) {
 
 function readDocumentAt(filePath) {
   const extension = documentExtension(filePath);
-  if (!extension) throw new Error('Only .hvy, .thvy, and .md documents can be opened.');
+  if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be opened.');
   return {
     path: filePath,
     name: path.basename(filePath),
@@ -1046,11 +1083,13 @@ function readTemplatesFrom(directory, scope) {
 }
 
 function readSavedTemplateAt(filePath, scope) {
+  const extension = path.extname(filePath).toLowerCase();
   return {
     id: `${scope}:${filePath}`,
     path: filePath,
-    name: path.basename(filePath, path.extname(filePath)),
+    name: path.basename(filePath),
     scope,
+    extension,
     bytes: Array.from(fs.readFileSync(filePath)),
   };
 }
@@ -1074,6 +1113,14 @@ function writeBytes(filePath, bytes) {
 function documentExtension(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   return DOCUMENT_EXTENSIONS.has(extension) ? extension : null;
+}
+
+function normalizeTemplateVisibility(value) {
+  return {
+    hvyDocuments: value?.hvyDocuments !== false,
+    thvyTemplates: value?.thvyTemplates !== false,
+    phvyTemplates: value?.phvyTemplates !== false,
+  };
 }
 
 function ensureDocumentFileName(name) {
@@ -1114,10 +1161,16 @@ function uniqueCopyPath(root, fileName) {
   return candidate;
 }
 
-function ensureTemplateFileName(name) {
+function ensureTemplateFileName(name, requestedExtension = '.thvy') {
   const base = safeFileStem(name || 'Template');
   const extension = path.extname(base).toLowerCase();
-  return TEMPLATE_EXTENSIONS.has(extension) ? base : `${base}.thvy`;
+  const targetExtension = TEMPLATE_EXTENSIONS.has(requestedExtension) ? requestedExtension : '.thvy';
+  return TEMPLATE_EXTENSIONS.has(extension) ? base : `${base}${targetExtension}`;
+}
+
+function ensurePdfFileName(name) {
+  const base = safeFileStem(name || 'document.pdf');
+  return PDF_EXTENSIONS.has(path.extname(base).toLowerCase()) ? base : `${base}.pdf`;
 }
 
 function ensureThemeFileName(name) {

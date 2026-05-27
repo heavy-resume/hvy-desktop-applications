@@ -46,27 +46,31 @@ import {
   saveDocumentAsDialog,
   saveDocumentFile,
   saveDocumentTemplate,
+  savePdfAsDialog,
   moveDocumentToWorkspace,
   pasteSystemFilesToWorkspace,
   startMcpServer,
   stopMcpServer,
   unarchiveWorkspace,
+  updateWorkspaceTemplateVisibility,
   type AddFilesResult,
   type DocumentBackup,
+  type DocumentCreationType,
   type DocumentFile,
   type DroppedWorkspaceFile,
   type ImportSourceFile,
   type McpClientInstallTarget,
   type McpSettings,
+  type TemplateExtension,
   type WorkspaceFileNode,
   type WorkspaceTreeNode,
   updateMcpWorkspaces,
   writeSystemFileClipboard,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
-import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, getMountedRecoveryState, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
-import { getTemplateById, mergeSavedTemplates } from './templates';
+import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { render, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
@@ -215,6 +219,7 @@ const handlers: UiHandlers = {
   newDocumentInWorkspace: (workspacePath) => {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = workspacePath;
+    state.newDocumentType = 'hvy';
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
@@ -225,20 +230,24 @@ const handlers: UiHandlers = {
       document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
     });
   },
-  createDocumentInWorkspace: (name, templateId) => void runBusy('Creating HVY document...', async () => {
+  setNewDocumentType: (type) => {
+    state.newDocumentType = type;
+    rerender({ preserveMountedDocument: true });
+  },
+  createDocumentInWorkspace: (name, templateId) => void runBusy('Creating document...', async () => {
     const workspacePath = state.newDocumentWorkspacePath;
-    const template = getTemplateById(mergeSavedTemplates(state.savedTemplates), templateId);
-    const fileName = documentFileName(name);
+    const fileName = documentFileName(name, state.newDocumentType);
     if (!workspacePath) return;
     if (!fileName) {
       state.status = 'Document name is required';
       return;
     }
+    const template = creationTemplate(workspacePath, state.newDocumentType, templateId, documentTitle(fileName));
     state.newDocumentWorkspacePath = null;
     const file = await createDocumentFile({
       workspacePath,
       relativePath: fileName,
-      template: applyTemplateTitle(template.content, documentTitle(fileName)),
+      template,
     });
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
@@ -254,6 +263,7 @@ const handlers: UiHandlers = {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = null;
     state.importWorkspacePath = workspacePath;
+    state.importDocumentType = 'hvy';
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
     state.status = 'Ready';
@@ -262,6 +272,10 @@ const handlers: UiHandlers = {
     requestAnimationFrame(() => {
       document.querySelector<HTMLInputElement>('input[name="documentName"]')?.focus();
     });
+  },
+  setImportDocumentType: (type) => {
+    state.importDocumentType = type;
+    rerender({ preserveMountedDocument: true });
   },
   openImportIntoCurrent: () => {
     if (!state.document?.mounted || state.document.readOnly) return;
@@ -284,7 +298,7 @@ const handlers: UiHandlers = {
   createImportedDocument: (name, templateId, instructions, pastedSourceText) => void runBusy('Importing document...', async () => {
     const workspacePath = state.importWorkspacePath;
     const source = importSourceFrom(pastedSourceText);
-    const fileName = documentFileName(name);
+    const fileName = documentFileName(name, state.importDocumentType);
     if (!workspacePath) return;
     if (!source) {
       state.status = 'Import source is required';
@@ -294,13 +308,13 @@ const handlers: UiHandlers = {
       state.status = 'Document name is required';
       return;
     }
-    const template = getTemplateById(mergeSavedTemplates(state.savedTemplates), templateId);
+    const template = creationTemplate(workspacePath, state.importDocumentType, templateId, documentTitle(fileName));
     state.importWorkspacePath = null;
     state.importSource = null;
     const file = await createDocumentFile({
       workspacePath,
       relativePath: fileName,
-      template: applyTemplateTitle(template.content, documentTitle(fileName)),
+      template,
     });
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
@@ -987,29 +1001,67 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  exportPdf: () => void exportCurrentDocumentPdf(),
+  saveBeforeExportPdf: () => void saveBeforeExportPdf(),
+  cancelExportPdfSavePrompt: () => {
+    state.exportPdfSavePromptOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   setSaveTemplateScope: (scope) => {
     if (scope === 'workspace' && !workspacePathForFile(state.document?.path ?? '')) return;
     state.saveTemplateScope = scope;
     rerender({ preserveMountedDocument: true });
   },
-  saveAsTemplate: (name, scope) => void runBusy('Saving template...', async () => {
+  saveAsTemplate: (name, scope, extension: TemplateExtension) => void runBusy('Saving template...', async () => {
     if (!state.document?.mounted || state.document.readOnly) return;
     const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.path) : null;
     if (scope === 'workspace' && !workspacePath) {
       throw new Error('Workspace template requires a document in an open workspace.');
     }
+    if (extension === '.phvy') {
+      const errors = await getPhvyCompatibilityErrors(state.document.mounted.document);
+      if (errors.length > 0) {
+        throw new Error(`Cannot save as PHVY until the document is PDF-safe. ${errors.slice(0, 3).join(' ')}`);
+      }
+    }
     const bytes = Array.from(serializeMountedDocument(state.document.mounted));
-    await saveDocumentTemplate({ scope, workspacePath, name, bytes });
+    await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
     state.saveTemplateDialogOpen = false;
     await refreshSavedTemplates(workspacePath);
-    state.status = `Saved template ${templateFileName(name)}`;
+    state.status = `Saved template ${templateFileName(name, extension)}`;
   }),
   cancelSaveTemplate: () => {
     state.saveTemplateDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  createFile: () => void createBlankDocument(),
+  openWorkspaceTemplateVisibility: (workspacePath) => {
+    state.openWorkspaceActionsPath = null;
+    state.workspaceTemplateVisibilityPath = workspacePath;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  saveWorkspaceTemplateVisibility: (workspacePath, templateVisibility) => void runBusy('Saving template visibility...', async () => {
+    if (!workspacePath) return;
+    const workspace = await updateWorkspaceTemplateVisibility(workspacePath, templateVisibility);
+    upsertWorkspace(workspace);
+    state.workspaceTemplateVisibilityPath = null;
+    state.status = 'Saved template visibility';
+  }, { preserveMountedDocument: true }),
+  cancelWorkspaceTemplateVisibility: () => {
+    state.workspaceTemplateVisibilityPath = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  createFile: () => {
+    const workspacePath = state.selectedWorkspacePath ?? state.workspaces[0]?.path ?? null;
+    if (workspacePath) {
+      handlers.newDocumentInWorkspace(workspacePath);
+      return;
+    }
+    void createBlankDocument();
+  },
   closeDocument: () => void closeCurrentDocument(),
 };
 
@@ -1063,7 +1115,8 @@ async function boot(): Promise<void> {
       if (event === 'save-as') handlers.saveAs();
       if (event === 'save-to-workspace') handlers.saveCurrentToWorkspace();
       if (event === 'import-current') handlers.openImportIntoCurrent();
-      if (event === 'export-document') handlers.openSaveTemplate();
+      if (event === 'export-pdf') handlers.exportPdf();
+      if (event === 'save-template') handlers.openSaveTemplate();
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
     });
@@ -1605,6 +1658,38 @@ async function saveCurrentDocumentAs(): Promise<void> {
   });
 }
 
+async function exportCurrentDocumentPdf(): Promise<void> {
+  const openDocument = state.document;
+  const mounted = openDocument?.mounted;
+  if (!openDocument || !mounted || openDocument.readOnly) return;
+  if (openDocument.extension !== '.phvy') {
+    state.status = 'PDF export is available for PHVY documents';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  if (openDocument.isNew || openDocument.dirty || isMountedDocumentDirty(mounted)) {
+    state.exportPdfSavePromptOpen = true;
+    state.status = 'Save before exporting PDF';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  await runBusy('Exporting PDF...', async () => {
+    if (!state.document?.mounted) return;
+    const blob = await state.document.mounted.mount.getPdfBlob({ filename: pdfFileName(state.document.name) });
+    const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+    const savedPath = await savePdfAsDialog({ suggestedName: pdfFileName(state.document.name), bytes });
+    state.status = savedPath ? `Exported ${pdfFileName(state.document.name)}` : 'Ready';
+  }, { preserveMountedDocument: true });
+}
+
+async function saveBeforeExportPdf(): Promise<void> {
+  state.exportPdfSavePromptOpen = false;
+  await saveCurrentDocument();
+  if (state.document && !state.document.dirty && !state.document.isNew) {
+    await exportCurrentDocumentPdf();
+  }
+}
+
 async function performSaveCurrentDocumentAs(): Promise<void> {
   if (!state.document?.mounted) return;
   if (state.document.readOnly) {
@@ -1999,6 +2084,24 @@ async function refreshSavedTemplates(workspacePath?: string | null): Promise<voi
   state.savedTemplates = await listSavedTemplates(workspacePath ?? workspacePathForFile(state.document?.path ?? '') ?? state.selectedWorkspacePath);
 }
 
+function templatesForCurrentWorkspaceDocumentType(workspacePath: string | null | undefined, documentType: DocumentCreationType) {
+  const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath) ?? null;
+  return templatesForDocumentType(mergeSavedTemplates(state.savedTemplates), documentType, workspaceTemplateVisibility(workspace));
+}
+
+function creationTemplate(
+  workspacePath: string | null | undefined,
+  documentType: DocumentCreationType,
+  templateId: string,
+  title: string,
+): string {
+  if (documentType !== 'hvy') {
+    return defaultHvyDocument(title);
+  }
+  const template = getTemplateById(templatesForCurrentWorkspaceDocumentType(workspacePath, documentType), templateId);
+  return applyTemplateTitle(template.content, title);
+}
+
 function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): void {
   const index = state.workspaces.findIndex((candidate) => candidate.path === workspace.path);
   if (index >= 0) {
@@ -2067,25 +2170,33 @@ title: ${JSON.stringify(title)}
 `;
 }
 
-function documentFileName(name: string): string | null {
+function documentFileName(name: string, documentType: DocumentCreationType = 'hvy'): string | null {
   const trimmed = name.trim();
   if (!trimmed) return null;
-  if (/\.thvy$/i.test(trimmed)) return trimmed.replace(/\.thvy$/i, '.hvy');
-  return hasDocumentExtension(trimmed) ? trimmed : `${trimmed}.hvy`;
+  const targetExtension = documentType === 'phvy' ? '.phvy' : documentType === 'thvy' ? '.thvy' : '.hvy';
+  if (hasDocumentExtension(trimmed)) {
+    return trimmed.replace(/\.(hvy|thvy|phvy)$/i, targetExtension);
+  }
+  return `${trimmed}${targetExtension}`;
 }
 
 function documentTitle(fileName: string): string {
-  return fileName.replace(/\.(t?hvy|md)$/i, '');
+  return fileName.replace(/\.(t?hvy|phvy|md)$/i, '');
 }
 
 function hasDocumentExtension(fileName: string): boolean {
-  return /\.(t?hvy)$/i.test(fileName);
+  return /\.(t?hvy|phvy)$/i.test(fileName);
 }
 
-function templateFileName(name: string): string {
+function templateFileName(name: string, extension: '.thvy' | '.phvy' = '.thvy'): string {
   const trimmed = name.trim();
-  const base = trimmed.replace(/\.(t?hvy|hvy|md)$/i, '').trim() || 'Untitled';
-  return `${base}.thvy`;
+  const base = trimmed.replace(/\.(t?hvy|phvy|hvy|md)$/i, '').trim() || 'Untitled';
+  return `${base}${extension}`;
+}
+
+function pdfFileName(name: string): string {
+  const base = name.trim().replace(/\.(hvy|thvy|phvy|md|markdown)$/i, '').trim() || 'document';
+  return `${base}.pdf`;
 }
 
 function revealStatusLabel(): string {

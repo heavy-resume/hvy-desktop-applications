@@ -71,6 +71,33 @@ struct WorkspaceManifest {
     root_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     expanded_paths: Vec<String>,
+    #[serde(default)]
+    template_visibility: WorkspaceTemplateVisibility,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceTemplateVisibility {
+    #[serde(default = "default_true")]
+    hvy_documents: bool,
+    #[serde(default = "default_true")]
+    thvy_templates: bool,
+    #[serde(default = "default_true")]
+    phvy_templates: bool,
+}
+
+impl Default for WorkspaceTemplateVisibility {
+    fn default() -> Self {
+        Self {
+            hvy_documents: true,
+            thvy_templates: true,
+            phvy_templates: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -165,6 +192,7 @@ struct SavedTemplate {
     path: String,
     name: String,
     scope: String,
+    extension: String,
     bytes: Vec<u8>,
 }
 
@@ -174,6 +202,7 @@ struct SaveDocumentTemplateRequest {
     scope: String,
     workspace_path: Option<String>,
     name: String,
+    extension: String,
     bytes: Vec<u8>,
 }
 
@@ -858,6 +887,22 @@ fn rename_workspace(app: AppHandle, path: String, name: String) -> AppResult<Wor
 }
 
 #[tauri::command]
+fn update_workspace_template_visibility(
+    workspace_path: String,
+    template_visibility: WorkspaceTemplateVisibility,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let manifest_path = workspace_manifest_path(&workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    manifest.template_visibility = template_visibility;
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
 fn archive_workspace(app: AppHandle, path: String) -> AppResult<()> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
@@ -886,8 +931,8 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<O
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let Some(paths) = rfd::FileDialog::new()
-        .add_filter("Supported documents", &["hvy", "thvy", "md"])
-        .add_filter("HVY documents", &["hvy", "thvy"])
+        .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
         .add_filter("Markdown", &["md"])
         .pick_files()
     else {
@@ -895,18 +940,28 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<O
     };
 
     let mut copied = Vec::new();
+    let mut copied_templates = Vec::new();
     for source in paths {
         if document_extension(&source).is_none() {
             return Err(AppError::Message(
-                "Only .hvy, .thvy, and .md documents can be added to a workspace.".into(),
+                "Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.".into(),
             ));
         }
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
-        let destination = unique_copy_path(&workspace_path, file_name);
+        let destination_root = if template_extension(&source).is_some() {
+            workspace_templates_dir(&workspace_path)?
+        } else {
+            workspace_path.clone()
+        };
+        let destination = unique_copy_path(&destination_root, file_name);
         fs::copy(&source, &destination)?;
-        copied.push(destination);
+        if template_extension(&source).is_some() {
+            copied_templates.push(destination);
+        } else {
+            copied.push(destination);
+        }
     }
 
     touch_workspace_manifest(&workspace_path)?;
@@ -917,7 +972,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<O
     Ok(Some(AddFilesResult {
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
-        copied_template_paths: Vec::new(),
+        copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
     }))
 }
 
@@ -935,7 +990,7 @@ fn add_dropped_files_to_workspace(
     for file in files {
         if document_extension(Path::new(&file.name)).is_none() {
             return Err(AppError::Message(
-                "Only .hvy, .thvy, and .md documents can be added to a workspace.".into(),
+                "Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.".into(),
             ));
         }
         let is_template = template_extension(Path::new(&file.name)).is_some();
@@ -968,8 +1023,8 @@ fn add_dropped_files_to_workspace(
 #[tauri::command]
 fn open_file_dialog(app: AppHandle) -> AppResult<Option<DocumentFile>> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Supported documents", &["hvy", "thvy", "md"])
-        .add_filter("HVY documents", &["hvy", "thvy"])
+        .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
         .add_filter("Markdown", &["md"])
         .pick_file()
     else {
@@ -1026,8 +1081,8 @@ fn save_document_as_dialog(
     bytes: Vec<u8>,
 ) -> AppResult<Option<DocumentFile>> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Supported documents", &["hvy", "thvy", "md"])
-        .add_filter("HVY documents", &["hvy", "thvy"])
+        .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
         .add_filter("Markdown", &["md"])
         .set_file_name(suggested_name)
         .save_file()
@@ -1035,11 +1090,30 @@ fn save_document_as_dialog(
         return Ok(None);
     };
     if document_extension(&path).is_none() {
-        return Err(AppError::Message("Save As path must end in .hvy, .thvy, or .md.".into()));
+        return Err(AppError::Message("Save As path must end in .hvy, .thvy, .phvy, or .md.".into()));
     }
     write_file_atomically(&path, &bytes)?;
     add_recent_file(&app, &path)?;
     Ok(Some(read_document_at(&path)?))
+}
+
+#[tauri::command]
+fn save_pdf_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Option<String>> {
+    let Some(mut path) = rfd::FileDialog::new()
+        .add_filter("PDF", &["pdf"])
+        .set_file_name(ensure_pdf_file_name(&suggested_name))
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    if path.extension().is_none() {
+        path.set_extension("pdf");
+    }
+    if pdf_extension(&path).is_none() {
+        return Err(AppError::Message("PDF export path must end in .pdf.".into()));
+    }
+    write_file_atomically(&path, &bytes)?;
+    Ok(Some(path_to_string(&path)))
 }
 
 #[tauri::command]
@@ -1069,7 +1143,7 @@ fn save_document_template(app: AppHandle, request: SaveDocumentTemplateRequest) 
         _ => return Err(AppError::Message("Template scope must be app or workspace.".into())),
     };
     fs::create_dir_all(&directory)?;
-    let file_name = template_file_name(&request.name)?;
+    let file_name = template_file_name(&request.name, &request.extension)?;
     let path = directory.join(file_name);
     write_file_atomically(&path, &request.bytes)?;
     read_saved_template_at(&path, &request.scope)
@@ -1163,7 +1237,7 @@ fn reveal_document_file(path: String) -> AppResult<()> {
 fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     let extension = document_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents can be renamed.".into()))?;
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be renamed.".into()))?;
     if !path.is_file() {
         return Err(AppError::Message("Document file does not exist.".into()));
     }
@@ -1208,7 +1282,7 @@ fn save_document_to_workspace(
 fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     document_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents can be copied.".into()))?;
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be copied.".into()))?;
     if !path.is_file() {
         return Err(AppError::Message("Document file does not exist.".into()));
     }
@@ -1229,7 +1303,7 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
 fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     document_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents can be moved.".into()))?;
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be moved.".into()))?;
     if !path.is_file() {
         return Err(AppError::Message("Document file does not exist.".into()));
     }
@@ -1308,7 +1382,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String) -> Ap
         copied_paths.push(destination.to_string_lossy().to_string());
     }
     if copied_paths.is_empty() {
-        return Err(AppError::Message("No supported .hvy, .thvy, or .md files are available to paste.".into()));
+        return Err(AppError::Message("No supported .hvy, .thvy, .phvy, or .md files are available to paste.".into()));
     }
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
@@ -1362,7 +1436,7 @@ fn run_apple_script(script: &str) -> AppResult<String> {
 #[tauri::command]
 fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
     if document_extension(Path::new(&request.name)).is_none() {
-        return Err(AppError::Message("Recovery draft document name must end in .hvy, .thvy, or .md.".into()));
+        return Err(AppError::Message("Recovery draft document name must end in .hvy, .thvy, .phvy, or .md.".into()));
     }
     prune_document_backups(&app)?;
     let created_at = Utc::now().to_rfc3339();
@@ -1527,8 +1601,10 @@ pub fn run() {
             read_document_file,
             save_document_file,
             save_document_as_dialog,
+            save_pdf_as_dialog,
             list_saved_templates,
             save_document_template,
+            update_workspace_template_visibility,
             open_color_theme_dialog,
             save_color_theme_as_dialog,
             create_document_file,
@@ -1643,7 +1719,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
         .item(&app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
         .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").build(app)?)
-        .item(&MenuItemBuilder::new("Export...").id("export-document").build(app)?)
+        .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").build(app)?)
+        .item(&MenuItemBuilder::new("Save as Template...").id("save-template").build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
@@ -1797,6 +1874,7 @@ fn initialize_workspace_with_name(path: &Path, name: Option<&str>) -> AppResult<
             updated_at: now,
             root_files: Vec::new(),
             expanded_paths: Vec::new(),
+            template_visibility: WorkspaceTemplateVisibility::default(),
         }
     };
     write_json_atomically(&manifest_path, &manifest)?;
@@ -1935,6 +2013,7 @@ fn document_extension(path: &Path) -> Option<String> {
     match ext.as_str() {
         "hvy" => Some(".hvy".into()),
         "thvy" => Some(".thvy".into()),
+        "phvy" => Some(".phvy".into()),
         "md" => Some(".md".into()),
         _ => None,
     }
@@ -1953,6 +2032,15 @@ fn template_extension(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
         "thvy" => Some(".thvy".into()),
+        "phvy" => Some(".phvy".into()),
+        _ => None,
+    }
+}
+
+fn pdf_extension(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "pdf" => Some(".pdf".into()),
         _ => None,
     }
 }
@@ -1976,6 +2064,19 @@ fn ensure_theme_file_name(name: &str) -> String {
         trimmed.to_string()
     } else {
         format!("{trimmed}.hvytheme")
+    }
+}
+
+fn ensure_pdf_file_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "document.pdf".into();
+    }
+    let path = Path::new(trimmed);
+    if pdf_extension(path).is_some() {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}.pdf")
     }
 }
 
@@ -2062,7 +2163,7 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
 
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
     let extension = document_extension(path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .md documents are supported.".into()))?;
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
     Ok(DocumentFile {
         path: path_to_string(path),
         name: path
@@ -2091,8 +2192,8 @@ fn append_saved_templates(templates: &mut Vec<SavedTemplate>, directory: &Path, 
 }
 
 fn read_saved_template_at(path: &Path, scope: &str) -> AppResult<SavedTemplate> {
-    template_extension(path)
-        .ok_or_else(|| AppError::Message("Only .thvy templates are supported.".into()))?;
+    let extension = template_extension(path)
+        .ok_or_else(|| AppError::Message("Only .thvy and .phvy templates are supported.".into()))?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -2103,11 +2204,12 @@ fn read_saved_template_at(path: &Path, scope: &str) -> AppResult<SavedTemplate> 
         path: path_to_string(path),
         name,
         scope: scope.to_string(),
+        extension,
         bytes: fs::read(path)?,
     })
 }
 
-fn template_file_name(name: &str) -> AppResult<String> {
+fn template_file_name(name: &str, requested_extension: &str) -> AppResult<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(AppError::Message("Template name is required.".into()));
@@ -2134,7 +2236,8 @@ fn template_file_name(name: &str) -> AppResult<String> {
     if stem.is_empty() {
         return Err(AppError::Message("Template name is required.".into()));
     }
-    Ok(format!("{stem}.thvy"))
+    let extension = if requested_extension == ".phvy" { ".phvy" } else { ".thvy" };
+    Ok(format!("{stem}{extension}"))
 }
 
 fn app_templates_dir(app: &AppHandle) -> AppResult<PathBuf> {
@@ -3928,6 +4031,9 @@ mod tests {
         let workspace = initialize_workspace(dir.path()).unwrap();
 
         assert_eq!(workspace.manifest.schema_version, 1);
+        assert!(workspace.manifest.template_visibility.hvy_documents);
+        assert!(workspace.manifest.template_visibility.thvy_templates);
+        assert!(workspace.manifest.template_visibility.phvy_templates);
         assert!(dir.path().join(WORKSPACE_MANIFEST).exists());
 
         let loaded = load_workspace_from_path(dir.path()).unwrap();
@@ -3957,6 +4063,7 @@ mod tests {
             updated_at: now,
             root_files: Vec::new(),
             expanded_paths: Vec::new(),
+            template_visibility: WorkspaceTemplateVisibility::default(),
         };
         write_json_atomically(&dir.path().join(LEGACY_WORKSPACE_MANIFEST), &manifest).unwrap();
 
@@ -4005,6 +4112,7 @@ mod tests {
         assert_eq!(normalized_rename_stem("Draft").unwrap(), "Draft");
         assert_eq!(normalized_rename_stem("Draft.hvy").unwrap(), "Draft");
         assert_eq!(normalized_rename_stem("Draft.thvy").unwrap(), "Draft");
+        assert_eq!(normalized_rename_stem("Draft.phvy").unwrap(), "Draft");
         assert_eq!(normalized_rename_stem("Draft.md").unwrap(), "Draft");
     }
 
@@ -4017,25 +4125,30 @@ mod tests {
     }
 
     #[test]
-    fn template_file_name_always_uses_thvy() {
-        assert_eq!(template_file_name("Draft").unwrap(), "Draft.thvy");
-        assert_eq!(template_file_name("Draft.hvy").unwrap(), "Draft.thvy");
-        assert_eq!(template_file_name("Draft.thvy").unwrap(), "Draft.thvy");
-        assert_eq!(template_file_name("Draft.md").unwrap(), "Draft.thvy");
+    fn template_file_name_uses_requested_template_extension() {
+        assert_eq!(template_file_name("Draft", ".thvy").unwrap(), "Draft.thvy");
+        assert_eq!(template_file_name("Draft.hvy", ".thvy").unwrap(), "Draft.thvy");
+        assert_eq!(template_file_name("Draft.thvy", ".phvy").unwrap(), "Draft.phvy");
+        assert_eq!(template_file_name("Draft.md", ".phvy").unwrap(), "Draft.phvy");
     }
 
     #[test]
-    fn saved_template_scan_only_includes_thvy_files() {
+    fn saved_template_scan_includes_thvy_and_phvy_files() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("alpha.thvy"), "template").unwrap();
+        fs::write(dir.path().join("beta.phvy"), "template").unwrap();
         fs::write(dir.path().join("regular.hvy"), "regular").unwrap();
         fs::write(dir.path().join("notes.md"), "notes").unwrap();
 
         let mut templates = Vec::new();
         append_saved_templates(&mut templates, dir.path(), "app").unwrap();
 
-        assert_eq!(templates.len(), 1);
+        templates.sort_by(|left, right| left.name.cmp(&right.name));
+        assert_eq!(templates.len(), 2);
         assert_eq!(templates[0].name, "alpha.thvy");
+        assert_eq!(templates[0].extension, ".thvy");
+        assert_eq!(templates[1].name, "beta.phvy");
+        assert_eq!(templates[1].extension, ".phvy");
         assert_eq!(templates[0].scope, "app");
     }
 

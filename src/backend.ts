@@ -12,7 +12,16 @@ declare global {
   }
 }
 
-export type DocumentExtension = '.hvy' | '.thvy' | '.md';
+export type DocumentExtension = '.hvy' | '.thvy' | '.phvy' | '.md';
+export type TemplateExtension = '.thvy' | '.phvy';
+export type DocumentCreationType = 'hvy' | 'thvy' | 'phvy';
+export type WorkspaceTemplateVisibilityKey = 'hvyDocuments' | 'thvyTemplates' | 'phvyTemplates';
+
+export interface WorkspaceTemplateVisibility {
+  hvyDocuments: boolean;
+  thvyTemplates: boolean;
+  phvyTemplates: boolean;
+}
 
 export interface WorkspaceManifest {
   schemaVersion: 1;
@@ -21,6 +30,7 @@ export interface WorkspaceManifest {
   updatedAt: string;
   rootFiles?: string[];
   expandedPaths?: string[];
+  templateVisibility?: WorkspaceTemplateVisibility;
 }
 
 export interface WorkspaceFileNode {
@@ -96,6 +106,7 @@ export interface SavedTemplate {
   path: string;
   name: string;
   scope: TemplateScope;
+  extension: TemplateExtension;
   bytes: number[];
 }
 
@@ -105,6 +116,11 @@ export interface SaveDocumentRequest {
 }
 
 export interface SaveDocumentAsRequest {
+  suggestedName: string;
+  bytes: number[];
+}
+
+export interface SavePdfAsRequest {
   suggestedName: string;
   bytes: number[];
 }
@@ -164,6 +180,7 @@ export interface SaveDocumentTemplateRequest {
   scope: TemplateScope;
   workspacePath?: string | null;
   name: string;
+  extension: TemplateExtension;
   bytes: number[];
 }
 
@@ -503,6 +520,10 @@ export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<Do
   return invokeDesktop('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
 }
 
+export function savePdfAsDialog(request: SavePdfAsRequest): Promise<string | null> {
+  return invokeDesktop('save_pdf_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+}
+
 export function listSavedTemplates(workspacePath?: string | null): Promise<SavedTemplate[]> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve([]);
@@ -512,6 +533,13 @@ export function listSavedTemplates(workspacePath?: string | null): Promise<Saved
 
 export function saveDocumentTemplate(request: SaveDocumentTemplateRequest): Promise<SavedTemplate> {
   return invokeDesktop('save_document_template', { request });
+}
+
+export function updateWorkspaceTemplateVisibility(
+  workspacePath: string,
+  templateVisibility: WorkspaceTemplateVisibility,
+): Promise<Workspace> {
+  return invokeDesktop('update_workspace_template_visibility', { workspacePath, templateVisibility });
 }
 
 export function openColorThemeDialog(): Promise<ThemeFile | null> {

@@ -533,6 +533,15 @@ button:disabled {
   padding: 0;
 }
 
+.search-close-button:hover:not(:disabled),
+.hvy-document-host .remove-x:hover:not(:disabled),
+.hvy-document-host .hvy-embed-layout .remove-x:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
 .workspace-filter-title svg,
 .search-tab svg,
 .search-close-button svg,
@@ -1113,6 +1122,10 @@ button:disabled {
   background: var(--hvy-button-bg, #ffffff);
   color: var(--hvy-button-text, #163635);
   font-weight: 650;
+}
+
+.document-type-control {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .source-picker-row {

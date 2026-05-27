@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
@@ -37,11 +37,15 @@ export interface AppState {
   openWorkspaceActionsPath: string | null;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
+  newDocumentType: DocumentCreationType;
   importWorkspacePath: string | null;
+  importDocumentType: DocumentCreationType;
   importIntoCurrentDialogOpen: boolean;
   importSource: ImportSourceFile | null;
   saveTemplateDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
+  exportPdfSavePromptOpen: boolean;
+  workspaceTemplateVisibilityPath: string | null;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -117,11 +121,15 @@ export const state: AppState = {
   openWorkspaceActionsPath: null,
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,
+  newDocumentType: 'hvy',
   importWorkspacePath: null,
+  importDocumentType: 'hvy',
   importIntoCurrentDialogOpen: false,
   importSource: null,
   saveTemplateDialogOpen: false,
   saveTemplateScope: 'app',
+  exportPdfSavePromptOpen: false,
+  workspaceTemplateVisibilityPath: null,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

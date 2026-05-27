@@ -18,7 +18,7 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'markSaved' | 'isDirty' | 'buildImportPlan' | 'importFromText'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'buildImportPlan' | 'importFromText'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
@@ -61,6 +61,19 @@ function loadHvyEmbed(): Promise<HvyEmbedModule> {
 export async function deserializeHvy(bytes: Uint8Array, extension: DocumentExtension): Promise<VisualDocument> {
   const { deserializeDocumentBytes } = await loadHvyEmbed();
   return deserializeDocumentBytes(bytes, extension);
+}
+
+export async function getPhvyCompatibilityErrors(document: VisualDocument): Promise<string[]> {
+  const { serializeDocument } = await loadHvyEmbed();
+  const { deserializeDocumentWithDiagnostics } = await import('../../heavy-file-format/src/serialization');
+  const phvySource = serializeDocument({ ...document, extension: '.phvy' });
+  return deserializeDocumentWithDiagnostics(phvySource, '.phvy')
+    .diagnostics
+    .filter((diagnostic) =>
+      diagnostic.severity === 'error'
+      && (diagnostic.code === 'phvy_component_not_supported' || diagnostic.code === 'phvy_sidebar_not_supported')
+    )
+    .map((diagnostic) => diagnostic.message);
 }
 
 export async function mountHvyDocument(
@@ -152,6 +165,11 @@ async function mountRawHvyDocument(
     serializeDocumentBytes() {
       currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
       return serializeDocumentBytes(currentDocument);
+    },
+    async getPdfBlob() {
+      const { getHvyPdfBlob } = await import('../../heavy-file-format/src/pdf-export/export');
+      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      return getHvyPdfBlob(currentDocument);
     },
     markSaved() {
       currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
