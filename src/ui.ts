@@ -110,6 +110,10 @@ export interface UiHandlers {
   openDocumentMeta(): void;
   save(): void;
   saveAs(): void;
+  setSaveAsScope(scope: 'workspace' | 'anywhere'): void;
+  saveAsToWorkspace(workspacePath: string, name: string): void;
+  saveAsAnywhere(): void;
+  cancelSaveAs(): void;
   closeDocument(): void;
   saveAndCloseDocument(): void;
   openSaveTemplate(): void;
@@ -182,6 +186,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderNewDocumentDialog(state)}
       ${renderImportDialog(state)}
       ${renderImportProgressDialog(state)}
+      ${renderSaveAsDialog(state)}
       ${renderExportDialog(state)}
       ${renderExportPdfSavePrompt(state)}
       ${renderWorkspaceTemplateVisibilityDialog(state)}
@@ -269,6 +274,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('form[data-form="workspace-transfer"]')) {
           handlers.cancelWorkspaceTransfer();
+          return;
+        }
+        if (backdrop.querySelector('form[data-form="save-as-document"]')) {
+          handlers.cancelSaveAs();
           return;
         }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -434,6 +443,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
     if (action === 'cancel-app-close') handlers.cancelAppClose();
     if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
+    if (action === 'set-save-as-scope' && isSaveAsScope(target.dataset.scope)) handlers.setSaveAsScope(target.dataset.scope);
+    if (action === 'save-as-anywhere') handlers.saveAsAnywhere();
+    if (action === 'cancel-save-as') handlers.cancelSaveAs();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
     if (action === 'set-import-source-tab' && isImportSourceTab(target.dataset.tab)) handlers.setImportSourceTab(target.dataset.tab);
     if (action === 'choose-import-source') handlers.chooseImportSource();
@@ -650,6 +662,14 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const data = new FormData(form);
       handlers.submitWorkspaceTransfer(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
     }
+    if (form.dataset.form === 'save-as-document') {
+      const data = new FormData(form);
+      if (String(data.get('scope') ?? 'workspace') === 'anywhere') {
+        handlers.saveAsAnywhere();
+      } else {
+        handlers.saveAsToWorkspace(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+      }
+    }
   }, { signal });
   document.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && handleWorkspaceClipboardShortcut(event, state, handlers)) {
@@ -692,6 +712,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('form[data-form="workspace-transfer"]')) {
       event.preventDefault();
       handlers.cancelWorkspaceTransfer();
+      return;
+    }
+    if (root.querySelector('form[data-form="save-as-document"]')) {
+      event.preventDefault();
+      handlers.cancelSaveAs();
       return;
     }
     if (root.querySelector('.close-document-dialog')) {
@@ -1026,6 +1051,46 @@ function renderWorkspaceTransferDialog(state: AppState): string {
     </div>`;
 }
 
+function renderSaveAsDialog(state: AppState): string {
+  if (!state.saveAsDialogOpen || !state.document) return '';
+  const workspaces = state.workspaces;
+  const workspaceDisabled = workspaces.length === 0;
+  const workspaceActive = state.saveAsScope === 'workspace' && !workspaceDisabled;
+  const anywhereActive = state.saveAsScope === 'anywhere' || workspaceDisabled;
+  const name = displayDocumentName(state.document.name);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="save-as-document">
+        <h2>Save As</h2>
+        <div class="segmented-control" role="tablist" aria-label="Save destination">
+          <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
+        </div>
+        <input name="scope" type="hidden" value="${escapeAttr(anywhereActive ? 'anywhere' : 'workspace')}">
+        ${workspaceActive ? `
+          <label>
+            <span>Workspace</span>
+            <select name="workspacePath" required>
+              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+            </select>
+          </label>
+          <label>
+            <span>Name</span>
+            <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
+          </label>
+        ` : `
+          <p class="dialog-note">Choose a location outside HVY Galaxy.</p>
+        `}
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-save-as">Cancel</button>
+          ${workspaceActive
+            ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
+            : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
+        </div>
+      </form>
+    </div>`;
+}
+
 function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {
   const active = filter.mode === mode;
   return `
@@ -1255,6 +1320,8 @@ function renderToolbar(state: AppState): string {
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       ${fileActions.saveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
+      <button type="button" data-action="save" ${fileActions.save ? '' : 'disabled'}>Save</button>
+      <button type="button" data-action="save-as" ${fileActions.saveAs ? '' : 'disabled'}>Save As</button>
       <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
       ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
       <button type="button" data-action="save-template" ${fileActions.saveTemplate ? '' : 'disabled'}>Save as Template</button>
@@ -1600,6 +1667,10 @@ function isDocumentCreationType(value: unknown): value is DocumentCreationType {
 }
 
 function isImportSourceTab(value: unknown): value is AppState['importSourceTab'] {
+  return value === 'workspace' || value === 'anywhere';
+}
+
+function isSaveAsScope(value: unknown): value is AppState['saveAsScope'] {
   return value === 'workspace' || value === 'anywhere';
 }
 

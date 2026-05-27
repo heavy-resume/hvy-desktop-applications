@@ -56,6 +56,8 @@ export interface AppState {
   importProgressDialogOpen: boolean;
   saveTemplateDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
+  saveAsDialogOpen: boolean;
+  saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
   workspaceTemplateVisibilityPath: string | null;
   aiSettingsDialogOpen: boolean;
@@ -147,6 +149,8 @@ export const state: AppState = {
   importProgressDialogOpen: false,
   saveTemplateDialogOpen: false,
   saveTemplateScope: 'app',
+  saveAsDialogOpen: false,
+  saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   workspaceTemplateVisibilityPath: null,
   aiSettingsDialogOpen: false,

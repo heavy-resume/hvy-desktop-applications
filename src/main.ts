@@ -440,6 +440,7 @@ const handlers: UiHandlers = {
     if (result.status !== 'complete') {
       throw new Error(result.message ?? 'Import failed.');
     }
+    markImportedTemplateAsUnsavedDocument();
     setDocumentDirty(true);
     updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
     state.status = result.message ?? `Imported ${source.name}`;
@@ -1061,7 +1062,34 @@ const handlers: UiHandlers = {
     });
   },
   save: () => void saveCurrentDocument(),
-  saveAs: () => void saveCurrentDocumentAs(),
+  saveAs: () => {
+    openSaveAsDialog();
+  },
+  setSaveAsScope: (scope) => {
+    if (scope === 'workspace' && state.workspaces.length === 0) return;
+    state.saveAsScope = scope;
+    rerender({ preserveMountedDocument: true });
+  },
+  saveAsToWorkspace: (workspacePath, name) => {
+    if (!workspacePath || !name.trim()) {
+      state.status = 'Document name is required';
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    state.saveAsDialogOpen = false;
+    void runBusy('Saving as...', async () => {
+      await saveCurrentDocumentToWorkspace(workspacePath, name.trim());
+    });
+  },
+  saveAsAnywhere: () => {
+    state.saveAsDialogOpen = false;
+    void saveCurrentDocumentAsAnywhere();
+  },
+  cancelSaveAs: () => {
+    state.saveAsDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   saveAndCloseDocument: () => void saveAndCloseDocument(),
   openSaveTemplate: () => void (async () => {
     if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
@@ -1457,6 +1485,23 @@ function displayDocumentName(name: string): string {
   return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
+function markImportedTemplateAsUnsavedDocument(): void {
+  const document = state.document;
+  if (!document || (document.extension !== '.thvy' && document.extension !== '.phvy')) {
+    return;
+  }
+  const nextExtension: DocumentExtension = document.extension === '.thvy' ? '.hvy' : '.phvy';
+  document.extension = nextExtension;
+  document.name = document.name.replace(/\.(thvy|phvy)$/i, nextExtension);
+  if (!document.name.endsWith(nextExtension)) {
+    document.name = `${document.name}${nextExtension}`;
+  }
+  document.isNew = true;
+  if (document.mounted?.document) {
+    document.mounted.document.extension = nextExtension;
+  }
+}
+
 async function importSourceFrom(pastedSourceText: string): Promise<PreparedImportSource | null> {
   const pasted = pastedSourceText.trim();
   if (pasted.length >= 50) {
@@ -1766,14 +1811,24 @@ function updateDirtyChrome(): void {
   indicator?.setAttribute('data-state', openDocument.readOnly ? 'read-only' : openDocument.dirty ? 'dirty' : 'clean');
   const activeTab = document.querySelector<HTMLElement>('.document-tab.is-active');
   activeTab?.classList.toggle('is-dirty', openDocument.dirty);
-  const saveButton = document.querySelector<HTMLButtonElement>('[data-action="save"]');
-  if (openDocument.dirty && !openDocument.readOnly) {
-    saveButton?.removeAttribute('disabled');
-  } else {
-    saveButton?.setAttribute('disabled', '');
-  }
+  const fileActions = getFileActionAvailability(state);
+  syncToolbarButtonDisabled('save', !fileActions.save);
+  syncToolbarButtonDisabled('save-as', !fileActions.saveAs);
+  syncToolbarButtonDisabled('import-into-current', !fileActions.importCurrent);
+  syncToolbarButtonDisabled('export-pdf', !fileActions.exportPdf);
+  syncToolbarButtonDisabled('save-template', !fileActions.saveTemplate);
   document.querySelector('.status-bar')?.replaceChildren(document.createTextNode(state.status));
   syncFileMenuState();
+}
+
+function syncToolbarButtonDisabled(action: string, disabled: boolean): void {
+  const button = document.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+  if (!button) return;
+  if (disabled) {
+    button.setAttribute('disabled', '');
+  } else {
+    button.removeAttribute('disabled');
+  }
 }
 
 function updateModeMetaChrome(): void {
@@ -1793,7 +1848,7 @@ async function saveCurrentDocument(): Promise<void> {
   const mounted = openDocument?.mounted;
   if (!openDocument || !mounted) return;
   if (openDocument.isNew || !openDocument.path) {
-    await saveCurrentDocumentAs();
+    openSaveAsDialog();
     return;
   }
   if (state.busy) return;
@@ -1826,7 +1881,15 @@ async function saveCurrentDocument(): Promise<void> {
   }
 }
 
-async function saveCurrentDocumentAs(): Promise<void> {
+function openSaveAsDialog(): void {
+  if (!state.document?.mounted || state.document.readOnly) return;
+  state.saveAsDialogOpen = true;
+  state.saveAsScope = state.workspaces.length > 0 ? 'workspace' : 'anywhere';
+  state.status = 'Ready';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function saveCurrentDocumentAsAnywhere(): Promise<void> {
   await runBusy('Saving as...', async () => {
     await performSaveCurrentDocumentAs();
   });
