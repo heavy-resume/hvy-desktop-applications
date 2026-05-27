@@ -147,7 +147,6 @@ export interface FileMenuState {
   saveAs: boolean;
   saveToWorkspace: boolean;
   exportPdf: boolean;
-  saveTemplate: boolean;
   importCurrent: boolean;
 }
 

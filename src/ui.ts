@@ -117,6 +117,7 @@ export interface UiHandlers {
   openDocumentMeta(): void;
   save(): void;
   saveAs(): void;
+  setSaveAsKind(kind: AppState['saveAsKind']): void;
   setSaveAsScope(scope: 'workspace' | 'anywhere'): void;
   saveAsToWorkspace(workspacePath: string, name: string): void;
   saveAsAnywhere(): void;
@@ -197,7 +198,6 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderImportDialog(state)}
       ${renderImportProgressDialog(state)}
       ${renderSaveAsDialog(state)}
-      ${renderExportDialog(state)}
       ${renderExportPdfSavePrompt(state)}
       ${renderExportedPdfDialog(state)}
       ${renderWorkspaceTemplateVisibilityDialog(state)}
@@ -296,7 +296,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.cancelWorkspaceTransfer();
           return;
         }
-        if (backdrop.querySelector('form[data-form="save-as-document"]')) {
+        if (backdrop.querySelector('form[data-form="save-as-document"], form[data-form="save-as-template"]')) {
           handlers.cancelSaveAs();
           return;
         }
@@ -452,6 +452,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
+    if (action === 'set-save-as-kind' && isSaveAsKind(target.dataset.kind)) handlers.setSaveAsKind(target.dataset.kind);
     if (action === 'select-document-tab' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
     if (action === 'close-document-tab' && target.dataset.path !== undefined) {
       event.stopPropagation();
@@ -480,7 +481,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-exported-pdf') handlers.openExportedPdf();
     if (action === 'reveal-exported-pdf') handlers.revealExportedPdf();
     if (action === 'close-exported-pdf-dialog') handlers.closeExportedPdfDialog();
-    if (action === 'save-template') handlers.openSaveTemplate();
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
     if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
     if (action === 'cancel-export-pdf-save-prompt') handlers.cancelExportPdfSavePrompt();
@@ -672,6 +672,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         isTemplateExtension(extension) ? extension : '.thvy'
       );
     }
+    if (form.dataset.form === 'save-as-template') {
+      const data = new FormData(form);
+      const scope = String(data.get('scope') ?? 'app');
+      const extension = data.get('format');
+      handlers.saveAsTemplate(
+        String(data.get('templateName') ?? ''),
+        isTemplateScope(scope) ? scope : 'app',
+        isTemplateExtension(extension) ? extension : '.thvy'
+      );
+    }
     if (form.dataset.form === 'workspace-template-visibility') {
       const data = new FormData(form);
       handlers.saveWorkspaceTemplateVisibility(String(data.get('workspacePath') ?? ''), readWorkspaceTemplateVisibilityForm(data));
@@ -752,7 +762,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.cancelWorkspaceTransfer();
       return;
     }
-    if (root.querySelector('form[data-form="save-as-document"]')) {
+    if (root.querySelector('form[data-form="save-as-document"], form[data-form="save-as-template"]')) {
       event.preventDefault();
       handlers.cancelSaveAs();
       return;
@@ -1113,6 +1123,10 @@ function renderWorkspaceTransferDialog(state: AppState): string {
 
 function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
+  const templateDisabled = state.document.extension === '.md';
+  if (state.saveAsKind === 'template' && !templateDisabled) {
+    return renderSaveAsTemplateDialog(state);
+  }
   const workspaces = state.workspaces;
   const workspaceDisabled = workspaces.length === 0;
   const workspaceActive = state.saveAsScope === 'workspace' && !workspaceDisabled;
@@ -1121,7 +1135,8 @@ function renderSaveAsDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="save-as-document">
-        <h2>Save As</h2>
+        <h2>Save As...</h2>
+        ${renderSaveAsKindControl('document', templateDisabled)}
         <div class="segmented-control" role="tablist" aria-label="Save destination">
           <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
           <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
@@ -1148,6 +1163,52 @@ function renderSaveAsDialog(state: AppState): string {
             : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
         </div>
       </form>
+    </div>`;
+}
+
+function renderSaveAsTemplateDialog(state: AppState): string {
+  const workspaceDisabled = !currentDocumentWorkspacePath(state);
+  const appActive = state.saveTemplateScope === 'app';
+  const workspaceActive = state.saveTemplateScope === 'workspace' && !workspaceDisabled;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="save-as-template">
+        <h2>Save As...</h2>
+        ${renderSaveAsKindControl('template', false)}
+        <label>
+          <span>Format</span>
+          <select name="format">
+            <option value=".thvy" ${state.document?.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
+            <option value=".phvy" ${state.document?.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
+          </select>
+        </label>
+        <label>
+          <span>Name</span>
+          <input name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
+        </label>
+        <div class="field-group">
+          <span>Scope</span>
+          <div class="segmented-control">
+            <button type="button" class="${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
+            <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          </div>
+        </div>
+        <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
+        <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'App templates are available everywhere; workspace templates stay with this workspace.'}</p>
+        ${state.error ? `<p class="dialog-note" data-state="error" role="alert">${escapeHtml(state.error)}</p>` : ''}
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-save-as">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderSaveAsKindControl(activeKind: AppState['saveAsKind'], templateDisabled: boolean): string {
+  return `
+    <div class="segmented-control" role="tablist" aria-label="Save as type">
+      <button type="button" class="${activeKind === 'document' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="document" aria-pressed="${activeKind === 'document' ? 'true' : 'false'}">Document</button>
+      <button type="button" class="${activeKind === 'template' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="template" aria-pressed="${activeKind === 'template' ? 'true' : 'false'}" ${templateDisabled ? 'disabled' : ''}>Template</button>
     </div>`;
 }
 
@@ -1394,10 +1455,9 @@ function renderToolbar(state: AppState): string {
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       ${fileActions.saveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
       <button type="button" data-action="save" ${fileActions.save ? '' : 'disabled'}>Save</button>
-      <button type="button" data-action="save-as" ${fileActions.saveAs ? '' : 'disabled'}>Save As</button>
+      <button type="button" data-action="save-as" ${fileActions.saveAs ? '' : 'disabled'}>Save As...</button>
       <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
       ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
-      <button type="button" data-action="save-template" ${fileActions.saveTemplate ? '' : 'disabled'}>Save as Template</button>
       <button type="button" data-action="close-document">Close</button>
     </div>`;
 }
@@ -1564,7 +1624,7 @@ function renderWorkspace(
   const fileViewNodes = filterNodesByWorkspaceFileView(workspace.files, fileView, workspace, savedTemplates);
   const visibleFiles = documentsActive
     ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
-    : fileViewNodes;
+    : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
     <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}" open>
       <summary title="${escapeAttr(workspace.path)}">
@@ -1614,15 +1674,20 @@ function filterNodesByWorkspaceFileView(
   }
   if (view === 'templates' && includeSavedTemplateFallback) {
     const existingPaths = new Set(visibleNodes.flatMap(flatNodePaths));
+    const archivedPaths = new Set(workspace.manifest.archivedFiles ?? []);
     const templateFiles = savedTemplates
       .filter((template) => template.scope === 'workspace' && template.path.startsWith(workspace.path) && !existingPaths.has(template.path))
-      .map((template): WorkspaceTreeNode => ({
-        kind: 'file',
-        name: template.name,
-        path: template.path,
-        relativePath: `templates/${template.name}`,
-        extension: template.extension,
-      }));
+      .map((template): WorkspaceTreeNode => {
+        const relativePath = `templates/${template.name}`;
+        return {
+          kind: 'file',
+          name: template.name,
+          path: template.path,
+          relativePath,
+          extension: template.extension,
+          archived: archivedPaths.has(relativePath),
+        };
+      });
     if (templateFiles.length > 0) {
       const templatesFolder = visibleNodes.find((node) => node.kind === 'folder' && (node.relativePath === 'templates' || node.name === 'templates'));
       if (templatesFolder?.kind === 'folder') {
@@ -1643,6 +1708,20 @@ function filterNodesByWorkspaceFileView(
 
 function flatNodePaths(node: WorkspaceTreeNode): string[] {
   return node.kind === 'folder' ? node.children.flatMap(flatNodePaths) : [node.path];
+}
+
+function filterNodesByArchivedVisibility(nodes: WorkspaceTreeNode[], showArchived: boolean): WorkspaceTreeNode[] {
+  const visibleNodes: WorkspaceTreeNode[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'folder') {
+      const children = filterNodesByArchivedVisibility(node.children, showArchived);
+      if (children.length > 0) visibleNodes.push({ ...node, children });
+      continue;
+    }
+    if (node.archived && !showArchived) continue;
+    visibleNodes.push(node);
+  }
+  return visibleNodes;
 }
 
 function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visibility: WorkspaceTemplateVisibility): WorkspaceTreeNode[] {
@@ -1821,6 +1900,10 @@ function isSaveAsScope(value: unknown): value is AppState['saveAsScope'] {
   return value === 'workspace' || value === 'anywhere';
 }
 
+function isSaveAsKind(value: unknown): value is AppState['saveAsKind'] {
+  return value === 'document' || value === 'template';
+}
+
 function renderNewDocumentDialog(state: AppState): string {
   if (!state.newDocumentWorkspacePath) {
     return '';
@@ -1874,6 +1957,7 @@ function renderImportDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="${importCurrent ? 'import-current' : 'import-document'}">
         <h2>${escapeHtml(title)}</h2>
+        ${importCurrent ? '<p class="dialog-note">Uses the current file as an import template, and saves the result to the output file.</p>' : ''}
         ${importCurrent ? '' : `
           ${renderDocumentTypeControl('import', state.importDocumentType, visibility)}
           <label>
@@ -2060,46 +2144,6 @@ function updateImportSubmit(form: HTMLFormElement): void {
       : `Choose a file or paste at least ${MIN_PASTED_IMPORT_CHARS} characters.`;
     note.dataset.state = !hasValidSource && pastedLength > 0 ? 'error' : 'neutral';
   }
-}
-
-function renderExportDialog(state: AppState): string {
-  if (!state.saveTemplateDialogOpen) {
-    return '';
-  }
-  const workspaceDisabled = !currentDocumentWorkspacePath(state);
-  const appActive = state.saveTemplateScope === 'app';
-  const workspaceActive = state.saveTemplateScope === 'workspace' && !workspaceDisabled;
-  return `
-    <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="export-document">
-        <h2>Save as Template</h2>
-        <label>
-          <span>Format</span>
-          <select name="format">
-            <option value=".thvy" ${state.document?.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
-            <option value=".phvy" ${state.document?.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
-          </select>
-        </label>
-        <label>
-          <span>Name</span>
-          <input name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
-        </label>
-        <div class="field-group">
-          <span>Scope</span>
-          <div class="segmented-control">
-            <button type="button" class="${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
-            <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
-          </div>
-        </div>
-        <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
-        <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'App templates are available everywhere; workspace templates stay with this workspace.'}</p>
-        ${state.error ? `<p class="dialog-note" data-state="error" role="alert">${escapeHtml(state.error)}</p>` : ''}
-        <div class="dialog-actions">
-          <button type="button" data-action="cancel-export">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
-        </div>
-      </form>
-    </div>`;
 }
 
 function renderExportPdfSavePrompt(state: AppState): string {

@@ -86,7 +86,6 @@ let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
 let pendingMountRecoveryState: string | null = null;
 let backupTimer: number | null = null;
-let lastSyncedFileMenuState = '';
 let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = null;
 let mountThemeReapplyCleanup: (() => void) | null = null;
 let workspaceFilterAbortController: AbortController | null = null;
@@ -907,14 +906,16 @@ const handlers: UiHandlers = {
   },
   archiveFile: (path, currentName) => void runBusy('Archiving file...', async () => {
     const workspace = await archiveDocumentFile(path);
-    upsertWorkspace(workspace);
+    upsertWorkspace(await loadWorkspace(workspace.path));
     if (state.selectedFilePath === path) state.selectedFilePath = null;
+    await refreshSavedTemplates(workspace.path);
     state.status = `Archived ${currentName}`;
   }),
   restoreFile: (path, currentName) => void runBusy('Restoring file...', async () => {
     const workspace = await restoreDocumentFile(path);
-    upsertWorkspace(workspace);
+    upsertWorkspace(await loadWorkspace(workspace.path));
     state.selectedFilePath = path;
+    await refreshSavedTemplates(workspace.path);
     state.status = `Restored ${currentName}`;
   }),
   confirmDeleteFile: (path, currentName) => {
@@ -931,7 +932,10 @@ const handlers: UiHandlers = {
     state.deleteFileName = null;
     void runBusy('Deleting file...', async () => {
       const workspace = await deleteDocumentFile(path);
-      if (workspace) upsertWorkspace(workspace);
+      if (workspace) {
+        upsertWorkspace(await loadWorkspace(workspace.path));
+        await refreshSavedTemplates(workspace.path);
+      }
       documentSessions.delete(path);
       workspaceFilterDocumentCache.delete(path);
       removeDocumentTabPath(path);
@@ -1156,6 +1160,12 @@ const handlers: UiHandlers = {
   saveAs: () => {
     openSaveAsDialog();
   },
+  setSaveAsKind: (kind) => {
+    if (kind === 'template' && state.document?.extension === '.md') return;
+    state.saveAsKind = kind;
+    state.error = null;
+    rerender({ preserveMountedDocument: true });
+  },
   setSaveAsScope: (scope) => {
     if (scope === 'workspace' && state.workspaces.length === 0) return;
     state.saveAsScope = scope;
@@ -1186,7 +1196,8 @@ const handlers: UiHandlers = {
     if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
-    state.saveTemplateDialogOpen = true;
+    state.saveAsDialogOpen = true;
+    state.saveAsKind = 'template';
     state.saveTemplateScope = workspacePathForFile(state.document.path) ? 'workspace' : 'app';
     state.error = null;
     state.status = 'Ready';
@@ -1240,12 +1251,12 @@ const handlers: UiHandlers = {
     }
     const bytes = Array.from(await serializeHvy({ ...state.document.mounted.document, extension }));
     await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
-    state.saveTemplateDialogOpen = false;
+    state.saveAsDialogOpen = false;
     await refreshSavedTemplates(workspacePath);
     state.status = `Saved template ${templateFileName(name, extension)}`;
   }),
   cancelSaveTemplate: () => {
-    state.saveTemplateDialogOpen = false;
+    state.saveAsDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -1325,7 +1336,6 @@ async function boot(): Promise<void> {
       if (event === 'save-to-workspace') handlers.saveCurrentToWorkspace();
       if (event === 'import-current') handlers.openImportIntoCurrent();
       if (event === 'export-pdf') handlers.exportPdf();
-      if (event === 'save-template') handlers.openSaveTemplate();
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
     });
@@ -1928,7 +1938,6 @@ function updateDirtyChrome(): void {
   syncToolbarButtonDisabled('save-as', !fileActions.saveAs);
   syncToolbarButtonDisabled('import-into-current', !fileActions.importCurrent);
   syncToolbarButtonDisabled('export-pdf', !fileActions.exportPdf);
-  syncToolbarButtonDisabled('save-template', !fileActions.saveTemplate);
   document.querySelector('.status-bar')?.replaceChildren(document.createTextNode(state.status));
   syncFileMenuState();
 }
@@ -1996,7 +2005,9 @@ async function saveCurrentDocument(): Promise<void> {
 function openSaveAsDialog(): void {
   if (!state.document?.mounted || state.document.readOnly) return;
   state.saveAsDialogOpen = true;
+  state.saveAsKind = 'document';
   state.saveAsScope = state.workspaces.length > 0 ? 'workspace' : 'anywhere';
+  state.error = null;
   state.status = 'Ready';
   rerender({ preserveMountedDocument: true });
 }
@@ -2728,13 +2739,7 @@ function syncMcpWorkspaces(): void {
 }
 
 function syncFileMenuState(): void {
-  const menuState = getFileActionAvailability(state);
-  const serialized = JSON.stringify(menuState);
-  if (serialized === lastSyncedFileMenuState) return;
-  lastSyncedFileMenuState = serialized;
-  void updateFileMenuState(menuState).catch(() => {
-    lastSyncedFileMenuState = '';
-  });
+  void updateFileMenuState(getFileActionAvailability(state));
 }
 
 function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = null): boolean {

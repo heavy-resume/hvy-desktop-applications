@@ -55,9 +55,9 @@ export interface AppState {
   importSource: ImportSourceFile | null;
   importOutputMode: 'current' | 'workspace';
   importProgressDialogOpen: boolean;
-  saveTemplateDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
+  saveAsKind: 'document' | 'template';
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
   exportedPdfPath: string | null;
@@ -155,9 +155,9 @@ export const state: AppState = {
   importSource: null,
   importOutputMode: 'current',
   importProgressDialogOpen: false,
-  saveTemplateDialogOpen: false,
   saveTemplateScope: 'app',
   saveAsDialogOpen: false,
+  saveAsKind: 'document',
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   exportedPdfPath: null,

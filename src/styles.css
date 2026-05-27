@@ -353,6 +353,10 @@ button:disabled {
   -webkit-user-select: none;
 }
 
+.tree li {
+  min-width: 0;
+}
+
 .tree summary {
   color: var(--hvy-text-alt, #394744);
   cursor: pointer;
@@ -362,10 +366,11 @@ button:disabled {
 }
 
 .tree-file {
-  display: flex;
+  display: grid;
   width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   overflow: hidden;
   border-color: transparent;
@@ -384,8 +389,7 @@ button:disabled {
 }
 
 .tree-file-extension {
-  flex: 0 0 auto;
-  margin-left: auto;
+  grid-column: 3;
   border-radius: 4px;
   background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 78%, transparent);
   color: var(--hvy-text-muted, #65716d);
@@ -398,6 +402,7 @@ button:disabled {
 }
 
 .tree-file-archived {
+  grid-column: 2;
   flex: 0 0 auto;
   border-radius: 4px;
   background: color-mix(in srgb, var(--hvy-text-muted, #65716d) 14%, var(--hvy-surface, #ffffff));

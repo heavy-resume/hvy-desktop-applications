@@ -149,7 +149,6 @@ function buildMenu() {
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
         menuItem('Export PDF...', 'export-pdf'),
-        menuItem('Save as Template...', 'save-template'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
@@ -218,7 +217,6 @@ function fileMenuItemEnabled(id) {
   if (id === 'save-as') return fileMenuState.saveAs;
   if (id === 'save-to-workspace') return fileMenuState.saveToWorkspace;
   if (id === 'export-pdf') return fileMenuState.exportPdf;
-  if (id === 'save-template') return fileMenuState.saveTemplate;
   if (id === 'import-current') return fileMenuState.importCurrent;
   return true;
 }
@@ -295,7 +293,6 @@ function defaultFileMenuState() {
     saveAs: false,
     saveToWorkspace: false,
     exportPdf: false,
-    saveTemplate: false,
     importCurrent: false,
   };
 }
@@ -308,7 +305,6 @@ function normalizeFileMenuState(state) {
     saveAs: Boolean(state?.saveAs ?? fallback.saveAs),
     saveToWorkspace: Boolean(state?.saveToWorkspace ?? fallback.saveToWorkspace),
     exportPdf: Boolean(state?.exportPdf ?? fallback.exportPdf),
-    saveTemplate: Boolean(state?.saveTemplate ?? fallback.saveTemplate),
     importCurrent: Boolean(state?.importCurrent ?? fallback.importCurrent),
   };
 }
@@ -320,7 +316,6 @@ function fileMenuStateEntries(state) {
     'save-as': state.saveAs,
     'save-to-workspace': state.saveToWorkspace,
     'export-pdf': state.exportPdf,
-    'save-template': state.saveTemplate,
     'import-current': state.importCurrent,
   };
 }

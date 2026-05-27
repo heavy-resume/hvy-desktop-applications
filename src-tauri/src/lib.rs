@@ -216,7 +216,7 @@ struct SaveDocumentTemplateRequest {
     bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct FileMenuState {
     close_document: bool,
@@ -224,8 +224,12 @@ struct FileMenuState {
     save_as: bool,
     save_to_workspace: bool,
     export_pdf: bool,
-    save_template: bool,
     import_current: bool,
+}
+
+#[derive(Default)]
+struct NativeMenuState {
+    file_menu: Mutex<FileMenuState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1667,7 +1671,8 @@ fn close_app_window(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
-fn update_file_menu_state(app: AppHandle, state: FileMenuState) -> AppResult<()> {
+fn update_file_menu_state(app: AppHandle, native_menu: State<NativeMenuState>, state: FileMenuState) -> AppResult<()> {
+    *native_menu.file_menu.lock().unwrap() = state.clone();
     if let Some(menu) = app.menu() {
         set_file_menu_state(&menu, &state)?;
     }
@@ -1679,6 +1684,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(McpRuntime::default())
+        .manage(NativeMenuState::default())
         .setup(|app| {
             set_native_process_name();
             install_camera_permission_handler(app.handle());
@@ -1838,7 +1844,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&disabled_app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
         .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
-        .item(&MenuItemBuilder::new("Save as Template...").id("save-template").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
@@ -2571,6 +2576,7 @@ fn refresh_menu(app: &AppHandle) -> AppResult<()> {
         return Ok(());
     }
     let menu = build_menu(app).map_err(|error| AppError::Message(error.to_string()))?;
+    refresh_menu_items(app, &menu)?;
     app.set_menu(menu)
         .map(|_| ())
         .map_err(|error| AppError::Message(error.to_string()))
@@ -2599,6 +2605,8 @@ fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> 
         "recent-workspace:",
         "No Recent Workspaces",
     )?;
+    let native_menu = app.state::<NativeMenuState>();
+    set_file_menu_state(menu, &native_menu.file_menu.lock().unwrap())?;
 
     Ok(())
 }
@@ -2609,7 +2617,6 @@ fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuSta
     set_menu_item_enabled(menu, "save-as", state.save_as)?;
     set_menu_item_enabled(menu, "save-to-workspace", state.save_to_workspace)?;
     set_menu_item_enabled(menu, "export-pdf", state.export_pdf)?;
-    set_menu_item_enabled(menu, "save-template", state.save_template)?;
     set_menu_item_enabled(menu, "import-current", state.import_current)?;
     Ok(())
 }
