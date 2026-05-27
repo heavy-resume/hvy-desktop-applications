@@ -2,6 +2,10 @@ import type { DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import type {
+  HvyEditorClipboardHost,
+  HvyEditorClipboardPayload,
+} from '../../heavy-file-format/src/types';
+import type {
   HvyDocumentSearchRequest,
   HvyDocumentSearchResponse,
   HvySearchSnapshotInput,
@@ -38,6 +42,16 @@ export interface MountHvyDocumentOptions {
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
+let editorClipboardPayload: HvyEditorClipboardPayload | null = null;
+
+const editorClipboardHost: HvyEditorClipboardHost = {
+  read() {
+    return editorClipboardPayload;
+  },
+  write(payload) {
+    editorClipboardPayload = payload;
+  },
+};
 
 function loadHvyEmbed(): Promise<HvyEmbedModule> {
   hvyEmbedModule ??= import('../../heavy-file-format/src/embed-full');
@@ -70,6 +84,7 @@ export async function mountHvyDocument(
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
     semanticFilterProvider: chatSemanticFilterProvider,
+    editorClipboard: editorClipboardHost,
     storageKey: mode === 'editor' || mode === 'advanced' ? null : options.storageKey,
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,

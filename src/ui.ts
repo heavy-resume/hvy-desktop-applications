@@ -2040,7 +2040,7 @@ function renderAppCloseDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <section class="dialog app-close-dialog" role="dialog" aria-modal="true" aria-labelledby="appCloseTitle">
         <h2 id="appCloseTitle">Save Changes Before Closing?</h2>
-        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}. HVY Galaxy tries to save a recovery draft before closing, but saving now writes the document to its file.</p>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}.</p>
         <div class="dialog-actions">
           <button type="button" data-action="save-and-close-app">Save and Close</button>
           <button type="button" class="danger-button" data-action="close-app-without-saving">Close Without Saving</button>

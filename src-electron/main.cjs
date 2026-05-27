@@ -58,6 +58,12 @@ app.on('window-all-closed', () => {
   }
 });
 
+app.on('before-quit', (event) => {
+  if (appCloseAllowed) return;
+  event.preventDefault();
+  mainWindow?.webContents.send('hvy:app-close-requested');
+});
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1280,
@@ -126,7 +132,7 @@ function buildMenu() {
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
-        { role: 'quit', label: `Quit ${APP_NAME}` },
+        menuItem(`Quit ${APP_NAME}`, 'app-close-requested', 'CmdOrCtrl+Q'),
       ],
     }] : []),
     {
@@ -149,7 +155,7 @@ function buildMenu() {
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
-        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, { role: 'quit' }]),
+        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem('Quit', 'app-close-requested', 'CmdOrCtrl+Q')]),
       ],
     },
     {

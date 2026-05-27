@@ -1623,10 +1623,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
-        .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?)
+        .item(&app_shortcut_menu_item(app, "Quit HVY Galaxy", "app-close-requested", "CmdOrCtrl+Q")?)
         .build()?;
 
-    let mut file_builder = SubmenuBuilder::with_id(app, "file-menu", "File")
+    let file_builder = SubmenuBuilder::with_id(app, "file-menu", "File")
         .item(&app_shortcut_menu_item(app, "New Workspace", "new-workspace", "CmdOrCtrl+N")?)
         .item(&app_shortcut_menu_item(app, "Open Workspace", "open-workspace", "CmdOrCtrl+O")?)
         .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
@@ -1635,12 +1635,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&recent_files)
         .separator();
     #[cfg(not(target_os = "macos"))]
-    {
-        file_builder = file_builder
-            .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
-            .separator();
-    }
-    let mut file_builder = file_builder
+    let file_builder = file_builder
+        .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
+        .separator();
+    let file_builder = file_builder
         .item(&app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
         .item(&app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
         .item(&app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
@@ -1650,11 +1648,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
     #[cfg(not(target_os = "macos"))]
-    {
-        file_builder = file_builder
-            .separator()
-            .item(&PredefinedMenuItem::quit(app, Some("Quit HVY Galaxy"))?);
-    }
+    let file_builder = file_builder
+        .separator()
+        .item(&app_shortcut_menu_item(app, "Quit HVY Galaxy", "app-close-requested", "CmdOrCtrl+Q")?);
     let file = file_builder.build()?;
     let mcp = SubmenuBuilder::with_id(app, "mcp-menu", "MCP Server")
         .item(
@@ -1679,7 +1675,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
         .build()?;
-    let mut help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
+    let help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
             &MenuItemBuilder::new("HVY Guide")
                 .id("open-guide")
@@ -1687,11 +1683,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 .build(app)?,
         );
     #[cfg(not(target_os = "macos"))]
-    {
-        help_builder = help_builder
-            .separator()
-            .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?);
-    }
+    let help_builder = help_builder
+        .separator()
+        .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?);
     let help = help_builder.build()?;
 
     let builder = MenuBuilder::new(app);

@@ -1057,6 +1057,7 @@ async function boot(): Promise<void> {
       }
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
+      if (event === 'app-close-requested') void handleAppCloseRequest();
       if (event === 'close-document') handlers.closeDocument();
       if (event === 'save') handlers.save();
       if (event === 'save-as') handlers.saveAs();
