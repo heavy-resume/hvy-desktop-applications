@@ -1,5 +1,5 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
 import type { HvyMode } from './hvy';
@@ -38,6 +38,7 @@ export interface UiHandlers {
   addFilesToWorkspace(workspacePath: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
   openWorkspaceFilter(workspacePath: string): void;
+  setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   closeWorkspaceFilter(): void;
   setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
   setWorkspaceFilterBehavior(mode: SearchFilterMode): void;
@@ -336,6 +337,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
     if (action === 'workspace-template-visibility' && target.dataset.workspacePath) handlers.openWorkspaceTemplateVisibility(target.dataset.workspacePath);
     if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
+    if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
+      handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
+    }
     if (action === 'close-workspace-filter') handlers.closeWorkspaceFilter();
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
@@ -1471,7 +1475,7 @@ function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.savedTemplates)).join('')}</div>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {
@@ -1545,6 +1549,8 @@ function renderWorkspace(
   openWorkspaceActionsPath: string | null,
   activeFilters: AppState['workspaceFilters'],
   workspaceClipboard: WorkspaceClipboardState | null,
+  fileView: AppState['workspaceFileViews'][string],
+  savedTemplates: SavedTemplate[],
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
@@ -1554,13 +1560,21 @@ function renderWorkspace(
   const filterTitle = filter
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
-  const visibleFiles = filterNodesByTemplateVisibility(workspace.files, workspaceTemplateVisibility(workspace));
+  const documentsActive = fileView === 'documents';
+  const fileViewNodes = filterNodesByWorkspaceFileView(workspace.files, fileView, workspace, savedTemplates);
+  const visibleFiles = documentsActive
+    ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
+    : fileViewNodes;
   return `
     <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}" open>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
       <button type="button" class="workspace-filter-trigger${filter ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
+      <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
+        <button type="button" class="${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
+        <button type="button" class="${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
+      </div>
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
@@ -1572,6 +1586,63 @@ function renderWorkspace(
       </div>
       ${visibleFiles.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>`}
     </details>`;
+}
+
+function isWorkspaceFileView(value: unknown): value is AppState['workspaceFileViews'][string] {
+  return value === 'documents' || value === 'templates';
+}
+
+function filterNodesByWorkspaceFileView(
+  nodes: WorkspaceTreeNode[],
+  view: AppState['workspaceFileViews'][string],
+  workspace: Workspace,
+  savedTemplates: SavedTemplate[],
+  includeSavedTemplateFallback = true,
+): WorkspaceTreeNode[] {
+  const visibleNodes: WorkspaceTreeNode[] = [];
+  for (const node of nodes) {
+    const relativePath = typeof node.relativePath === 'string' ? node.relativePath : '';
+    const inTemplateFolder = relativePath === 'templates' || relativePath.startsWith('templates/');
+    if (node.kind === 'folder') {
+      const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
+      if (children.length > 0) visibleNodes.push({ ...node, children });
+      continue;
+    }
+    if (view === 'templates' && !inTemplateFolder) continue;
+    if (view === 'documents' && inTemplateFolder) continue;
+    visibleNodes.push(node);
+  }
+  if (view === 'templates' && includeSavedTemplateFallback) {
+    const existingPaths = new Set(visibleNodes.flatMap(flatNodePaths));
+    const templateFiles = savedTemplates
+      .filter((template) => template.scope === 'workspace' && template.path.startsWith(workspace.path) && !existingPaths.has(template.path))
+      .map((template): WorkspaceTreeNode => ({
+        kind: 'file',
+        name: template.name,
+        path: template.path,
+        relativePath: `templates/${template.name}`,
+        extension: template.extension,
+      }));
+    if (templateFiles.length > 0) {
+      const templatesFolder = visibleNodes.find((node) => node.kind === 'folder' && (node.relativePath === 'templates' || node.name === 'templates'));
+      if (templatesFolder?.kind === 'folder') {
+        templatesFolder.children = [...templatesFolder.children, ...templateFiles];
+      } else {
+        visibleNodes.push({
+          kind: 'folder',
+          name: 'templates',
+          path: `${workspace.path.replace(/\/+$/, '')}/templates`,
+          relativePath: 'templates',
+          children: templateFiles,
+        });
+      }
+    }
+  }
+  return visibleNodes;
+}
+
+function flatNodePaths(node: WorkspaceTreeNode): string[] {
+  return node.kind === 'folder' ? node.children.flatMap(flatNodePaths) : [node.path];
 }
 
 function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visibility: WorkspaceTemplateVisibility): WorkspaceTreeNode[] {
@@ -2022,6 +2093,7 @@ function renderExportDialog(state: AppState): string {
         </div>
         <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
         <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'App templates are available everywhere; workspace templates stay with this workspace.'}</p>
+        ${state.error ? `<p class="dialog-note" data-state="error" role="alert">${escapeHtml(state.error)}</p>` : ''}
         <div class="dialog-actions">
           <button type="button" data-action="cancel-export">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>

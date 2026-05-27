@@ -86,7 +86,10 @@ export interface AppState {
   workspaceTransfer: WorkspaceTransferState | null;
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
+  workspaceFileViews: Record<string, WorkspaceFileView>;
 }
+
+export type WorkspaceFileView = 'documents' | 'templates';
 
 export interface WorkspaceFilterConfig {
   query: string;
@@ -193,6 +196,7 @@ export const state: AppState = {
     error: null,
   },
   workspaceFilters: {},
+  workspaceFileViews: {},
 };
 
 export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {

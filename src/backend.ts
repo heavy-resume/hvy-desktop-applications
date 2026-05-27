@@ -486,8 +486,8 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
   return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export function loadWorkspace(path: string): Promise<Workspace> {
-  return invokeDesktop('load_workspace', { path });
+export function loadWorkspace(path: string, options: { includeTemplates?: boolean } = {}): Promise<Workspace> {
+  return invokeDesktop('load_workspace', { path, includeTemplates: options.includeTemplates === true });
 }
 
 export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {

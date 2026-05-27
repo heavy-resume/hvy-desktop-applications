@@ -889,11 +889,14 @@ fn initialize_workspace_path(app: AppHandle, path: String) -> AppResult<Workspac
 }
 
 #[tauri::command]
-fn load_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
+fn load_workspace(app: AppHandle, path: String, include_templates: Option<bool>) -> AppResult<Workspace> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
     remove_archived_workspace(&app, &path)?;
     add_recent_workspace(&app, &path)?;
+    if include_templates.unwrap_or(false) {
+        return load_workspace_from_path_with_options(&path, true);
+    }
     Ok(workspace)
 }
 
@@ -2029,12 +2032,16 @@ fn workspace_folder_name(name: &str) -> String {
 }
 
 fn load_workspace_from_path(path: &Path) -> AppResult<Workspace> {
+    load_workspace_from_path_with_options(path, false)
+}
+
+fn load_workspace_from_path_with_options(path: &Path, include_templates: bool) -> AppResult<Workspace> {
     let manifest_path = workspace_manifest_path(path)
         .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
     let manifest = read_manifest(&manifest_path)?;
     Ok(Workspace {
         path: path_to_string(path),
-        files: scan_workspace_files(path, &manifest.archived_files)?,
+        files: scan_workspace_files(path, &manifest.archived_files, include_templates)?,
         manifest,
     })
 }
@@ -2066,11 +2073,11 @@ fn workspace_manifest_path(path: &Path) -> Option<PathBuf> {
     legacy.exists().then_some(legacy)
 }
 
-fn scan_workspace_files(root: &Path, archived_files: &[String]) -> AppResult<Vec<WorkspaceTreeNode>> {
-    scan_directory(root, root, archived_files)
+fn scan_workspace_files(root: &Path, archived_files: &[String], include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
+    scan_directory(root, root, archived_files, include_templates)
 }
 
-fn scan_directory(root: &Path, directory: &Path, archived_files: &[String]) -> AppResult<Vec<WorkspaceTreeNode>> {
+fn scan_directory(root: &Path, directory: &Path, archived_files: &[String], include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -2078,11 +2085,11 @@ fn scan_directory(root: &Path, directory: &Path, archived_files: &[String]) -> A
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if should_ignore(root, &path, &name) {
+        if should_ignore(root, &path, &name, include_templates) {
             continue;
         }
         if path.is_dir() {
-            let children = scan_directory(root, &path, archived_files)?;
+            let children = scan_directory(root, &path, archived_files, include_templates)?;
             if !children.is_empty() {
                 folders.push(WorkspaceTreeNode::Folder {
                     name,
@@ -2109,11 +2116,11 @@ fn scan_directory(root: &Path, directory: &Path, archived_files: &[String]) -> A
     Ok(folders)
 }
 
-fn should_ignore(root: &Path, path: &Path, name: &str) -> bool {
+fn should_ignore(root: &Path, path: &Path, name: &str, include_templates: bool) -> bool {
     name == WORKSPACE_MANIFEST
         || name == LEGACY_WORKSPACE_MANIFEST
         || name.starts_with('.')
-        || path == workspace_templates_dir_path(root)
+        || (!include_templates && path == workspace_templates_dir_path(root))
         || matches!(name, "node_modules" | "dist" | "build" | "target" | ".git")
 }
 
@@ -4237,7 +4244,7 @@ mod tests {
         fs::write(dir.path().join(".git").join("hidden.hvy"), "hidden").unwrap();
         fs::write(dir.path().join("skip.txt"), "skip").unwrap();
 
-        let nodes = scan_workspace_files(dir.path(), &[]).unwrap();
+        let nodes = scan_workspace_files(dir.path(), &[], false).unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
         assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));

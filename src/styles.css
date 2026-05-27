@@ -425,7 +425,7 @@ button:disabled {
 
 .tree-file-extension[data-extension=".thvy"] {
   background: color-mix(in srgb, var(--hvy-accent-2, #7b8f86) 16%, var(--hvy-surface, #ffffff));
-  color: var(--hvy-accent-1-alt, #356f6c);
+  color: var(--hvy-warning-text, #8a4d00);
 }
 
 .tree-file-extension[data-extension=".phvy"] {
@@ -861,6 +861,16 @@ button:disabled {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2;
+}
+
+.workspace-view-toggle {
+  margin: 0.15rem 0 0.35rem;
+}
+
+.workspace-view-toggle button {
+  min-height: 1.7rem;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.75rem;
 }
 
 .workspace-action-popover {

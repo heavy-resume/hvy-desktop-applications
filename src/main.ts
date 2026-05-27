@@ -23,7 +23,7 @@ import {
   loadMcpServerStatus,
   loadMcpSettings,
   loadMcpStdioLaunchConfig,
-  loadWorkspace,
+  loadWorkspace as loadWorkspaceBackend,
   listSavedTemplates,
   listDocumentBackups,
   loadRecentState,
@@ -68,6 +68,7 @@ import {
   type McpClientInstallTarget,
   type McpSettings,
   type TemplateExtension,
+  type Workspace,
   type WorkspaceFileNode,
   type WorkspaceTreeNode,
   updateMcpWorkspaces,
@@ -261,6 +262,7 @@ const handlers: UiHandlers = {
       relativePath: fileName,
       template,
     });
+    showWorkspaceDocumentsView(workspacePath);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
     await openDocument(file, { isNew: true, deferMount: true });
@@ -461,6 +463,7 @@ const handlers: UiHandlers = {
     }
     if (outputMode === 'workspace' && outputWorkspacePath) {
       markImportedTemplateAsUnsavedDocument();
+      showWorkspaceDocumentsView(outputWorkspacePath);
       await saveCurrentDocumentToWorkspace(outputWorkspacePath, outputName.trim());
     } else {
       setDocumentDirty(true);
@@ -511,6 +514,20 @@ const handlers: UiHandlers = {
       document.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-field="workspace-filter-query"]')?.focus();
     });
   },
+  setWorkspaceFileView: (workspacePath, view) => void runBusy(
+    view === 'templates' ? 'Loading templates...' : 'Loading documents...',
+    async () => {
+      state.workspaceFileViews[workspacePath] = view;
+      if (view === 'templates') {
+        await refreshSavedTemplates(workspacePath);
+      }
+      upsertWorkspace(await loadWorkspace(workspacePath));
+      state.selectedWorkspacePath = workspacePath;
+      state.openWorkspaceActionsPath = null;
+      state.status = view === 'templates' ? 'Showing templates' : 'Showing documents';
+    },
+    { preserveMountedDocument: true }
+  ),
   closeWorkspaceFilter: () => {
     state.workspaceFilter.open = false;
     state.workspaceFilter.isLoading = false;
@@ -1105,6 +1122,7 @@ const handlers: UiHandlers = {
         state.document.mode = 'advanced';
         state.document.metaOpen = true;
         updateCurrentDocumentSession(state.document.mounted.document);
+        applyAppColorTheme();
         updateModeMetaChrome();
         return;
       }
@@ -1113,6 +1131,7 @@ const handlers: UiHandlers = {
       if (state.document.mounted) {
         state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
         updateCurrentDocumentSession(state.document.mounted.document);
+        applyAppColorTheme();
         updateModeMetaChrome();
       }
       return;
@@ -1128,6 +1147,7 @@ const handlers: UiHandlers = {
       if (state.document?.mode === 'advanced' && state.document.mounted) {
         state.document.metaOpen = openMountedDocumentMeta(state.document.mounted);
         updateCurrentDocumentSession(state.document.mounted.document);
+        applyAppColorTheme();
         updateModeMetaChrome();
       }
     });
@@ -1168,6 +1188,7 @@ const handlers: UiHandlers = {
     if (!state.document?.mounted) return;
     state.saveTemplateDialogOpen = true;
     state.saveTemplateScope = workspacePathForFile(state.document.path) ? 'workspace' : 'app';
+    state.error = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   })(),
@@ -1200,6 +1221,7 @@ const handlers: UiHandlers = {
   setSaveTemplateScope: (scope) => {
     if (scope === 'workspace' && !workspacePathForFile(state.document?.path ?? '')) return;
     state.saveTemplateScope = scope;
+    state.error = null;
     rerender({ preserveMountedDocument: true });
   },
   saveAsTemplate: (name, scope, extension: TemplateExtension) => void runBusy('Saving template...', async () => {
@@ -1216,7 +1238,7 @@ const handlers: UiHandlers = {
         throw new Error(`Cannot save as PHVY until the document is PDF-safe. ${errors.slice(0, 3).join(' ')}`);
       }
     }
-    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+    const bytes = Array.from(await serializeHvy({ ...state.document.mounted.document, extension }));
     await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
     state.saveTemplateDialogOpen = false;
     await refreshSavedTemplates(workspacePath);
@@ -1830,7 +1852,6 @@ async function ensureCurrentDocumentMounted(): Promise<void> {
 
 function bindMountThemeReapply(root: HTMLElement): () => void {
   const controller = new AbortController();
-  const overlayObserver = new MutationObserver(() => updateDocumentStageOverlayState(root));
   let frame = 0;
   const schedule = () => {
     if (frame) window.cancelAnimationFrame(frame);
@@ -1846,6 +1867,7 @@ function bindMountThemeReapply(root: HTMLElement): () => void {
   root.addEventListener('input', schedule, { signal: controller.signal });
   root.addEventListener('submit', schedule, { signal: controller.signal });
   root.addEventListener('keydown', schedule, { signal: controller.signal });
+  const overlayObserver = new MutationObserver(schedule);
   overlayObserver.observe(root, {
     attributes: true,
     attributeFilter: ['class', 'hidden', 'style'],
@@ -2654,6 +2676,14 @@ async function droppedWorkspaceFilesFrom(files: File[]): Promise<DroppedWorkspac
 
 function workspacePathForFile(filePath: string): string | null {
   return state.workspaces.find((workspace) => filePath.startsWith(workspace.path))?.path ?? null;
+}
+
+function loadWorkspace(path: string): Promise<Workspace> {
+  return loadWorkspaceBackend(path, { includeTemplates: state.workspaceFileViews[path] === 'templates' });
+}
+
+function showWorkspaceDocumentsView(workspacePath: string): void {
+  state.workspaceFileViews[workspacePath] = 'documents';
 }
 
 async function refreshSavedTemplates(workspacePath?: string | null): Promise<void> {

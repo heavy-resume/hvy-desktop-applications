@@ -361,7 +361,7 @@ async function handleCommand(command, args) {
     case 'create_workspace': return createWorkspace(args.name);
     case 'new_workspace_dialog': return newWorkspaceDialog();
     case 'initialize_workspace_path': return initializeWorkspacePath(args.path);
-    case 'load_workspace': return loadWorkspace(args.path);
+    case 'load_workspace': return loadWorkspace(args.path, args.includeTemplates === true);
     case 'load_archived_workspaces': return loadArchivedWorkspaces();
     case 'rename_workspace': return renameWorkspace(args.path, args.name);
     case 'archive_workspace': return archiveWorkspace(args.path);
@@ -530,8 +530,8 @@ function initializeWorkspacePath(selectedPath) {
   return workspace;
 }
 
-function loadWorkspace(selectedPath) {
-  const workspace = ensureWorkspace(selectedPath);
+function loadWorkspace(selectedPath, includeTemplates = false) {
+  const workspace = ensureWorkspace(selectedPath, includeTemplates);
   removeArchivedWorkspace(selectedPath);
   addRecentWorkspace(selectedPath);
   return workspace;
@@ -1071,8 +1071,8 @@ async function openExternalUrl(url) {
   return null;
 }
 
-function ensureWorkspace(workspacePath) {
-  return workspaceManifestPath(workspacePath) ? loadWorkspaceFromPath(workspacePath) : initializeWorkspaceWithName(workspacePath, null);
+function ensureWorkspace(workspacePath, includeTemplates = false) {
+  return workspaceManifestPath(workspacePath) ? loadWorkspaceFromPath(workspacePath, includeTemplates) : initializeWorkspaceWithName(workspacePath, null);
 }
 
 function initializeWorkspaceWithName(workspacePath, name) {
@@ -1092,14 +1092,14 @@ function initializeWorkspaceWithName(workspacePath, name) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
-function loadWorkspaceFromPath(workspacePath) {
+function loadWorkspaceFromPath(workspacePath, includeTemplates = false) {
   const manifestPath = workspaceManifestPath(workspacePath);
   if (!manifestPath) throw new Error('Workspace manifest was not found.');
   const manifest = readJson(manifestPath, null);
   return {
     path: workspacePath,
     manifest,
-    files: readWorkspaceChildren(workspacePath, workspacePath, new Set(manifest?.archivedFiles ?? [])),
+    files: readWorkspaceChildren(workspacePath, workspacePath, new Set(manifest?.archivedFiles ?? []), includeTemplates),
   };
 }
 
@@ -1120,9 +1120,9 @@ function touchWorkspaceManifest(workspacePath) {
   writeJson(manifestPath, manifest);
 }
 
-function readWorkspaceChildren(root, directory, archivedFiles = new Set()) {
+function readWorkspaceChildren(root, directory, archivedFiles = new Set(), includeTemplates = false) {
   return fs.readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => !entry.name.startsWith('.') && path.join(directory, entry.name) !== workspaceTemplatesDir(root))
+    .filter((entry) => !entry.name.startsWith('.') && (includeTemplates || path.join(directory, entry.name) !== workspaceTemplatesDir(root)))
     .map((entry) => {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
@@ -1131,7 +1131,7 @@ function readWorkspaceChildren(root, directory, archivedFiles = new Set()) {
           name: entry.name,
           path: entryPath,
           relativePath: relativeWorkspacePath(root, entryPath),
-          children: readWorkspaceChildren(root, entryPath, archivedFiles),
+          children: readWorkspaceChildren(root, entryPath, archivedFiles, includeTemplates),
         };
       }
       const extension = documentExtension(entryPath);
@@ -1272,7 +1272,10 @@ function ensureTemplateFileName(name, requestedExtension = '.thvy') {
   const base = safeFileStem(name || 'Template');
   const extension = path.extname(base).toLowerCase();
   const targetExtension = TEMPLATE_EXTENSIONS.has(requestedExtension) ? requestedExtension : '.thvy';
-  return TEMPLATE_EXTENSIONS.has(extension) ? base : `${base}${targetExtension}`;
+  if (TEMPLATE_EXTENSIONS.has(extension) || DOCUMENT_EXTENSIONS.has(extension)) {
+    return `${path.parse(base).name}${targetExtension}`;
+  }
+  return `${base}${targetExtension}`;
 }
 
 function ensurePdfFileName(name) {
