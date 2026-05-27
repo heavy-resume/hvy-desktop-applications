@@ -1786,7 +1786,7 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
   const workspaceDisabled = !workspace;
   const workspaceActive = state.importOutputMode === 'workspace' && !workspaceDisabled;
   const currentActive = state.importOutputMode === 'current' || workspaceDisabled;
-  const outputName = displayDocumentName(state.document?.name ?? 'Imported');
+  const outputName = suggestedImportOutputName(state, workspace);
   return `
     <div class="field-group">
       <span>Output</span>
@@ -1802,6 +1802,29 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
         </label>
       ` : ''}
     </div>`;
+}
+
+function suggestedImportOutputName(state: AppState, workspace: AppState['workspaces'][number] | null): string {
+  const base = `${displayDocumentName(state.document?.name ?? 'Imported')} import`;
+  if (!workspace || !state.document) {
+    return base;
+  }
+  const extension = importOutputExtension(state.document.extension);
+  const existing = new Set(workspace.files
+    .filter((node): node is Extract<WorkspaceTreeNode, { kind: 'file' }> => node.kind === 'file')
+    .map((node) => node.name.toLowerCase()));
+  if (!existing.has(`${base}${extension}`.toLowerCase())) {
+    return base;
+  }
+  let index = 1;
+  while (existing.has(`${base} (${index})${extension}`.toLowerCase())) {
+    index += 1;
+  }
+  return `${base} (${index})`;
+}
+
+function importOutputExtension(extension: NonNullable<AppState['document']>['extension']): '.hvy' | '.phvy' {
+  return extension === '.phvy' ? '.phvy' : '.hvy';
 }
 
 function renderImportProgressDialog(state: AppState): string {

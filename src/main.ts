@@ -295,7 +295,7 @@ const handlers: UiHandlers = {
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = true;
     state.importSourceTab = 'workspace';
-    state.importOutputMode = 'current';
+    state.importOutputMode = currentDocumentWorkspacePath(state) ? 'workspace' : 'current';
     state.importSource = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -2523,6 +2523,16 @@ async function saveCurrentDocumentToWorkspace(workspacePath: string, name: strin
     bytes,
   });
   await openDocument(file, { deferMount: true });
+  documentSessions.delete(file.path);
+  if (state.document?.path === file.path) {
+    state.document.dirty = false;
+    state.document.isNew = false;
+    state.document.recoveryBackupId = null;
+    const document = pendingMountDocument ?? state.document.mounted?.document;
+    if (document) {
+      updateCurrentDocumentSession(document);
+    }
+  }
   if (previousPath !== file.path) {
     removeDocumentTabPath(previousPath);
   }
