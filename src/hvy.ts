@@ -1,5 +1,6 @@
 import type { DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
+import { isPdfAllowedComponent } from '../../heavy-file-format/src/pdf-document-capabilities';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import type {
   HvyEditorClipboardHost,
@@ -278,7 +279,7 @@ function installMetaTemplateContextMenu(
       copyMetaTemplate(mount, kind, index);
     }
     if (action === 'paste') {
-      pasteMetaTemplate(mount, kind, onDocumentChange);
+      pasteMetaTemplate(root, button, mount, kind, onDocumentChange);
     }
     closeMenu();
   }, { signal: controller.signal });
@@ -356,6 +357,8 @@ function copyMetaTemplate(mount: HvyMount, kind: MetaTemplateKind, index: number
 }
 
 function pasteMetaTemplate(
+  root: HTMLElement,
+  source: HTMLElement,
   mount: HvyMount,
   kind: MetaTemplateKind,
   onDocumentChange?: HvyDocumentChangeCallback,
@@ -370,6 +373,11 @@ function pasteMetaTemplate(
   }
   const meta = document.meta as Record<string, unknown>;
   if (kind === 'component') {
+    const nextMeta = { ...meta, component_defs: [...defs, nextDefinition] };
+    if (document.extension === '.phvy' && !isPdfAllowedComponent(readTemplateName(nextDefinition), nextMeta)) {
+      showMetaTemplateNotice(root, source, 'Copied component is incompatible with PHVY.');
+      return;
+    }
     meta.component_defs = [...defs, nextDefinition];
   } else {
     meta.section_defs = [...defs, nextDefinition];
@@ -426,6 +434,22 @@ function placeMetaTemplateMenu(menu: HTMLElement): void {
   const top = Math.min(Math.max(margin, rect.top), Math.max(margin, window.innerHeight - rect.height - margin));
   menu.style.left = `${Math.round(left)}px`;
   menu.style.top = `${Math.round(top)}px`;
+}
+
+function showMetaTemplateNotice(root: HTMLElement, source: HTMLElement, message: string): void {
+  root.querySelector('.hvy-meta-template-notice')?.remove();
+  const notice = documentOwner().createElement('section');
+  notice.className = 'hvy-context-popover hvy-meta-template-notice';
+  notice.setAttribute('role', 'status');
+  notice.setAttribute('aria-live', 'polite');
+  notice.textContent = message;
+  notice.style.position = 'fixed';
+  const rect = source.getBoundingClientRect();
+  notice.style.left = `${Math.max(8, rect.left)}px`;
+  notice.style.top = `${Math.max(8, rect.bottom + 6)}px`;
+  root.append(notice);
+  placeMetaTemplateMenu(notice);
+  window.setTimeout(() => notice.remove(), 3200);
 }
 
 function installViewerCarouselInteractions(root: HTMLElement): () => void {

@@ -1997,8 +1997,8 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
     <div class="field-group">
       <span>Output</span>
       <div class="segmented-control" role="tablist" aria-label="Import output">
-        <button type="button" class="${currentActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="current" aria-pressed="${currentActive ? 'true' : 'false'}">Current File</button>
         <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace File</button>
+        <button type="button" class="${currentActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="current" aria-pressed="${currentActive ? 'true' : 'false'}">Current File</button>
       </div>
       <input name="importOutputMode" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'current')}">
       ${workspaceActive ? `

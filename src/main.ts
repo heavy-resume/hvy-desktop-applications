@@ -76,7 +76,7 @@ import {
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
-import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { render, type UiHandlers } from './ui';
@@ -92,6 +92,12 @@ let workspaceFilterAbortController: AbortController | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
+
+interface MountScrollRatio {
+  top: number;
+  left: number;
+}
+
 interface DocumentSession {
   path: string;
   name: string;
@@ -433,42 +439,49 @@ const handlers: UiHandlers = {
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
-    const plan = await buildMountedImportPlan(state.document.mounted, {
-      sourceName: source.name,
-      sourceText: source.text,
-      instructions,
-      maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
-      onProgress: (event) => {
-        if (event.message) state.status = event.message;
-        rerender({ preserveMountedDocument: true });
-      },
-    });
-    if (plan.status !== 'ready' || !plan.steps?.length) {
-      throw new Error(plan.message ?? 'Import planner did not return a usable plan.');
+    const importTarget = outputMode === 'workspace'
+      ? await createTemporaryImportMount(state.document.mounted.document, state.document.mode)
+      : { mounted: state.document.mounted, cleanup: () => {} };
+    try {
+      const plan = await buildMountedImportPlan(importTarget.mounted, {
+        sourceName: source.name,
+        sourceText: source.text,
+        instructions,
+        maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
+        onProgress: (event) => {
+          if (event.message) state.status = event.message;
+          rerender({ preserveMountedDocument: true });
+        },
+      });
+      if (plan.status !== 'ready' || !plan.steps?.length) {
+        throw new Error(plan.message ?? 'Import planner did not return a usable plan.');
+      }
+      const result = await importTextIntoMountedDocument(importTarget.mounted, {
+        sourceName: source.name,
+        sourceText: source.text,
+        instructions,
+        steps: plan.steps,
+        maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
+        onProgress: (event) => {
+          if (event.message) state.status = event.message;
+          rerender({ preserveMountedDocument: true });
+        },
+      });
+      if (result.status !== 'complete') {
+        throw new Error(result.message ?? 'Import failed.');
+      }
+      if (outputMode === 'workspace' && outputWorkspacePath) {
+        markImportedTemplateDocument(importTarget.mounted.document);
+        showWorkspaceDocumentsView(outputWorkspacePath);
+        await saveImportedDocumentToWorkspace(outputWorkspacePath, outputName.trim(), importTarget.mounted.document);
+      } else {
+        setDocumentDirty(true);
+        updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+      }
+      state.status = result.message ?? `Imported ${source.name}`;
+    } finally {
+      importTarget.cleanup();
     }
-    const result = await importTextIntoMountedDocument(state.document.mounted, {
-      sourceName: source.name,
-      sourceText: source.text,
-      instructions,
-      steps: plan.steps,
-      maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
-      onProgress: (event) => {
-        if (event.message) state.status = event.message;
-        rerender({ preserveMountedDocument: true });
-      },
-    });
-    if (result.status !== 'complete') {
-      throw new Error(result.message ?? 'Import failed.');
-    }
-    if (outputMode === 'workspace' && outputWorkspacePath) {
-      markImportedTemplateAsUnsavedDocument();
-      showWorkspaceDocumentsView(outputWorkspacePath);
-      await saveCurrentDocumentToWorkspace(outputWorkspacePath, outputName.trim());
-    } else {
-      setDocumentDirty(true);
-      updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
-    }
-    state.status = result.message ?? `Imported ${source.name}`;
     } finally {
       state.importProgressDialogOpen = false;
     }
@@ -1104,13 +1117,14 @@ const handlers: UiHandlers = {
       return;
     }
     const document = state.document.mounted?.document;
+    const scrollRatio = captureMountScrollRatio(mountRoot);
     state.document.mode = mode;
     state.document.metaOpen = false;
     if (document) {
       updateCurrentDocumentSession(document);
     }
     rerender();
-    void mountCurrentDocument(document);
+    void mountCurrentDocument(document).then(() => restoreMountScrollRatio(mountRoot, scrollRatio));
   },
   openDocumentMeta: () => {
     if (!state.document) return;
@@ -1607,21 +1621,13 @@ function displayDocumentName(name: string): string {
   return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
-function markImportedTemplateAsUnsavedDocument(): void {
-  const document = state.document;
+function markImportedTemplateDocument(document: VisualDocument | null): DocumentExtension | null {
   if (!document || (document.extension !== '.thvy' && document.extension !== '.phvy')) {
-    return;
+    return null;
   }
   const nextExtension: DocumentExtension = document.extension === '.thvy' ? '.hvy' : '.phvy';
   document.extension = nextExtension;
-  document.name = document.name.replace(/\.(thvy|phvy)$/i, nextExtension);
-  if (!document.name.endsWith(nextExtension)) {
-    document.name = `${document.name}${nextExtension}`;
-  }
-  document.isNew = true;
-  if (document.mounted?.document) {
-    document.mounted.document.extension = nextExtension;
-  }
+  return nextExtension;
 }
 
 async function importSourceFrom(pastedSourceText: string): Promise<PreparedImportSource | null> {
@@ -1904,6 +1910,40 @@ function updateDocumentStageOverlayState(root: HTMLElement): void {
   const hasContextPopover = Boolean(root.querySelector('.hvy-context-popover-backdrop'));
   stage.classList.toggle('has-embedded-pullout', hasPullout);
   stage.classList.toggle('has-embedded-context-popover', hasContextPopover);
+}
+
+function getMountScrollElement(root: HTMLElement | null): HTMLElement | null {
+  return root?.querySelector<HTMLElement>(
+    '.editor-shell .editor-tree, .viewer-shell .reader-document, .raw-hvy-textarea'
+  ) ?? null;
+}
+
+function captureMountScrollRatio(root: HTMLElement | null): MountScrollRatio | null {
+  const scroller = getMountScrollElement(root);
+  if (!scroller) return null;
+  return {
+    top: scrollRatio(scroller.scrollTop, scroller.scrollHeight - scroller.clientHeight),
+    left: scrollRatio(scroller.scrollLeft, scroller.scrollWidth - scroller.clientWidth),
+  };
+}
+
+function scrollRatio(position: number, max: number): number {
+  return max > 0 ? position / max : 0;
+}
+
+function restoreMountScrollRatio(root: HTMLElement | null, ratio: MountScrollRatio | null): void {
+  if (!root || !ratio) return;
+  const restore = () => {
+    const scroller = getMountScrollElement(root);
+    if (!scroller) return;
+    scroller.scrollTop = ratio.top * Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    scroller.scrollLeft = ratio.left * Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  };
+  restore();
+  window.requestAnimationFrame(() => {
+    restore();
+    window.requestAnimationFrame(restore);
+  });
 }
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {
@@ -2625,6 +2665,44 @@ async function saveCurrentDocumentToWorkspace(workspacePath: string, name: strin
   await clearRecoveryDraftsForDocument(previousPath, previousName);
   await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;
+}
+
+async function saveImportedDocumentToWorkspace(
+  workspacePath: string,
+  name: string,
+  document: VisualDocument,
+): Promise<void> {
+  const bytes = Array.from(await serializeHvy(document));
+  const file = await saveDocumentToWorkspace({
+    workspacePath,
+    name: documentFileName(name, documentTypeForExtension(document.extension)) ?? name,
+    bytes,
+  });
+  documentSessions.delete(file.path);
+  upsertWorkspace(await loadWorkspace(workspacePath));
+  await openDocument(file, { deferMount: true });
+  await refreshRecents();
+  await clearRecoveryDraftsForDocument(file.path, file.name);
+  state.status = `Saved to ${file.name}`;
+}
+
+async function createTemporaryImportMount(
+  sourceDocument: VisualDocument,
+  mode: HvyMode,
+): Promise<{ mounted: MountedDocument; cleanup: () => void }> {
+  const bytes = await serializeHvy(sourceDocument);
+  const document = await deserializeHvy(bytes, sourceDocument.extension);
+  const root = globalThis.document.createElement('div');
+  root.hidden = true;
+  globalThis.document.body.append(root);
+  const mounted = await mountHvyDocument(root, document, mode);
+  return {
+    mounted,
+    cleanup() {
+      mounted.mount.destroy();
+      root.remove();
+    },
+  };
 }
 
 async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string): Promise<void> {
