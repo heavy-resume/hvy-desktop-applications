@@ -1,6 +1,7 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
+import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceClipboardState, WorkspaceFilterState } from './state';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -1167,7 +1168,7 @@ function renderToolbar(state: AppState): string {
   }
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
-  const showSaveToWorkspace = isDocumentOrphanedFromWorkspace(state);
+  const fileActions = getFileActionAvailability(state);
   const showExportPdf = document.extension === '.phvy';
   return `
     <div class="toolbar-title">
@@ -1176,10 +1177,10 @@ function renderToolbar(state: AppState): string {
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
-      ${showSaveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
-      <button type="button" data-action="import-into-current" ${document.readOnly ? 'disabled' : ''}>Import</button>
-      ${showExportPdf ? `<button type="button" data-action="export-pdf" ${document.readOnly ? 'disabled' : ''}>Export PDF</button>` : ''}
-      <button type="button" data-action="save-template" ${document.readOnly ? 'disabled' : ''}>Save as Template</button>
+      ${fileActions.saveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
+      <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
+      ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
+      <button type="button" data-action="save-template" ${fileActions.saveTemplate ? '' : 'disabled'}>Save as Template</button>
       <button type="button" data-action="close-document">Close</button>
     </div>`;
 }
@@ -1737,16 +1738,6 @@ function renderTemplateOption(template: ReturnType<typeof mergeSavedTemplates>[n
 
 function isBlankBundledTemplate(template: ReturnType<typeof mergeSavedTemplates>[number]): boolean {
   return template.scope === 'bundled' && /^blank\.(thvy|phvy)$/i.test(template.fileName);
-}
-
-function currentDocumentWorkspacePath(state: AppState): string | null {
-  const path = state.document?.path;
-  if (!path) return null;
-  return state.workspaces.find((workspace) => path.startsWith(workspace.path))?.path ?? null;
-}
-
-function isDocumentOrphanedFromWorkspace(state: AppState): boolean {
-  return Boolean(state.document && !state.document.readOnly && state.workspaces.length > 0 && !currentDocumentWorkspacePath(state));
 }
 
 function renderAboutDialog(state: AppState): string {

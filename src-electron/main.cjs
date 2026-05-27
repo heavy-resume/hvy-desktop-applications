@@ -21,6 +21,7 @@ const APP_NAME = 'HVY Galaxy';
 
 let mainWindow = null;
 let appCloseAllowed = false;
+let fileMenuState = defaultFileMenuState();
 let mcpStatus = {
   running: false,
   url: null,
@@ -102,9 +103,9 @@ function shortcutCommand(input) {
   if (!input.control && !input.meta) return null;
   if (input.alt || input.isAutoRepeat) return null;
   const key = String(input.key ?? '').toLowerCase();
-  if (key === 's' && !input.shift) return 'save';
-  if (key === 's' && input.shift) return 'save-as';
-  if (key === 'w' && !input.shift) return 'close-document';
+  if (key === 's' && !input.shift) return fileMenuState.save ? 'save' : null;
+  if (key === 's' && input.shift) return fileMenuState.saveAs ? 'save-as' : null;
+  if (key === 'w' && !input.shift) return fileMenuState.closeDocument ? 'close-document' : null;
   if (key === 'n' && !input.shift) return 'new-workspace';
   if (key === 'o' && !input.shift) return 'open-workspace';
   if (key === 'o' && input.shift) return 'open-file';
@@ -206,8 +207,20 @@ function menuItem(label, id, accelerator) {
     label,
     id,
     accelerator,
+    enabled: fileMenuItemEnabled(id),
     click: () => emitMenu(id),
   };
+}
+
+function fileMenuItemEnabled(id) {
+  if (id === 'close-document') return fileMenuState.closeDocument;
+  if (id === 'save') return fileMenuState.save;
+  if (id === 'save-as') return fileMenuState.saveAs;
+  if (id === 'save-to-workspace') return fileMenuState.saveToWorkspace;
+  if (id === 'export-pdf') return fileMenuState.exportPdf;
+  if (id === 'save-template') return fileMenuState.saveTemplate;
+  if (id === 'import-current') return fileMenuState.importCurrent;
+  return true;
 }
 
 function recentSubmenu(label, entries, prefix, emptyLabel = 'No Recent Items') {
@@ -243,6 +256,7 @@ function refreshMenu() {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   refreshRecentSubmenu(menu, 'recent-file:', recent.files || [], 'No Recent Files');
   refreshRecentSubmenu(menu, 'recent-workspace:', recent.workspaces || [], 'No Recent Workspaces');
+  refreshFileMenuState(menu);
 }
 
 function refreshRecentSubmenu(menu, prefix, entries, emptyLabel) {
@@ -255,6 +269,60 @@ function refreshRecentSubmenu(menu, prefix, entries, emptyLabel) {
     item.label = entry ? menuLabel(entry) : emptyLabel;
     item.visible = Boolean(entry);
   }
+}
+
+function updateFileMenuState(nextState) {
+  fileMenuState = normalizeFileMenuState(nextState);
+  const menu = Menu.getApplicationMenu();
+  if (!menu) {
+    buildMenu();
+    return;
+  }
+  refreshFileMenuState(menu);
+}
+
+function refreshFileMenuState(menu) {
+  for (const [id, enabled] of Object.entries(fileMenuStateEntries(fileMenuState))) {
+    const item = menu.getMenuItemById(id);
+    if (item) item.enabled = enabled;
+  }
+}
+
+function defaultFileMenuState() {
+  return {
+    closeDocument: false,
+    save: false,
+    saveAs: false,
+    saveToWorkspace: false,
+    exportPdf: false,
+    saveTemplate: false,
+    importCurrent: false,
+  };
+}
+
+function normalizeFileMenuState(state) {
+  const fallback = defaultFileMenuState();
+  return {
+    closeDocument: Boolean(state?.closeDocument ?? fallback.closeDocument),
+    save: Boolean(state?.save ?? fallback.save),
+    saveAs: Boolean(state?.saveAs ?? fallback.saveAs),
+    saveToWorkspace: Boolean(state?.saveToWorkspace ?? fallback.saveToWorkspace),
+    exportPdf: Boolean(state?.exportPdf ?? fallback.exportPdf),
+    saveTemplate: Boolean(state?.saveTemplate ?? fallback.saveTemplate),
+    importCurrent: Boolean(state?.importCurrent ?? fallback.importCurrent),
+  };
+}
+
+function fileMenuStateEntries(state) {
+  return {
+    'close-document': state.closeDocument,
+    save: state.save,
+    'save-as': state.saveAs,
+    'save-to-workspace': state.saveToWorkspace,
+    'export-pdf': state.exportPdf,
+    'save-template': state.saveTemplate,
+    'import-current': state.importCurrent,
+  };
 }
 
 ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
@@ -311,6 +379,7 @@ async function handleCommand(command, args) {
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
     case 'open_color_theme_dialog': return openColorThemeDialog();
     case 'save_color_theme_as_dialog': return saveColorThemeAsDialog(args.suggestedName, args.bytes);
+    case 'update_file_menu_state': return updateFileMenuState(args.state);
     case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template);
     case 'reveal_document_file': return revealDocumentFile(args.path);
     case 'rename_document_file': return renameDocumentFile(args.path, args.name);

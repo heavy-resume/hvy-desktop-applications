@@ -208,6 +208,18 @@ struct SaveDocumentTemplateRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct FileMenuState {
+    close_document: bool,
+    save: bool,
+    save_as: bool,
+    save_to_workspace: bool,
+    export_pdf: bool,
+    save_template: bool,
+    import_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct ThemeFile {
     path: String,
     name: String,
@@ -1553,6 +1565,14 @@ fn close_app_window(app: AppHandle) -> AppResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn update_file_menu_state(app: AppHandle, state: FileMenuState) -> AppResult<()> {
+    if let Some(menu) = app.menu() {
+        set_file_menu_state(&menu, &state)?;
+    }
+    Ok(())
+}
+
 pub fn run() {
     set_native_process_name();
 
@@ -1607,6 +1627,7 @@ pub fn run() {
             update_workspace_template_visibility,
             open_color_theme_dialog,
             save_color_theme_as_dialog,
+            update_file_menu_state,
             create_document_file,
             reveal_document_file,
             rename_document_file,
@@ -1707,13 +1728,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&recent_files)
         .separator();
     let file_builder = file_builder
-        .item(&app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
-        .item(&app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
-        .item(&app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
-        .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").build(app)?)
-        .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").build(app)?)
-        .item(&MenuItemBuilder::new("Save as Template...").id("save-template").build(app)?)
-        .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").build(app)?)
+        .item(&disabled_app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
+        .item(&disabled_app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
+        .item(&disabled_app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
+        .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").enabled(false).build(app)?)
+        .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
+        .item(&MenuItemBuilder::new("Save as Template...").id("save-template").enabled(false).build(app)?)
+        .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
     #[cfg(not(target_os = "macos"))]
@@ -1763,6 +1784,20 @@ fn app_shortcut_menu_item(
     accelerator: &str,
 ) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
     let builder = MenuItemBuilder::new(label).id(id);
+    #[cfg(target_os = "macos")]
+    let builder = builder.accelerator(accelerator);
+    #[cfg(not(target_os = "macos"))]
+    let _ = accelerator;
+    builder.build(app)
+}
+
+fn disabled_app_shortcut_menu_item(
+    app: &AppHandle,
+    label: &str,
+    id: &str,
+    accelerator: &str,
+) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
+    let builder = MenuItemBuilder::new(label).id(id).enabled(false);
     #[cfg(target_os = "macos")]
     let builder = builder.accelerator(accelerator);
     #[cfg(not(target_os = "macos"))]
@@ -2427,6 +2462,29 @@ fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> 
         "No Recent Workspaces",
     )?;
 
+    Ok(())
+}
+
+fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuState) -> AppResult<()> {
+    set_menu_item_enabled(menu, "close-document", state.close_document)?;
+    set_menu_item_enabled(menu, "save", state.save)?;
+    set_menu_item_enabled(menu, "save-as", state.save_as)?;
+    set_menu_item_enabled(menu, "save-to-workspace", state.save_to_workspace)?;
+    set_menu_item_enabled(menu, "export-pdf", state.export_pdf)?;
+    set_menu_item_enabled(menu, "save-template", state.save_template)?;
+    set_menu_item_enabled(menu, "import-current", state.import_current)?;
+    Ok(())
+}
+
+fn set_menu_item_enabled(
+    menu: &tauri::menu::Menu<tauri::Wry>,
+    id: &str,
+    enabled: bool,
+) -> AppResult<()> {
+    if let Some(item) = menu.get(id).and_then(|item| item.as_menuitem().cloned()) {
+        item.set_enabled(enabled)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
     Ok(())
 }
 

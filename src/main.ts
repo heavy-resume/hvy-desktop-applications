@@ -53,6 +53,7 @@ import {
   stopMcpServer,
   unarchiveWorkspace,
   updateWorkspaceTemplateVisibility,
+  updateFileMenuState,
   type AddFilesResult,
   type DocumentBackup,
   type DocumentCreationType,
@@ -68,6 +69,7 @@ import {
   writeSystemFileClipboard,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
+import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -78,6 +80,7 @@ let mountGeneration = 0;
 let pendingMountDocument: VisualDocument | null = null;
 let pendingMountRecoveryState: string | null = null;
 let backupTimer: number | null = null;
+let lastSyncedFileMenuState = '';
 let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = null;
 let mountThemeReapplyCleanup: (() => void) | null = null;
 let workspaceFilterAbortController: AbortController | null = null;
@@ -1087,6 +1090,7 @@ async function boot(): Promise<void> {
     await loadRecentWorkspaces();
     await refreshSavedTemplates(state.selectedWorkspacePath);
     mountRoot = render(state, handlers);
+    syncFileMenuState();
     await openDefaultGuide();
     await openRecoveryDialogOnBoot();
     startBackupTimer();
@@ -1597,6 +1601,7 @@ function updateDirtyChrome(): void {
     saveButton?.setAttribute('disabled', '');
   }
   document.querySelector('.status-bar')?.replaceChildren(document.createTextNode(state.status));
+  syncFileMenuState();
 }
 
 function updateModeMetaChrome(): void {
@@ -1969,7 +1974,7 @@ async function refreshOpenWorkspaceForFile(filePath: string): Promise<void> {
 }
 
 function currentDocumentCanSaveToWorkspace(): boolean {
-  return Boolean(state.document && !state.document.readOnly && state.workspaces.length > 0 && !workspacePathForFile(state.document.path));
+  return getFileActionAvailability(state).saveToWorkspace;
 }
 
 function openWorkspaceTransfer(
@@ -2117,6 +2122,16 @@ function syncMcpWorkspaces(): void {
   void updateMcpWorkspaces(state.workspaces.map((workspace) => workspace.path));
 }
 
+function syncFileMenuState(): void {
+  const menuState = getFileActionAvailability(state);
+  const serialized = JSON.stringify(menuState);
+  if (serialized === lastSyncedFileMenuState) return;
+  lastSyncedFileMenuState = serialized;
+  void updateFileMenuState(menuState).catch(() => {
+    lastSyncedFileMenuState = '';
+  });
+}
+
 function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = null): boolean {
   const normalized = name.trim().toLowerCase();
   return state.workspaces.some((workspace) => workspace.path !== exceptPath && workspace.manifest.name.trim().toLowerCase() === normalized);
@@ -2132,6 +2147,7 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
   }
   mountRoot = render(state, handlers, { preserveMount });
   applyAppColorTheme();
+  syncFileMenuState();
 }
 
 async function runBusy(label: string, task: () => Promise<void>, options: { preserveMountedDocument?: boolean } = {}): Promise<void> {

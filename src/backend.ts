@@ -136,6 +136,16 @@ export interface SaveThemeAsRequest {
   bytes: number[];
 }
 
+export interface FileMenuState {
+  closeDocument: boolean;
+  save: boolean;
+  saveAs: boolean;
+  saveToWorkspace: boolean;
+  exportPdf: boolean;
+  saveTemplate: boolean;
+  importCurrent: boolean;
+}
+
 export interface CreateDocumentRequest {
   workspacePath: string;
   relativePath: string;
@@ -548,6 +558,10 @@ export function openColorThemeDialog(): Promise<ThemeFile | null> {
 
 export function saveColorThemeAsDialog(request: SaveThemeAsRequest): Promise<ThemeFile | null> {
   return invokeDesktop('save_color_theme_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+}
+
+export function updateFileMenuState(state: FileMenuState): Promise<void> {
+  return invokeDesktop('update_file_menu_state', { state });
 }
 
 export function createDocumentFile(request: CreateDocumentRequest): Promise<DocumentFile> {
