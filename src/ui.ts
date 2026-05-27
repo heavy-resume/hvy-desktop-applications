@@ -1,5 +1,5 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
 import type { HvyMode } from './hvy';
@@ -28,6 +28,8 @@ export interface UiHandlers {
   openImportInWorkspace(workspacePath: string): void;
   setImportDocumentType(type: DocumentCreationType): void;
   openImportIntoCurrent(): void;
+  setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
+  selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
   createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string): void;
   importIntoCurrent(instructions: string, pastedSourceText: string): void;
@@ -179,6 +181,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderWorkspaceManagerDialog(state)}
       ${renderNewDocumentDialog(state)}
       ${renderImportDialog(state)}
+      ${renderImportProgressDialog(state)}
       ${renderExportDialog(state)}
       ${renderExportPdfSavePrompt(state)}
       ${renderWorkspaceTemplateVisibilityDialog(state)}
@@ -432,6 +435,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-app-close') handlers.cancelAppClose();
     if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
+    if (action === 'set-import-source-tab' && isImportSourceTab(target.dataset.tab)) handlers.setImportSourceTab(target.dataset.tab);
     if (action === 'choose-import-source') handlers.chooseImportSource();
     if (action === 'cancel-import') handlers.cancelImport();
     if (action === 'export-pdf') handlers.exportPdf();
@@ -530,6 +534,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     row?.classList.toggle('theme-color-row--override', overridden);
     syncThemeOverrideAction(row, name, overridden);
     handlers.updateColorTheme(name, nextValue);
+  }, { signal });
+  root.addEventListener('change', (event) => {
+    const target = event.target instanceof HTMLSelectElement ? event.target : null;
+    if (!target || target.closest('#hvyMount')) return;
+    if (target.dataset.field === 'import-workspace-source') {
+      handlers.selectImportWorkspaceSource(target.value);
+    }
   }, { signal });
   root.addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
@@ -1588,6 +1599,10 @@ function isDocumentCreationType(value: unknown): value is DocumentCreationType {
   return value === 'hvy' || value === 'thvy' || value === 'phvy';
 }
 
+function isImportSourceTab(value: unknown): value is AppState['importSourceTab'] {
+  return value === 'workspace' || value === 'anywhere';
+}
+
 function renderNewDocumentDialog(state: AppState): string {
   if (!state.newDocumentWorkspacePath) {
     return '';
@@ -1625,13 +1640,17 @@ function renderImportDialog(state: AppState): string {
   if (!workspacePath && !importCurrent) {
     return '';
   }
-  const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath) ?? null;
+  const currentWorkspacePath = importCurrent ? currentDocumentWorkspacePath(state) : workspacePath;
+  const workspace = state.workspaces.find((candidate) => candidate.path === currentWorkspacePath) ?? null;
   const visibility = workspaceTemplateVisibility(workspace);
   const templates = templatesForDocumentType(mergeSavedTemplates(state.savedTemplates), state.importDocumentType, visibility);
   const showTemplatePicker = state.importDocumentType === 'hvy';
   const source = state.importSource;
   const title = importCurrent ? 'Import Into Current' : 'Import Document';
   const baseDisabled = state.busy || (!importCurrent && showTemplatePicker && templates.length === 0);
+  const sourceControls = importCurrent
+    ? renderImportCurrentSourceControls(state, workspace)
+    : renderAnywhereImportSourceControls(source);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="${importCurrent ? 'import-current' : 'import-document'}">
@@ -1651,12 +1670,7 @@ function renderImportDialog(state: AppState): string {
         `}
         <div class="field-group">
           <span>Source</span>
-          <div class="source-picker-row">
-            <button type="button" data-action="choose-import-source">Choose .txt or .md</button>
-            <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
-          </div>
-          <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here"></textarea>
-          <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>
+          ${sourceControls}
         </div>
         <label>
           <span>Instructions</span>
@@ -1668,6 +1682,78 @@ function renderImportDialog(state: AppState): string {
         </div>
       </form>
     </div>`;
+}
+
+function renderImportProgressDialog(state: AppState): string {
+  if (!state.importProgressDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-label="Import progress">
+        <h2>Importing</h2>
+        <p class="dialog-note">${escapeHtml(state.status || 'Importing...')}</p>
+      </section>
+    </div>`;
+}
+
+function renderImportCurrentSourceControls(state: AppState, workspace: AppState['workspaces'][number] | null): string {
+  const workspaceFiles = workspace ? sortedWorkspaceHvySourceFiles(workspace.files) : [];
+  const workspaceDisabled = workspaceFiles.length === 0;
+  const workspaceActive = state.importSourceTab === 'workspace' && !workspaceDisabled;
+  const anywhereActive = state.importSourceTab === 'anywhere' || workspaceDisabled;
+  return `
+    <div class="segmented-control import-source-tabs" role="tablist" aria-label="Import source">
+      <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+      <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
+    </div>
+    ${workspaceActive ? renderImportCurrentWorkspaceSourcePicker(state, workspaceFiles) : renderAnywhereImportSourceControls(state.importSource)}
+  `;
+}
+
+function renderAnywhereImportSourceControls(source: AppState['importSource']): string {
+  return `
+    <div class="source-picker-row">
+      <button type="button" data-action="choose-import-source">Choose file</button>
+      <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
+    </div>
+    <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here"></textarea>
+    <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>`;
+}
+
+function renderImportCurrentWorkspaceSourcePicker(state: AppState, options: WorkspaceFileNode[]): string {
+  return `
+    <label>
+      <span>Workspace HVY</span>
+      <select data-field="import-workspace-source">
+        <option value="">Choose from current workspace</option>
+        ${options.map((file) => `
+          <option value="${escapeAttr(file.path)}" ${state.importSource?.path === file.path ? 'selected' : ''}>${escapeHtml(workspaceSourceLabel(file))}</option>
+        `).join('')}
+      </select>
+    </label>`;
+}
+
+function sortedWorkspaceHvySourceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return flattenWorkspaceHvySourceFiles(nodes)
+    .sort((left, right) => workspaceSourceSortKey(left).localeCompare(workspaceSourceSortKey(right)));
+}
+
+function workspaceSourceLabel(file: WorkspaceFileNode): string {
+  return file.relativePath || file.name;
+}
+
+function workspaceSourceSortKey(file: WorkspaceFileNode): string {
+  return workspaceSourceLabel(file).toLocaleLowerCase();
+}
+
+function flattenWorkspaceHvySourceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === 'folder') {
+      return flattenWorkspaceHvySourceFiles(node.children);
+    }
+    return node.extension === '.hvy' ? [node] : [];
+  });
 }
 
 function renderDocumentTypeControl(
@@ -1870,6 +1956,10 @@ function renderAiSettingsDialog(state: AppState): string {
         <label>
           <span>API Key</span>
           <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
+        </label>
+        <label>
+          <span>Maximum import chunk size</span>
+          <input name="maxContextChars" type="number" min="1" step="1000" value="${escapeAttr(String(normalizeAiMaxContextChars(settings.maxContextChars)))}">
         </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
@@ -2418,13 +2508,16 @@ function readAiSettingsForm(data: FormData): AiSettings {
     activeProviderId: providerId,
     providers,
     actions: readActionSettings(data, providerId),
+    maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
   };
 }
 
 function parseAiSettings(value: string): AiSettings | null {
   try {
     const parsed = JSON.parse(value) as AiSettings;
-    return Array.isArray(parsed.providers) && parsed.actions ? parsed : null;
+    return Array.isArray(parsed.providers) && parsed.actions
+      ? { ...parsed, maxContextChars: normalizeAiMaxContextChars(parsed.maxContextChars) }
+      : null;
   } catch {
     return null;
   }
@@ -2447,6 +2540,11 @@ function readActionConfig(data: FormData, action: AiActionKey, fallbackProviderI
     providerId: String(data.get(`${action}ProviderId`) ?? fallbackProviderId).trim() || fallbackProviderId,
     model: String(data.get(`${action}Model`) ?? '').trim(),
   };
+}
+
+function normalizeAiMaxContextChars(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 40_000;
 }
 
 function activeProviderConfig(settings: AiSettings): AiProviderConfig {

@@ -51,7 +51,9 @@ export interface AppState {
   importWorkspacePath: string | null;
   importDocumentType: DocumentCreationType;
   importIntoCurrentDialogOpen: boolean;
+  importSourceTab: 'workspace' | 'anywhere';
   importSource: ImportSourceFile | null;
+  importProgressDialogOpen: boolean;
   saveTemplateDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
   exportPdfSavePromptOpen: boolean;
@@ -140,7 +142,9 @@ export const state: AppState = {
   importWorkspacePath: null,
   importDocumentType: 'hvy',
   importIntoCurrentDialogOpen: false,
+  importSourceTab: 'workspace',
   importSource: null,
+  importProgressDialogOpen: false,
   saveTemplateDialogOpen: false,
   saveTemplateScope: 'app',
   exportPdfSavePromptOpen: false,

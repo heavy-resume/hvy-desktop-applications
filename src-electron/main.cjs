@@ -657,7 +657,8 @@ async function openImportSourceDialog() {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: [
-      { name: 'Text import sources', extensions: ['txt', 'md'] },
+      { name: 'Import sources', extensions: ['hvy', 'thvy', 'phvy', 'txt', 'md'] },
+      { name: 'HVY documents', extensions: ['hvy', 'thvy', 'phvy'] },
       { name: 'Markdown', extensions: ['md'] },
       { name: 'Plain text', extensions: ['txt'] },
     ],
@@ -665,12 +666,18 @@ async function openImportSourceDialog() {
   if (result.canceled || result.filePaths.length === 0) return null;
   const selected = result.filePaths[0];
   const extension = path.extname(selected).toLowerCase();
-  if (!['.txt', '.md'].includes(extension)) throw new Error('Only .txt and .md files can be imported.');
-  return {
+  if (!['.hvy', '.thvy', '.phvy', '.txt', '.md'].includes(extension)) throw new Error('Only .hvy, .thvy, .phvy, .txt, and .md files can be imported.');
+  const source = {
     path: selected,
     name: path.basename(selected),
-    text: fs.readFileSync(selected, 'utf8'),
+    extension,
   };
+  if (extension === '.txt') {
+    source.text = fs.readFileSync(selected, 'utf8');
+  } else {
+    source.bytes = Array.from(fs.readFileSync(selected));
+  }
+  return source;
 }
 
 function readDocumentFile(filePath) {
@@ -1309,11 +1316,21 @@ function defaultAiSettings() {
       semanticFilter: { providerId: 'openai', model: 'gpt-5.4-nano' },
       compaction: { providerId: 'openai', model: 'gpt-5.4-nano' },
     },
+    maxContextChars: 40000,
   };
 }
 
 function normalizeAiSettings(settings) {
-  return settings || defaultAiSettings();
+  return {
+    ...defaultAiSettings(),
+    ...(settings || {}),
+    maxContextChars: normalizeAiMaxContextChars(settings?.maxContextChars),
+  };
+}
+
+function normalizeAiMaxContextChars(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 40000;
 }
 
 function defaultMcpSettings() {

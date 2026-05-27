@@ -57,6 +57,7 @@ import {
   type AddFilesResult,
   type DocumentBackup,
   type DocumentCreationType,
+  type DocumentExtension,
   type DocumentFile,
   type DroppedWorkspaceFile,
   type ImportSourceFile,
@@ -70,7 +71,7 @@ import {
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
 import { getFileActionAvailability } from './fileActions';
-import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { render, type UiHandlers } from './ui';
@@ -100,6 +101,8 @@ interface DocumentSession {
   recoveryState: string | null;
   recoveryBackupId: string | null;
 }
+
+type PreparedImportSource = ImportSourceFile & { text: string };
 const documentSessions = new Map<string, DocumentSession>();
 const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
@@ -270,6 +273,7 @@ const handlers: UiHandlers = {
     state.importWorkspacePath = workspacePath;
     state.importDocumentType = 'hvy';
     state.importIntoCurrentDialogOpen = false;
+    state.importSourceTab = 'anywhere';
     state.importSource = null;
     state.status = 'Ready';
     void refreshSavedTemplates(workspacePath).then(() => rerender({ preserveMountedDocument: true }));
@@ -289,10 +293,32 @@ const handlers: UiHandlers = {
     state.newDocumentWorkspacePath = null;
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = true;
+    state.importSourceTab = 'workspace';
     state.importSource = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   })(),
+  setImportSourceTab: (tab) => {
+    state.importSourceTab = tab;
+    state.importSource = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  selectImportWorkspaceSource: (path) => void runBusy('Selecting import source...', async () => {
+    if (!path) {
+      state.importSource = null;
+      state.status = 'Ready';
+      return;
+    }
+    const file = await readDocumentFile(path);
+    state.importSource = {
+      path: file.path,
+      name: file.name,
+      extension: file.extension,
+      bytes: file.bytes,
+    };
+    state.status = `Selected ${file.name}`;
+  }, { preserveMountedDocument: true }),
   chooseImportSource: () => void runBusy('Choosing import source...', async () => {
     const source = await openImportSourceDialog();
     if (!source) {
@@ -304,7 +330,7 @@ const handlers: UiHandlers = {
   }),
   createImportedDocument: (name, templateId, instructions, pastedSourceText) => void runBusy('Importing document...', async () => {
     const workspacePath = state.importWorkspacePath;
-    const source = importSourceFrom(pastedSourceText);
+    const source = await importSourceFrom(pastedSourceText);
     const fileName = documentFileName(name, state.importDocumentType);
     if (!workspacePath) return;
     if (!source) {
@@ -318,6 +344,9 @@ const handlers: UiHandlers = {
     const template = creationTemplate(workspacePath, state.importDocumentType, templateId, documentTitle(fileName));
     state.importWorkspacePath = null;
     state.importSource = null;
+    state.importProgressDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+    try {
     const file = await createDocumentFile({
       workspacePath,
       relativePath: fileName,
@@ -333,6 +362,7 @@ const handlers: UiHandlers = {
       sourceName: source.name,
       sourceText: source.text,
       instructions,
+      maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
         if (event.message) state.status = event.message;
         rerender({ preserveMountedDocument: true });
@@ -346,6 +376,7 @@ const handlers: UiHandlers = {
       sourceText: source.text,
       instructions,
       steps: plan.steps,
+      maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
         if (event.message) state.status = event.message;
         rerender({ preserveMountedDocument: true });
@@ -364,9 +395,12 @@ const handlers: UiHandlers = {
     await refreshOpenWorkspaceForFile(state.document.path);
     await refreshRecents();
     state.status = result.message ?? `Imported ${source.name}`;
+    } finally {
+      state.importProgressDialogOpen = false;
+    }
   }),
   importIntoCurrent: (instructions, pastedSourceText) => void runBusy('Importing into current document...', async () => {
-    const source = importSourceFrom(pastedSourceText);
+    const source = await importSourceFrom(pastedSourceText);
     if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
@@ -376,10 +410,14 @@ const handlers: UiHandlers = {
     }
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
+    state.importProgressDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+    try {
     const plan = await buildMountedImportPlan(state.document.mounted, {
       sourceName: source.name,
       sourceText: source.text,
       instructions,
+      maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
         if (event.message) state.status = event.message;
         rerender({ preserveMountedDocument: true });
@@ -393,6 +431,7 @@ const handlers: UiHandlers = {
       sourceText: source.text,
       instructions,
       steps: plan.steps,
+      maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
         if (event.message) state.status = event.message;
         rerender({ preserveMountedDocument: true });
@@ -404,11 +443,16 @@ const handlers: UiHandlers = {
     setDocumentDirty(true);
     updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
     state.status = result.message ?? `Imported ${source.name}`;
+    } finally {
+      state.importProgressDialogOpen = false;
+    }
   }),
   cancelImport: () => {
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = false;
+    state.importSourceTab = 'workspace';
     state.importSource = null;
+    state.importProgressDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -1413,12 +1457,30 @@ function displayDocumentName(name: string): string {
   return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
-function importSourceFrom(pastedSourceText: string): ImportSourceFile | null {
+async function importSourceFrom(pastedSourceText: string): Promise<PreparedImportSource | null> {
   const pasted = pastedSourceText.trim();
   if (pasted.length >= 50) {
-    return { path: '', name: 'Pasted text', text: pasted };
+    return { path: '', name: 'Pasted text', extension: '.txt', text: pasted };
   }
-  return state.importSource;
+  const source = state.importSource;
+  if (!source) {
+    return null;
+  }
+  if (source.text) {
+    return { ...source, text: source.text };
+  }
+  if (!source.bytes || !isHvyDocumentExtension(source.extension)) {
+    return null;
+  }
+  const document = await deserializeHvy(new Uint8Array(source.bytes), source.extension);
+  return {
+    ...source,
+    text: await exportHvySourceMarkdown(document),
+  };
+}
+
+function isHvyDocumentExtension(extension: ImportSourceFile['extension']): extension is DocumentExtension {
+  return extension === '.hvy' || extension === '.thvy' || extension === '.phvy' || extension === '.md';
 }
 
 function fileNameFromPath(path: string): string {
@@ -2757,6 +2819,7 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
   return {
     activeProviderId: settings.activeProviderId,
     providers: [...settings.providers].sort((left, right) => left.provider.localeCompare(right.provider)),
+    maxContextChars: normalizeAiMaxContextChars(settings.maxContextChars),
     actions: {
       chat: settings.actions.chat,
       edit: settings.actions.edit,
@@ -2767,6 +2830,11 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
       compaction: settings.actions.compaction,
     },
   };
+}
+
+function normalizeAiMaxContextChars(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 40_000;
 }
 
 async function confirmWorkspaceInitialization(path: string, defaultName: string) {

@@ -182,7 +182,11 @@ struct DocumentFile {
 struct ImportSourceFile {
     path: String,
     name: String,
-    text: String,
+    extension: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -528,6 +532,8 @@ struct AiSettings {
     active_provider_id: String,
     providers: Vec<AiProviderConfig>,
     actions: AiActionSettings,
+    #[serde(default = "default_ai_max_context_chars")]
+    max_context_chars: u32,
 }
 
 impl Default for AiSettings {
@@ -537,8 +543,13 @@ impl Default for AiSettings {
             active_provider_id: provider.provider.clone(),
             providers: vec![provider],
             actions: AiActionSettings::default(),
+            max_context_chars: default_ai_max_context_chars(),
         }
     }
+}
+
+fn default_ai_max_context_chars() -> u32 {
+    40_000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1050,15 +1061,26 @@ fn open_file_dialog(app: AppHandle) -> AppResult<Option<DocumentFile>> {
 #[tauri::command]
 fn open_import_source_dialog() -> AppResult<Option<ImportSourceFile>> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Text import sources", &["txt", "md"])
+        .add_filter("Import sources", &["hvy", "thvy", "phvy", "txt", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
         .add_filter("Markdown", &["md"])
         .add_filter("Plain text", &["txt"])
         .pick_file()
     else {
         return Ok(None);
     };
-    import_source_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .txt and .md files can be imported.".into()))?;
+    let extension = import_source_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, .txt, and .md files can be imported.".into()))?;
+    let text = if extension == ".txt" {
+        Some(fs::read_to_string(&path)?)
+    } else {
+        None
+    };
+    let bytes = if extension == ".txt" {
+        None
+    } else {
+        Some(fs::read(&path)?)
+    };
     Ok(Some(ImportSourceFile {
         path: path_to_string(&path),
         name: path
@@ -1066,7 +1088,9 @@ fn open_import_source_dialog() -> AppResult<Option<ImportSourceFile>> {
             .and_then(|name| name.to_str())
             .unwrap_or("source.txt")
             .to_string(),
-        text: fs::read_to_string(&path)?,
+        extension,
+        text,
+        bytes,
     }))
 }
 
@@ -2026,6 +2050,9 @@ fn document_extension(path: &Path) -> Option<String> {
 fn import_source_extension(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     match ext.as_str() {
+        "hvy" => Some(".hvy".into()),
+        "thvy" => Some(".thvy".into()),
+        "phvy" => Some(".phvy".into()),
         "txt" => Some(".txt".into()),
         "md" => Some(".md".into()),
         _ => None,
@@ -3399,6 +3426,7 @@ fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
         active_provider_id,
         providers,
         actions,
+        max_context_chars: if settings.max_context_chars == 0 { default_ai_max_context_chars() } else { settings.max_context_chars },
     })
 }
 
@@ -3486,6 +3514,7 @@ fn preset_ai_settings(settings: AiSettingsPresetFile) -> AiSettings {
             semantic_filter: AiActionConfig::new(&provider_id, active_models.semantic_filter.trim()),
             compaction: AiActionConfig::new(&provider_id, active_models.compaction.trim()),
         },
+        max_context_chars: default_ai_max_context_chars(),
     }
 }
 
@@ -3501,6 +3530,7 @@ fn legacy_ai_settings(settings: AiSettingsLegacy) -> AiSettings {
         active_provider_id: provider_id.clone(),
         providers: vec![provider],
         actions: same_model_ai_action_settings(&provider_id, &model),
+        max_context_chars: default_ai_max_context_chars(),
     }
 }
 
@@ -4208,6 +4238,7 @@ mod tests {
                 semantic_filter: AiActionConfig::new(" openai-compatible ", " semantic "),
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
+            max_context_chars: 0,
         })
         .unwrap();
 

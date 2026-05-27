@@ -63,6 +63,11 @@ export async function deserializeHvy(bytes: Uint8Array, extension: DocumentExten
   return deserializeDocumentBytes(bytes, extension);
 }
 
+export async function exportHvySourceMarkdown(document: VisualDocument): Promise<string> {
+  const { exportDocumentSourceMarkdown } = await import('../../heavy-file-format/src/document-source-markdown');
+  return exportDocumentSourceMarkdown(document);
+}
+
 export async function serializeHvy(document: VisualDocument): Promise<Uint8Array> {
   const { serializeDocumentBytes } = await loadHvyEmbed();
   return serializeDocumentBytes(document);

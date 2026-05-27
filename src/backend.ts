@@ -96,7 +96,9 @@ export interface DocumentFile {
 export interface ImportSourceFile {
   path: string;
   name: string;
-  text: string;
+  extension: DocumentExtension | '.txt';
+  text?: string;
+  bytes?: number[];
 }
 
 export type TemplateScope = 'app' | 'workspace';
@@ -258,6 +260,7 @@ export interface AiSettings {
   activeProviderId: string;
   providers: AiProviderConfig[];
   actions: AiActionSettings;
+  maxContextChars: number;
 }
 
 export function isTauriRuntime(): boolean {
@@ -361,6 +364,7 @@ export function defaultAiSettings(): AiSettings {
     activeProviderId: provider.provider,
     providers: [provider],
     actions: defaultAiActionSettings(),
+    maxContextChars: 40_000,
   };
 }
 
