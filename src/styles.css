@@ -397,6 +397,32 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.tree-file-archived {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--hvy-text-muted, #65716d) 14%, var(--hvy-surface, #ffffff));
+  color: var(--hvy-text-muted, #65716d);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+}
+
+.tree-file.is-archived {
+  border-style: dashed;
+  color: var(--hvy-text-muted, #65716d);
+  opacity: 0.72;
+}
+
+.tree-file.is-archived .tree-file-name {
+  text-decoration: line-through;
+}
+
+.tree-file.is-archived:hover,
+.tree-file.is-archived:focus-visible {
+  opacity: 0.9;
+}
+
 .tree-file-extension[data-extension=".thvy"] {
   background: color-mix(in srgb, var(--hvy-accent-2, #7b8f86) 16%, var(--hvy-surface, #ffffff));
   color: var(--hvy-accent-1-alt, #356f6c);

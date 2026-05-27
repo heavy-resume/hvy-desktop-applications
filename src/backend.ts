@@ -15,12 +15,13 @@ declare global {
 export type DocumentExtension = '.hvy' | '.thvy' | '.phvy' | '.md';
 export type TemplateExtension = '.thvy' | '.phvy';
 export type DocumentCreationType = 'hvy' | 'thvy' | 'phvy';
-export type WorkspaceTemplateVisibilityKey = 'hvyDocuments' | 'thvyTemplates' | 'phvyTemplates';
+export type WorkspaceTemplateVisibilityKey = 'hvyDocuments' | 'thvyTemplates' | 'phvyTemplates' | 'archivedFiles';
 
 export interface WorkspaceTemplateVisibility {
   hvyDocuments: boolean;
   thvyTemplates: boolean;
   phvyTemplates: boolean;
+  archivedFiles: boolean;
 }
 
 export interface WorkspaceManifest {
@@ -31,6 +32,7 @@ export interface WorkspaceManifest {
   rootFiles?: string[];
   expandedPaths?: string[];
   templateVisibility?: WorkspaceTemplateVisibility;
+  archivedFiles?: string[];
 }
 
 export interface WorkspaceFileNode {
@@ -38,6 +40,7 @@ export interface WorkspaceFileNode {
   path: string;
   relativePath: string;
   extension: DocumentExtension;
+  archived?: boolean;
 }
 
 export interface WorkspaceFolderNode {
@@ -586,6 +589,18 @@ export function openDocumentFile(path: string): Promise<void> {
 
 export function renameDocumentFile(request: RenameDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('rename_document_file', { path: request.path, name: request.name });
+}
+
+export function archiveDocumentFile(path: string): Promise<Workspace> {
+  return invokeDesktop('archive_document_file', { path });
+}
+
+export function restoreDocumentFile(path: string): Promise<Workspace> {
+  return invokeDesktop('restore_document_file', { path });
+}
+
+export function deleteDocumentFile(path: string): Promise<Workspace | null> {
+  return invokeDesktop('delete_document_file', { path });
 }
 
 export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFile> {

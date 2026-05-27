@@ -81,6 +81,8 @@ export interface AppState {
   workspaceClipboard: WorkspaceClipboardState | null;
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
+  deleteFilePath: string | null;
+  deleteFileName: string | null;
   workspaceTransfer: WorkspaceTransferState | null;
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
@@ -176,6 +178,8 @@ export const state: AppState = {
   workspaceClipboard: null,
   renameFilePath: null,
   renameFileCurrentName: null,
+  deleteFilePath: null,
+  deleteFileName: null,
   workspaceTransfer: null,
   workspaceFilter: {
     open: false,

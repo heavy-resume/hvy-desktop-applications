@@ -73,6 +73,8 @@ struct WorkspaceManifest {
     expanded_paths: Vec<String>,
     #[serde(default)]
     template_visibility: WorkspaceTemplateVisibility,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    archived_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +86,8 @@ struct WorkspaceTemplateVisibility {
     thvy_templates: bool,
     #[serde(default = "default_true")]
     phvy_templates: bool,
+    #[serde(default)]
+    archived_files: bool,
 }
 
 impl Default for WorkspaceTemplateVisibility {
@@ -92,6 +96,7 @@ impl Default for WorkspaceTemplateVisibility {
             hvy_documents: true,
             thvy_templates: true,
             phvy_templates: true,
+            archived_files: false,
         }
     }
 }
@@ -146,6 +151,7 @@ enum WorkspaceTreeNode {
         path: String,
         relative_path: String,
         extension: String,
+        archived: bool,
     },
 }
 
@@ -1325,6 +1331,46 @@ fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult
 }
 
 #[tauri::command]
+fn archive_document_file(path: String) -> AppResult<Workspace> {
+    let path = PathBuf::from(path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let workspace_path = workspace_root_for_document(parent)
+        .ok_or_else(|| AppError::Message("Document must be inside a workspace.".into()))?;
+    update_archived_document_file(&workspace_path, &path, true)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn restore_document_file(path: String) -> AppResult<Workspace> {
+    let path = PathBuf::from(path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let workspace_path = workspace_root_for_document(parent)
+        .ok_or_else(|| AppError::Message("Document must be inside a workspace.".into()))?;
+    update_archived_document_file(&workspace_path, &path, false)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn delete_document_file(app: AppHandle, path: String) -> AppResult<Option<Workspace>> {
+    let path = PathBuf::from(path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let workspace_path = workspace_root_for_document(parent);
+    fs::remove_file(&path)?;
+    remove_recent_file(&app, &path)?;
+    if let Some(workspace_path) = workspace_path {
+        update_archived_document_file(&workspace_path, &path, false)?;
+        return load_workspace_from_path(&workspace_path).map(Some);
+    }
+    Ok(None)
+}
+
+#[tauri::command]
 fn save_document_to_workspace(
     app: AppHandle,
     workspace_path: String,
@@ -1684,6 +1730,9 @@ pub fn run() {
             reveal_document_file,
             open_document_file,
             rename_document_file,
+            archive_document_file,
+            restore_document_file,
+            delete_document_file,
             save_document_to_workspace,
             copy_document_to_workspace,
             move_document_to_workspace,
@@ -1932,6 +1981,7 @@ fn initialize_workspace_with_name(path: &Path, name: Option<&str>) -> AppResult<
             root_files: Vec::new(),
             expanded_paths: Vec::new(),
             template_visibility: WorkspaceTemplateVisibility::default(),
+            archived_files: Vec::new(),
         }
     };
     write_json_atomically(&manifest_path, &manifest)?;
@@ -1984,8 +2034,8 @@ fn load_workspace_from_path(path: &Path) -> AppResult<Workspace> {
     let manifest = read_manifest(&manifest_path)?;
     Ok(Workspace {
         path: path_to_string(path),
+        files: scan_workspace_files(path, &manifest.archived_files)?,
         manifest,
-        files: scan_workspace_files(path)?,
     })
 }
 
@@ -2016,11 +2066,11 @@ fn workspace_manifest_path(path: &Path) -> Option<PathBuf> {
     legacy.exists().then_some(legacy)
 }
 
-fn scan_workspace_files(root: &Path) -> AppResult<Vec<WorkspaceTreeNode>> {
-    scan_directory(root, root)
+fn scan_workspace_files(root: &Path, archived_files: &[String]) -> AppResult<Vec<WorkspaceTreeNode>> {
+    scan_directory(root, root, archived_files)
 }
 
-fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<WorkspaceTreeNode>> {
+fn scan_directory(root: &Path, directory: &Path, archived_files: &[String]) -> AppResult<Vec<WorkspaceTreeNode>> {
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -2032,7 +2082,7 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<WorkspaceTreeN
             continue;
         }
         if path.is_dir() {
-            let children = scan_directory(root, &path)?;
+            let children = scan_directory(root, &path, archived_files)?;
             if !children.is_empty() {
                 folders.push(WorkspaceTreeNode::Folder {
                     name,
@@ -2042,10 +2092,12 @@ fn scan_directory(root: &Path, directory: &Path) -> AppResult<Vec<WorkspaceTreeN
                 });
             }
         } else if let Some(extension) = document_extension(&path) {
+            let relative_path = relative_path(root, &path);
             files.push(WorkspaceTreeNode::File {
                 name,
                 path: path_to_string(&path),
-                relative_path: relative_path(root, &path),
+                archived: archived_files.iter().any(|archived| archived == &relative_path),
+                relative_path,
                 extension,
             });
         }
@@ -2361,6 +2413,29 @@ fn add_recent_file(app: &AppHandle, path: &Path) -> AppResult<()> {
     state.files.retain(|entry| Path::new(entry).is_file());
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
+}
+
+fn remove_recent_file(app: &AppHandle, path: &Path) -> AppResult<()> {
+    let recent_path = recent_state_path(app)?;
+    let mut state = read_recent_state(&recent_path)?;
+    let normalized = path_to_string(path);
+    state.files.retain(|entry| entry != &normalized);
+    write_json_atomically(&recent_path, &state)?;
+    refresh_menu(app)
+}
+
+fn update_archived_document_file(workspace_path: &Path, file_path: &Path, archived: bool) -> AppResult<()> {
+    let manifest_path = workspace_manifest_path(workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let relative = relative_path(workspace_path, file_path);
+    manifest.archived_files.retain(|entry| entry != &relative);
+    if archived {
+        manifest.archived_files.push(relative);
+        manifest.archived_files.sort();
+    }
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)
 }
 
 fn snapshot_metadata(snapshot: &DocumentBackupSnapshot) -> DocumentBackup {
@@ -4136,6 +4211,7 @@ mod tests {
             root_files: Vec::new(),
             expanded_paths: Vec::new(),
             template_visibility: WorkspaceTemplateVisibility::default(),
+            archived_files: Vec::new(),
         };
         write_json_atomically(&dir.path().join(LEGACY_WORKSPACE_MANIFEST), &manifest).unwrap();
 
@@ -4161,7 +4237,7 @@ mod tests {
         fs::write(dir.path().join(".git").join("hidden.hvy"), "hidden").unwrap();
         fs::write(dir.path().join("skip.txt"), "skip").unwrap();
 
-        let nodes = scan_workspace_files(dir.path()).unwrap();
+        let nodes = scan_workspace_files(dir.path(), &[]).unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
         assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));

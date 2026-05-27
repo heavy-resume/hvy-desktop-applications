@@ -50,6 +50,7 @@ export const defaultWorkspaceTemplateVisibility: WorkspaceTemplateVisibility = {
   hvyDocuments: true,
   thvyTemplates: true,
   phvyTemplates: true,
+  archivedFiles: false,
 };
 
 export function getHvyTemplate(id: string): HvyTemplate {

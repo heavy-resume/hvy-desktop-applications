@@ -384,6 +384,9 @@ async function handleCommand(command, args) {
     case 'reveal_document_file': return revealDocumentFile(args.path);
     case 'open_document_file': return openDocumentFile(args.path);
     case 'rename_document_file': return renameDocumentFile(args.path, args.name);
+    case 'archive_document_file': return archiveDocumentFile(args.path);
+    case 'restore_document_file': return restoreDocumentFile(args.path);
+    case 'delete_document_file': return deleteDocumentFile(args.path);
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes);
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath);
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath);
@@ -809,6 +812,29 @@ function renameDocumentFile(filePath, name) {
   return readDocumentAt(destination);
 }
 
+function archiveDocumentFile(filePath) {
+  const workspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (!workspacePath) throw new Error('Document must be inside a workspace.');
+  updateArchivedDocumentFile(workspacePath, filePath, true);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function restoreDocumentFile(filePath) {
+  const workspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (!workspacePath) throw new Error('Document must be inside a workspace.');
+  updateArchivedDocumentFile(workspacePath, filePath, false);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function deleteDocumentFile(filePath) {
+  const workspacePath = workspaceRootForDocument(path.dirname(filePath));
+  fs.unlinkSync(filePath);
+  if (!workspacePath) return null;
+  updateArchivedDocumentFile(workspacePath, filePath, false);
+  removeRecentFile(filePath);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
 function saveDocumentToWorkspace(workspacePath, name, bytes) {
   ensureWorkspace(workspacePath);
   const fileName = ensureDocumentFileName(name);
@@ -1069,10 +1095,11 @@ function initializeWorkspaceWithName(workspacePath, name) {
 function loadWorkspaceFromPath(workspacePath) {
   const manifestPath = workspaceManifestPath(workspacePath);
   if (!manifestPath) throw new Error('Workspace manifest was not found.');
+  const manifest = readJson(manifestPath, null);
   return {
     path: workspacePath,
-    manifest: readJson(manifestPath, null),
-    files: readWorkspaceChildren(workspacePath, workspacePath),
+    manifest,
+    files: readWorkspaceChildren(workspacePath, workspacePath, new Set(manifest?.archivedFiles ?? [])),
   };
 }
 
@@ -1093,7 +1120,7 @@ function touchWorkspaceManifest(workspacePath) {
   writeJson(manifestPath, manifest);
 }
 
-function readWorkspaceChildren(root, directory) {
+function readWorkspaceChildren(root, directory, archivedFiles = new Set()) {
   return fs.readdirSync(directory, { withFileTypes: true })
     .filter((entry) => !entry.name.startsWith('.') && path.join(directory, entry.name) !== workspaceTemplatesDir(root))
     .map((entry) => {
@@ -1103,8 +1130,8 @@ function readWorkspaceChildren(root, directory) {
           kind: 'folder',
           name: entry.name,
           path: entryPath,
-          relativePath: path.relative(root, entryPath),
-          children: readWorkspaceChildren(root, entryPath),
+          relativePath: relativeWorkspacePath(root, entryPath),
+          children: readWorkspaceChildren(root, entryPath, archivedFiles),
         };
       }
       const extension = documentExtension(entryPath);
@@ -1113,8 +1140,9 @@ function readWorkspaceChildren(root, directory) {
         kind: 'file',
         name: entry.name,
         path: entryPath,
-        relativePath: path.relative(root, entryPath),
+        relativePath: relativeWorkspacePath(root, entryPath),
         extension,
+        archived: archivedFiles.has(relativeWorkspacePath(root, entryPath)),
       };
     })
     .filter(Boolean)
@@ -1180,7 +1208,26 @@ function normalizeTemplateVisibility(value) {
     hvyDocuments: value?.hvyDocuments !== false,
     thvyTemplates: value?.thvyTemplates !== false,
     phvyTemplates: value?.phvyTemplates !== false,
+    archivedFiles: value?.archivedFiles === true,
   };
+}
+
+function updateArchivedDocumentFile(workspacePath, filePath, archived) {
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) throw new Error('Workspace manifest was not found.');
+  const manifest = readJson(manifestPath, null);
+  const relative = relativeWorkspacePath(workspacePath, filePath);
+  const archivedFiles = new Set(manifest.archivedFiles ?? []);
+  if (archived) archivedFiles.add(relative);
+  else archivedFiles.delete(relative);
+  manifest.archivedFiles = [...archivedFiles].sort();
+  if (manifest.archivedFiles.length === 0) delete manifest.archivedFiles;
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+}
+
+function relativeWorkspacePath(root, entryPath) {
+  return path.relative(root, entryPath).replace(/\\/g, '/');
 }
 
 function ensureDocumentFileName(name) {
@@ -1297,6 +1344,14 @@ function removeArchivedWorkspace(entryPath) {
 function addRecentFile(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   recent.files = pushRecent(recent.files || [], entryPath);
+  writeJson(dataPath(RECENT_STATE), recent);
+  refreshMenu();
+}
+
+function removeRecentFile(entryPath) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  const normalized = path.resolve(entryPath);
+  recent.files = (recent.files || []).filter((entry) => path.resolve(entry) !== normalized);
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }

@@ -97,6 +97,11 @@ export interface UiHandlers {
   refreshWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
+  archiveFile(path: string, currentName: string): void;
+  restoreFile(path: string, currentName: string): void;
+  confirmDeleteFile(path: string, currentName: string): void;
+  deleteFile(): void;
+  cancelDeleteFile(): void;
   copyWorkspaceFile(path: string, currentName: string): void;
   cutWorkspaceFile(path: string, currentName: string): void;
   pasteWorkspaceClipboard(workspacePath: string): void;
@@ -205,6 +210,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderCloseDocumentDraftDialog(state)}
       ${renderAppCloseDialog(state)}
       ${renderRenameFileDialog(state)}
+      ${renderDeleteFileDialog(state)}
       ${renderWorkspaceTransferDialog(state)}
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
@@ -281,6 +287,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.cancelRenameFile();
           return;
         }
+        if (backdrop.querySelector('.delete-file-dialog')) {
+          handlers.cancelDeleteFile();
+          return;
+        }
         if (backdrop.querySelector('form[data-form="workspace-transfer"]')) {
           handlers.cancelWorkspaceTransfer();
           return;
@@ -330,6 +340,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
+    if (action === 'delete-file') handlers.deleteFile();
+    if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
@@ -572,11 +584,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const fileButton = target?.closest<HTMLButtonElement>('.tree-file');
     const path = fileButton?.dataset.path;
     const name = fileButton?.dataset.name;
+    const archived = fileButton?.dataset.archived === 'true';
     if (fileButton && path && name) {
       const workspacePath = workspacePathForTreeTarget(fileButton, state);
       if (!workspacePath) return;
       event.preventDefault();
-      showFileContextMenu(event, path, name, workspacePath, state.workspaceClipboard, handlers, state.workspaces.length > 1);
+      showFileContextMenu(event, path, name, workspacePath, archived, state.workspaceClipboard, handlers, state.workspaces.length > 1);
       return;
     }
     const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
@@ -723,6 +736,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('form[data-form="rename-file"]')) {
       event.preventDefault();
       handlers.cancelRenameFile();
+      return;
+    }
+    if (root.querySelector('.delete-file-dialog')) {
+      event.preventDefault();
+      handlers.cancelDeleteFile();
       return;
     }
     if (root.querySelector('form[data-form="workspace-transfer"]')) {
@@ -1037,6 +1055,23 @@ function renderRenameFileDialog(state: AppState): string {
     </div>`;
 }
 
+function renderDeleteFileDialog(state: AppState): string {
+  if (!state.deleteFilePath || !state.deleteFileName) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog delete-file-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteFileTitle">
+        <h2 id="deleteFileTitle">Delete forever?</h2>
+        <p class="dialog-note">${escapeHtml(state.deleteFileName)} will be removed from disk.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-delete-file">Cancel</button>
+          <button type="button" class="danger-button" data-action="delete-file" ${state.busy ? 'disabled' : ''}>Delete</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function renderWorkspaceTransferDialog(state: AppState): string {
   const transfer = state.workspaceTransfer;
   if (!transfer) return '';
@@ -1156,6 +1191,10 @@ function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVi
           <input type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>PHVY</span>
         </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="archivedFiles" ${visibility.archivedFiles ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <span>Archived</span>
+        </label>
       </div>
       <div class="workspace-filter-actions">
         <button type="button" class="secondary" data-action="save-filter-file-visibility" ${disabled ? 'disabled' : ''}>Save visibility</button>
@@ -1168,6 +1207,7 @@ function readWorkspaceTemplateVisibilityForm(data: FormData): WorkspaceTemplateV
     hvyDocuments: data.has('hvyDocuments'),
     thvyTemplates: data.has('thvyTemplates'),
     phvyTemplates: data.has('phvyTemplates'),
+    archivedFiles: data.has('archivedFiles'),
   };
 }
 
@@ -1176,6 +1216,7 @@ function showFileContextMenu(
   path: string,
   name: string,
   workspacePath: string,
+  archived: boolean,
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
   showWorkspaceActions: boolean,
@@ -1186,9 +1227,13 @@ function showFileContextMenu(
   menu.className = 'file-context-menu';
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
-  menu.innerHTML = `
+  menu.innerHTML = archived ? `
+    <button type="button" data-menu-action="restore">Restore</button>
+    <button type="button" data-menu-action="delete">Delete</button>
+  ` : `
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button type="button" data-menu-action="rename">Rename</button>
+    <button type="button" data-menu-action="archive">Archive</button>
     <button type="button" data-menu-action="copy">Copy</button>
     <button type="button" data-menu-action="cut">Cut</button>
     <button type="button" data-menu-action="paste">Paste</button>
@@ -1212,6 +1257,9 @@ function showFileContextMenu(
     cleanup();
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
+    if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
+    if (button.dataset.menuAction === 'restore') handlers.restoreFile(path, name);
+    if (button.dataset.menuAction === 'delete') handlers.confirmDeleteFile(path, name);
     if (button.dataset.menuAction === 'copy') handlers.copyWorkspaceFile(path, name);
     if (button.dataset.menuAction === 'cut') handlers.cutWorkspaceFile(path, name);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
@@ -1537,6 +1585,7 @@ function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visibility:
     if (node.extension === '.hvy' && !visibility.hvyDocuments) continue;
     if (node.extension === '.thvy' && !visibility.thvyTemplates) continue;
     if (node.extension === '.phvy' && !visibility.phvyTemplates) continue;
+    if (node.archived && !visibility.archivedFiles) continue;
     visibleNodes.push(node);
   }
   return visibleNodes;
@@ -1561,13 +1610,15 @@ function renderNode(
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
   const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
   const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
+  const archived = node.archived === true;
   const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
     ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
     : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
+        ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${extensionBadge}
       </button>
     </li>`;
@@ -2023,6 +2074,7 @@ function renderWorkspaceTemplateVisibilityDialog(state: AppState): string {
       <form class="dialog" data-form="workspace-template-visibility">
         <h2>Template Visibility</h2>
         <input type="hidden" name="workspacePath" value="${escapeAttr(workspace.path)}">
+        ${visibility.archivedFiles ? '<input type="hidden" name="archivedFiles" value="on">' : ''}
         <div class="field-group">
           <span>${escapeHtml(workspace.manifest.name)}</span>
           <label class="checkbox-row">

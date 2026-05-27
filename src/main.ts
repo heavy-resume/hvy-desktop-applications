@@ -4,12 +4,14 @@ import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/sear
 import {
   addDroppedFilesToWorkspace,
   addFilesToWorkspace,
+  archiveDocumentFile,
   archiveWorkspace,
   chooseWorkspaceFolder,
   clearDocumentRecoveryDrafts,
   createDocumentBackup,
   createDocumentFile,
   createWorkspace,
+  deleteDocumentFile,
   discardDocumentBackup,
   copyDocumentToWorkspace,
   initializeWorkspacePath,
@@ -37,6 +39,7 @@ import {
   removeMcpClient,
   renameDocumentFile,
   renameWorkspace,
+  restoreDocumentFile,
   revealDocumentFile,
   restoreMcpClientBackup,
   restoreDocumentBackup,
@@ -882,6 +885,53 @@ const handlers: UiHandlers = {
   renameFile: (path, currentName) => {
     state.renameFilePath = path;
     state.renameFileCurrentName = currentName;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  archiveFile: (path, currentName) => void runBusy('Archiving file...', async () => {
+    const workspace = await archiveDocumentFile(path);
+    upsertWorkspace(workspace);
+    if (state.selectedFilePath === path) state.selectedFilePath = null;
+    state.status = `Archived ${currentName}`;
+  }),
+  restoreFile: (path, currentName) => void runBusy('Restoring file...', async () => {
+    const workspace = await restoreDocumentFile(path);
+    upsertWorkspace(workspace);
+    state.selectedFilePath = path;
+    state.status = `Restored ${currentName}`;
+  }),
+  confirmDeleteFile: (path, currentName) => {
+    state.deleteFilePath = path;
+    state.deleteFileName = currentName;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  deleteFile: () => {
+    const path = state.deleteFilePath;
+    const name = state.deleteFileName;
+    if (!path || !name) return;
+    state.deleteFilePath = null;
+    state.deleteFileName = null;
+    void runBusy('Deleting file...', async () => {
+      const workspace = await deleteDocumentFile(path);
+      if (workspace) upsertWorkspace(workspace);
+      documentSessions.delete(path);
+      workspaceFilterDocumentCache.delete(path);
+      removeDocumentTabPath(path);
+      backupSnapshots.delete(backupDocumentKey(path, name));
+      if (state.selectedFilePath === path) state.selectedFilePath = null;
+      if (state.document?.path === path) {
+        state.document = null;
+        pendingMountDocument = null;
+        pendingMountRecoveryState = null;
+      }
+      await refreshRecents();
+      state.status = `Deleted ${name}`;
+    });
+  },
+  cancelDeleteFile: () => {
+    state.deleteFilePath = null;
+    state.deleteFileName = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
