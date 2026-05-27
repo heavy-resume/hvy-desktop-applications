@@ -53,12 +53,14 @@ export interface AppState {
   importIntoCurrentDialogOpen: boolean;
   importSourceTab: 'workspace' | 'anywhere';
   importSource: ImportSourceFile | null;
+  importOutputMode: 'current' | 'workspace';
   importProgressDialogOpen: boolean;
   saveTemplateDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
+  exportedPdfPath: string | null;
   workspaceTemplateVisibilityPath: string | null;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
@@ -146,12 +148,14 @@ export const state: AppState = {
   importIntoCurrentDialogOpen: false,
   importSourceTab: 'workspace',
   importSource: null,
+  importOutputMode: 'current',
   importProgressDialogOpen: false,
   saveTemplateDialogOpen: false,
   saveTemplateScope: 'app',
   saveAsDialogOpen: false,
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
+  exportedPdfPath: null,
   workspaceTemplateVisibilityPath: null,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,

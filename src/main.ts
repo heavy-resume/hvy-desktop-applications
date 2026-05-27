@@ -27,6 +27,7 @@ import {
   loadRecentState,
   onMenuEvent,
   onAppCloseRequest,
+  openDocumentFile,
   openExternalUrl,
   openColorThemeDialog,
   openFileDialog,
@@ -70,7 +71,7 @@ import {
   writeSystemFileClipboard,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
-import { getFileActionAvailability } from './fileActions';
+import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -294,6 +295,7 @@ const handlers: UiHandlers = {
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = true;
     state.importSourceTab = 'workspace';
+    state.importOutputMode = 'current';
     state.importSource = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -301,6 +303,11 @@ const handlers: UiHandlers = {
   setImportSourceTab: (tab) => {
     state.importSourceTab = tab;
     state.importSource = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  setImportOutputMode: (mode) => {
+    state.importOutputMode = mode;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -399,13 +406,22 @@ const handlers: UiHandlers = {
       state.importProgressDialogOpen = false;
     }
   }),
-  importIntoCurrent: (instructions, pastedSourceText) => void runBusy('Importing into current document...', async () => {
+  importIntoCurrent: (instructions, pastedSourceText, outputMode, outputName) => void runBusy('Importing into current document...', async () => {
     const source = await importSourceFrom(pastedSourceText);
     if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
     if (!source) {
       state.status = 'Import source is required';
+      return;
+    }
+    const outputWorkspacePath = outputMode === 'workspace' ? currentDocumentWorkspacePath(state) : null;
+    if (outputMode === 'workspace' && !outputWorkspacePath) {
+      state.status = 'Current workspace is required';
+      return;
+    }
+    if (outputMode === 'workspace' && !outputName.trim()) {
+      state.status = 'Output name is required';
       return;
     }
     state.importIntoCurrentDialogOpen = false;
@@ -440,9 +456,13 @@ const handlers: UiHandlers = {
     if (result.status !== 'complete') {
       throw new Error(result.message ?? 'Import failed.');
     }
-    markImportedTemplateAsUnsavedDocument();
-    setDocumentDirty(true);
-    updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+    if (outputMode === 'workspace' && outputWorkspacePath) {
+      markImportedTemplateAsUnsavedDocument();
+      await saveCurrentDocumentToWorkspace(outputWorkspacePath, outputName.trim());
+    } else {
+      setDocumentDirty(true);
+      updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+    }
     state.status = result.message ?? `Imported ${source.name}`;
     } finally {
       state.importProgressDialogOpen = false;
@@ -452,6 +472,7 @@ const handlers: UiHandlers = {
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = false;
     state.importSourceTab = 'workspace';
+    state.importOutputMode = 'current';
     state.importSource = null;
     state.importProgressDialogOpen = false;
     state.status = 'Ready';
@@ -1101,6 +1122,25 @@ const handlers: UiHandlers = {
     rerender({ preserveMountedDocument: true });
   })(),
   exportPdf: () => void exportCurrentDocumentPdf(),
+  openExportedPdf: () => void runBusy('Opening PDF...', async () => {
+    const path = state.exportedPdfPath;
+    if (!path) return;
+    await openDocumentFile(path);
+    state.exportedPdfPath = null;
+    state.status = 'Opened PDF';
+  }, { preserveMountedDocument: true }),
+  revealExportedPdf: () => void runBusy('Showing PDF...', async () => {
+    const path = state.exportedPdfPath;
+    if (!path) return;
+    await revealDocumentFile(path);
+    state.exportedPdfPath = null;
+    state.status = revealStatusLabel();
+  }, { preserveMountedDocument: true }),
+  closeExportedPdfDialog: () => {
+    state.exportedPdfPath = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   saveBeforeExportPdf: () => void saveBeforeExportPdf(),
   cancelExportPdfSavePrompt: () => {
     state.exportPdfSavePromptOpen = false;
@@ -1915,6 +1955,7 @@ async function exportCurrentDocumentPdf(): Promise<void> {
     const blob = await state.document.mounted.mount.getPdfBlob({ filename: pdfFileName(state.document.name) });
     const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
     const savedPath = await savePdfAsDialog({ suggestedName: pdfFileName(state.document.name), bytes });
+    state.exportedPdfPath = savedPath;
     state.status = savedPath ? `Exported ${pdfFileName(state.document.name)}` : 'Ready';
   }, { preserveMountedDocument: true });
 }

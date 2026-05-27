@@ -29,10 +29,11 @@ export interface UiHandlers {
   setImportDocumentType(type: DocumentCreationType): void;
   openImportIntoCurrent(): void;
   setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
+  setImportOutputMode(mode: 'current' | 'workspace'): void;
   selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
   createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string): void;
-  importIntoCurrent(instructions: string, pastedSourceText: string): void;
+  importIntoCurrent(instructions: string, pastedSourceText: string, outputMode: 'current' | 'workspace', outputName: string): void;
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
@@ -118,6 +119,9 @@ export interface UiHandlers {
   saveAndCloseDocument(): void;
   openSaveTemplate(): void;
   exportPdf(): void;
+  openExportedPdf(): void;
+  revealExportedPdf(): void;
+  closeExportedPdfDialog(): void;
   saveBeforeExportPdf(): void;
   cancelExportPdfSavePrompt(): void;
   setSaveTemplateScope(scope: TemplateScope): void;
@@ -189,6 +193,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderSaveAsDialog(state)}
       ${renderExportDialog(state)}
       ${renderExportPdfSavePrompt(state)}
+      ${renderExportedPdfDialog(state)}
       ${renderWorkspaceTemplateVisibilityDialog(state)}
       ${renderAboutDialog(state)}
       ${renderAiSettingsDialog(state)}
@@ -266,6 +271,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.app-close-dialog')) {
           handlers.cancelAppClose();
+          return;
+        }
+        if (backdrop.querySelector('[aria-label="PDF exported"]')) {
+          handlers.closeExportedPdfDialog();
           return;
         }
         if (backdrop.querySelector('form[data-form="rename-file"]')) {
@@ -448,9 +457,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-save-as') handlers.cancelSaveAs();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
     if (action === 'set-import-source-tab' && isImportSourceTab(target.dataset.tab)) handlers.setImportSourceTab(target.dataset.tab);
+    if (action === 'set-import-output-mode' && isImportOutputMode(target.dataset.mode)) handlers.setImportOutputMode(target.dataset.mode);
     if (action === 'choose-import-source') handlers.chooseImportSource();
     if (action === 'cancel-import') handlers.cancelImport();
     if (action === 'export-pdf') handlers.exportPdf();
+    if (action === 'open-exported-pdf') handlers.openExportedPdf();
+    if (action === 'reveal-exported-pdf') handlers.revealExportedPdf();
+    if (action === 'close-exported-pdf-dialog') handlers.closeExportedPdfDialog();
     if (action === 'save-template') handlers.openSaveTemplate();
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
     if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
@@ -624,9 +637,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (form.dataset.form === 'import-current') {
       const data = new FormData(form);
+      const outputMode = String(data.get('importOutputMode') ?? 'current');
       handlers.importIntoCurrent(
         String(data.get('instructions') ?? ''),
-        String(data.get('importSourceText') ?? '')
+        String(data.get('importSourceText') ?? ''),
+        isImportOutputMode(outputMode) ? outputMode : 'current',
+        String(data.get('importOutputName') ?? '')
       );
     }
     if (form.dataset.form === 'export-document') {
@@ -727,6 +743,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.app-close-dialog')) {
       event.preventDefault();
       handlers.cancelAppClose();
+      return;
+    }
+    if (root.querySelector('[aria-label="PDF exported"]')) {
+      event.preventDefault();
+      handlers.closeExportedPdfDialog();
       return;
     }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
@@ -1670,6 +1691,10 @@ function isImportSourceTab(value: unknown): value is AppState['importSourceTab']
   return value === 'workspace' || value === 'anywhere';
 }
 
+function isImportOutputMode(value: unknown): value is AppState['importOutputMode'] {
+  return value === 'current' || value === 'workspace';
+}
+
 function isSaveAsScope(value: unknown): value is AppState['saveAsScope'] {
   return value === 'workspace' || value === 'anywhere';
 }
@@ -1722,6 +1747,7 @@ function renderImportDialog(state: AppState): string {
   const sourceControls = importCurrent
     ? renderImportCurrentSourceControls(state, workspace)
     : renderAnywhereImportSourceControls(source);
+  const outputControls = importCurrent ? renderImportCurrentOutputControls(state, workspace) : '';
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="${importCurrent ? 'import-current' : 'import-document'}">
@@ -1743,6 +1769,7 @@ function renderImportDialog(state: AppState): string {
           <span>Source</span>
           ${sourceControls}
         </div>
+        ${outputControls}
         <label>
           <span>Instructions</span>
           <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
@@ -1752,6 +1779,28 @@ function renderImportDialog(state: AppState): string {
           <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !source ? 'disabled' : ''}>Import</button>
         </div>
       </form>
+    </div>`;
+}
+
+function renderImportCurrentOutputControls(state: AppState, workspace: AppState['workspaces'][number] | null): string {
+  const workspaceDisabled = !workspace;
+  const workspaceActive = state.importOutputMode === 'workspace' && !workspaceDisabled;
+  const currentActive = state.importOutputMode === 'current' || workspaceDisabled;
+  const outputName = displayDocumentName(state.document?.name ?? 'Imported');
+  return `
+    <div class="field-group">
+      <span>Output</span>
+      <div class="segmented-control" role="tablist" aria-label="Import output">
+        <button type="button" class="${currentActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="current" aria-pressed="${currentActive ? 'true' : 'false'}">Current File</button>
+        <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace File</button>
+      </div>
+      <input name="importOutputMode" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'current')}">
+      ${workspaceActive ? `
+        <label>
+          <span>Name</span>
+          <input name="importOutputName" type="text" autocomplete="off" value="${escapeAttr(outputName)}" required>
+        </label>
+      ` : ''}
     </div>`;
 }
 
@@ -1918,6 +1967,23 @@ function renderExportPdfSavePrompt(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" data-action="cancel-export-pdf-save-prompt">Cancel</button>
           <button type="button" data-action="save-before-export-pdf" ${state.busy ? 'disabled' : ''}>${saveLabel}</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderExportedPdfDialog(state: AppState): string {
+  if (!state.exportedPdfPath) return '';
+  const name = state.exportedPdfPath.split(/[\\/]/).filter(Boolean).pop() ?? 'PDF';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-label="PDF exported">
+        <h2>PDF Exported</h2>
+        <p class="dialog-note">${escapeHtml(name)}</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="open-exported-pdf">Open</button>
+          <button type="button" data-action="reveal-exported-pdf">${escapeHtml(revealMenuLabel())}</button>
+          <button type="button" data-action="close-exported-pdf-dialog">Done</button>
         </div>
       </section>
     </div>`;

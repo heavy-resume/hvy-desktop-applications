@@ -382,6 +382,7 @@ async function handleCommand(command, args) {
     case 'update_file_menu_state': return updateFileMenuState(args.state);
     case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template);
     case 'reveal_document_file': return revealDocumentFile(args.path);
+    case 'open_document_file': return openDocumentFile(args.path);
     case 'rename_document_file': return renameDocumentFile(args.path, args.name);
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes);
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath);
@@ -784,6 +785,12 @@ function createDocumentFile(workspacePath, relativePath, template) {
 
 async function revealDocumentFile(filePath) {
   await shell.showItemInFolder(filePath);
+  return null;
+}
+
+async function openDocumentFile(filePath) {
+  const error = await shell.openPath(filePath);
+  if (error) throw new Error(error);
   return null;
 }
 

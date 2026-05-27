@@ -580,6 +580,10 @@ export function revealDocumentFile(path: string): Promise<void> {
   return invokeDesktop('reveal_document_file', { path });
 }
 
+export function openDocumentFile(path: string): Promise<void> {
+  return invokeDesktop('open_document_file', { path });
+}
+
 export function renameDocumentFile(request: RenameDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('rename_document_file', { path: request.path, name: request.name });
 }

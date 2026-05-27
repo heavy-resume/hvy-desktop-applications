@@ -1270,6 +1270,34 @@ fn reveal_document_file(path: String) -> AppResult<()> {
 }
 
 #[tauri::command]
+fn open_document_file(path: String) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err(AppError::Message("File does not exist.".into()));
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(&path);
+        command
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", &path_to_string(&path)]);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(&path);
+        command
+    };
+    command.spawn()?;
+    Ok(())
+}
+
+#[tauri::command]
 fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     let extension = document_extension(&path)
@@ -1654,6 +1682,7 @@ pub fn run() {
             update_file_menu_state,
             create_document_file,
             reveal_document_file,
+            open_document_file,
             rename_document_file,
             save_document_to_workspace,
             copy_document_to_workspace,
