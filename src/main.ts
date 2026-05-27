@@ -1103,10 +1103,6 @@ async function boot(): Promise<void> {
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
-      if (event === 'mcp-toggle') {
-        if (state.mcpServerStatus.running) handlers.stopMcpServer();
-        else handlers.startMcpServer();
-      }
       if (event === 'colors') handlers.openColorTheme();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'app-close-requested') void handleAppCloseRequest();

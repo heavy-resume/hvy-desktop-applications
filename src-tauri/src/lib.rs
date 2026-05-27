@@ -1689,13 +1689,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
-    let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
-    let mcp_toggle_label = if mcp_status.running { "Stop MCP Server" } else { "Start MCP Server" };
     #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
-        .separator()
-        .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
@@ -1709,10 +1705,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&app_shortcut_menu_item(app, "Open File", "open-file", "CmdOrCtrl+Shift+O")?)
         .item(&recent_workspaces)
         .item(&recent_files)
-        .separator();
-    #[cfg(not(target_os = "macos"))]
-    let file_builder = file_builder
-        .item(&app_shortcut_menu_item(app, "AI Settings...", "ai-settings", "CmdOrCtrl+,")?)
         .separator();
     let file_builder = file_builder
         .item(&app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
@@ -1729,16 +1721,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&app_shortcut_menu_item(app, "Quit HVY Galaxy", "app-close-requested", "CmdOrCtrl+Q")?);
     let file = file_builder.build()?;
-    let mcp = SubmenuBuilder::with_id(app, "mcp-menu", "MCP Server")
-        .item(
-            &MenuItemBuilder::new(mcp_status_menu_label(&mcp_status))
-                .id("mcp-status")
-                .enabled(false)
-                .build(app)?,
-        )
-        .item(&MenuItemBuilder::new(mcp_toggle_label).id("mcp-toggle").build(app)?)
-        .separator()
-        .item(&MenuItemBuilder::new("Server Settings...").id("mcp-settings").build(app)?)
+    let ai = SubmenuBuilder::with_id(app, "ai-menu", "AI")
+        .item(&app_shortcut_menu_item(app, "LLM Settings...", "ai-settings", "CmdOrCtrl+,")?)
+        .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
         .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
@@ -1768,7 +1753,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let builder = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
-    builder.item(&file).item(&edit).item(&mcp).item(&help).build()
+    builder.item(&file).item(&edit).item(&ai).item(&help).build()
 }
 
 fn app_shortcut_menu_item(
@@ -1783,22 +1768,6 @@ fn app_shortcut_menu_item(
     #[cfg(not(target_os = "macos"))]
     let _ = accelerator;
     builder.build(app)
-}
-
-fn mcp_status_menu_label(status: &McpServerStatus) -> String {
-    if !status.running {
-        return "Stopped".into();
-    }
-    status
-        .url
-        .as_deref()
-        .and_then(mcp_port_from_url)
-        .map(|port| format!("Listening on port {port}"))
-        .unwrap_or_else(|| "Listening".into())
-}
-
-fn mcp_port_from_url(url: &str) -> Option<&str> {
-    url.rsplit_once(':')?.1.split('/').next().filter(|port| !port.is_empty())
 }
 
 fn build_recent_files_menu(
@@ -2458,20 +2427,6 @@ fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> 
         "No Recent Workspaces",
     )?;
 
-    let mcp = menu
-        .get("mcp-menu")
-        .and_then(|item| item.as_submenu().cloned())
-        .ok_or_else(|| AppError::Message("MCP menu is unavailable.".into()))?;
-    let mcp_status = app.state::<McpRuntime>().status.lock().ok().map(|status| status.clone()).unwrap_or_default();
-    if let Some(item) = mcp.get("mcp-status").and_then(|item| item.as_menuitem().cloned()) {
-        item.set_text(mcp_status_menu_label(&mcp_status))
-            .map_err(|error| AppError::Message(error.to_string()))?;
-    }
-    if let Some(item) = mcp.get("mcp-toggle").and_then(|item| item.as_menuitem().cloned()) {
-        let label = if mcp_status.running { "Stop MCP Server" } else { "Start MCP Server" };
-        item.set_text(label)
-            .map_err(|error| AppError::Message(error.to_string()))?;
-    }
     Ok(())
 }
 

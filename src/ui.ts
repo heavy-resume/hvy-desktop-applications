@@ -1781,7 +1781,7 @@ function renderAiSettingsDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
-        <h2>AI Settings</h2>
+        <h2>LLM Settings</h2>
         <p class="dialog-note">Configure providers once, then choose the provider and model each action should use.</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         <div class="ai-provider-picker" aria-label="Configured AI providers">
@@ -1837,7 +1837,7 @@ function renderMcpSettingsDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
-        <h2>MCP Server</h2>
+        <h2>MCP Settings</h2>
         <p class="dialog-note">Let local AI agents search workspaces and edit HVY files through the low-context HVY CLI surface.</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         <div class="mcp-settings-grid mcp-settings-grid--global">

@@ -122,14 +122,11 @@ async function loadRenderer(window) {
 
 function buildMenu() {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-  const mcpToggleLabel = mcpStatus.running ? 'Stop MCP Server' : 'Start MCP Server';
   const template = [
     ...(process.platform === 'darwin' ? [{
       label: APP_NAME,
       submenu: [
         menuItem(`About ${APP_NAME}`, 'about'),
-        { type: 'separator' },
-        menuItem('AI Settings...', 'ai-settings', 'CmdOrCtrl+,'),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -146,8 +143,6 @@ function buildMenu() {
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
-        ...(process.platform === 'darwin' ? [] : [menuItem('AI Settings...', 'ai-settings', 'CmdOrCtrl+,')]),
-        ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }]),
         menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
@@ -189,16 +184,10 @@ function buildMenu() {
       ],
     },
     {
-      label: 'MCP Server',
+      label: 'AI',
       submenu: [
-        {
-          label: mcpStatusMenuLabel(mcpStatus),
-          id: 'mcp-status',
-          enabled: false,
-        },
-        menuItem(mcpToggleLabel, 'mcp-toggle'),
-        { type: 'separator' },
-        menuItem('Server Settings...', 'mcp-settings'),
+        menuItem('LLM Settings...', 'ai-settings', 'CmdOrCtrl+,'),
+        menuItem('MCP Settings...', 'mcp-settings'),
       ],
     },
     {
@@ -234,14 +223,6 @@ function recentSubmenu(label, entries, prefix, emptyLabel = 'No Recent Items') {
   return { id: `${prefix}menu`, label, submenu };
 }
 
-function mcpStatusMenuLabel(status) {
-  if (!status.running) {
-    return 'Stopped';
-  }
-  const port = status.url?.split(':').pop()?.split('/')[0];
-  return port ? `Listening on port ${port}` : 'Listening';
-}
-
 function emitMenu(payload) {
   mainWindow?.webContents.send('hvy:menu-event', payload);
 }
@@ -262,10 +243,6 @@ function refreshMenu() {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   refreshRecentSubmenu(menu, 'recent-file:', recent.files || [], 'No Recent Files');
   refreshRecentSubmenu(menu, 'recent-workspace:', recent.workspaces || [], 'No Recent Workspaces');
-  const status = menu.getMenuItemById('mcp-status');
-  if (status) status.label = mcpStatusMenuLabel(mcpStatus);
-  const toggle = menu.getMenuItemById('mcp-toggle');
-  if (toggle) toggle.label = mcpStatus.running ? 'Stop MCP Server' : 'Start MCP Server';
 }
 
 function refreshRecentSubmenu(menu, prefix, entries, emptyLabel) {
