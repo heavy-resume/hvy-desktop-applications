@@ -1929,6 +1929,9 @@ function updateDocumentStageOverlayState(root: HTMLElement): void {
 }
 
 function getMountScrollElement(root: HTMLElement | null): HTMLElement | null {
+  const metaView = root?.querySelector<HTMLElement>('.document-meta-view');
+  const metaPane = metaView?.closest<HTMLElement>('.full-pane');
+  if (metaPane) return metaPane;
   return root?.querySelector<HTMLElement>(
     '.editor-shell .editor-tree, .viewer-shell .reader-document, .raw-hvy-textarea'
   ) ?? null;
@@ -2864,6 +2867,7 @@ function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = null): 
 
 function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
   const preserveMount = options.preserveMountedDocument ? mountRoot : null;
+  const mountScrollRatio = options.preserveMountedDocument ? captureMountScrollRatio(mountRoot) : null;
   syncDocumentTabs();
   if (!options.preserveMountedDocument) {
     state.document?.mounted?.mount.destroy();
@@ -2874,6 +2878,7 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
   mountRoot = render(state, handlers, { preserveMount });
   applyAppColorTheme();
   syncFileMenuState();
+  restoreMountScrollRatio(mountRoot, mountScrollRatio);
 }
 
 async function runBusy(label: string, task: () => Promise<void>, options: { preserveMountedDocument?: boolean } = {}): Promise<void> {

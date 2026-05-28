@@ -1,8 +1,10 @@
 import type { DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
-import { isPdfAllowedComponent } from '../../heavy-file-format/src/pdf-document-capabilities';
+import { filterPdfAllowedComponentDefs } from '../../heavy-file-format/src/pdf-document-capabilities';
+import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import type {
+  ComponentDefinition,
   HvyEditorClipboardHost,
   HvyEditorClipboardPayload,
 } from '../../heavy-file-format/src/types';
@@ -317,7 +319,7 @@ function installMetaTemplateContextMenu(
       copyMetaTemplate(mount, kind, index);
     }
     if (action === 'paste') {
-      pasteMetaTemplate(root, button, mount, kind, onDocumentChange);
+      pasteMetaTemplate(root, mount, kind, onDocumentChange);
     }
     closeMenu();
   }, { signal: controller.signal });
@@ -396,7 +398,6 @@ function copyMetaTemplate(mount: HvyMount, kind: MetaTemplateKind, index: number
 
 function pasteMetaTemplate(
   root: HTMLElement,
-  source: HTMLElement,
   mount: HvyMount,
   kind: MetaTemplateKind,
   onDocumentChange?: HvyDocumentChangeCallback,
@@ -410,18 +411,38 @@ function pasteMetaTemplate(
     nextDefinition.key = uniqueTemplateKey(nextDefinition.key, defs, String(nextDefinition.name));
   }
   const meta = document.meta as Record<string, unknown>;
+  const commitPaste = (nextDefs: Record<string, unknown>[]): void => {
+    if (kind === 'component') {
+      meta.component_defs = nextDefs;
+    } else {
+      meta.section_defs = nextDefs;
+    }
+    onDocumentChange?.({ dirty: true, reason: `${kind}-template-paste`, source: 'editor' });
+    mount.openDocumentMeta?.();
+  };
   if (kind === 'component') {
-    const nextMeta = { ...meta, component_defs: [...defs, nextDefinition] };
-    if (document.extension === '.phvy' && !isPdfAllowedComponent(readTemplateName(nextDefinition), nextMeta)) {
-      showMetaTemplateNotice(root, source, 'Copied component is incompatible with PHVY.');
+    const nextDefs = [...defs, nextDefinition];
+    if (document.extension === '.phvy') {
+      const nextMeta = { ...meta, component_defs: nextDefs };
+      const compatibleDefs = filterPdfAllowedComponentDefs(
+        nextDefs as unknown as ComponentDefinition[],
+        nextMeta
+      ) as unknown as Record<string, unknown>[];
+      if (compatibleDefs.length !== nextDefs.length) {
+        openPhvyPasteConfirmationPopover(
+          () => commitPaste(compatibleDefs),
+          () => undefined,
+          root
+        );
+        return;
+      }
+      commitPaste(compatibleDefs);
       return;
     }
-    meta.component_defs = [...defs, nextDefinition];
+    commitPaste(nextDefs);
   } else {
-    meta.section_defs = [...defs, nextDefinition];
+    commitPaste([...defs, nextDefinition]);
   }
-  onDocumentChange?.({ dirty: true, reason: `${kind}-template-paste`, source: 'editor' });
-  mount.openDocumentMeta?.();
 }
 
 function getMetaTemplateDefinitions(document: VisualDocument, kind: MetaTemplateKind): Record<string, unknown>[] {
@@ -474,21 +495,6 @@ function placeMetaTemplateMenu(menu: HTMLElement): void {
   menu.style.top = `${Math.round(top)}px`;
 }
 
-function showMetaTemplateNotice(root: HTMLElement, source: HTMLElement, message: string): void {
-  root.querySelector('.hvy-meta-template-notice')?.remove();
-  const notice = documentOwner().createElement('section');
-  notice.className = 'hvy-context-popover hvy-meta-template-notice';
-  notice.setAttribute('role', 'status');
-  notice.setAttribute('aria-live', 'polite');
-  notice.textContent = message;
-  notice.style.position = 'fixed';
-  const rect = source.getBoundingClientRect();
-  notice.style.left = `${Math.max(8, rect.left)}px`;
-  notice.style.top = `${Math.max(8, rect.bottom + 6)}px`;
-  root.append(notice);
-  placeMetaTemplateMenu(notice);
-  window.setTimeout(() => notice.remove(), 3200);
-}
 
 function installViewerCarouselInteractions(root: HTMLElement): () => void {
   let frame = 0;
