@@ -1,6 +1,6 @@
 import type { DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
-import { filterPdfAllowedComponentDefs } from '../../heavy-file-format/src/pdf-document-capabilities';
+import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import type {
@@ -424,11 +424,14 @@ function pasteMetaTemplate(
     const nextDefs = [...defs, nextDefinition];
     if (document.extension === '.phvy') {
       const nextMeta = { ...meta, component_defs: nextDefs };
-      const compatibleDefs = filterPdfAllowedComponentDefs(
-        nextDefs as unknown as ComponentDefinition[],
+      const prepared = prepareComponentDefinitionForDocumentPasteWithResult(
+        document,
+        nextDefinition as unknown as ComponentDefinition,
         nextMeta
-      ) as unknown as Record<string, unknown>[];
-      if (compatibleDefs.length !== nextDefs.length) {
+      );
+      if (!prepared.definition) return;
+      const compatibleDefs = [...defs, prepared.definition as unknown as Record<string, unknown>];
+      if (prepared.removedCount > 0) {
         openPhvyPasteConfirmationPopover(
           () => commitPaste(compatibleDefs),
           () => undefined,

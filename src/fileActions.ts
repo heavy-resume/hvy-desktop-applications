@@ -14,7 +14,7 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const hasDocument = Boolean(document);
   const editableDocument = Boolean(document && !document.readOnly);
   const mountedEditableDocument = Boolean(document?.mounted && editableDocument);
-  const editableTemplateDocument = Boolean(document && editableDocument && isTemplatePath(state, document.path));
+  const editableTemplateDocument = Boolean(document && editableDocument && isWorkspaceTemplatePath(state, document.path));
   const editableHvyDocument = Boolean(document && editableDocument && document.extension !== '.md');
   const documentWorkspacePath = currentDocumentWorkspacePath(state);
   const hasWorkspaceDestination = state.workspaces.some((workspace) => workspace.path !== documentWorkspacePath);
@@ -24,12 +24,12 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
     save: Boolean((document?.dirty || editableTemplateDocument) && editableDocument),
     saveAs: mountedEditableDocument,
     saveToWorkspace: Boolean(mountedEditableDocument && hasWorkspaceDestination),
-    exportPdf: Boolean(document?.extension === '.phvy' && mountedEditableDocument),
+    exportPdf: Boolean(document?.extension === '.phvy' && mountedEditableDocument && !editableTemplateDocument),
     importCurrent: editableHvyDocument,
   };
 }
 
-function isTemplatePath(state: AppState, path: string): boolean {
+export function isWorkspaceTemplatePath(state: AppState, path: string): boolean {
   const normalizedPath = path.replace(/\\/g, '/');
   return state.workspaces.some((workspace) => {
     const workspacePath = workspace.path.replace(/\\/g, '/').replace(/\/+$/, '');

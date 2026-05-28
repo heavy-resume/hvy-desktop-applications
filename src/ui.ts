@@ -1,7 +1,7 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
-import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
+import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode } from './hvy';
 import type { AppState, WorkspaceClipboardState, WorkspaceFilterState } from './state';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -1491,7 +1491,7 @@ function renderToolbar(state: AppState): string {
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   const fileActions = getFileActionAvailability(state);
-  const showExportPdf = document.extension === '.phvy';
+  const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
