@@ -2612,17 +2612,21 @@ fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> 
 }
 
 fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuState) -> AppResult<()> {
-    set_menu_item_enabled(menu, "close-document", state.close_document)?;
-    set_menu_item_enabled(menu, "save", state.save)?;
-    set_menu_item_enabled(menu, "save-as", state.save_as)?;
-    set_menu_item_enabled(menu, "save-to-workspace", state.save_to_workspace)?;
-    set_menu_item_enabled(menu, "export-pdf", state.export_pdf)?;
-    set_menu_item_enabled(menu, "import-current", state.import_current)?;
+    let file = menu
+        .get("file-menu")
+        .and_then(|item| item.as_submenu().cloned())
+        .ok_or_else(|| AppError::Message("File menu is unavailable.".into()))?;
+    set_submenu_item_enabled(&file, "close-document", state.close_document)?;
+    set_submenu_item_enabled(&file, "save", state.save)?;
+    set_submenu_item_enabled(&file, "save-as", state.save_as)?;
+    set_submenu_item_enabled(&file, "save-to-workspace", state.save_to_workspace)?;
+    set_submenu_item_enabled(&file, "export-pdf", state.export_pdf)?;
+    set_submenu_item_enabled(&file, "import-current", state.import_current)?;
     Ok(())
 }
 
-fn set_menu_item_enabled(
-    menu: &tauri::menu::Menu<tauri::Wry>,
+fn set_submenu_item_enabled(
+    menu: &Submenu<tauri::Wry>,
     id: &str,
     enabled: bool,
 ) -> AppResult<()> {

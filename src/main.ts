@@ -1094,7 +1094,7 @@ const handlers: UiHandlers = {
   },
   saveCurrentToWorkspace: () => {
     if (!currentDocumentCanSaveToWorkspace()) return;
-    openWorkspaceTransfer('saveCurrent', state.document!.name, null, null);
+    openWorkspaceTransfer('saveCurrent', state.document!.name, null, currentDocumentWorkspacePath(state));
   },
   submitWorkspaceTransfer: (workspacePath, name) => {
     if (!workspacePath || !state.workspaceTransfer) return;

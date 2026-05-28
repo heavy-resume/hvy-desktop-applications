@@ -17,12 +17,13 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const editableTemplateDocument = Boolean(document && editableDocument && isTemplatePath(state, document.path));
   const editableHvyDocument = Boolean(document && editableDocument && document.extension !== '.md');
   const documentWorkspacePath = currentDocumentWorkspacePath(state);
+  const hasWorkspaceDestination = state.workspaces.some((workspace) => workspace.path !== documentWorkspacePath);
 
   return {
     closeDocument: hasDocument,
     save: Boolean((document?.dirty || editableTemplateDocument) && editableDocument),
     saveAs: mountedEditableDocument,
-    saveToWorkspace: Boolean(document && editableDocument && state.workspaces.length > 0 && !documentWorkspacePath),
+    saveToWorkspace: Boolean(mountedEditableDocument && hasWorkspaceDestination),
     exportPdf: Boolean(document?.extension === '.phvy' && mountedEditableDocument),
     importCurrent: editableHvyDocument,
   };
