@@ -443,10 +443,12 @@ const handlers: UiHandlers = {
       ? await createTemporaryImportMount(state.document.mounted.document, state.document.mode)
       : { mounted: state.document.mounted, cleanup: () => {} };
     try {
+      const requestMode = importTarget.mounted.document.extension === '.phvy' ? 'pdf-template-import' : undefined;
       const plan = await buildMountedImportPlan(importTarget.mounted, {
         sourceName: source.name,
         sourceText: source.text,
         instructions,
+        requestMode,
         maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
         onProgress: (event) => {
           if (event.message) state.status = event.message;
@@ -461,6 +463,7 @@ const handlers: UiHandlers = {
         sourceText: source.text,
         instructions,
         steps: plan.steps,
+        requestMode,
         maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
         onProgress: (event) => {
           if (event.message) state.status = event.message;
