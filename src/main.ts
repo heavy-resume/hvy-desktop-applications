@@ -439,52 +439,57 @@ const handlers: UiHandlers = {
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
-    const importTarget = outputMode === 'workspace'
-      ? await createTemporaryImportMount(state.document.mounted.document, state.document.mode)
-      : { mounted: state.document.mounted, cleanup: () => {} };
-    try {
-      const requestMode = importTarget.mounted.document.extension === '.phvy' ? 'pdf-template-import' : undefined;
-      const plan = await buildMountedImportPlan(importTarget.mounted, {
-        sourceName: source.name,
-        sourceText: source.text,
-        instructions,
-        requestMode,
-        maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
-        onProgress: (event) => {
-          if (event.message) state.status = event.message;
-          rerender({ preserveMountedDocument: true });
-        },
-      });
-      if (plan.status !== 'ready' || !plan.steps?.length) {
-        throw new Error(plan.message ?? 'Import planner did not return a usable plan.');
+      const outputExtension = outputMode === 'workspace'
+        ? importedTemplateOutputExtension(state.document.extension)
+        : state.document.extension;
+      if (outputMode !== 'workspace') {
+        state.document.mounted.document.extension = outputExtension;
       }
-      const result = await importTextIntoMountedDocument(importTarget.mounted, {
-        sourceName: source.name,
-        sourceText: source.text,
-        instructions,
-        steps: plan.steps,
-        requestMode,
-        maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
-        onProgress: (event) => {
-          if (event.message) state.status = event.message;
-          rerender({ preserveMountedDocument: true });
-        },
-      });
-      if (result.status !== 'complete') {
-        throw new Error(result.message ?? 'Import failed.');
+      const importTarget = outputMode === 'workspace'
+        ? await createTemporaryImportMount(state.document.mounted.document, state.document.mode, outputExtension)
+        : { mounted: state.document.mounted, cleanup: () => {} };
+      try {
+        const requestMode = outputExtension === '.phvy' ? 'pdf-template-import' : undefined;
+        const plan = await buildMountedImportPlan(importTarget.mounted, {
+          sourceName: source.name,
+          sourceText: source.text,
+          instructions,
+          requestMode,
+          maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
+          onProgress: (event) => {
+            if (event.message) state.status = event.message;
+            rerender({ preserveMountedDocument: true });
+          },
+        });
+        if (plan.status !== 'ready' || !plan.steps?.length) {
+          throw new Error(plan.message ?? 'Import planner did not return a usable plan.');
+        }
+        const result = await importTextIntoMountedDocument(importTarget.mounted, {
+          sourceName: source.name,
+          sourceText: source.text,
+          instructions,
+          steps: plan.steps,
+          requestMode,
+          maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
+          onProgress: (event) => {
+            if (event.message) state.status = event.message;
+            rerender({ preserveMountedDocument: true });
+          },
+        });
+        if (result.status !== 'complete') {
+          throw new Error(result.message ?? 'Import failed.');
+        }
+        if (outputMode === 'workspace' && outputWorkspacePath) {
+          showWorkspaceDocumentsView(outputWorkspacePath);
+          await saveImportedDocumentToWorkspace(outputWorkspacePath, outputName.trim(), importTarget.mounted.document, outputExtension);
+        } else {
+          setDocumentDirty(true);
+          updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
+        }
+        state.status = result.message ?? `Imported ${source.name}`;
+      } finally {
+        importTarget.cleanup();
       }
-      if (outputMode === 'workspace' && outputWorkspacePath) {
-        markImportedTemplateDocument(importTarget.mounted.document);
-        showWorkspaceDocumentsView(outputWorkspacePath);
-        await saveImportedDocumentToWorkspace(outputWorkspacePath, outputName.trim(), importTarget.mounted.document);
-      } else {
-        setDocumentDirty(true);
-        updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
-      }
-      state.status = result.message ?? `Imported ${source.name}`;
-    } finally {
-      importTarget.cleanup();
-    }
     } finally {
       state.importProgressDialogOpen = false;
     }
@@ -1624,13 +1629,10 @@ function displayDocumentName(name: string): string {
   return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
-function markImportedTemplateDocument(document: VisualDocument | null): DocumentExtension | null {
-  if (!document || (document.extension !== '.thvy' && document.extension !== '.phvy')) {
-    return null;
-  }
-  const nextExtension: DocumentExtension = document.extension === '.thvy' ? '.hvy' : '.phvy';
-  document.extension = nextExtension;
-  return nextExtension;
+function importedTemplateOutputExtension(extension: DocumentExtension): DocumentExtension {
+  if (extension === '.thvy') return '.hvy';
+  if (extension === '.phvy') return '.phvy';
+  return extension;
 }
 
 async function importSourceFrom(pastedSourceText: string): Promise<PreparedImportSource | null> {
@@ -2674,11 +2676,12 @@ async function saveImportedDocumentToWorkspace(
   workspacePath: string,
   name: string,
   document: VisualDocument,
+  extension: DocumentExtension,
 ): Promise<void> {
-  const bytes = Array.from(await serializeHvy(document));
+  const bytes = Array.from(await serializeHvy({ ...document, extension }));
   const file = await saveDocumentToWorkspace({
     workspacePath,
-    name: documentFileName(name, documentTypeForExtension(document.extension)) ?? name,
+    name: documentFileName(name, documentTypeForExtension(extension)) ?? name,
     bytes,
   });
   documentSessions.delete(file.path);
@@ -2692,9 +2695,11 @@ async function saveImportedDocumentToWorkspace(
 async function createTemporaryImportMount(
   sourceDocument: VisualDocument,
   mode: HvyMode,
+  extension: DocumentExtension,
 ): Promise<{ mounted: MountedDocument; cleanup: () => void }> {
   const bytes = await serializeHvy(sourceDocument);
   const document = await deserializeHvy(bytes, sourceDocument.extension);
+  document.extension = extension;
   const root = globalThis.document.createElement('div');
   root.hidden = true;
   globalThis.document.body.append(root);

@@ -170,6 +170,21 @@ async function mountRawHvyDocument(
       // Invalid raw drafts stay editable; Save will surface the parse error.
     }
   });
+  const parseDraft = () => {
+    currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    return currentDocument;
+  };
+  const syncDraftFromDocument = () => {
+    textarea.value = serializeDocument(currentDocument);
+    notifyDirty(textarea.value !== lastSavedText);
+  };
+  const rawImportLlm = async () => {
+    const { loadChatSettings } = await import('../../heavy-file-format/src/chat/chat');
+    return {
+      settings: loadChatSettings(),
+      client: window.HVY_CHAT_CLIENT ?? null,
+    };
+  };
 
   const mount: HvyMount = {
     destroy() {
@@ -196,11 +211,34 @@ async function mountRawHvyDocument(
     isDirty() {
       return dirty || textarea.value !== lastSavedText;
     },
-    buildImportPlan() {
-      return Promise.resolve({ status: 'error', message: 'Import is unavailable in raw HVY mode.' });
+    async buildImportPlan(importOptions) {
+      const { buildImportPlanForDocument } = await import('../../heavy-file-format/src/ai-document-import');
+      return buildImportPlanForDocument(parseDraft(), {
+        ...importOptions,
+        llm: importOptions.llm ?? await rawImportLlm(),
+      });
     },
-    importFromText() {
-      return Promise.resolve({ status: 'error', message: 'Import is unavailable in raw HVY mode.' });
+    async importFromText(importOptions) {
+      const { importTextIntoDocument } = await import('../../heavy-file-format/src/ai-document-import');
+      const result = await importTextIntoDocument(parseDraft(), {
+        ...importOptions,
+        llm: importOptions.llm ?? await rawImportLlm(),
+        onProgress: (event) => {
+          if (event.phase !== 'complete') {
+            importOptions.onProgress?.(event);
+          }
+        },
+        onSectionApplied: syncDraftFromDocument,
+        onImportFillInsApplied: syncDraftFromDocument,
+        onImportXrefsApplied: syncDraftFromDocument,
+        onImportPrepared: syncDraftFromDocument,
+        onImportFinalized: syncDraftFromDocument,
+      });
+      if (result.status === 'complete') {
+        syncDraftFromDocument();
+        importOptions.onProgress?.({ phase: 'complete', message: result.message ?? 'Import complete.' });
+      }
+      return result;
     },
   };
   return { mount, get document() { return currentDocument; } };

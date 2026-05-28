@@ -2,7 +2,7 @@ import type { AiActionKey, AiProviderConfig, AiSettings } from './backend';
 import { aiProviderPreset } from './aiProviders';
 
 type HvyChatProvider = 'openai' | 'anthropic' | 'qwen';
-type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit';
+type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit' | 'pdf-template-import';
 
 interface HvyProxyMessage {
   role: 'system' | 'user' | 'assistant';

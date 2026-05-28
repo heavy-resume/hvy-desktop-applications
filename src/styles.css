@@ -166,6 +166,8 @@ button:disabled {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  --workspace-scrollbar-gutter: 14px;
+  --workspace-sidebar-resizer-width: 6px;
   overflow: hidden;
   background: var(--hvy-surface-alt, #e8ece7);
   padding: 18px;
@@ -177,7 +179,7 @@ button:disabled {
   right: 0;
   bottom: 0;
   z-index: 20;
-  width: 18px;
+  width: var(--workspace-sidebar-resizer-width);
   cursor: col-resize;
 }
 
@@ -275,7 +277,8 @@ button:disabled {
   min-height: 0;
   align-content: start;
   overflow: auto;
-  padding-right: 2px;
+  padding-right: var(--workspace-scrollbar-gutter);
+  scrollbar-gutter: stable;
 }
 
 .workspace-root {
@@ -592,8 +595,8 @@ button:disabled {
 }
 
 .search-close-button:hover:not(:disabled),
-.hvy-document-host .remove-x:hover:not(:disabled),
-.hvy-document-host .hvy-embed-layout .remove-x:hover:not(:disabled) {
+.hvy-document-host .remove-x.ghost:hover:not(:disabled),
+.hvy-document-host .hvy-embed-layout .remove-x.ghost:hover:not(:disabled) {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
