@@ -156,6 +156,7 @@ const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
 const MAX_WORKSPACE_SIDEBAR_WIDTH = 560;
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
+  const workspaceScrollTop = appRoot.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
   appRoot.innerHTML = `
     <main class="app-shell">
       <aside class="workspace-sidebar">
@@ -216,6 +217,10 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
       ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
     </main>`;
   applyWorkspaceSidebarWidth(appRoot);
+  const nextWorkspacesSection = appRoot.querySelector<HTMLElement>('.workspaces-section');
+  if (nextWorkspacesSection) {
+    nextWorkspacesSection.scrollTop = workspaceScrollTop;
+  }
 
   const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
   if (options.preserveMount && state.document) {
@@ -516,8 +521,18 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     workspaceRoot.classList.remove('is-drag-over');
     handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files));
   }, { signal });
+  root.addEventListener('beforeinput', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount') || !isFolderlessNameInput(target)) return;
+    if (typeof event.data === 'string' && wouldChangeFolderlessNameInput(target, event.data)) {
+      event.preventDefault();
+    }
+  }, { signal });
   root.addEventListener('input', (event) => {
     const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
+    if (target instanceof HTMLInputElement && !target.closest('#hvyMount') && isFolderlessNameInput(target)) {
+      stripInvalidCharactersFromNameInput(target);
+    }
     const field = target?.dataset.field;
     if (!target || !field || target.closest('#hvyMount')) return;
     if (field === 'workspace-filter-query') {
@@ -816,6 +831,37 @@ function dismissBackdropFromTarget(target: EventTarget | null): HTMLElement | nu
   return target.classList.contains('modal-backdrop') || target.classList.contains('workspace-filter-backdrop')
     ? target
     : null;
+}
+
+const folderlessNameInputNames = new Set(['documentName', 'fileName', 'importOutputName', 'templateName']);
+const invalidNameInputCharactersPattern = /[<>:"/\\|?*\x00-\x1f]/g;
+const leadingNameInputPeriodsPattern = /^\.+/;
+
+function isFolderlessNameInput(input: HTMLInputElement): boolean {
+  return input.type === 'text' && folderlessNameInputNames.has(input.name);
+}
+
+function wouldChangeFolderlessNameInput(input: HTMLInputElement, insertedText: string): boolean {
+  const selectionStart = input.selectionStart ?? input.value.length;
+  const selectionEnd = input.selectionEnd ?? selectionStart;
+  const nextValue = `${input.value.slice(0, selectionStart)}${insertedText}${input.value.slice(selectionEnd)}`;
+  return sanitizeFolderlessNameInputValue(nextValue) !== nextValue;
+}
+
+function stripInvalidCharactersFromNameInput(input: HTMLInputElement): void {
+  const sanitized = sanitizeFolderlessNameInputValue(input.value);
+  if (sanitized === input.value) return;
+  const selectionStart = input.selectionStart ?? input.value.length;
+  const sanitizedBeforeSelection = sanitizeFolderlessNameInputValue(input.value.slice(0, selectionStart));
+  input.value = sanitized;
+  const nextSelection = Math.min(sanitizedBeforeSelection.length, sanitized.length);
+  input.setSelectionRange(nextSelection, nextSelection);
+}
+
+function sanitizeFolderlessNameInputValue(value: string): string {
+  return value
+    .replace(invalidNameInputCharactersPattern, '')
+    .replace(leadingNameInputPeriodsPattern, '');
 }
 
 function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {

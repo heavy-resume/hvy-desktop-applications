@@ -434,6 +434,17 @@ const handlers: UiHandlers = {
       state.status = 'Output name is required';
       return;
     }
+    if (outputMode === 'workspace' && hasInvalidDocumentNameSyntax(outputName)) {
+      state.status = 'Document name contains invalid characters.';
+      return;
+    }
+    const outputFileName = outputMode === 'workspace'
+      ? workspaceRootDocumentFileName(outputName, documentTypeForExtension(importedTemplateOutputExtension(state.document.extension)))
+      : null;
+    if (outputMode === 'workspace' && !outputFileName) {
+      state.status = 'Document name is required';
+      return;
+    }
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
     state.importProgressDialogOpen = true;
@@ -481,7 +492,7 @@ const handlers: UiHandlers = {
         }
         if (outputMode === 'workspace' && outputWorkspacePath) {
           showWorkspaceDocumentsView(outputWorkspacePath);
-          await saveImportedDocumentToWorkspace(outputWorkspacePath, outputName.trim(), importTarget.mounted.document, outputExtension);
+          await saveImportedDocumentToWorkspace(outputWorkspacePath, outputFileName ?? outputName.trim(), importTarget.mounted.document);
         } else {
           setDocumentDirty(true);
           updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
@@ -2693,14 +2704,13 @@ async function saveCurrentDocumentToWorkspace(workspacePath: string, name: strin
 
 async function saveImportedDocumentToWorkspace(
   workspacePath: string,
-  name: string,
+  fileName: string,
   document: VisualDocument,
-  extension: DocumentExtension,
 ): Promise<void> {
-  const bytes = Array.from(await serializeHvy({ ...document, extension }));
+  const bytes = Array.from(await serializeHvy(document));
   const file = await saveDocumentToWorkspace({
     workspacePath,
-    name: documentFileName(name, documentTypeForExtension(extension)) ?? name,
+    name: fileName,
     bytes,
   });
   documentSessions.delete(file.path);
@@ -2906,6 +2916,17 @@ function documentFileName(name: string, documentType: DocumentCreationType = 'hv
     return trimmed.replace(/\.(hvy|thvy|phvy)$/i, targetExtension);
   }
   return `${trimmed}${targetExtension}`;
+}
+
+function workspaceRootDocumentFileName(name: string, documentType: DocumentCreationType = 'hvy'): string | null {
+  const trimmed = name.trim();
+  if (hasInvalidDocumentNameSyntax(trimmed)) return null;
+  return documentFileName(trimmed, documentType);
+}
+
+function hasInvalidDocumentNameSyntax(name: string): boolean {
+  const trimmed = name.trim();
+  return /[<>:"/\\|?*\x00-\x1f]/.test(trimmed) || trimmed.startsWith('.');
 }
 
 function documentTypeForExtension(extension: DocumentFile['extension']): DocumentCreationType {
