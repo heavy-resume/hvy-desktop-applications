@@ -853,7 +853,7 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  closeDocumentWithoutSaving: () => void promptCloseDocumentDraftChoice(),
+  closeDocumentWithoutSaving: () => void closeDocumentWithoutSaving(),
   discardCloseDocumentDraft: () => void closeTargetDocumentWithoutSaving({ discardDraft: true }),
   reviewCloseDocumentLater: () => void closeTargetDocumentWithoutSaving({ discardDraft: false }),
   saveAndCloseApp: () => void saveAndCloseApp(),
@@ -2289,10 +2289,29 @@ async function ensureCloseDocumentRecoveryDraft(targetPath: string): Promise<str
   return session.recoveryBackupId;
 }
 
-async function closeTargetDocumentWithoutSaving(options: { discardDraft: boolean }): Promise<void> {
+function getCloseDocumentRecoveryBackupId(targetPath: string): string | null {
+  if (state.document?.path === targetPath) {
+    return state.document.recoveryBackupId;
+  }
+  return documentSessions.get(targetPath)?.recoveryBackupId ?? null;
+}
+
+async function closeDocumentWithoutSaving(): Promise<void> {
   const targetPath = state.closeDocumentTargetPath ?? state.document?.path ?? null;
   if (targetPath === null) return;
-  const backupId = await ensureCloseDocumentRecoveryDraft(targetPath);
+  if (getCloseDocumentRecoveryBackupId(targetPath)) {
+    await promptCloseDocumentDraftChoice();
+    return;
+  }
+  await closeTargetDocumentWithoutSaving({ discardDraft: true, createDraft: false });
+}
+
+async function closeTargetDocumentWithoutSaving(options: { discardDraft: boolean; createDraft?: boolean }): Promise<void> {
+  const targetPath = state.closeDocumentTargetPath ?? state.document?.path ?? null;
+  if (targetPath === null) return;
+  const backupId = options.createDraft === false
+    ? getCloseDocumentRecoveryBackupId(targetPath)
+    : await ensureCloseDocumentRecoveryDraft(targetPath);
   if (options.discardDraft && backupId) {
     await discardDocumentBackup(backupId);
   }
