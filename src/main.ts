@@ -275,7 +275,8 @@ const handlers: UiHandlers = {
     showWorkspaceDocumentsView(workspacePath);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { isNew: true, deferMount: true });
+    await openDocument(file, { deferMount: true });
+    state.status = 'Created blank HVY document';
     await refreshRecents();
   }),
   cancelNewDocument: () => {
@@ -376,7 +377,7 @@ const handlers: UiHandlers = {
     });
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { isNew: true, deferMount: true });
+    await openDocument(file, { deferMount: true });
     rerender();
     await mountCurrentDocument(pendingMountDocument ?? undefined);
     if (!state.document?.mounted) return;
