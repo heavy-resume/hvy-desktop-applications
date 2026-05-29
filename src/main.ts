@@ -350,7 +350,7 @@ const handlers: UiHandlers = {
     state.importSource = source;
     state.status = `Selected ${source.name}`;
   }),
-  createImportedDocument: (name, templateId, instructions, pastedSourceText) => void runBusy('Importing document...', async () => {
+  createImportedDocument: (name, templateId, instructions, pastedSourceText, excludeTags) => void runBusy('Importing document...', async () => {
     const workspacePath = state.importWorkspacePath;
     const source = await importSourceFrom(pastedSourceText);
     const fileName = documentFileName(name, state.importDocumentType);
@@ -384,6 +384,7 @@ const handlers: UiHandlers = {
       sourceName: source.name,
       sourceText: source.text,
       instructions,
+      excludeTags,
       maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
         if (event.message) state.status = event.message;
@@ -398,6 +399,7 @@ const handlers: UiHandlers = {
       sourceText: source.text,
       instructions,
       steps: plan.steps,
+      excludeTags,
       maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
         if (event.message) state.status = event.message;
@@ -421,7 +423,7 @@ const handlers: UiHandlers = {
       state.importProgressDialogOpen = false;
     }
   }),
-  importIntoCurrent: (instructions, pastedSourceText, outputMode, outputName) => void runBusy('Importing into current document...', async () => {
+  importIntoCurrent: (instructions, pastedSourceText, excludeTags, outputMode, outputName) => void runBusy('Importing into current document...', async () => {
     const source = await importSourceFrom(pastedSourceText);
     if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
     await ensureCurrentDocumentMounted();
@@ -470,6 +472,7 @@ const handlers: UiHandlers = {
           sourceName: source.name,
           sourceText: source.text,
           instructions,
+          excludeTags,
           requestMode,
           maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
           onProgress: (event) => {
@@ -485,6 +488,7 @@ const handlers: UiHandlers = {
           sourceText: source.text,
           instructions,
           steps: plan.steps,
+          excludeTags,
           requestMode,
           maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
           onProgress: (event) => {

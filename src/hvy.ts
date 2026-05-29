@@ -27,9 +27,12 @@ type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocume
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
 } & HvyRecoveryStateMount;
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
-export type BuildImportPlanOptions = Parameters<HvyEmbedMount['buildImportPlan']>[0];
+type ImportTagFilterOptions = {
+  excludeTags?: string;
+};
+export type BuildImportPlanOptions = Parameters<HvyEmbedMount['buildImportPlan']>[0] & ImportTagFilterOptions;
 export type BuildImportPlanResult = Awaited<ReturnType<HvyEmbedMount['buildImportPlan']>>;
-export type ImportFromTextOptions = Parameters<HvyEmbedMount['importFromText']>[0];
+export type ImportFromTextOptions = Parameters<HvyEmbedMount['importFromText']>[0] & ImportTagFilterOptions;
 export type ImportFromTextResult = Awaited<ReturnType<HvyEmbedMount['importFromText']>>;
 type HvyDocumentChangeCallback = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['onDocumentChange']>;
 type MetaTemplateKind = 'component' | 'section';

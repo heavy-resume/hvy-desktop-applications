@@ -32,8 +32,8 @@ export interface UiHandlers {
   setImportOutputMode(mode: 'current' | 'workspace'): void;
   selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
-  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string): void;
-  importIntoCurrent(instructions: string, pastedSourceText: string, outputMode: 'current' | 'workspace', outputName: string): void;
+  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string): void;
+  importIntoCurrent(instructions: string, pastedSourceText: string, excludeTags: string, outputMode: 'current' | 'workspace', outputName: string): void;
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
@@ -678,7 +678,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         String(data.get('documentName') ?? ''),
         String(data.get('templateId') ?? ''),
         String(data.get('instructions') ?? ''),
-        String(data.get('importSourceText') ?? '')
+        String(data.get('importSourceText') ?? ''),
+        String(data.get('excludeTags') ?? '')
       );
     }
     if (form.dataset.form === 'import-current') {
@@ -687,6 +688,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.importIntoCurrent(
         String(data.get('instructions') ?? ''),
         String(data.get('importSourceText') ?? ''),
+        String(data.get('excludeTags') ?? ''),
         isImportOutputMode(outputMode) ? outputMode : 'current',
         String(data.get('importOutputName') ?? '')
       );
@@ -2040,6 +2042,10 @@ function renderImportDialog(state: AppState): string {
         <label>
           <span>Instructions</span>
           <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
+        </label>
+        <label>
+          <span>Filter out tags</span>
+          <input name="excludeTags" type="text" autocomplete="off" placeholder="Optional, comma or space separated">
         </label>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-import">Cancel</button>
