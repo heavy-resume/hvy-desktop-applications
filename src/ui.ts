@@ -2,11 +2,21 @@ import { aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
-import type { HvyMode } from './hvy';
+import type { HvyMode, VisualDocument } from './hvy';
 import type { AppState, WorkspaceClipboardState, WorkspaceFilterState } from './state';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 import ufoLogoUrl from './assets/ufo-no-bg.svg';
+import {
+  commitTagEditorDraft,
+  handleRemoveTag,
+  handleTagEditorInput,
+  handleTagEditorKeydown,
+  parseTags,
+  renderTagEditor,
+  serializeTags,
+} from '../../heavy-file-format/src/editor/tag-editor';
+import { deserializeDocumentBytes } from '../../heavy-file-format/src/serialization';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
@@ -30,6 +40,7 @@ export interface UiHandlers {
   openImportIntoCurrent(): void;
   setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
   setImportOutputMode(mode: 'current' | 'workspace'): void;
+  updateImportExcludeTags(tags: string): void;
   selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
   createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string): void;
@@ -159,6 +170,65 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const importExcludeTagHelpers = {
+  getTagState(target: HTMLElement): string[] {
+    return parseTags(importExcludeTagsInput(target)?.value ?? '');
+  },
+  setTagState(target: HTMLElement, tags: string[]): void {
+    const input = importExcludeTagsInput(target);
+    if (input) input.value = serializeTags(tags);
+  },
+  getRenderOptions() {
+    return {};
+  },
+};
+
+function importExcludeTagsInput(target: HTMLElement): HTMLInputElement | null {
+  const form = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
+  return form?.querySelector<HTMLInputElement>('input[name="excludeTags"]') ?? null;
+}
+
+function commitImportTagEditorDrafts(form: HTMLFormElement, handlers?: UiHandlers): void {
+  form.querySelectorAll<HTMLInputElement>('[data-field="search-exclude-tags-input"]').forEach((input) => {
+    commitTagEditorDraft(input, importExcludeTagHelpers);
+    if (handlers) syncImportExcludeTagsState(input, handlers);
+  });
+}
+
+function syncImportExcludeTagsState(target: HTMLElement, handlers: UiHandlers): void {
+  const input = importExcludeTagsInput(target);
+  if (input) handlers.updateImportExcludeTags(input.value);
+}
+
+function addImportExcludeTagSuggestion(target: HTMLElement, handlers: UiHandlers): void {
+  const tag = target.dataset.tag ?? '';
+  const field = target.closest<HTMLElement>('.import-exclude-tags-field');
+  const input = field?.querySelector<HTMLInputElement>('[data-field="search-exclude-tags-input"]');
+  if (!tag || !input) return;
+  input.value = `${tag},`;
+  handleTagEditorInput(input, importExcludeTagHelpers);
+  syncImportExcludeTagsState(input, handlers);
+  updateImportExcludeTagAutocomplete(input);
+  input.focus();
+}
+
+function updateImportExcludeTagAutocomplete(target: HTMLElement): void {
+  const field = target.closest<HTMLElement>('.import-exclude-tags-field');
+  const input = field?.querySelector<HTMLInputElement>('[data-field="search-exclude-tags-input"]');
+  const menu = field?.querySelector<HTMLElement>('[data-role="import-exclude-tag-suggestions"]');
+  if (!field || !input || !menu) return;
+
+  const draft = input.value.trim().toLowerCase();
+  const selected = new Set(parseTags(importExcludeTagsInput(input)?.value ?? '').map((tag) => tag.toLowerCase()));
+  let visibleCount = 0;
+  menu.querySelectorAll<HTMLButtonElement>('[data-tag]').forEach((button) => {
+    const tag = button.dataset.tag ?? '';
+    const visible = draft.length > 0 && tag.toLowerCase().includes(draft) && !selected.has(tag.toLowerCase());
+    button.hidden = !visible;
+    if (visible) visibleCount += 1;
+  });
+  menu.hidden = visibleCount === 0;
+}
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   const workspaceScrollTop = appRoot.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
@@ -254,6 +324,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   window.addEventListener('resize', () => syncAiRangeFields(root), { signal });
   root.addEventListener('pointerdown', (event) => {
     dismissBackdropPointerStart = dismissBackdropFromTarget(event.target);
+    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-action="add-import-exclude-tag"]') : null;
+    if (target) event.preventDefault();
   }, { signal, capture: true });
   root.addEventListener('click', (event) => {
     const clickedDismissBackdrop = dismissBackdropFromTarget(event.target);
@@ -488,6 +560,14 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'set-import-source-tab' && isImportSourceTab(target.dataset.tab)) handlers.setImportSourceTab(target.dataset.tab);
     if (action === 'set-import-output-mode' && isImportOutputMode(target.dataset.mode)) handlers.setImportOutputMode(target.dataset.mode);
     if (action === 'choose-import-source') handlers.chooseImportSource();
+    if (action === 'remove-tag' && !target.closest('#hvyMount')) {
+      handleRemoveTag(target, importExcludeTagHelpers);
+      syncImportExcludeTagsState(target, handlers);
+      updateImportExcludeTagAutocomplete(target);
+    }
+    if (action === 'add-import-exclude-tag' && !target.closest('#hvyMount')) {
+      addImportExcludeTagSuggestion(target, handlers);
+    }
     if (action === 'cancel-import') handlers.cancelImport();
     if (action === 'export-pdf') handlers.exportPdf();
     if (action === 'open-exported-pdf') handlers.openExportedPdf();
@@ -553,6 +633,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       if (form) updateImportSubmit(form);
       return;
     }
+    if (field === 'search-exclude-tags-input') {
+      handleTagEditorInput(target, importExcludeTagHelpers);
+      syncImportExcludeTagsState(target, handlers);
+      updateImportExcludeTagAutocomplete(target);
+      return;
+    }
     if (field === 'mcp-port' || field === 'mcp-token') {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
       if (form) {
@@ -601,6 +687,26 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     row?.classList.toggle('theme-color-row--override', overridden);
     syncThemeOverrideAction(row, name, overridden);
     handlers.updateColorTheme(name, nextValue);
+  }, { signal });
+  root.addEventListener('keydown', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount')) return;
+    if (handleTagEditorKeydown(event, target, importExcludeTagHelpers)) {
+      syncImportExcludeTagsState(target, handlers);
+      updateImportExcludeTagAutocomplete(target);
+    }
+  }, { signal });
+  root.addEventListener('focusin', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount') || target.dataset.field !== 'search-exclude-tags-input') return;
+    updateImportExcludeTagAutocomplete(target);
+  }, { signal });
+  root.addEventListener('focusout', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount') || target.dataset.field !== 'search-exclude-tags-input') return;
+    commitTagEditorDraft(target, importExcludeTagHelpers);
+    syncImportExcludeTagsState(target, handlers);
+    updateImportExcludeTagAutocomplete(target);
   }, { signal });
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLSelectElement ? event.target : null;
@@ -673,6 +779,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       );
     }
     if (form.dataset.form === 'import-document') {
+      commitImportTagEditorDrafts(form, handlers);
       const data = new FormData(form);
       handlers.createImportedDocument(
         String(data.get('documentName') ?? ''),
@@ -683,6 +790,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       );
     }
     if (form.dataset.form === 'import-current') {
+      commitImportTagEditorDrafts(form, handlers);
       const data = new FormData(form);
       const outputMode = String(data.get('importOutputMode') ?? 'current');
       handlers.importIntoCurrent(
@@ -2043,10 +2151,7 @@ function renderImportDialog(state: AppState): string {
           <span>Instructions</span>
           <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
         </label>
-        <label>
-          <span>Filter out tags</span>
-          <input name="excludeTags" type="text" autocomplete="off" placeholder="Optional, comma or space separated">
-        </label>
+        ${renderImportExcludeTagsField(state.importExcludeTags, collectImportSourceTagSuggestions(state.importSource))}
         <div class="dialog-actions">
           <button type="button" data-action="cancel-import">Cancel</button>
           <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !source ? 'disabled' : ''}>Import</button>
@@ -2075,6 +2180,62 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
         </label>
       ` : ''}
     </div>`;
+}
+
+function renderImportExcludeTagsField(value: string, suggestions: string[]): string {
+  return `
+    <label class="import-exclude-tags-field">
+      <span>Filter out tags</span>
+      ${renderTagEditor('search-exclude-tags', value, { placeholder: 'Add tag to filter out' }, { escapeAttr, escapeHtml })}
+      <input name="excludeTags" type="hidden" value="${escapeAttr(serializeTags(parseTags(value)))}">
+      ${suggestions.length > 0 ? `
+        <div class="import-exclude-tag-suggestions" data-role="import-exclude-tag-suggestions" hidden>
+          ${suggestions.map((tag) => `<button type="button" data-action="add-import-exclude-tag" data-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</button>`).join('')}
+        </div>
+      ` : ''}
+    </label>`;
+}
+
+function collectImportSourceTagSuggestions(source: AppState['importSource']): string[] {
+  if (!source?.bytes || source.extension === '.txt') {
+    return [];
+  }
+  return collectDocumentTags(deserializeDocumentBytes(new Uint8Array(source.bytes), source.extension));
+}
+
+function collectDocumentTags(document: VisualDocument): string[] {
+  const tags = new Map<string, string>();
+  const visit = (item: unknown): void => {
+    if (!item || typeof item !== 'object') return;
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    Object.entries(item as Record<string, unknown>).forEach(([key, child]) => {
+      if (key === 'tags' && typeof child === 'string') {
+        parseTagSuggestions(child).forEach((tag) => tags.set(tag.toLowerCase(), tag));
+      } else {
+        visit(child);
+      }
+    });
+  };
+  visit(document.meta);
+  visit(document.sections);
+  return [...tags.values()].sort((left, right) => left.localeCompare(right));
+}
+
+function parseTagSuggestions(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[,\s]+/)
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      if (!tag || seen.has(tag.toLowerCase())) {
+        return false;
+      }
+      seen.add(tag.toLowerCase());
+      return true;
+    });
 }
 
 function suggestedImportOutputName(state: AppState, workspace: AppState['workspaces'][number] | null): string {

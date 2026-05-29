@@ -292,6 +292,7 @@ const handlers: UiHandlers = {
     state.importIntoCurrentDialogOpen = false;
     state.importSourceTab = 'anywhere';
     state.importSource = null;
+    state.importExcludeTags = '';
     state.status = 'Ready';
     void refreshSavedTemplates(workspacePath).then(() => rerender({ preserveMountedDocument: true }));
     rerender({ preserveMountedDocument: true });
@@ -313,6 +314,7 @@ const handlers: UiHandlers = {
     state.importSourceTab = 'workspace';
     state.importOutputMode = currentDocumentWorkspacePath(state) ? 'workspace' : 'current';
     state.importSource = null;
+    state.importExcludeTags = '';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   })(),
@@ -326,6 +328,9 @@ const handlers: UiHandlers = {
     state.importOutputMode = mode;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
+  },
+  updateImportExcludeTags: (tags) => {
+    state.importExcludeTags = tags;
   },
   selectImportWorkspaceSource: (path) => void runBusy('Selecting import source...', async () => {
     if (!path) {
@@ -367,6 +372,7 @@ const handlers: UiHandlers = {
     const template = creationTemplate(workspacePath, state.importDocumentType, templateId, documentTitle(fileName));
     state.importWorkspacePath = null;
     state.importSource = null;
+    state.importExcludeTags = '';
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
@@ -455,6 +461,7 @@ const handlers: UiHandlers = {
     }
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
+    state.importExcludeTags = '';
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
@@ -521,6 +528,7 @@ const handlers: UiHandlers = {
     state.importSourceTab = 'workspace';
     state.importOutputMode = 'current';
     state.importSource = null;
+    state.importExcludeTags = '';
     state.importProgressDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });

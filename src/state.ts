@@ -55,6 +55,7 @@ export interface AppState {
   importSourceTab: 'workspace' | 'anywhere';
   importSource: ImportSourceFile | null;
   importOutputMode: 'current' | 'workspace';
+  importExcludeTags: string;
   importProgressDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
@@ -156,6 +157,7 @@ export const state: AppState = {
   importSourceTab: 'workspace',
   importSource: null,
   importOutputMode: 'current',
+  importExcludeTags: '',
   importProgressDialogOpen: false,
   saveTemplateScope: 'app',
   saveAsDialogOpen: false,

@@ -1381,6 +1381,89 @@ button:disabled {
   line-height: 1.45;
 }
 
+.import-exclude-tags-field .tag-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--hvy-border-input, #b7c2bd);
+  border-radius: 8px;
+  background: var(--hvy-surface, #fff);
+}
+
+.import-exclude-tags-field .tag-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.import-exclude-tags-field .tag-pill-list:not(:empty) + .tag-editor-input {
+  margin-left: 8px;
+}
+
+.import-exclude-tags-field .tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  background: var(--hvy-xref-card-hover-bg, #e9f0ec);
+  padding: 3px 5px 3px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.import-exclude-tags-field .tag-pill-remove {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+}
+
+.import-exclude-tags-field .tag-pill-remove svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.import-exclude-tags-field .tag-editor-input {
+  flex: 1 1 140px;
+  min-width: 140px;
+  padding: 3px 1px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+}
+
+.import-exclude-tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.import-exclude-tag-suggestions[hidden] {
+  display: none;
+}
+
+.import-exclude-tag-suggestions button {
+  width: auto;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
 .dialog-note[data-state="error"] {
   color: var(--hvy-danger, #8c291d);
 }
