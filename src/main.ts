@@ -75,7 +75,7 @@ import {
   writeSystemFileClipboard,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
-import { currentDocumentWorkspacePath, getFileActionAvailability } from './fileActions';
+import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -1057,6 +1057,12 @@ const handlers: UiHandlers = {
       const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
       const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
       const file = await renameDocumentFile({ path, name: trimmed });
+      const renamedOpenTemplateMetadata = Boolean(
+        currentDocument
+        && mountedDocument
+        && isWorkspaceTemplatePath(state, path)
+        && syncRenamedTemplateMetadata(mountedDocument, currentStem, documentTitle(file.name))
+      );
       documentSessions.delete(path);
       renameDocumentTabPath(path, file.path);
       if (state.selectedFilePath === path) {
@@ -1068,6 +1074,13 @@ const handlers: UiHandlers = {
         currentDocument.extension = file.extension;
         if (mountedDocument) {
           updateCurrentDocumentSession(mountedDocument);
+        }
+        if (renamedOpenTemplateMetadata) {
+          setDocumentDirty(true);
+          if (currentDocument.metaOpen) {
+            currentDocument.metaOpen = currentDocument.mounted?.mount.openDocumentMeta?.() ?? currentDocument.metaOpen;
+            updateModeMetaChrome();
+          }
         }
         if (oldBackupKey) {
           const backup = backupSnapshots.get(oldBackupKey);
@@ -2942,6 +2955,36 @@ function documentTypeForExtension(extension: DocumentFile['extension']): Documen
 
 function documentTitle(fileName: string): string {
   return fileName.replace(/\.(t?hvy|phvy|md)$/i, '');
+}
+
+function syncRenamedTemplateMetadata(document: VisualDocument, oldName: string, newName: string): boolean {
+  const meta = document.meta as Record<string, unknown>;
+  let changed = false;
+  if (meta.title === oldName) {
+    meta.title = newName;
+    changed = true;
+  }
+  changed = renameTemplateDefinitionEntries(meta.component_defs, oldName, newName) || changed;
+  changed = renameTemplateDefinitionEntries(meta.section_defs, oldName, newName) || changed;
+  return changed;
+}
+
+function renameTemplateDefinitionEntries(value: unknown, oldName: string, newName: string): boolean {
+  if (!Array.isArray(value)) return false;
+  let changed = false;
+  value.forEach((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+    const definition = entry as Record<string, unknown>;
+    if (definition.name === oldName) {
+      definition.name = newName;
+      changed = true;
+    }
+    if (definition.key === oldName) {
+      definition.key = newName;
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 function hasDocumentExtension(fileName: string): boolean {
