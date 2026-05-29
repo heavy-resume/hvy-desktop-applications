@@ -164,6 +164,7 @@ const handlers: UiHandlers = {
     await archiveWorkspace(path);
     state.workspaces = state.workspaces.filter((candidate) => candidate.path !== path);
     delete state.workspaceFilters[path];
+    delete state.workspaceExpanded[path];
     clearWorkspaceFilterDocumentCache(path);
     if (state.workspaceFilter.workspacePath === path) {
       state.workspaceFilter.open = false;
@@ -559,6 +560,9 @@ const handlers: UiHandlers = {
     },
     { preserveMountedDocument: true }
   ),
+  setWorkspaceExpanded: (workspacePath, expanded) => {
+    state.workspaceExpanded[workspacePath] = expanded;
+  },
   closeWorkspaceFilter: () => {
     state.workspaceFilter.open = false;
     state.workspaceFilter.isLoading = false;

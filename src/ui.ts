@@ -39,6 +39,7 @@ export interface UiHandlers {
   addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
   openWorkspaceFilter(workspacePath: string): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
+  setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
   setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
   setWorkspaceFilterBehavior(mode: SearchFilterMode): void;
@@ -629,8 +630,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const summary = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root > summary') : null;
     const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
     const workspacePath = details?.dataset.workspacePath;
-    if (!details || !workspacePath || details.open) return;
+    if (!details || !workspacePath) return;
+    const wasOpen = details.open;
     window.setTimeout(() => {
+      if (details.open === wasOpen) return;
+      handlers.setWorkspaceExpanded(workspacePath, details.open);
       if (details.open) handlers.refreshWorkspace(workspacePath);
     }, 0);
   }, { signal, capture: true });
@@ -1581,7 +1585,7 @@ function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.savedTemplates)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.savedTemplates)).join('')}</div>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {
@@ -1656,6 +1660,7 @@ function renderWorkspace(
   activeFilters: AppState['workspaceFilters'],
   workspaceClipboard: WorkspaceClipboardState | null,
   fileView: AppState['workspaceFileViews'][string],
+  expanded: boolean,
   savedTemplates: SavedTemplate[],
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
@@ -1672,7 +1677,7 @@ function renderWorkspace(
     ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
     : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
-    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}" open>
+    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>

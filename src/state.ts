@@ -45,6 +45,7 @@ export interface AppState {
   newWorkspaceDialogOpen: boolean;
   workspaceManagerOpen: boolean;
   openWorkspaceActionsPath: string | null;
+  workspaceExpanded: Record<string, boolean>;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
   newDocumentType: DocumentCreationType;
@@ -145,6 +146,7 @@ export const state: AppState = {
   newWorkspaceDialogOpen: false,
   workspaceManagerOpen: false,
   openWorkspaceActionsPath: null,
+  workspaceExpanded: {},
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,
   newDocumentType: 'hvy',
