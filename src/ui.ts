@@ -155,6 +155,10 @@ let workspaceSidebarWidth = 320;
 const MIN_PASTED_IMPORT_CHARS = 50;
 const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
 const MAX_WORKSPACE_SIDEBAR_WIDTH = 560;
+const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
+const AI_MIN_CONTEXT_CHARS = 1_000;
+const AI_MAX_CONTEXT_CHARS = 750_000;
+const AI_CONTEXT_STEP_CHARS = 1_000;
 
 export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
   const workspaceScrollTop = appRoot.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
@@ -228,6 +232,7 @@ export function render(state: AppState, handlers: UiHandlers, options: { preserv
     nextMount.replaceWith(options.preserveMount);
   }
   bind(appRoot, handlers, state);
+  requestAnimationFrame(() => syncAiRangeFields(appRoot));
   return options.preserveMount && state.document ? options.preserveMount : nextMount;
 }
 
@@ -246,6 +251,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.commitTabStack();
     }
   }, { signal, capture: true });
+  window.addEventListener('resize', () => syncAiRangeFields(root), { signal });
   root.addEventListener('pointerdown', (event) => {
     dismissBackdropPointerStart = dismissBackdropFromTarget(event.target);
   }, { signal, capture: true });
@@ -553,6 +559,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         updateMcpConnectionPreview(form);
         updateMcpUrlPreview(form);
       }
+      return;
+    }
+    if (field === 'max-context-chars' && target instanceof HTMLInputElement) {
+      syncAiMaxContextCharsOutput(target);
       return;
     }
     if (field === 'theme-color-filter') {
@@ -2304,6 +2314,7 @@ function renderAiSettingsDialog(state: AppState): string {
   const settings = state.aiSettingsDraft ?? state.aiSettings;
   const providerConfig = activeProviderConfig(settings);
   const provider = aiProviderPreset(settings.activeProviderId);
+  const maxContextChars = normalizeAiMaxContextChars(settings.maxContextChars);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
@@ -2336,9 +2347,18 @@ function renderAiSettingsDialog(state: AppState): string {
           <span>API Key</span>
           <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
         </label>
-        <label>
+        <label class="ai-range-field">
           <span>Maximum import chunk size</span>
-          <input name="maxContextChars" type="number" min="1" step="1000" value="${escapeAttr(String(normalizeAiMaxContextChars(settings.maxContextChars)))}">
+          <input
+            name="maxContextChars"
+            data-field="max-context-chars"
+            type="range"
+            min="${AI_MIN_CONTEXT_CHARS}"
+            max="${AI_MAX_CONTEXT_CHARS}"
+            step="${AI_CONTEXT_STEP_CHARS}"
+            value="${escapeAttr(String(maxContextChars))}"
+          >
+          <output data-role="max-context-chars-output">${escapeHtml(formatAiMaxContextChars(maxContextChars))}</output>
         </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
@@ -2923,7 +2943,42 @@ function readActionConfig(data: FormData, action: AiActionKey, fallbackProviderI
 
 function normalizeAiMaxContextChars(value: unknown): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 40_000;
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
+  const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
+  return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function syncAiMaxContextCharsOutput(input: HTMLInputElement): void {
+  const output = input
+    .closest<HTMLElement>('.ai-range-field')
+    ?.querySelector<HTMLOutputElement>('[data-role="max-context-chars-output"]');
+  if (output) {
+    output.value = formatAiMaxContextChars(input.value);
+    output.textContent = output.value;
+  }
+  syncAiRangeFill(input);
+}
+
+function syncAiRangeFields(root: ParentNode): void {
+  root.querySelectorAll<HTMLInputElement>('input[data-field="max-context-chars"]').forEach(syncAiMaxContextCharsOutput);
+}
+
+function syncAiRangeFill(input: HTMLInputElement): void {
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const value = Number(input.value);
+  const range = max - min;
+  const progress = Number.isFinite(range) && range > 0
+    ? Math.min(1, Math.max(0, (value - min) / range))
+    : 0;
+  const thumbSize = Number.parseFloat(getComputedStyle(input).getPropertyValue('--range-thumb-size')) || 18;
+  const width = input.getBoundingClientRect().width;
+  const fillEnd = (thumbSize / 2) + progress * Math.max(0, width - thumbSize);
+  input.style.setProperty('--range-fill-end', `${fillEnd}px`);
+}
+
+function formatAiMaxContextChars(value: unknown): string {
+  return `${new Intl.NumberFormat().format(normalizeAiMaxContextChars(value))} chars`;
 }
 
 function activeProviderConfig(settings: AiSettings): AiProviderConfig {

@@ -11,6 +11,10 @@ const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
 const RECENT_LIMIT = 12;
+const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
+const AI_MIN_CONTEXT_CHARS = 1000;
+const AI_MAX_CONTEXT_CHARS = 750000;
+const AI_CONTEXT_STEP_CHARS = 1000;
 const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.md']);
 const TEMPLATE_EXTENSIONS = new Set(['.thvy', '.phvy']);
@@ -1376,7 +1380,7 @@ function defaultAiSettings() {
       semanticFilter: { providerId: 'openai', model: 'gpt-5.4-nano' },
       compaction: { providerId: 'openai', model: 'gpt-5.4-nano' },
     },
-    maxContextChars: 40000,
+    maxContextChars: DEFAULT_AI_MAX_CONTEXT_CHARS,
   };
 }
 
@@ -1390,7 +1394,9 @@ function normalizeAiSettings(settings) {
 
 function normalizeAiMaxContextChars(value) {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 40000;
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
+  const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
+  return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
 }
 
 function defaultMcpSettings() {

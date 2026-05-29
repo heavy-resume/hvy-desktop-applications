@@ -35,7 +35,7 @@ type HvyDocumentChangeCallback = NonNullable<Parameters<HvyEmbedModule['mountHvy
 type MetaTemplateKind = 'component' | 'section';
 type MetaTemplateClipboard =
   | { kind: 'component'; definition: Record<string, unknown> }
-  | { kind: 'section'; definition: Record<string, unknown> };
+  | { kind: 'section'; definition: Record<string, unknown>; componentDefinitions: Record<string, unknown>[] };
 
 export interface MountedDocument {
   mount: HvyMount;
@@ -393,7 +393,37 @@ function copyMetaTemplate(mount: HvyMount, kind: MetaTemplateKind, index: number
   const defs = getMetaTemplateDefinitions(mount.getDocument(), kind);
   const definition = defs[index];
   if (!definition) return;
+  if (kind === 'section') {
+    const document = mount.getDocument();
+    const componentDefs = getMetaTemplateDefinitions(document, 'component');
+    const referencedNames = collectReferencedComponentNames(definition);
+    collectTransitiveComponentDefinitionNames(referencedNames, componentDefs);
+    metaTemplateClipboard = {
+      kind,
+      definition: cloneJsonObject(definition),
+      componentDefinitions: componentDefs
+        .filter((def) => referencedNames.has(readTemplateName(def)))
+        .map((def) => cloneJsonObject(def)),
+    };
+    return;
+  }
   metaTemplateClipboard = { kind, definition: cloneJsonObject(definition) };
+}
+
+function collectTransitiveComponentDefinitionNames(names: Set<string>, componentDefs: Record<string, unknown>[]): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const def of componentDefs) {
+      const name = readTemplateName(def);
+      if (!names.has(name)) continue;
+      for (const referencedName of collectReferencedComponentNames(def)) {
+        if (names.has(referencedName)) continue;
+        names.add(referencedName);
+        changed = true;
+      }
+    }
+  }
 }
 
 function pasteMetaTemplate(
@@ -444,8 +474,105 @@ function pasteMetaTemplate(
     }
     commitPaste(nextDefs);
   } else {
+    if (metaTemplateClipboard.kind === 'section') {
+      const componentDefs = getMetaTemplateDefinitions(document, 'component');
+      const existingComponentNames = new Set(componentDefs.map(readTemplateName));
+      const dependencyDefs = metaTemplateClipboard.componentDefinitions.filter((def) => !existingComponentNames.has(readTemplateName(def)));
+      if (dependencyDefs.length > 0) {
+        const prepared = prepareComponentDependenciesForPaste(document, meta, componentDefs, dependencyDefs);
+        const compatibleSectionDefs = [...defs, nextDefinition];
+        if (prepared.removedCount > 0) {
+          openPhvyPasteConfirmationPopover(
+            () => {
+              meta.component_defs = prepared.definitions;
+              commitPaste(compatibleSectionDefs);
+            },
+            () => undefined,
+            root
+          );
+          return;
+        }
+        meta.component_defs = prepared.definitions;
+      }
+    }
     commitPaste([...defs, nextDefinition]);
   }
+}
+
+function prepareComponentDependenciesForPaste(
+  document: VisualDocument,
+  meta: Record<string, unknown>,
+  existingDefs: Record<string, unknown>[],
+  dependencyDefs: Record<string, unknown>[],
+): { definitions: Record<string, unknown>[]; removedCount: number } {
+  if (document.extension !== '.phvy') {
+    return {
+      definitions: [...existingDefs, ...dependencyDefs.map((def) => cloneJsonObject(def))],
+      removedCount: 0,
+    };
+  }
+  const mergedMeta = {
+    ...meta,
+    component_defs: [...existingDefs, ...dependencyDefs],
+  };
+  let removedCount = 0;
+  const preparedDefs: Record<string, unknown>[] = [];
+  for (const dependencyDef of dependencyDefs) {
+    const prepared = prepareComponentDefinitionForDocumentPasteWithResult(
+      document,
+      dependencyDef as unknown as ComponentDefinition,
+      mergedMeta
+    );
+    removedCount += prepared.removedCount;
+    if (prepared.definition) {
+      preparedDefs.push(prepared.definition as unknown as Record<string, unknown>);
+    }
+  }
+  return {
+    definitions: [...existingDefs, ...preparedDefs],
+    removedCount,
+  };
+}
+
+function collectReferencedComponentNames(definition: Record<string, unknown>): Set<string> {
+  const names = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (typeof record.component === 'string' && !isBuiltinComponentName(record.component)) {
+      names.add(record.component);
+    }
+    for (const componentField of ['componentListComponent', 'expandableStubComponent', 'expandableContentComponent']) {
+      const componentName = record[componentField];
+      if (typeof componentName === 'string' && !isBuiltinComponentName(componentName)) {
+        names.add(componentName);
+      }
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(definition);
+  return names;
+}
+
+function isBuiltinComponentName(componentName: string): boolean {
+  return [
+    'text',
+    'code',
+    'container',
+    'component-list',
+    'grid',
+    'expandable',
+    'table',
+    'image',
+    'carousel',
+    'button',
+    'plugin',
+    'xref-card',
+  ].includes(componentName);
 }
 
 function getMetaTemplateDefinitions(document: VisualDocument, kind: MetaTemplateKind): Record<string, unknown>[] {

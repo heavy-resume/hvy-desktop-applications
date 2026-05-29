@@ -937,8 +937,8 @@ button:disabled {
   display: flex;
   min-width: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--hvy-border, #c2cbc6);
-  background: var(--hvy-surface-muted, #dde4df);
+  border-bottom: 1px solid var(--hvy-border-translucent, var(--hvy-border, #c2cbc6));
+  background: var(--hvy-surface-alt, #e8ece7);
   padding: 6px 8px 0;
 }
 
@@ -956,17 +956,17 @@ button:disabled {
   max-width: 220px;
   height: 34px;
   margin: 0 2px;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--hvy-border-translucent, var(--hvy-border, #c2cbc6)) 58%, transparent);
   border-bottom: 0;
   border-radius: 7px 7px 0 0;
-  background: transparent;
+  background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 90%, transparent);
   color: var(--hvy-text-muted, #5f6a66);
   padding: 0 5px 0 0;
 }
 
 .document-tab.is-active {
-  border-color: var(--hvy-border, #c2cbc6);
-  background: var(--hvy-bg, #fbfaf7);
+  border-color: var(--hvy-border-translucent, var(--hvy-border, #c2cbc6));
+  background: var(--hvy-surface, #ffffff);
   color: var(--hvy-text, #17211f);
 }
 
@@ -1271,6 +1271,27 @@ button:disabled {
 
 .hvy-document-host.hvy-vscode-has-mode-controls .viewer-shell .reader-document {
   padding-top: 50px;
+}
+
+.hvy-document-host .phvy-viewer-shell {
+  --hvy-bg: #ffffff !important;
+  --hvy-bg-alt: #ffffff !important;
+  --hvy-surface: #ffffff !important;
+  --hvy-surface-alt: #ffffff !important;
+  --hvy-text: #000000 !important;
+  --hvy-text-alt: #000000 !important;
+  --hvy-text-muted: #404040 !important;
+  --hvy-link-color: #000000 !important;
+  --hvy-link-hover-color: #000000 !important;
+  --hvy-border: #d0d0d0 !important;
+  --hvy-border-alt: #a8a8a8 !important;
+  --hvy-border-input: #b8b8b8 !important;
+  --hvy-border-translucent: rgba(0, 0, 0, 0.18) !important;
+  --hvy-table-header: #eeeeee !important;
+  --hvy-table-row-bg-1: #ffffff !important;
+  --hvy-table-row-bg-2: #f7f7f7 !important;
+  background: #ffffff !important;
+  color: #000000 !important;
 }
 
 .hvy-document-host.hvy-vscode-has-mode-controls .editor-shell .editor-tree {
@@ -2128,6 +2149,75 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.ai-range-field {
+  gap: 8px;
+}
+
+.ai-range-field input[type="range"] {
+  --range-thumb-size: 18px;
+  --range-track-height: 8px;
+  --range-fill-end: calc(var(--range-thumb-size) / 2);
+
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  overflow: visible;
+}
+
+.ai-range-field input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--range-track-height);
+  border: 1px solid var(--hvy-border-input, #c2ccc6);
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      var(--hvy-button-bg, var(--hvy-accent-1, #477d7c)) 0 var(--range-fill-end),
+      var(--hvy-surface-alt, #edf1ed) var(--range-fill-end) 100%
+    );
+}
+
+.ai-range-field input[type="range"]::-webkit-slider-thumb {
+  width: var(--range-thumb-size);
+  height: var(--range-thumb-size);
+  margin-top: calc((var(--range-track-height) - var(--range-thumb-size)) / 2 - 1px);
+  border: 2px solid var(--hvy-button-bg, var(--hvy-accent-1, #477d7c));
+  border-radius: 999px;
+  background: var(--hvy-surface, #ffffff);
+  box-shadow: 0 2px 7px var(--hvy-shadow-md, rgb(40 51 47 / 16%));
+  appearance: none;
+}
+
+.ai-range-field input[type="range"]::-moz-range-track {
+  height: var(--range-track-height);
+  border: 1px solid var(--hvy-border-input, #c2ccc6);
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      var(--hvy-button-bg, var(--hvy-accent-1, #477d7c)) 0 var(--range-fill-end),
+      var(--hvy-surface-alt, #edf1ed) var(--range-fill-end) 100%
+    );
+}
+
+.ai-range-field input[type="range"]::-moz-range-thumb {
+  width: var(--range-thumb-size);
+  height: var(--range-thumb-size);
+  border: 2px solid var(--hvy-button-bg, var(--hvy-accent-1, #477d7c));
+  border-radius: 999px;
+  background: var(--hvy-surface, #ffffff);
+  box-shadow: 0 2px 7px var(--hvy-shadow-md, rgb(40 51 47 / 16%));
+}
+
+.ai-range-field output {
+  justify-self: end;
+  color: var(--hvy-text, #1f2c2b);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
 }
 
 .ai-action-config {

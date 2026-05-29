@@ -92,6 +92,10 @@ let workspaceFilterAbortController: AbortController | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
+const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
+const AI_MIN_CONTEXT_CHARS = 1_000;
+const AI_MAX_CONTEXT_CHARS = 750_000;
+const AI_CONTEXT_STEP_CHARS = 1_000;
 
 interface MountScrollRatio {
   top: number;
@@ -3211,7 +3215,9 @@ function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.ai
 
 function normalizeAiMaxContextChars(value: unknown): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 40_000;
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
+  const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
+  return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
 }
 
 async function confirmWorkspaceInitialization(path: string, defaultName: string) {

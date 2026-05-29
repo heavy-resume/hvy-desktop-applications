@@ -26,6 +26,10 @@ const MCP_SETTINGS: &str = "mcp-settings.json";
 const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
 const DEFAULT_MCP_PORT: u16 = 8794;
 const RECENT_LIMIT: usize = 12;
+const DEFAULT_AI_MAX_CONTEXT_CHARS: u32 = 40_000;
+const AI_MIN_CONTEXT_CHARS: u32 = 1_000;
+const AI_MAX_CONTEXT_CHARS: u32 = 750_000;
+const AI_CONTEXT_STEP_CHARS: u32 = 1_000;
 const BACKUP_RETENTION_HOURS: i64 = 24 * 7;
 
 #[derive(Debug, Error)]
@@ -559,7 +563,7 @@ impl Default for AiSettings {
 }
 
 fn default_ai_max_context_chars() -> u32 {
-    40_000
+    DEFAULT_AI_MAX_CONTEXT_CHARS
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3548,8 +3552,16 @@ fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
         active_provider_id,
         providers,
         actions,
-        max_context_chars: if settings.max_context_chars == 0 { default_ai_max_context_chars() } else { settings.max_context_chars },
+        max_context_chars: normalize_ai_max_context_chars(settings.max_context_chars),
     })
+}
+
+fn normalize_ai_max_context_chars(value: u32) -> u32 {
+    if value == 0 {
+        return default_ai_max_context_chars();
+    }
+    let stepped = (value.saturating_add(AI_CONTEXT_STEP_CHARS / 2) / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
+    stepped.clamp(AI_MIN_CONTEXT_CHARS, AI_MAX_CONTEXT_CHARS)
 }
 
 fn normalize_ai_provider(provider_config: AiProviderConfig) -> AppResult<AiProviderConfig> {
