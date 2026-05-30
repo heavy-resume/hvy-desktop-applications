@@ -3103,6 +3103,29 @@ fn mcp_tool_list() -> serde_json::Value {
                 "required": ["query"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "document.cli_based_editor",
+            "description": "CLI based editor for one HVY document in a workspace. Use this for edits: inspect with commands like ls, find, rg, cat, and man; mutate with hvy insert/remove, sed, echo/printf redirection, cp, mv, rm, and plugin commands. Mutating commands are saved back to the document file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path of the .hvy, .thvy, .phvy, or .md document to edit."
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "One HVY CLI command to run, for example \"man hvy\", \"find /body -maxdepth 3\", or \"sed -i 's/old/new/' /body/intro/text.txt\"."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional virtual CLI working directory. Defaults to /."
+                    }
+                },
+                "required": ["path", "command"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -3133,6 +3156,7 @@ fn handle_mcp_tool_call_from_with_access(
         "workspace.list" => mcp_workspace_list_from(workspaces)?,
         "workspace.tree" => mcp_workspace_tree_from(workspaces, arguments)?,
         "workspace.search" => mcp_workspace_search_from(workspaces, arguments)?,
+        "document.cli_based_editor" => mcp_document_cli_from(workspaces, arguments)?,
         _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
     };
     Ok(mcp_tool_result(result))
@@ -3150,6 +3174,7 @@ fn ensure_mcp_tool_allowed(name: &str, write_access: &str) -> AppResult<()> {
 fn mcp_tool_required_access(name: &str) -> u8 {
     match name {
         "workspace.list" | "workspace.tree" | "workspace.search" => 0,
+        "document.cli_based_editor" => 1,
         _ => 2,
     }
 }
@@ -3242,6 +3267,137 @@ fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: serde_json::Va
         "query": query,
         "results": results
     }))
+}
+
+fn mcp_document_cli_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
+    let path = arguments
+        .get("path")
+        .and_then(|path| path.as_str())
+        .ok_or_else(|| AppError::Message("document.cli_based_editor requires a document path.".into()))?;
+    let command = arguments
+        .get("command")
+        .and_then(|command| command.as_str())
+        .ok_or_else(|| AppError::Message("document.cli_based_editor requires a command.".into()))?
+        .trim();
+    if command.is_empty() {
+        return Err(AppError::Message("document.cli_based_editor requires a non-empty command.".into()));
+    }
+    let cwd = arguments.get("cwd").and_then(|cwd| cwd.as_str()).unwrap_or("/");
+    let document_path = PathBuf::from(path);
+    let workspace = workspaces
+        .iter()
+        .find(|workspace| workspace_contains_document(workspace, &document_path))
+        .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
+    document_extension(&document_path)
+        .ok_or_else(|| AppError::Message("document.cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
+
+    let package_root = mcp_cli_package_root()?;
+    let request = serde_json::json!({
+        "filePath": path_to_string(&document_path),
+        "cwd": cwd,
+        "commands": [command],
+    });
+    let output = Command::new("node")
+        .current_dir(package_root)
+        .arg("--input-type=module")
+        .arg("--eval")
+        .arg(MCP_CLI_NODE_EVAL)
+        .arg(request.to_string())
+        .output()?;
+    if !output.status.success() {
+        return Err(AppError::Message(mcp_cli_runner_error(&output)));
+    }
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    if result.get("mutated").and_then(|mutated| mutated.as_bool()).unwrap_or(false) {
+        touch_workspace_manifest(Path::new(&workspace.path))?;
+    }
+    Ok(serde_json::json!({
+        "path": path,
+        "cwd": result.get("cwd").cloned().unwrap_or_else(|| serde_json::json!(cwd)),
+        "mutated": result.get("mutated").cloned().unwrap_or_else(|| serde_json::json!(false)),
+        "results": result.get("results").cloned().unwrap_or_else(|| serde_json::json!([])),
+    }))
+}
+
+fn workspace_contains_document(workspace: &Workspace, path: &Path) -> bool {
+    flatten_workspace_file_nodes(&workspace.files)
+        .iter()
+        .any(|file| Path::new(&file.path) == path)
+}
+
+const MCP_CLI_NODE_EVAL: &str = r#"
+import { runHvyCliOnFile } from 'heavy-file-format-ref-impl/mcp-cli-runner';
+
+try {
+  const result = await runHvyCliOnFile(JSON.parse(process.argv[1]));
+  process.stdout.write(JSON.stringify(result));
+} catch (error) {
+  process.stderr.write(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+  process.exit(1);
+}
+"#;
+
+fn mcp_cli_package_root() -> AppResult<PathBuf> {
+    if let Some(path) = std::env::var_os("HVY_GALAXY_MCP_PACKAGE_ROOT") {
+        return Ok(PathBuf::from(path));
+    }
+    let cwd = std::env::current_dir()?;
+    let current_exe = std::env::current_exe()?;
+    if let Some(path) = mcp_cli_package_root_from(&cwd, &current_exe) {
+        return Ok(path);
+    }
+    Err(AppError::Message(
+        "heavy-file-format-ref-impl was not found for the HVY MCP CLI based editor. Set HVY_GALAXY_MCP_PACKAGE_ROOT to the package root.".into(),
+    ))
+}
+
+fn mcp_cli_package_root_from(cwd: &Path, current_exe: &Path) -> Option<PathBuf> {
+    for candidate in [
+        mcp_cli_package_root_path(cwd),
+        mcp_cli_package_root_path(&cwd.join("..")),
+    ] {
+        if mcp_cli_package_entry_exists(&candidate) {
+            return Some(candidate);
+        }
+    }
+    for ancestor in current_exe.ancestors() {
+        let candidate = mcp_cli_package_root_path(ancestor);
+        if mcp_cli_package_entry_exists(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn mcp_cli_package_root_path(root: &Path) -> PathBuf {
+    root.join("node_modules")
+        .join("heavy-file-format-ref-impl")
+}
+
+fn mcp_cli_package_entry_exists(package_root: &Path) -> bool {
+    package_root.join("package.json").exists()
+        && package_root
+            .join("scripts")
+            .join("hvy-mcp-cli.mjs")
+            .exists()
+}
+
+fn mcp_cli_runner_error(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&stderr) {
+        if let Some(error) = value.get("error").and_then(|error| error.as_str()) {
+            return error.to_string();
+        }
+    }
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        "HVY CLI command failed.".into()
+    } else {
+        stdout
+    }
 }
 
 #[derive(Clone)]
@@ -4663,7 +4819,10 @@ model = "gpt-5.4"
             .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()))
             .collect::<Vec<_>>();
 
-        assert_eq!(names, vec!["workspace.list", "workspace.tree", "workspace.search"]);
+        assert_eq!(
+            names,
+            vec!["workspace.list", "workspace.tree", "workspace.search", "document.cli_based_editor"]
+        );
         assert!(tools[2]
             .get("description")
             .and_then(|description| description.as_str())
@@ -4672,6 +4831,15 @@ model = "gpt-5.4"
         assert_eq!(
             tools[2]["inputSchema"]["required"].as_array().unwrap()[0],
             serde_json::json!("query")
+        );
+        assert!(tools[3]
+            .get("description")
+            .and_then(|description| description.as_str())
+            .unwrap()
+            .contains("CLI based editor"));
+        assert_eq!(
+            tools[3]["inputSchema"]["required"].as_array().unwrap()[0],
+            serde_json::json!("path")
         );
     }
 
@@ -4856,8 +5024,31 @@ model = "gpt-5.4"
     #[test]
     fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
         assert!(ensure_mcp_tool_allowed("workspace.search", "searchOnly").is_ok());
-        assert!(ensure_mcp_tool_allowed("workspace.create", "searchOnly").is_err());
+        assert!(ensure_mcp_tool_allowed("document.cli_based_editor", "searchOnly").is_err());
+        assert!(ensure_mcp_tool_allowed("document.cli_based_editor", "hvyCliEdits").is_ok());
         assert!(ensure_mcp_tool_allowed("workspace.create", "createImportSave").is_ok());
+    }
+
+    #[test]
+    fn mcp_cli_package_lookup_finds_repo_from_rust_executable() {
+        let repo = tempdir().unwrap();
+        let package = repo
+            .path()
+            .join("node_modules")
+            .join("heavy-file-format-ref-impl");
+        let scripts = package.join("scripts");
+        let executable = repo.path().join("src-tauri").join("target").join("debug").join("hvy-galaxy");
+        fs::create_dir_all(&scripts).unwrap();
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(package.join("package.json"), "{}").unwrap();
+        fs::write(scripts.join("hvy-mcp-cli.mjs"), "").unwrap();
+        fs::write(&executable, "").unwrap();
+        let cwd = tempdir().unwrap();
+
+        assert_eq!(
+            mcp_cli_package_root_from(cwd.path(), &executable),
+            Some(package)
+        );
     }
 
     #[test]

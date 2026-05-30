@@ -2639,7 +2639,7 @@ function renderMcpSettingsDialog(state: AppState): string {
             <span>Write access</span>
             <select name="writeAccess">
               <option value="searchOnly" ${settings.writeAccess === 'searchOnly' ? 'selected' : ''}>Search only</option>
-              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>Search &amp; Alter files</option>
+              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>CLI based editor</option>
               <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
             </select>
           </label>
