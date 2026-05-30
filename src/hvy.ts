@@ -21,7 +21,7 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'buildImportPlan' | 'importFromText'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
@@ -371,6 +371,14 @@ async function mountRawHvyDocument(
     },
     isDirty() {
       return dirty || textarea.value !== lastSavedText;
+    },
+    undo() {
+      textarea.focus();
+      documentOwner().execCommand('undo');
+    },
+    redo() {
+      textarea.focus();
+      documentOwner().execCommand('redo');
     },
     async buildImportPlan(importOptions) {
       const { buildImportPlanForDocument } = await import('../../heavy-file-format/src/ai-document-import');
@@ -890,6 +898,14 @@ export function getMountedRecoveryState(mounted: MountedDocument): string | null
 
 export function applyMountedRecoveryState(mounted: MountedDocument, recoveryState?: string | null): void {
   mounted.mount.applyRecoveryState?.(recoveryState);
+}
+
+export function undoMountedDocument(mounted: MountedDocument): void {
+  mounted.mount.undo();
+}
+
+export function redoMountedDocument(mounted: MountedDocument): void {
+  mounted.mount.redo();
 }
 
 export function getMountedDocument(mounted: MountedDocument): VisualDocument {

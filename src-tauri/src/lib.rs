@@ -1894,8 +1894,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
-        .item(&PredefinedMenuItem::undo(app, Some("Undo"))?)
-        .item(&PredefinedMenuItem::redo(app, Some("Redo"))?)
+        .item(&app_shortcut_menu_item(app, "Undo", "undo", "CmdOrCtrl+Z")?)
+        .item(&app_shortcut_menu_item(
+            app,
+            "Redo",
+            "redo",
+            redo_accelerator(),
+        )?)
         .separator()
         .item(&PredefinedMenuItem::cut(app, Some("Cut"))?)
         .item(&PredefinedMenuItem::copy(app, Some("Copy"))?)
@@ -1952,6 +1957,17 @@ fn disabled_app_shortcut_menu_item(
     #[cfg(not(target_os = "macos"))]
     let _ = accelerator;
     builder.build(app)
+}
+
+fn redo_accelerator() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "CmdOrCtrl+Shift+Z"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "CmdOrCtrl+Y"
+    }
 }
 
 fn build_recent_files_menu(

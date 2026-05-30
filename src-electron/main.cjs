@@ -170,8 +170,8 @@ function buildMenu() {
     {
       label: 'Edit',
       submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
+        menuItem('Undo', 'undo', 'CmdOrCtrl+Z'),
+        menuItem('Redo', 'redo', process.platform === 'darwin' ? 'CmdOrCtrl+Shift+Z' : 'CmdOrCtrl+Y'),
         { type: 'separator' },
         { role: 'cut' },
         { role: 'copy' },

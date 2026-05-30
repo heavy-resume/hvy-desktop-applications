@@ -78,7 +78,7 @@ import {
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
-import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, redoMountedDocument, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, undoMountedDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { render, renderAllAroundDocument as renderUiAroundDocument, type UiHandlers } from './ui';
@@ -1401,6 +1401,8 @@ async function boot(): Promise<void> {
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
       if (event === 'find') openMountedSearch();
+      if (event === 'undo') performUndo();
+      if (event === 'redo') performRedo();
       if (event === 'open-guide') void openGuide();
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
@@ -1455,6 +1457,28 @@ function openMountedSearch(): boolean {
   const launcher = mountRoot.querySelector<HTMLButtonElement>('[data-action="open-search"]');
   if (!launcher) return false;
   launcher.click();
+  return true;
+}
+
+function performUndo(): void {
+  if (routeNativeEditCommand('undo')) return;
+  const mounted = state.document?.mounted;
+  if (!mounted) return;
+  undoMountedDocument(mounted);
+}
+
+function performRedo(): void {
+  if (routeNativeEditCommand('redo')) return;
+  const mounted = state.document?.mounted;
+  if (!mounted) return;
+  redoMountedDocument(mounted);
+}
+
+function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLElement) || target.closest('#hvyMount')) return false;
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return false;
+  document.execCommand(command);
   return true;
 }
 
