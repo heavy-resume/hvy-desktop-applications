@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "identifier": "com.heavyresume.hvy-galaxy",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 1420",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
@@ -17,7 +17,8 @@
         "width": 1200,
         "height": 780,
         "minWidth": 920,
-        "minHeight": 640
+        "minHeight": 640,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -37,6 +38,20 @@
     "category": "Productivity",
     "shortDescription": "HVY Galaxy",
     "longDescription": "Cross-platform desktop app for viewing and editing HVY files.",
+    "fileAssociations": [
+      {
+        "ext": ["hvy", "thvy", "phvy"],
+        "name": "HVY Document",
+        "description": "HVY document",
+        "role": "Editor",
+        "mimeType": "application/x-hvy",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "com.heavyresume.hvy-document",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ],
     "macOS": {
       "infoPlist": "Info.plist",
       "minimumSystemVersion": "10.13"

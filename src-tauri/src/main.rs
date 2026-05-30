@@ -36,7 +36,12 @@ fn should_run_tauri_shell_for_platform() -> bool {
     macos_major_version().map(|major| major >= 13).unwrap_or(true)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn should_run_tauri_shell_for_platform() -> bool {
+    true
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 fn should_run_tauri_shell_for_platform() -> bool {
     false
 }

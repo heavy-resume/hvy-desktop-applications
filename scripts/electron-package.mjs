@@ -9,15 +9,17 @@ const packager = packagerModule.packager || packagerModule.default || packagerMo
 
 const appName = 'HVY Galaxy';
 const appIdentifier = 'com.heavyresume.hvy-galaxy';
+const hvyDocumentTypeIdentifier = 'com.heavyresume.hvy-document';
 const outDir = path.resolve('dist-electron');
-const platform = process.env.ELECTRON_PLATFORM || process.platform;
-const arch = process.env.ELECTRON_ARCH || process.arch;
+const args = parseArgs(process.argv.slice(2));
+const platform = args.platform || process.env.ELECTRON_PLATFORM || process.platform;
+const arch = args.arch || process.env.ELECTRON_ARCH || process.arch;
 const packageDir = path.join(outDir, `${appName}-${platform}-${arch}`);
 const icon = platform === 'darwin'
-  ? path.resolve('src-tauri', 'icons', 'icon')
+  ? path.resolve('src-tauri', 'icons', 'icon.icns')
   : platform === 'win32'
-    ? path.resolve('src-tauri', 'icons', 'icon')
-    : path.resolve('src-tauri', 'icons', 'icon');
+    ? path.resolve('src-tauri', 'icons', 'icon.ico')
+    : path.resolve('src-tauri', 'icons', 'icon.png');
 
 fs.rmSync(packageDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
@@ -38,6 +40,26 @@ const appPaths = await packager({
   extendInfo: {
     CFBundleDisplayName: appName,
     CFBundleName: appName,
+    CFBundleDocumentTypes: [
+      {
+        CFBundleTypeExtensions: ['hvy', 'thvy', 'phvy'],
+        CFBundleTypeName: 'HVY Document',
+        CFBundleTypeRole: 'Editor',
+        LSHandlerRank: 'Owner',
+        LSItemContentTypes: [hvyDocumentTypeIdentifier],
+      },
+    ],
+    UTExportedTypeDeclarations: [
+      {
+        UTTypeConformsTo: ['public.data'],
+        UTTypeDescription: 'HVY document',
+        UTTypeIdentifier: hvyDocumentTypeIdentifier,
+        UTTypeTagSpecification: {
+          'public.filename-extension': ['hvy', 'thvy', 'phvy'],
+          'public.mime-type': 'application/x-hvy',
+        },
+      },
+    ],
     NSCameraUsageDescription: 'HVY Galaxy uses the camera to capture photos for image components in your HVY documents.',
   },
   extraResource: [
@@ -88,4 +110,23 @@ function setPlistString(plist, key, value) {
     return plist.replace('</dict>', `\t<key>${key}</key>\n\t<string>${escapedValue}</string>\n</dict>`);
   }
   return plist.replace(pattern, `$1${escapedValue}$3`);
+}
+
+function parseArgs(argv) {
+  const parsed = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--platform') {
+      parsed.platform = argv[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--platform=')) {
+      parsed.platform = arg.slice('--platform='.length);
+    } else if (arg === '--arch') {
+      parsed.arch = argv[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--arch=')) {
+      parsed.arch = arg.slice('--arch='.length);
+    }
+  }
+  return parsed;
 }

@@ -36,9 +36,10 @@ async function smokeViewport(viewport) {
       page.getByText('Startup error').waitFor({ timeout: 10_000 }),
     ]);
     await page.getByTitle('New HVY document').click();
-    await page.getByText('Untitled.hvy').waitFor({ timeout: 10_000 });
+    await page.locator('.document-tab-name', { hasText: 'Untitled.hvy' }).waitFor({ timeout: 10_000 });
     await page.locator('.dirty-indicator', { hasText: 'Unsaved' }).waitFor({ timeout: 10_000 });
     await page.getByRole('button', { name: 'View' }).waitFor({ timeout: 10_000 });
+    await assertModalPreservesDocumentMount(page, viewport);
 
     const text = await page.locator('body').innerText({ timeout: 5_000 });
     const layout = await page.evaluate(() => {
@@ -110,4 +111,42 @@ async function smokeViewport(viewport) {
   } finally {
     await page.close();
   }
+}
+
+async function assertModalPreservesDocumentMount(page, viewport) {
+  await page.locator('button[data-action="set-mode"][data-mode="editor"]').click();
+  await page.locator('button[data-action="set-mode"][data-mode="hvy"]').click();
+  const rawTextarea = page.locator('.raw-hvy-textarea');
+  await rawTextarea.waitFor({ timeout: 10_000 });
+  await page.evaluate(() => {
+    const mount = document.querySelector('#hvyMount');
+    if (!(mount instanceof HTMLElement)) {
+      throw new Error('Could not find HVY mount for modal preservation smoke.');
+    }
+    window.__hvySmokeMount = mount;
+    const fixture = document.createElement('div');
+    fixture.className = 'hvy-smoke-scroll-fixture';
+    fixture.style.cssText = 'position:absolute;left:-9999px;top:0;width:120px;height:80px;overflow:auto;';
+    fixture.innerHTML = '<div style="height:600px"></div>';
+    mount.append(fixture);
+    fixture.scrollTop = 240;
+    window.__hvySmokeScrollTop = fixture.scrollTop;
+  });
+  await page.getByTitle('New workspace').click();
+  await page.locator('form[data-form="new-workspace"]').waitFor({ timeout: 10_000 });
+  const preservation = await page.evaluate(() => {
+    const mount = document.querySelector('#hvyMount');
+    const fixture = document.querySelector('.hvy-smoke-scroll-fixture');
+    return {
+      sameMount: mount === window.__hvySmokeMount,
+      scrollTop: fixture instanceof HTMLElement ? fixture.scrollTop : -1,
+      previousScrollTop: window.__hvySmokeScrollTop ?? -1,
+    };
+  });
+  if (!preservation.sameMount || Math.abs(preservation.scrollTop - preservation.previousScrollTop) > 1) {
+    throw new Error(`Modal did not preserve HVY mount at ${viewport.width}x${viewport.height}: ${JSON.stringify(preservation)}`);
+  }
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.locator('form[data-form="new-workspace"]').waitFor({ state: 'detached', timeout: 10_000 });
+  await page.locator('button[data-action="set-mode"][data-mode="viewer"]').click();
 }

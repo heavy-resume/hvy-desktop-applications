@@ -28,8 +28,12 @@ a desktop sync client installed.
 Prerequisites:
 
 - Node.js and npm
+- Sibling `../heavy-file-format` checkout
 - Rust toolchain
 - Tauri platform prerequisites for macOS or Windows
+
+On Windows PowerShell, if `npm` is blocked by script execution policy, use
+`npm.cmd` for the same commands.
 
 Install dependencies:
 
@@ -42,6 +46,52 @@ Run the frontend build:
 ```bash
 npm run build
 ```
+
+Build the host OS release artifacts for both the smaller Tauri app and the
+compatibility Electron app:
+
+```bash
+npm run build:host
+```
+
+On macOS this creates the universal Tauri DMG and the Electron DMG. On Windows
+this creates the Tauri installers and the Electron Windows app folder.
+
+Build only the host OS Tauri artifact:
+
+```bash
+npm run build:tauri:host
+```
+
+Build only the host OS Electron artifact:
+
+```bash
+npm run build:electron:host
+```
+
+Build Tauri Windows installers on Windows:
+
+```bash
+npm run build:windows
+```
+
+The Windows installers are written under `src-tauri/target/release/bundle/`.
+
+Build the Electron Windows app folder on Windows:
+
+```bash
+npm run build:electron:windows
+```
+
+The Electron output is written under `dist-electron/HVY Galaxy-win32-x64/`.
+
+Build the Electron macOS DMG:
+
+```bash
+npm run build:electron:dmg
+```
+
+The Electron DMG is written under `dist-electron/`.
 
 Build a universal macOS app for Apple Silicon and Intel Macs:
 

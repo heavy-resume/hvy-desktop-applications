@@ -2,7 +2,7 @@ import type { AiActionKey, AiProviderConfig, AiSettings } from './backend';
 import { aiProviderPreset } from './aiProviders';
 
 type HvyChatProvider = 'openai' | 'anthropic' | 'qwen';
-type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit';
+type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit' | 'pdf-template-import';
 
 interface HvyProxyMessage {
   role: 'system' | 'user' | 'assistant';
@@ -19,10 +19,14 @@ interface HvyProxyRequest {
 
 interface HvyHostChatResponse {
   output: string;
-  usage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    totalTokens?: number;
+}
+
+interface ChatCompletionRequestBody {
+  model: string;
+  messages: HvyProxyMessage[];
+  stream: boolean;
+  chat_template_kwargs?: {
+    enable_thinking?: boolean;
   };
 }
 
@@ -64,35 +68,93 @@ async function requestOpenAiCompatibleCompletion(
   if (!model) {
     throw new Error(`Choose an AI model for ${taskLabel(task)}.`);
   }
+  const stream = provider.provider === 'unsloth';
+  const body = buildChatCompletionBody(model, request, task, provider.provider, stream);
   const response = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(provider.apiKey.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
     },
-    body: JSON.stringify({
-      model,
-      messages: buildMessages(request),
-      stream: false,
-    }),
+    body: JSON.stringify(body),
     signal,
   });
+  if (stream) {
+    return readStreamingChatCompletionResponse(response);
+  }
   const payload = await response.json().catch(() => null) as any;
   if (!response.ok) {
-    throw new Error(readProviderError(payload) || `AI request failed with HTTP ${response.status}.`);
+    throw new Error(formatProviderHttpError(response.status, payload));
   }
   const output = String(payload?.choices?.[0]?.message?.content ?? '').trim();
   if (!output) {
     throw new Error('AI provider returned no assistant text.');
   }
+  return { output };
+}
+
+function buildChatCompletionBody(
+  model: string,
+  request: HvyProxyRequest,
+  task: AiActionKey,
+  providerId: string,
+  stream: boolean,
+): ChatCompletionRequestBody {
+  const disableThinking = providerId === 'unsloth' && (task === 'chat' || task === 'semanticFilter');
   return {
-    output,
-    usage: {
-      inputTokens: numberOrUndefined(payload?.usage?.prompt_tokens),
-      outputTokens: numberOrUndefined(payload?.usage?.completion_tokens),
-      totalTokens: numberOrUndefined(payload?.usage?.total_tokens),
-    },
+    model,
+    messages: buildMessages(request, disableThinking),
+    stream,
+    ...(disableThinking
+      ? { chat_template_kwargs: { enable_thinking: false } }
+      : {}),
   };
+}
+
+async function readStreamingChatCompletionResponse(response: Response): Promise<HvyHostChatResponse> {
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as any;
+    throw new Error(formatProviderHttpError(response.status, payload));
+  }
+  if (!response.body) {
+    throw new Error('AI provider returned no assistant text.');
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let output = '';
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      output += readStreamingChatCompletionLine(line);
+    }
+  }
+  buffer += decoder.decode();
+  for (const line of buffer.split(/\r?\n/)) {
+    output += readStreamingChatCompletionLine(line);
+  }
+  output = output.trim();
+  if (!output) {
+    throw new Error('AI provider returned no assistant text.');
+  }
+  return { output };
+}
+
+function readStreamingChatCompletionLine(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('data:')) return '';
+  const data = trimmed.slice('data:'.length).trim();
+  if (!data || data === '[DONE]') return '';
+  try {
+    const payload = JSON.parse(data) as any;
+    return String(payload?.choices?.[0]?.delta?.content ?? payload?.choices?.[0]?.message?.content ?? '');
+  } catch {
+    return '';
+  }
 }
 
 function aiProviderConfig(settings: AiSettings, providerId: string): AiProviderConfig {
@@ -111,8 +173,28 @@ function resolveProviderId(settings: AiSettings, providerId: string): string {
   return providerId && providerId !== 'default' ? providerId : settings.activeProviderId;
 }
 
-function buildMessages(request: HvyProxyRequest): HvyProxyMessage[] {
+function buildMessages(request: HvyProxyRequest, disableThinking = false): HvyProxyMessage[] {
   const messages = [...request.messages];
+  if (disableThinking) {
+    let lastUserMessageIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'user') {
+        lastUserMessageIndex = index;
+        break;
+      }
+    }
+    if (lastUserMessageIndex >= 0) {
+      messages[lastUserMessageIndex] = {
+        ...messages[lastUserMessageIndex],
+        content: `/no_think\n\n${messages[lastUserMessageIndex].content}`,
+      };
+    } else {
+      messages.push({
+        role: 'user',
+        content: '/no_think',
+      });
+    }
+  }
   if (request.context.trim()) {
     messages.push({
       role: 'user',
@@ -141,6 +223,11 @@ function readProviderError(payload: any): string {
   return String(payload?.error?.message ?? payload?.message ?? '').trim();
 }
 
-function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === 'number' ? value : undefined;
+function formatProviderHttpError(status: number, payload: any): string {
+  const providerMessage = readProviderError(payload);
+  const message = providerMessage || `AI request failed with HTTP ${status}.`;
+  if (status === 401) {
+    return `${message} Check the API key for the selected AI provider.`;
+  }
+  return message;
 }

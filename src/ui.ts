@@ -1,31 +1,56 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type McpClientInstallTarget, type McpSettings, type TemplateScope, type Workspace, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
-import type { HvyMode } from './hvy';
-import type { AppState, WorkspaceFilterState } from './state';
-import { mergeSavedTemplates } from './templates';
+import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
+import type { HvyMode, VisualDocument } from './hvy';
+import type { AppState, WorkspaceClipboardState, WorkspaceFilterState } from './state';
+import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 import ufoLogoUrl from './assets/ufo-no-bg.svg';
+import {
+  commitTagEditorDraft,
+  handleRemoveTag,
+  handleTagEditorInput,
+  handleTagEditorKeydown,
+  parseTags,
+  renderTagEditor,
+  serializeTags,
+} from '../../heavy-file-format/src/editor/tag-editor';
+import { deserializeDocumentBytes } from '../../heavy-file-format/src/serialization';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
   newWorkspace(): void;
+  openWorkspaceManager(): void;
+  closeWorkspaceManager(): void;
+  renameWorkspace(path: string, name: string): void;
+  archiveWorkspace(path: string): void;
+  unarchiveWorkspace(path: string): void;
   toggleWorkspaceActions(path: string): void;
   closeWorkspaceActions(): void;
   createWorkspace(name: string, location: 'managed' | 'choose'): void;
   setNewWorkspaceLocation(location: 'managed' | 'choose'): void;
   cancelNewWorkspace(): void;
   newDocumentInWorkspace(workspacePath: string): void;
+  setNewDocumentType(type: DocumentCreationType): void;
   createDocumentInWorkspace(name: string, templateId: string): void;
   cancelNewDocument(): void;
   openImportInWorkspace(workspacePath: string): void;
+  setImportDocumentType(type: DocumentCreationType): void;
   openImportIntoCurrent(): void;
+  setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
+  setImportOutputMode(mode: 'current' | 'workspace'): void;
+  updateImportExcludeTags(tags: string): void;
+  selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
-  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string): void;
-  importIntoCurrent(instructions: string, pastedSourceText: string): void;
+  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string): void;
+  importIntoCurrent(instructions: string, pastedSourceText: string, excludeTags: string, outputMode: 'current' | 'workspace', outputName: string): void;
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
+  addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
   openWorkspaceFilter(workspacePath: string): void;
+  setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
+  setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
   setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
   setWorkspaceFilterBehavior(mode: SearchFilterMode): void;
@@ -63,7 +88,20 @@ export interface UiHandlers {
   resetColorTheme(name: string): void;
   applyColorThemePalette(id: string | null): void;
   restoreBackup(id: string): void;
+  discardBackup(id: string): void;
   cancelRecovery(): void;
+  cancelCloseDocument(): void;
+  closeDocumentWithoutSaving(): void;
+  discardCloseDocumentDraft(): void;
+  reviewCloseDocumentLater(): void;
+  saveAndCloseApp(): void;
+  closeAppWithoutSaving(): void;
+  cancelAppClose(): void;
+  selectDocumentTab(path: string): void;
+  closeDocumentTab(path: string): void;
+  cycleTabStack(direction: 1 | -1): void;
+  commitTabStack(): void;
+  cancelTabStack(): void;
   openWorkspace(): void;
   openFile(): void;
   openRecentWorkspace(path: string): void;
@@ -72,14 +110,45 @@ export interface UiHandlers {
   refreshWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
+  archiveFile(path: string, currentName: string): void;
+  restoreFile(path: string, currentName: string): void;
+  confirmDeleteFile(path: string, currentName: string): void;
+  deleteFile(): void;
+  cancelDeleteFile(): void;
+  copyWorkspaceFile(path: string, currentName: string): void;
+  cutWorkspaceFile(path: string, currentName: string): void;
+  pasteWorkspaceClipboard(workspacePath: string): void;
+  copyFileToWorkspace(path: string, currentName: string): void;
+  moveFileToWorkspace(path: string, currentName: string): void;
+  submitRenameFile(name: string): void;
+  cancelRenameFile(): void;
+  saveCurrentToWorkspace(): void;
+  submitWorkspaceTransfer(workspacePath: string, name: string): void;
+  cancelWorkspaceTransfer(): void;
   setMode(mode: HvyMode): void;
   openDocumentMeta(): void;
   save(): void;
   saveAs(): void;
+  setSaveAsKind(kind: AppState['saveAsKind']): void;
+  setSaveAsScope(scope: 'workspace' | 'anywhere'): void;
+  saveAsToWorkspace(workspacePath: string, name: string): void;
+  saveAsAnywhere(): void;
+  cancelSaveAs(): void;
+  closeDocument(): void;
+  saveAndCloseDocument(): void;
   openSaveTemplate(): void;
+  exportPdf(): void;
+  openExportedPdf(): void;
+  revealExportedPdf(): void;
+  closeExportedPdfDialog(): void;
+  saveBeforeExportPdf(): void;
+  cancelExportPdfSavePrompt(): void;
   setSaveTemplateScope(scope: TemplateScope): void;
-  saveAsTemplate(name: string, scope: TemplateScope): void;
+  saveAsTemplate(name: string, scope: TemplateScope, extension: TemplateExtension): void;
   cancelSaveTemplate(): void;
+  openWorkspaceTemplateVisibility(workspacePath: string): void;
+  saveWorkspaceTemplateVisibility(workspacePath: string, visibility: WorkspaceTemplateVisibility): void;
+  cancelWorkspaceTemplateVisibility(): void;
   createFile(): void;
 }
 
@@ -91,74 +160,252 @@ if (!app) {
 
 const appRoot = app;
 let bindController: AbortController | null = null;
+let uiBound = false;
+let renderedRenameFilePath: string | null = null;
 let activeFileContextMenuCleanup: (() => void) | null = null;
+let dismissBackdropPointerStart: HTMLElement | null = null;
+let workspaceSidebarWidth = 320;
 const MIN_PASTED_IMPORT_CHARS = 50;
+const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
+const MAX_WORKSPACE_SIDEBAR_WIDTH = 560;
+const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
+const AI_MIN_CONTEXT_CHARS = 1_000;
+const AI_MAX_CONTEXT_CHARS = 750_000;
+const AI_CONTEXT_STEP_CHARS = 1_000;
+const importExcludeTagHelpers = {
+  getTagState(target: HTMLElement): string[] {
+    return parseTags(importExcludeTagsInput(target)?.value ?? '');
+  },
+  setTagState(target: HTMLElement, tags: string[]): void {
+    const input = importExcludeTagsInput(target);
+    if (input) input.value = serializeTags(tags);
+  },
+  getRenderOptions() {
+    return {};
+  },
+};
 
-export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
-  appRoot.innerHTML = `
-    <main class="app-shell">
-      <aside class="workspace-sidebar">
-        <div class="sidebar-header">
-          <div class="brand-lockup">
-            <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
-            <h1>HVY Galaxy</h1>
-          </div>
-          <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
-        </div>
-        <div class="sidebar-actions">
-          <button type="button" data-action="open-file">Open File</button>
-        </div>
-        <section class="workspaces-section">
-          <div class="sidebar-section-heading">
-            <h2>Workspaces</h2>
-            <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
-          </div>
-          ${renderWorkspaces(state)}
-        </section>
-      </aside>
-      <section class="document-shell">
-        <header class="document-toolbar">
-          ${renderToolbar(state)}
-        </header>
-        <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>
-        <div class="document-stage">
-          ${state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen) : ''}
-          <div id="hvyMount" class="document-host${state.document ? ' hvy-vscode-has-mode-controls' : ''}">
-            ${renderEmptyState(state)}
-          </div>
-        </div>
-      </section>
-      ${renderNewWorkspaceDialog(state)}
-      ${renderNewDocumentDialog(state)}
-      ${renderImportDialog(state)}
-      ${renderExportDialog(state)}
-      ${renderAboutDialog(state)}
-      ${renderAiSettingsDialog(state)}
-      ${renderMcpSettingsDialog(state)}
-      ${renderColorThemeDialog(state)}
-      ${renderRecoveryDialog(state)}
-      ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
-    </main>`;
-
-  const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
-  if (options.preserveMount && state.document) {
-    nextMount.replaceWith(options.preserveMount);
-  }
-  bind(appRoot, handlers);
-  return options.preserveMount && state.document ? options.preserveMount : nextMount;
+function importExcludeTagsInput(target: HTMLElement): HTMLInputElement | null {
+  const form = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
+  return form?.querySelector<HTMLInputElement>('input[name="excludeTags"]') ?? null;
 }
 
-function bind(root: HTMLElement, handlers: UiHandlers): void {
+function commitImportTagEditorDrafts(form: HTMLFormElement, handlers?: UiHandlers): void {
+  form.querySelectorAll<HTMLInputElement>('[data-field="search-exclude-tags-input"]').forEach((input) => {
+    commitTagEditorDraft(input, importExcludeTagHelpers);
+    if (handlers) syncImportExcludeTagsState(input, handlers);
+  });
+}
+
+function syncImportExcludeTagsState(target: HTMLElement, handlers: UiHandlers): void {
+  const input = importExcludeTagsInput(target);
+  if (input) handlers.updateImportExcludeTags(input.value);
+}
+
+function addImportExcludeTagSuggestion(target: HTMLElement, handlers: UiHandlers): void {
+  const tag = target.dataset.tag ?? '';
+  const field = target.closest<HTMLElement>('.import-exclude-tags-field');
+  const input = field?.querySelector<HTMLInputElement>('[data-field="search-exclude-tags-input"]');
+  if (!tag || !input) return;
+  input.value = `${tag},`;
+  handleTagEditorInput(input, importExcludeTagHelpers);
+  syncImportExcludeTagsState(input, handlers);
+  updateImportExcludeTagAutocomplete(input);
+  input.focus();
+}
+
+function updateImportExcludeTagAutocomplete(target: HTMLElement): void {
+  const field = target.closest<HTMLElement>('.import-exclude-tags-field');
+  const input = field?.querySelector<HTMLInputElement>('[data-field="search-exclude-tags-input"]');
+  const menu = field?.querySelector<HTMLElement>('[data-role="import-exclude-tag-suggestions"]');
+  if (!field || !input || !menu) return;
+
+  const draft = input.value.trim().toLowerCase();
+  const selected = new Set(parseTags(importExcludeTagsInput(input)?.value ?? '').map((tag) => tag.toLowerCase()));
+  let visibleCount = 0;
+  menu.querySelectorAll<HTMLButtonElement>('[data-tag]').forEach((button) => {
+    const tag = button.dataset.tag ?? '';
+    const visible = draft.length > 0 && tag.toLowerCase().includes(draft) && !selected.has(tag.toLowerCase());
+    button.hidden = !visible;
+    if (visible) visibleCount += 1;
+  });
+  menu.hidden = visibleCount === 0;
+}
+
+export function render(state: AppState, handlers: UiHandlers): HTMLElement {
+  ensureAppFrame();
+  bindOnce(appRoot, handlers, state);
+  renderAllAroundDocument(state);
+  return hvyMountRoot();
+}
+
+export function renderLeftPanel(state: AppState): void {
+  const leftPanel = leftPanelRoot();
+  const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
+  leftPanel.innerHTML = `
+    <div class="sidebar-header">
+      <div class="brand-lockup">
+        <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
+        <h1>HVY Galaxy</h1>
+      </div>
+      <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
+    </div>
+    <div class="sidebar-actions">
+      <button type="button" data-action="open-file">Open File</button>
+    </div>
+    <section class="workspaces-section">
+      <div class="sidebar-section-heading">
+        <h2>Workspaces</h2>
+        <button type="button" class="icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
+        <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
+      </div>
+      ${renderWorkspaces(state)}
+    </section>
+    <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>`;
+  applyWorkspaceSidebarWidth(appRoot);
+  const nextWorkspacesSection = leftPanel.querySelector<HTMLElement>('.workspaces-section');
+  if (nextWorkspacesSection) {
+    nextWorkspacesSection.scrollTop = workspaceScrollTop;
+  }
+}
+
+export function renderDocumentControls(state: AppState): void {
+  documentControlsRoot().innerHTML = `
+    ${renderDocumentTabs(state)}
+    <header class="document-toolbar">
+      ${renderToolbar(state)}
+    </header>
+    <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
+  documentModeControlsRoot().innerHTML = state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen) : '';
+  const mount = hvyMountRoot();
+  mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document));
+  if (!state.document || !state.document.mounted) {
+    mount.innerHTML = renderEmptyState(state);
+  }
+}
+
+export function renderModals(state: AppState): void {
+  modalRoot().innerHTML = `
+    ${renderNewWorkspaceDialog(state)}
+    ${renderWorkspaceManagerDialog(state)}
+    ${renderNewDocumentDialog(state)}
+    ${renderImportDialog(state)}
+    ${renderImportProgressDialog(state)}
+    ${renderSaveAsDialog(state)}
+    ${renderExportPdfSavePrompt(state)}
+    ${renderExportedPdfDialog(state)}
+    ${renderWorkspaceTemplateVisibilityDialog(state)}
+    ${renderAboutDialog(state)}
+    ${renderAiSettingsDialog(state)}
+    ${renderMcpSettingsDialog(state)}
+    ${renderColorThemeDialog(state)}
+    ${renderRecoveryDialog(state)}
+    ${renderTabStackPopover(state)}
+    ${renderCloseDocumentDialog(state)}
+    ${renderCloseDocumentDraftDialog(state)}
+    ${renderAppCloseDialog(state)}
+    ${renderRenameFileDialog(state)}
+    ${renderDeleteFileDialog(state)}
+    ${renderWorkspaceTransferDialog(state)}
+    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}`;
+  refreshRenderedFormState(appRoot, state);
+  if (state.aiSettingsDialogOpen) {
+    requestAnimationFrame(() => syncAiRangeFields(appRoot));
+  }
+}
+
+export function renderAllAroundDocument(state: AppState): void {
+  renderLeftPanel(state);
+  renderDocumentControls(state);
+  renderModals(state);
+}
+
+function ensureAppFrame(): void {
+  if (
+    appRoot.querySelector('#leftPanelRoot')
+    && appRoot.querySelector('#documentControlsRoot')
+    && appRoot.querySelector('#documentModeControlsRoot')
+    && appRoot.querySelector('#hvyMount')
+    && appRoot.querySelector('#modalRoot')
+  ) {
+    return;
+  }
+  appRoot.innerHTML = `
+    <main class="app-shell">
+      <aside id="leftPanelRoot" class="workspace-sidebar"></aside>
+      <section class="document-shell">
+        <div id="documentControlsRoot" class="document-controls-root"></div>
+        <div class="document-stage">
+          <div id="documentModeControlsRoot"></div>
+          <div id="hvyMount" class="document-host"></div>
+        </div>
+      </section>
+      <div id="modalRoot"></div>
+    </main>`;
+  applyWorkspaceSidebarWidth(appRoot);
+}
+
+function leftPanelRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#leftPanelRoot')!;
+}
+
+function documentControlsRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#documentControlsRoot')!;
+}
+
+function documentModeControlsRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#documentModeControlsRoot')!;
+}
+
+function hvyMountRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#hvyMount')!;
+}
+
+function modalRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#modalRoot')!;
+}
+
+function bindOnce(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
+  if (uiBound) return;
+  uiBound = true;
+  bind(root, handlers, state);
+}
+
+function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindController?.abort();
   bindController = new AbortController();
   const { signal } = bindController;
+  bindWorkspaceSidebarResize(root, signal);
+  document.addEventListener('keydown', (event) => {
+    handleApplicationShortcut(event, root, handlers);
+  }, { signal, capture: true });
+  document.addEventListener('keyup', (event) => {
+    if (!state.tabStackOpen) return;
+    if (event.key === 'Meta' || event.key === 'Control') {
+      event.preventDefault();
+      handlers.commitTabStack();
+    }
+  }, { signal, capture: true });
+  window.addEventListener('resize', () => syncAiRangeFields(root), { signal });
+  root.addEventListener('pointerdown', (event) => {
+    dismissBackdropPointerStart = dismissBackdropFromTarget(event.target);
+    const target = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-action="add-import-exclude-tag"]') : null;
+    if (target) event.preventDefault();
+  }, { signal, capture: true });
   root.addEventListener('click', (event) => {
+    const clickedDismissBackdrop = dismissBackdropFromTarget(event.target);
+    const dismissBackdropClick = Boolean(clickedDismissBackdrop && clickedDismissBackdrop === dismissBackdropPointerStart);
+    dismissBackdropPointerStart = null;
     const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!target) {
       const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
-      if (backdrop && backdrop === event.target) {
+      if (backdrop && backdrop === event.target && dismissBackdropClick) {
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
+          return;
+        }
+        if (backdrop.querySelector('.workspace-manager-dialog')) {
+          handlers.closeWorkspaceManager();
           return;
         }
         if (backdrop.querySelector('.color-theme-dialog')) {
@@ -172,6 +419,34 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
           handlers.closeWorkspaceFilter();
+          return;
+        }
+        if (backdrop.querySelector('.close-document-dialog')) {
+          handlers.cancelCloseDocument();
+          return;
+        }
+        if (backdrop.querySelector('.app-close-dialog')) {
+          handlers.cancelAppClose();
+          return;
+        }
+        if (backdrop.querySelector('[aria-label="PDF exported"]')) {
+          handlers.closeExportedPdfDialog();
+          return;
+        }
+        if (backdrop.querySelector('form[data-form="rename-file"]')) {
+          handlers.cancelRenameFile();
+          return;
+        }
+        if (backdrop.querySelector('.delete-file-dialog')) {
+          handlers.cancelDeleteFile();
+          return;
+        }
+        if (backdrop.querySelector('form[data-form="workspace-transfer"]')) {
+          handlers.cancelWorkspaceTransfer();
+          return;
+        }
+        if (backdrop.querySelector('form[data-form="save-as-document"], form[data-form="save-as-template"]')) {
+          handlers.cancelSaveAs();
           return;
         }
         const aiSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -188,7 +463,13 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (target.closest('#hvyMount')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
+    if (action === 'close-workspace-filter' && clickedDismissBackdrop && !dismissBackdropClick) return;
     if (action === 'new-workspace') handlers.newWorkspace();
+    if (action === 'manage-workspaces') handlers.openWorkspaceManager();
+    if (action === 'close-workspace-manager') handlers.closeWorkspaceManager();
+    if (action === 'show-workspace-in-folder' && target.dataset.workspacePath) handlers.showFileInFolder(target.dataset.workspacePath);
+    if (action === 'archive-workspace' && target.dataset.workspacePath) handlers.archiveWorkspace(target.dataset.workspacePath);
+    if (action === 'unarchive-workspace' && target.dataset.workspacePath) handlers.unarchiveWorkspace(target.dataset.workspacePath);
     if (action === 'toggle-workspace-actions' && target.dataset.workspacePath) {
       event.preventDefault();
       event.stopPropagation();
@@ -199,13 +480,21 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     }
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
+    if (action === 'set-new-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setNewDocumentType(target.dataset.documentType);
     if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath);
+    if (action === 'set-import-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setImportDocumentType(target.dataset.documentType);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
+    if (action === 'workspace-template-visibility' && target.dataset.workspacePath) handlers.openWorkspaceTemplateVisibility(target.dataset.workspacePath);
     if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
+    if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
+      handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
+    }
     if (action === 'close-workspace-filter') handlers.closeWorkspaceFilter();
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
+    if (action === 'delete-file') handlers.deleteFile();
+    if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
@@ -302,26 +591,106 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
+    if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
+    if (action === 'cancel-rename-file') handlers.cancelRenameFile();
+    if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
     if (action === 'open-document-meta') handlers.openDocumentMeta();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
+    if (action === 'set-save-as-kind' && isSaveAsKind(target.dataset.kind)) handlers.setSaveAsKind(target.dataset.kind);
+    if (action === 'select-document-tab' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
+    if (action === 'close-document-tab' && target.dataset.path !== undefined) {
+      event.stopPropagation();
+      handlers.closeDocumentTab(target.dataset.path);
+    }
+    if (action === 'select-tab-stack-item' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
+    if (action === 'close-document') handlers.closeDocument();
+    if (action === 'save-and-close-document') handlers.saveAndCloseDocument();
+    if (action === 'close-document-without-saving') handlers.closeDocumentWithoutSaving();
+    if (action === 'discard-close-document-draft') handlers.discardCloseDocumentDraft();
+    if (action === 'review-close-document-later') handlers.reviewCloseDocumentLater();
+    if (action === 'cancel-close-document') handlers.cancelCloseDocument();
+    if (action === 'save-and-close-app') handlers.saveAndCloseApp();
+    if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
+    if (action === 'cancel-app-close') handlers.cancelAppClose();
+    if (action === 'save-to-workspace') handlers.saveCurrentToWorkspace();
+    if (action === 'set-save-as-scope' && isSaveAsScope(target.dataset.scope)) handlers.setSaveAsScope(target.dataset.scope);
+    if (action === 'save-as-anywhere') handlers.saveAsAnywhere();
+    if (action === 'cancel-save-as') handlers.cancelSaveAs();
     if (action === 'import-into-current') handlers.openImportIntoCurrent();
+    if (action === 'set-import-source-tab' && isImportSourceTab(target.dataset.tab)) handlers.setImportSourceTab(target.dataset.tab);
+    if (action === 'set-import-output-mode' && isImportOutputMode(target.dataset.mode)) handlers.setImportOutputMode(target.dataset.mode);
     if (action === 'choose-import-source') handlers.chooseImportSource();
+    if (action === 'remove-tag' && !target.closest('#hvyMount')) {
+      handleRemoveTag(target, importExcludeTagHelpers);
+      syncImportExcludeTagsState(target, handlers);
+      updateImportExcludeTagAutocomplete(target);
+    }
+    if (action === 'add-import-exclude-tag' && !target.closest('#hvyMount')) {
+      addImportExcludeTagSuggestion(target, handlers);
+    }
     if (action === 'cancel-import') handlers.cancelImport();
-    if (action === 'export-document') handlers.openSaveTemplate();
+    if (action === 'export-pdf') handlers.exportPdf();
+    if (action === 'open-exported-pdf') handlers.openExportedPdf();
+    if (action === 'reveal-exported-pdf') handlers.revealExportedPdf();
+    if (action === 'close-exported-pdf-dialog') handlers.closeExportedPdfDialog();
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
+    if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
+    if (action === 'cancel-export-pdf-save-prompt') handlers.cancelExportPdfSavePrompt();
+    if (action === 'cancel-workspace-template-visibility') handlers.cancelWorkspaceTemplateVisibility();
+    if (action === 'save-filter-file-visibility') {
+      const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
+      if (form) {
+        handlers.saveWorkspaceTemplateVisibility(String(form.dataset.workspacePath ?? ''), readWorkspaceTemplateVisibilityForm(new FormData(form)));
+      }
+    }
     if (action === 'set-save-template-scope' && isTemplateScope(target.dataset.scope)) handlers.setSaveTemplateScope(target.dataset.scope);
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
+  root.addEventListener('dragover', (event) => {
+    const workspaceRoot = workspaceRootFromEvent(event);
+    if (!workspaceRoot || !hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer!.dropEffect = 'copy';
+    workspaceRoot.classList.add('is-drag-over');
+  }, { signal });
+  root.addEventListener('dragleave', (event) => {
+    const workspaceRoot = workspaceRootFromEvent(event);
+    const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+    if (!workspaceRoot || (relatedTarget && workspaceRoot.contains(relatedTarget))) return;
+    workspaceRoot.classList.remove('is-drag-over');
+  }, { signal });
+  root.addEventListener('drop', (event) => {
+    const workspaceRoot = workspaceRootFromEvent(event);
+    const workspacePath = workspaceRoot?.dataset.workspacePath;
+    if (!workspaceRoot || !workspacePath || !event.dataTransfer?.files.length) return;
+    event.preventDefault();
+    workspaceRoot.classList.remove('is-drag-over');
+    handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files));
+  }, { signal });
+  root.addEventListener('beforeinput', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount') || !isFolderlessNameInput(target)) return;
+    if (typeof event.data === 'string' && wouldChangeFolderlessNameInput(target, event.data)) {
+      event.preventDefault();
+    }
+  }, { signal });
   root.addEventListener('input', (event) => {
     const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
+    if (target instanceof HTMLInputElement && !target.closest('#hvyMount') && isFolderlessNameInput(target)) {
+      stripInvalidCharactersFromNameInput(target);
+    }
     const field = target?.dataset.field;
     if (!target || !field || target.closest('#hvyMount')) return;
+    const newWorkspaceForm = target.closest<HTMLFormElement>('form[data-form="new-workspace"]');
+    if (newWorkspaceForm) updateNewWorkspaceSubmit(newWorkspaceForm);
+    const importForm = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
+    if (importForm) updateImportSubmit(importForm);
     if (field === 'workspace-filter-query') {
       handlers.updateWorkspaceFilterQuery(target.value);
       const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
@@ -333,12 +702,22 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       if (form) updateImportSubmit(form);
       return;
     }
+    if (field === 'search-exclude-tags-input') {
+      handleTagEditorInput(target, importExcludeTagHelpers);
+      syncImportExcludeTagsState(target, handlers);
+      updateImportExcludeTagAutocomplete(target);
+      return;
+    }
     if (field === 'mcp-port' || field === 'mcp-token') {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
       if (form) {
         updateMcpConnectionPreview(form);
         updateMcpUrlPreview(form);
       }
+      return;
+    }
+    if (field === 'max-context-chars' && target instanceof HTMLInputElement) {
+      syncAiMaxContextCharsOutput(target);
       return;
     }
     if (field === 'theme-color-filter') {
@@ -378,21 +757,69 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     syncThemeOverrideAction(row, name, overridden);
     handlers.updateColorTheme(name, nextValue);
   }, { signal });
+  root.addEventListener('keydown', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount')) return;
+    if (handleTagEditorKeydown(event, target, importExcludeTagHelpers)) {
+      syncImportExcludeTagsState(target, handlers);
+      updateImportExcludeTagAutocomplete(target);
+    }
+  }, { signal });
+  root.addEventListener('focusin', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount') || target.dataset.field !== 'search-exclude-tags-input') return;
+    updateImportExcludeTagAutocomplete(target);
+  }, { signal });
+  root.addEventListener('focusout', (event) => {
+    const target = event.target instanceof HTMLInputElement ? event.target : null;
+    if (!target || target.closest('#hvyMount') || target.dataset.field !== 'search-exclude-tags-input') return;
+    commitTagEditorDraft(target, importExcludeTagHelpers);
+    syncImportExcludeTagsState(target, handlers);
+    updateImportExcludeTagAutocomplete(target);
+  }, { signal });
+  root.addEventListener('change', (event) => {
+    const target = event.target instanceof HTMLSelectElement ? event.target : null;
+    if (!target || target.closest('#hvyMount')) return;
+    if (target.dataset.field === 'import-workspace-source') {
+      handlers.selectImportWorkspaceSource(target.value);
+    }
+  }, { signal });
   root.addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const fileButton = target?.closest<HTMLButtonElement>('.tree-file');
     const path = fileButton?.dataset.path;
     const name = fileButton?.dataset.name;
-    if (!fileButton || !path || !name) return;
+    const archived = fileButton?.dataset.archived === 'true';
+    if (fileButton && path && name) {
+      const workspacePath = workspacePathForTreeTarget(fileButton, state);
+      if (!workspacePath) return;
+      event.preventDefault();
+      showFileContextMenu(event, path, name, workspacePath, archived, state.workspaceClipboard, handlers, state.workspaces.length > 1);
+      return;
+    }
+    const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
+    const workspacePath = workspaceSummary?.parentElement instanceof HTMLDetailsElement
+      ? workspaceSummary.parentElement.dataset.workspacePath
+      : null;
+    if (!workspaceSummary || !workspacePath) return;
     event.preventDefault();
-    showFileContextMenu(event, path, name, handlers);
+    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers);
+  }, { signal });
+  root.addEventListener('mousedown', (event) => {
+    if (event.button !== 2) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target?.closest('.tree-file, .tree summary')) return;
+    event.preventDefault();
   }, { signal });
   root.addEventListener('click', (event) => {
     const summary = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root > summary') : null;
     const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
     const workspacePath = details?.dataset.workspacePath;
-    if (!details || !workspacePath || details.open) return;
+    if (!details || !workspacePath) return;
+    const wasOpen = details.open;
     window.setTimeout(() => {
+      if (details.open === wasOpen) return;
+      handlers.setWorkspaceExpanded(workspacePath, details.open);
       if (details.open) handlers.refreshWorkspace(workspacePath);
     }, 0);
   }, { signal, capture: true });
@@ -409,6 +836,10 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
         isNewWorkspaceLocation(location) ? location : 'managed'
       );
     }
+    if (form.dataset.form === 'workspace-manager-rename') {
+      const data = new FormData(form);
+      handlers.renameWorkspace(String(data.get('workspacePath') ?? ''), String(data.get('workspaceName') ?? ''));
+    }
     if (form.dataset.form === 'new-document') {
       const data = new FormData(form);
       handlers.createDocumentInWorkspace(
@@ -417,28 +848,51 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       );
     }
     if (form.dataset.form === 'import-document') {
+      commitImportTagEditorDrafts(form, handlers);
       const data = new FormData(form);
       handlers.createImportedDocument(
         String(data.get('documentName') ?? ''),
         String(data.get('templateId') ?? ''),
         String(data.get('instructions') ?? ''),
-        String(data.get('importSourceText') ?? '')
+        String(data.get('importSourceText') ?? ''),
+        String(data.get('excludeTags') ?? '')
       );
     }
     if (form.dataset.form === 'import-current') {
+      commitImportTagEditorDrafts(form, handlers);
       const data = new FormData(form);
+      const outputMode = String(data.get('importOutputMode') ?? 'current');
       handlers.importIntoCurrent(
         String(data.get('instructions') ?? ''),
-        String(data.get('importSourceText') ?? '')
+        String(data.get('importSourceText') ?? ''),
+        String(data.get('excludeTags') ?? ''),
+        isImportOutputMode(outputMode) ? outputMode : 'current',
+        String(data.get('importOutputName') ?? '')
       );
     }
     if (form.dataset.form === 'export-document') {
       const data = new FormData(form);
       const scope = String(data.get('scope') ?? 'app');
+      const extension = data.get('format');
       handlers.saveAsTemplate(
         String(data.get('templateName') ?? ''),
-        isTemplateScope(scope) ? scope : 'app'
+        isTemplateScope(scope) ? scope : 'app',
+        isTemplateExtension(extension) ? extension : '.thvy'
       );
+    }
+    if (form.dataset.form === 'save-as-template') {
+      const data = new FormData(form);
+      const scope = String(data.get('scope') ?? 'app');
+      const extension = data.get('format');
+      handlers.saveAsTemplate(
+        String(data.get('templateName') ?? ''),
+        isTemplateScope(scope) ? scope : 'app',
+        isTemplateExtension(extension) ? extension : '.thvy'
+      );
+    }
+    if (form.dataset.form === 'workspace-template-visibility') {
+      const data = new FormData(form);
+      handlers.saveWorkspaceTemplateVisibility(String(data.get('workspacePath') ?? ''), readWorkspaceTemplateVisibilityForm(data));
     }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
@@ -451,13 +905,37 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     if (form.dataset.form === 'workspace-filter') {
       handlers.submitWorkspaceFilter();
     }
+    if (form.dataset.form === 'rename-file') {
+      const data = new FormData(form);
+      handlers.submitRenameFile(String(data.get('fileName') ?? ''));
+    }
+    if (form.dataset.form === 'workspace-transfer') {
+      const data = new FormData(form);
+      handlers.submitWorkspaceTransfer(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+    }
+    if (form.dataset.form === 'save-as-document') {
+      const data = new FormData(form);
+      if (String(data.get('scope') ?? 'workspace') === 'anywhere') {
+        handlers.saveAsAnywhere();
+      } else {
+        handlers.saveAsToWorkspace(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+      }
+    }
   }, { signal });
   document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && handleWorkspaceClipboardShortcut(event, state, handlers)) {
+      return;
+    }
     if (event.key !== 'Escape') return;
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (root.querySelector('.about-dialog')) {
       event.preventDefault();
       handlers.closeAbout();
+      return;
+    }
+    if (root.querySelector('.workspace-manager-dialog')) {
+      event.preventDefault();
+      handlers.closeWorkspaceManager();
       return;
     }
     if (root.querySelector('.color-theme-dialog')) {
@@ -477,6 +955,41 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
       handlers.closeWorkspaceFilter();
       return;
     }
+    if (root.querySelector('form[data-form="rename-file"]')) {
+      event.preventDefault();
+      handlers.cancelRenameFile();
+      return;
+    }
+    if (root.querySelector('.delete-file-dialog')) {
+      event.preventDefault();
+      handlers.cancelDeleteFile();
+      return;
+    }
+    if (root.querySelector('form[data-form="workspace-transfer"]')) {
+      event.preventDefault();
+      handlers.cancelWorkspaceTransfer();
+      return;
+    }
+    if (root.querySelector('form[data-form="save-as-document"], form[data-form="save-as-template"]')) {
+      event.preventDefault();
+      handlers.cancelSaveAs();
+      return;
+    }
+    if (root.querySelector('.close-document-dialog')) {
+      event.preventDefault();
+      handlers.cancelCloseDocument();
+      return;
+    }
+    if (root.querySelector('.app-close-dialog')) {
+      event.preventDefault();
+      handlers.cancelAppClose();
+      return;
+    }
+    if (root.querySelector('[aria-label="PDF exported"]')) {
+      event.preventDefault();
+      handlers.closeExportedPdfDialog();
+      return;
+    }
     if (root.querySelector('form[data-form="import-document"], form[data-form="import-current"]')) {
       event.preventDefault();
       handlers.cancelImport();
@@ -493,9 +1006,11 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
     event.preventDefault();
     handlers.cancelAiSettings(readAiSettingsForm(new FormData(form)));
   }, { signal });
+}
+
+function refreshRenderedFormState(root: HTMLElement, state: AppState): void {
   root.querySelectorAll<HTMLFormElement>('form[data-form="new-workspace"]').forEach((form) => {
     updateNewWorkspaceSubmit(form);
-    form.addEventListener('input', () => updateNewWorkspaceSubmit(form), { signal });
   });
   root.querySelectorAll<HTMLFormElement>('form[data-form="workspace-filter"]').forEach((form) => {
     updateWorkspaceFilterSubmit(form);
@@ -503,6 +1018,212 @@ function bind(root: HTMLElement, handlers: UiHandlers): void {
   root.querySelectorAll<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]').forEach((form) => {
     updateImportSubmit(form);
   });
+  if (state.renameFilePath && state.renameFilePath !== renderedRenameFilePath) {
+    root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
+  }
+  renderedRenameFilePath = state.renameFilePath;
+}
+
+function dismissBackdropFromTarget(target: EventTarget | null): HTMLElement | null {
+  if (!(target instanceof HTMLElement)) return null;
+  return target.classList.contains('modal-backdrop') || target.classList.contains('workspace-filter-backdrop')
+    ? target
+    : null;
+}
+
+const folderlessNameInputNames = new Set(['documentName', 'fileName', 'importOutputName', 'templateName']);
+const invalidNameInputCharactersPattern = /[<>:"/\\|?*\x00-\x1f]/g;
+const leadingNameInputPeriodsPattern = /^\.+/;
+
+function isFolderlessNameInput(input: HTMLInputElement): boolean {
+  return input.type === 'text' && folderlessNameInputNames.has(input.name);
+}
+
+function wouldChangeFolderlessNameInput(input: HTMLInputElement, insertedText: string): boolean {
+  const selectionStart = input.selectionStart ?? input.value.length;
+  const selectionEnd = input.selectionEnd ?? selectionStart;
+  const nextValue = `${input.value.slice(0, selectionStart)}${insertedText}${input.value.slice(selectionEnd)}`;
+  return sanitizeFolderlessNameInputValue(nextValue) !== nextValue;
+}
+
+function stripInvalidCharactersFromNameInput(input: HTMLInputElement): void {
+  const sanitized = sanitizeFolderlessNameInputValue(input.value);
+  if (sanitized === input.value) return;
+  const selectionStart = input.selectionStart ?? input.value.length;
+  const sanitizedBeforeSelection = sanitizeFolderlessNameInputValue(input.value.slice(0, selectionStart));
+  input.value = sanitized;
+  const nextSelection = Math.min(sanitizedBeforeSelection.length, sanitized.length);
+  input.setSelectionRange(nextSelection, nextSelection);
+}
+
+function sanitizeFolderlessNameInputValue(value: string): string {
+  return value
+    .replace(invalidNameInputCharactersPattern, '')
+    .replace(leadingNameInputPeriodsPattern, '');
+}
+
+function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
+  if (event.isComposing || event.altKey || event.defaultPrevented) return false;
+  if (event.key === 'Escape') {
+    handlers.cancelTabStack();
+  }
+  if (root.querySelector('.modal-backdrop')) return false;
+
+  const key = event.key.toLowerCase();
+  const meta = event.metaKey || event.ctrlKey;
+  if (!meta) return false;
+
+  if (key === 'p') {
+    event.preventDefault();
+    handlers.cycleTabStack(event.shiftKey ? -1 : 1);
+    return true;
+  }
+  if (!event.shiftKey && key === 's') {
+    event.preventDefault();
+    handlers.save();
+    return true;
+  }
+  if (event.shiftKey && key === 's') {
+    event.preventDefault();
+    handlers.saveAs();
+    return true;
+  }
+  if (!event.shiftKey && key === 'w') {
+    event.preventDefault();
+    handlers.closeDocument();
+    return true;
+  }
+  if (!event.shiftKey && key === 'n') {
+    event.preventDefault();
+    handlers.newWorkspace();
+    return true;
+  }
+  if (!event.shiftKey && key === 'o') {
+    event.preventDefault();
+    handlers.openWorkspace();
+    return true;
+  }
+  if (event.shiftKey && key === 'o') {
+    event.preventDefault();
+    handlers.openFile();
+    return true;
+  }
+  if (!event.shiftKey && key === ',') {
+    event.preventDefault();
+    handlers.openAiSettings();
+    return true;
+  }
+  return false;
+}
+
+function bindWorkspaceSidebarResize(root: HTMLElement, signal: AbortSignal): void {
+  root.addEventListener('pointerdown', (event) => {
+    const resizer = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-sidebar-resizer') : null;
+    if (!resizer) return;
+    if (event.button !== 0) return;
+    const shell = root.querySelector<HTMLElement>('.app-shell');
+    const sidebar = root.querySelector<HTMLElement>('.workspace-sidebar');
+    if (!shell || !sidebar) return;
+
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebar.getBoundingClientRect().width;
+    const maxWidth = Math.min(MAX_WORKSPACE_SIDEBAR_WIDTH, Math.max(MIN_WORKSPACE_SIDEBAR_WIDTH, shell.getBoundingClientRect().width - 420));
+    sidebar.classList.add('is-resizing');
+    sidebar.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      workspaceSidebarWidth = Math.round(Math.min(maxWidth, Math.max(MIN_WORKSPACE_SIDEBAR_WIDTH, startWidth + moveEvent.clientX - startX)));
+      applyWorkspaceSidebarWidth(root);
+    };
+    const onEnd = () => {
+      sidebar.classList.remove('is-resizing');
+      resizer.releasePointerCapture(event.pointerId);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    resizer.setPointerCapture(event.pointerId);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd, { once: true });
+    window.addEventListener('pointercancel', onEnd, { once: true });
+  }, { signal });
+}
+
+function applyWorkspaceSidebarWidth(root: HTMLElement): void {
+  root.style.setProperty('--workspace-sidebar-width', `${workspaceSidebarWidth}px`);
+}
+
+function handleWorkspaceClipboardShortcut(event: KeyboardEvent, state: AppState, handlers: UiHandlers): boolean {
+  const key = event.key.toLowerCase();
+  if (key !== 'c' && key !== 'x' && key !== 'v') return false;
+  if ((key === 'c' || key === 'x') && hasActiveTextSelection()) return false;
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (target && (target.closest('#hvyMount') || isTextEditingTarget(target))) return false;
+  const selectedFile = state.selectedFilePath ? findWorkspaceFileByPath(state.workspaces, state.selectedFilePath) : null;
+  if ((key === 'c' || key === 'x') && selectedFile) {
+    event.preventDefault();
+    if (key === 'c') handlers.copyWorkspaceFile(selectedFile.path, selectedFile.name);
+    else handlers.cutWorkspaceFile(selectedFile.path, selectedFile.name);
+    return true;
+  }
+  if (key === 'v') {
+    const workspacePath = selectedFile ? workspacePathForFileNode(state.workspaces, selectedFile.path) : state.selectedWorkspacePath;
+    if (!workspacePath) return false;
+    event.preventDefault();
+    handlers.pasteWorkspaceClipboard(workspacePath);
+    return true;
+  }
+  return false;
+}
+
+function hasActiveTextSelection(): boolean {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
+}
+
+function isTextEditingTarget(target: HTMLElement): boolean {
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable;
+}
+
+function workspacePathForTreeTarget(target: HTMLElement, state: AppState): string | null {
+  return target.closest<HTMLElement>('.workspace-root')?.dataset.workspacePath
+    ?? workspacePathForFileNode(state.workspaces, target.dataset.path ?? '');
+}
+
+function workspacePathForFileNode(workspaces: AppState['workspaces'], filePath: string): string | null {
+  return workspaces.find((workspace) => filePath.startsWith(workspace.path))?.path ?? null;
+}
+
+function findWorkspaceFileByPath(workspaces: AppState['workspaces'], filePath: string): { path: string; name: string } | null {
+  for (const workspace of workspaces) {
+    const node = findWorkspaceFileNode(workspace.files, filePath);
+    if (node) return node;
+  }
+  return null;
+}
+
+function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { path: string; name: string } | null {
+  for (const node of nodes) {
+    if (node.kind === 'file' && node.path === filePath) return { path: node.path, name: node.name };
+    if (node.kind === 'folder') {
+      const match = findWorkspaceFileNode(node.children, filePath);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+function workspaceRootFromEvent(event: Event): HTMLElement | null {
+  return event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root') : null;
+}
+
+function hasDraggedFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files');
 }
 
 function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
@@ -521,6 +1242,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   const isSemantic = filter.mode === 'semantic';
   const stopSemanticFilter = filter.isLoading && isSemantic;
   const submitLabel = stopSemanticFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
+  const visibility = workspaceTemplateVisibility(scopedWorkspace);
   const status = filter.isLoading
     ? filter.status ?? (isSemantic ? `Analyzing ${workspaceName}...` : `Filtering ${workspaceName}...`)
     : filter.error
@@ -529,7 +1251,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   return `
     <section class="workspace-filter-overlay" aria-label="Workspace filter">
       <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
-      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
+      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" data-workspace-path="${escapeAttr(filter.workspacePath ?? '')}" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
         <div class="search-tabbar">
           <div class="workspace-filter-title">
             ${funnelIcon()}
@@ -537,6 +1259,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           </div>
           <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
+        ${renderWorkspaceFilterVisibilityControls(visibility, filter.isLoading)}
         <div class="search-input-row">
           <span class="search-input-icon" aria-hidden="true">${funnelIcon()}</span>
           <label>
@@ -573,6 +1296,169 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
     </section>`;
 }
 
+function renderRenameFileDialog(state: AppState): string {
+  if (!state.renameFilePath || !state.renameFileCurrentName) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="rename-file">
+        <h2>Rename</h2>
+        <label>
+          <span>Name</span>
+          <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(displayDocumentName(state.renameFileCurrentName))}" required>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-rename-file">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderDeleteFileDialog(state: AppState): string {
+  if (!state.deleteFilePath || !state.deleteFileName) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog delete-file-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteFileTitle">
+        <h2 id="deleteFileTitle">Delete forever?</h2>
+        <p class="dialog-note">${escapeHtml(state.deleteFileName)} will be removed from disk.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-delete-file">Cancel</button>
+          <button type="button" class="danger-button" data-action="delete-file" ${state.busy ? 'disabled' : ''}>Delete</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWorkspaceTransferDialog(state: AppState): string {
+  const transfer = state.workspaceTransfer;
+  if (!transfer) return '';
+  const workspaces = state.workspaces.filter((workspace) => workspace.path !== transfer.excludedWorkspacePath);
+  const title = transfer.mode === 'saveCurrent'
+    ? 'Save to Workspace'
+    : transfer.mode === 'copyFile'
+    ? 'Copy to Workspace'
+    : 'Move to Workspace';
+  const submitLabel = transfer.mode === 'moveFile' ? 'Move' : transfer.mode === 'copyFile' ? 'Copy' : 'Save';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="workspace-transfer">
+        <h2>${escapeHtml(title)}</h2>
+        <label>
+          <span>Workspace</span>
+          <select name="workspacePath" required>
+            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+          </select>
+        </label>
+        ${transfer.mode === 'saveCurrent' ? `
+          <label>
+            <span>Name</span>
+            <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(transfer.nameDraft)}" required>
+          </label>
+        ` : ''}
+        <p class="dialog-note">${escapeHtml(transfer.fileName)}</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-workspace-transfer">Cancel</button>
+          <button type="submit" ${state.busy || workspaces.length === 0 ? 'disabled' : ''}>${escapeHtml(submitLabel)}</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderSaveAsDialog(state: AppState): string {
+  if (!state.saveAsDialogOpen || !state.document) return '';
+  const templateDisabled = state.document.extension === '.md';
+  if (state.saveAsKind === 'template' && !templateDisabled) {
+    return renderSaveAsTemplateDialog(state);
+  }
+  const workspaces = state.workspaces;
+  const workspaceDisabled = workspaces.length === 0;
+  const workspaceActive = state.saveAsScope === 'workspace' && !workspaceDisabled;
+  const anywhereActive = state.saveAsScope === 'anywhere' || workspaceDisabled;
+  const name = displayDocumentName(state.document.name);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="save-as-document">
+        <h2>Save As...</h2>
+        ${renderSaveAsKindControl('document', templateDisabled)}
+        <div class="segmented-control" role="tablist" aria-label="Save destination">
+          <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
+        </div>
+        <input name="scope" type="hidden" value="${escapeAttr(anywhereActive ? 'anywhere' : 'workspace')}">
+        ${workspaceActive ? `
+          <label>
+            <span>Workspace</span>
+            <select name="workspacePath" required>
+              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+            </select>
+          </label>
+          <label>
+            <span>Name</span>
+            <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
+          </label>
+        ` : `
+          <p class="dialog-note">Choose a location outside HVY Galaxy.</p>
+        `}
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-save-as">Cancel</button>
+          ${workspaceActive
+            ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
+            : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderSaveAsTemplateDialog(state: AppState): string {
+  const workspaceDisabled = !currentDocumentWorkspacePath(state);
+  const appActive = state.saveTemplateScope === 'app';
+  const workspaceActive = state.saveTemplateScope === 'workspace' && !workspaceDisabled;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="save-as-template">
+        <h2>Save As...</h2>
+        ${renderSaveAsKindControl('template', false)}
+        <label>
+          <span>Format</span>
+          <select name="format">
+            <option value=".thvy" ${state.document?.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
+            <option value=".phvy" ${state.document?.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
+          </select>
+        </label>
+        <label>
+          <span>Name</span>
+          <input name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
+        </label>
+        <div class="field-group">
+          <span>Scope</span>
+          <div class="segmented-control">
+            <button type="button" class="${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
+            <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          </div>
+        </div>
+        <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
+        <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'App templates are available everywhere; workspace templates stay with this workspace.'}</p>
+        ${state.error ? `<p class="dialog-note" data-state="error" role="alert">${escapeHtml(state.error)}</p>` : ''}
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-save-as">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderSaveAsKindControl(activeKind: AppState['saveAsKind'], templateDisabled: boolean): string {
+  return `
+    <div class="segmented-control" role="tablist" aria-label="Save as type">
+      <button type="button" class="${activeKind === 'document' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="document" aria-pressed="${activeKind === 'document' ? 'true' : 'false'}">Document</button>
+      <button type="button" class="${activeKind === 'template' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="template" aria-pressed="${activeKind === 'template' ? 'true' : 'false'}" ${templateDisabled ? 'disabled' : ''}>Template</button>
+    </div>`;
+}
+
 function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {
   const active = filter.mode === mode;
   return `
@@ -597,15 +1483,73 @@ function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: stri
     >${escapeHtml(label)}</button>`;
 }
 
-function showFileContextMenu(event: MouseEvent, path: string, name: string, handlers: UiHandlers): void {
+function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVisibility, disabled: boolean): string {
+  return `
+    <div class="search-filter-box">
+      <div class="search-filter-box-head">
+        ${eyeIcon()}
+        <span>File Visibility</span>
+      </div>
+      <div class="workspace-filter-visibility-list">
+        <label class="checkbox-row">
+          <input type="checkbox" name="hvyDocuments" ${visibility.hvyDocuments ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <span>HVY</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="thvyTemplates" ${visibility.thvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <span>THVY</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <span>PHVY</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="archivedFiles" ${visibility.archivedFiles ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <span>Archived</span>
+        </label>
+      </div>
+      <div class="workspace-filter-actions">
+        <button type="button" class="secondary" data-action="save-filter-file-visibility" ${disabled ? 'disabled' : ''}>Save visibility</button>
+      </div>
+    </div>`;
+}
+
+function readWorkspaceTemplateVisibilityForm(data: FormData): WorkspaceTemplateVisibility {
+  return {
+    hvyDocuments: data.has('hvyDocuments'),
+    thvyTemplates: data.has('thvyTemplates'),
+    phvyTemplates: data.has('phvyTemplates'),
+    archivedFiles: data.has('archivedFiles'),
+  };
+}
+
+function showFileContextMenu(
+  event: MouseEvent,
+  path: string,
+  name: string,
+  workspacePath: string,
+  archived: boolean,
+  clipboard: WorkspaceClipboardState | null,
+  handlers: UiHandlers,
+  showWorkspaceActions: boolean,
+): void {
+  void clipboard;
   closeFileContextMenu();
   const menu = document.createElement('div');
   menu.className = 'file-context-menu';
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
-  menu.innerHTML = `
+  menu.innerHTML = archived ? `
+    <button type="button" data-menu-action="restore">Restore</button>
+    <button type="button" data-menu-action="delete">Delete</button>
+  ` : `
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button type="button" data-menu-action="rename">Rename</button>
+    <button type="button" data-menu-action="archive">Archive</button>
+    <button type="button" data-menu-action="copy">Copy</button>
+    <button type="button" data-menu-action="cut">Cut</button>
+    <button type="button" data-menu-action="paste">Paste</button>
+    ${showWorkspaceActions ? '<button type="button" data-menu-action="copy-to-workspace">Copy to...</button><button type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -625,6 +1569,62 @@ function showFileContextMenu(event: MouseEvent, path: string, name: string, hand
     cleanup();
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
+    if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
+    if (button.dataset.menuAction === 'restore') handlers.restoreFile(path, name);
+    if (button.dataset.menuAction === 'delete') handlers.confirmDeleteFile(path, name);
+    if (button.dataset.menuAction === 'copy') handlers.copyWorkspaceFile(path, name);
+    if (button.dataset.menuAction === 'cut') handlers.cutWorkspaceFile(path, name);
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
+    if (button.dataset.menuAction === 'copy-to-workspace') handlers.copyFileToWorkspace(path, name);
+    if (button.dataset.menuAction === 'move-to-workspace') handlers.moveFileToWorkspace(path, name);
+  });
+  document.body.append(menu);
+  activeFileContextMenuCleanup = cleanup;
+  requestAnimationFrame(() => {
+    const rect = menu.getBoundingClientRect();
+    const left = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+    const top = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+  });
+}
+
+function showWorkspaceContextMenu(
+  event: MouseEvent,
+  workspacePath: string,
+  clipboard: WorkspaceClipboardState | null,
+  handlers: UiHandlers,
+): void {
+  closeFileContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'file-context-menu';
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+  void clipboard;
+  menu.innerHTML = `
+    <button type="button" data-menu-action="paste">Paste</button>
+    <button type="button" data-menu-action="template-visibility">Template Visibility</button>
+  `;
+  const cleanup = () => {
+    menu.remove();
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    if (activeFileContextMenuCleanup === cleanup) activeFileContextMenuCleanup = null;
+  };
+  const onPointerDown = (pointerEvent: PointerEvent) => {
+    if (!menu.contains(pointerEvent.target as Node)) cleanup();
+  };
+  const onKeyDown = (keyEvent: KeyboardEvent) => {
+    if (keyEvent.key === 'Escape') cleanup();
+  };
+  menu.addEventListener('click', (clickEvent) => {
+    const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
+    if (!button || button.disabled) return;
+    cleanup();
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
+    if (button.dataset.menuAction === 'template-visibility') handlers.openWorkspaceTemplateVisibility(workspacePath);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -651,27 +1651,61 @@ function revealMenuLabel(): string {
   return 'Open Containing Folder';
 }
 
+function renderDocumentTabs(state: AppState): string {
+  return `
+    <nav class="document-tabs${state.documentTabs.length === 0 ? ' is-empty' : ''}" aria-label="Open documents">
+      ${state.documentTabs.map((tab) => `
+        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}">
+          <button type="button" class="document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.path)}" title="${escapeAttr(tab.path)}" aria-current="${tab.active ? 'page' : 'false'}">
+            <span class="document-tab-dirty" aria-hidden="true"></span>
+            <span class="document-tab-name">${escapeHtml(tab.name)}</span>
+          </button>
+          <button type="button" class="document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.path)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
+        </div>
+      `).join('')}
+    </nav>`;
+}
+
+function renderTabStackPopover(state: AppState): string {
+  if (!state.tabStackOpen || state.documentTabs.length === 0) {
+    return '';
+  }
+  const activeIndex = ((state.tabStackIndex % state.documentTabs.length) + state.documentTabs.length) % state.documentTabs.length;
+  return `
+    <div class="tab-stack-popover" role="listbox" aria-label="Open documents">
+      ${state.documentTabs.map((tab, index) => `
+        <button type="button" class="tab-stack-item${index === activeIndex ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}" role="option" aria-selected="${index === activeIndex ? 'true' : 'false'}" data-action="select-tab-stack-item" data-path="${escapeAttr(tab.path)}">
+          <span class="tab-stack-dirty" aria-hidden="true"></span>
+          <span>${escapeHtml(tab.name)}</span>
+        </button>
+      `).join('')}
+    </div>`;
+}
+
 function renderToolbar(state: AppState): string {
   const document = state.document;
   if (!document) {
     return `
       <div class="toolbar-title">No document selected</div>
-      <div class="toolbar-actions">
-        <button type="button" data-action="create-file">New HVY</button>
-      </div>`;
+      <div class="toolbar-actions"></div>`;
   }
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
+  const fileActions = getFileActionAvailability(state);
+  const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
   return `
     <div class="toolbar-title">
-      <strong>${escapeHtml(document.name)}</strong>
-      <span>${document.readOnly ? 'Read-only guide' : document.isNew ? 'Unsaved document' : escapeHtml(document.path)}</span>
+      <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
+      <span>${document.readOnly ? 'Read-only guide' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
-      <button type="button" data-action="import-into-current" ${document.readOnly ? 'disabled' : ''}>Import</button>
-      <button type="button" data-action="export-document" ${document.readOnly ? 'disabled' : ''}>Export</button>
-      <button type="button" data-action="create-file">New HVY</button>
+      ${fileActions.saveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
+      <button type="button" data-action="save" ${fileActions.save ? '' : 'disabled'}>Save</button>
+      <button type="button" data-action="save-as" ${fileActions.saveAs ? '' : 'disabled'}>Save As...</button>
+      <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
+      ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
+      <button type="button" data-action="close-document">Close</button>
     </div>`;
 }
 
@@ -740,11 +1774,80 @@ function copyIcon(): string {
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';
 }
 
+function gearIcon(): string {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.3 7A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 .9-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6.9h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>';
+}
+
 function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.savedTemplates)).join('')}</div>`;
+}
+
+function renderWorkspaceManagerDialog(state: AppState): string {
+  if (!state.workspaceManagerOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog workspace-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceManagerTitle">
+        <h2 id="workspaceManagerTitle">Manage Workspaces</h2>
+        <div class="workspace-manager-section">
+          <h3>Open</h3>
+          <div class="workspace-manager-list">
+            ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaces.map(renderWorkspaceManagerRow).join('')}
+          </div>
+        </div>
+        <div class="workspace-manager-section">
+          <h3>Archived</h3>
+          <div class="workspace-manager-list">
+            ${state.archivedWorkspaces.length === 0 ? '<div class="empty-panel compact">No archived workspaces.</div>' : state.archivedWorkspaces.map(renderArchivedWorkspaceRow).join('')}
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="close-workspace-manager">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWorkspaceManagerRow(workspace: Workspace): string {
+  return `
+    <form class="workspace-manager-row" data-form="workspace-manager-rename">
+      <input name="workspacePath" type="hidden" value="${escapeAttr(workspace.path)}">
+      <label>
+        <span>Name</span>
+        <input name="workspaceName" type="text" autocomplete="off" value="${escapeAttr(workspace.manifest.name)}" required>
+      </label>
+      <div class="workspace-manager-location">
+        <span>Location</span>
+        <code title="${escapeAttr(workspace.path)}">${escapeHtml(workspace.path)}</code>
+      </div>
+      <div class="workspace-manager-actions">
+        <button type="submit">Save</button>
+        <button type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
+        <button type="button" class="danger-button" data-action="archive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Archive</button>
+      </div>
+    </form>`;
+}
+
+function renderArchivedWorkspaceRow(workspace: ArchivedWorkspace): string {
+  return `
+    <div class="workspace-manager-row workspace-manager-row-archived">
+      <div class="workspace-manager-name">
+        <span>Name</span>
+        <strong>${escapeHtml(workspace.name)}</strong>
+      </div>
+      <div class="workspace-manager-location">
+        <span>Location</span>
+        <code title="${escapeAttr(workspace.path)}">${escapeHtml(workspace.path)}</code>
+      </div>
+      <div class="workspace-manager-actions">
+        <button type="button" data-action="unarchive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Unarchive</button>
+        <button type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
+      </div>
+    </div>`;
 }
 
 function renderWorkspace(
@@ -752,6 +1855,10 @@ function renderWorkspace(
   selectedFilePath: string | null,
   openWorkspaceActionsPath: string | null,
   activeFilters: AppState['workspaceFilters'],
+  workspaceClipboard: WorkspaceClipboardState | null,
+  fileView: AppState['workspaceFileViews'][string],
+  expanded: boolean,
+  savedTemplates: SavedTemplate[],
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
@@ -761,41 +1868,156 @@ function renderWorkspace(
   const filterTitle = filter
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
+  const documentsActive = fileView === 'documents';
+  const fileViewNodes = filterNodesByWorkspaceFileView(workspace.files, fileView, workspace, savedTemplates);
+  const visibleFiles = documentsActive
+    ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
+    : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
-    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}" open>
+    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
       <button type="button" class="workspace-filter-trigger${filter ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
+      <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
+        <button type="button" class="${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
+        <button type="button" class="${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
+      </div>
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
           <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
-          <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
+          <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
+          <button type="button" role="menuitem" data-action="workspace-template-visibility" data-workspace-path="${escapeAttr(workspace.path)}">Template Visibility</button>
         </div>
       </div>
-      ${workspace.files.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(workspace.files, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds)).join('')}</ul>`}
+      ${visibleFiles.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>`}
     </details>`;
 }
 
-function renderNode(node: WorkspaceTreeNode, selectedFilePath: string | null, matchedDocumentIds: Set<string> | null): string {
+function isWorkspaceFileView(value: unknown): value is AppState['workspaceFileViews'][string] {
+  return value === 'documents' || value === 'templates';
+}
+
+function filterNodesByWorkspaceFileView(
+  nodes: WorkspaceTreeNode[],
+  view: AppState['workspaceFileViews'][string],
+  workspace: Workspace,
+  savedTemplates: SavedTemplate[],
+  includeSavedTemplateFallback = true,
+): WorkspaceTreeNode[] {
+  const visibleNodes: WorkspaceTreeNode[] = [];
+  for (const node of nodes) {
+    const relativePath = typeof node.relativePath === 'string' ? node.relativePath : '';
+    const inTemplateFolder = relativePath === 'templates' || relativePath.startsWith('templates/');
+    if (node.kind === 'folder') {
+      const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
+      if (children.length > 0) visibleNodes.push({ ...node, children });
+      continue;
+    }
+    if (view === 'templates' && !inTemplateFolder) continue;
+    if (view === 'documents' && inTemplateFolder) continue;
+    visibleNodes.push(node);
+  }
+  if (view === 'templates' && includeSavedTemplateFallback) {
+    const existingPaths = new Set(visibleNodes.flatMap(flatNodePaths));
+    const archivedPaths = new Set(workspace.manifest.archivedFiles ?? []);
+    const templateFiles = savedTemplates
+      .filter((template) => template.scope === 'workspace' && template.path.startsWith(workspace.path) && !existingPaths.has(template.path))
+      .map((template): WorkspaceTreeNode => {
+        const relativePath = `templates/${template.name}`;
+        return {
+          kind: 'file',
+          name: template.name,
+          path: template.path,
+          relativePath,
+          extension: template.extension,
+          archived: archivedPaths.has(relativePath),
+        };
+      });
+    if (templateFiles.length > 0) {
+      const templatesFolder = visibleNodes.find((node) => node.kind === 'folder' && (node.relativePath === 'templates' || node.name === 'templates'));
+      if (templatesFolder?.kind === 'folder') {
+        templatesFolder.children = [...templatesFolder.children, ...templateFiles];
+      } else {
+        visibleNodes.push({
+          kind: 'folder',
+          name: 'templates',
+          path: `${workspace.path.replace(/\/+$/, '')}/templates`,
+          relativePath: 'templates',
+          children: templateFiles,
+        });
+      }
+    }
+  }
+  return visibleNodes;
+}
+
+function flatNodePaths(node: WorkspaceTreeNode): string[] {
+  return node.kind === 'folder' ? node.children.flatMap(flatNodePaths) : [node.path];
+}
+
+function filterNodesByArchivedVisibility(nodes: WorkspaceTreeNode[], showArchived: boolean): WorkspaceTreeNode[] {
+  const visibleNodes: WorkspaceTreeNode[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'folder') {
+      const children = filterNodesByArchivedVisibility(node.children, showArchived);
+      if (children.length > 0) visibleNodes.push({ ...node, children });
+      continue;
+    }
+    if (node.archived && !showArchived) continue;
+    visibleNodes.push(node);
+  }
+  return visibleNodes;
+}
+
+function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visibility: WorkspaceTemplateVisibility): WorkspaceTreeNode[] {
+  const visibleNodes: WorkspaceTreeNode[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'folder') {
+      const children = filterNodesByTemplateVisibility(node.children, visibility);
+      if (children.length > 0) visibleNodes.push({ ...node, children });
+      continue;
+    }
+    if (node.extension === '.hvy' && !visibility.hvyDocuments) continue;
+    if (node.extension === '.thvy' && !visibility.thvyTemplates) continue;
+    if (node.extension === '.phvy' && !visibility.phvyTemplates) continue;
+    if (node.archived && !visibility.archivedFiles) continue;
+    visibleNodes.push(node);
+  }
+  return visibleNodes;
+}
+
+function renderNode(
+  node: WorkspaceTreeNode,
+  selectedFilePath: string | null,
+  matchedDocumentIds: Set<string> | null,
+  workspaceClipboard: WorkspaceClipboardState | null,
+): string {
   if (node.kind === 'folder') {
     const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds);
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details open>
           <summary>${escapeHtml(node.name)}</summary>
-          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>
         </details>
       </li>`;
   }
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
   const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
+  const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
+  const archived = node.archived === true;
+  const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
+    ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
+    : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}">
-        <span>${escapeHtml(displayDocumentName(node.name))}</span>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+        <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
+        ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
+        ${extensionBadge}
       </button>
     </li>`;
 }
@@ -812,7 +2034,7 @@ function nodeHasFilterMatch(node: WorkspaceTreeNode, matchedDocumentIds: Set<str
 }
 
 function displayDocumentName(name: string): string {
-  return name.replace(/\.(t?hvy|md)$/i, '');
+  return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
 
 function renderEmptyState(state: AppState): string {
@@ -823,10 +2045,6 @@ function renderEmptyState(state: AppState): string {
     <div class="empty-state">
       <h2>Choose a file from a workspace</h2>
       <p>Open a workspace folder or a standalone HVY file to start viewing and editing.</p>
-      <div>
-        <button type="button" data-action="open-workspace">Open Workspace</button>
-        <button type="button" data-action="new-workspace">New Workspace</button>
-      </div>
     </div>`;
 }
 
@@ -910,25 +2128,53 @@ function isTemplateScope(value: unknown): value is TemplateScope {
   return value === 'app' || value === 'workspace';
 }
 
+function isTemplateExtension(value: unknown): value is TemplateExtension {
+  return value === '.thvy' || value === '.phvy';
+}
+
+function isDocumentCreationType(value: unknown): value is DocumentCreationType {
+  return value === 'hvy' || value === 'thvy' || value === 'phvy';
+}
+
+function isImportSourceTab(value: unknown): value is AppState['importSourceTab'] {
+  return value === 'workspace' || value === 'anywhere';
+}
+
+function isImportOutputMode(value: unknown): value is AppState['importOutputMode'] {
+  return value === 'current' || value === 'workspace';
+}
+
+function isSaveAsScope(value: unknown): value is AppState['saveAsScope'] {
+  return value === 'workspace' || value === 'anywhere';
+}
+
+function isSaveAsKind(value: unknown): value is AppState['saveAsKind'] {
+  return value === 'document' || value === 'template';
+}
+
 function renderNewDocumentDialog(state: AppState): string {
   if (!state.newDocumentWorkspacePath) {
     return '';
   }
-  const templates = mergeSavedTemplates(state.savedTemplates);
+  const workspace = state.workspaces.find((candidate) => candidate.path === state.newDocumentWorkspacePath) ?? null;
+  const visibility = workspaceTemplateVisibility(workspace);
+  const templates = templatesForDocumentType(mergeSavedTemplates(state.savedTemplates), state.newDocumentType, visibility);
+  const showTemplatePicker = state.newDocumentType === 'hvy';
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-document">
         <h2>New Document</h2>
+        ${renderDocumentTypeControl('new', state.newDocumentType, visibility)}
         <label>
           <span>Name</span>
           <input name="documentName" type="text" autocomplete="off" autofocus required>
         </label>
-        <label>
+        ${showTemplatePicker ? `<label>
           <span>Template</span>
           <select name="templateId">
             ${templates.map(renderTemplateOption).join('')}
           </select>
-        </label>
+        </label>` : ''}
         <div class="dialog-actions">
           <button type="button" data-action="cancel-new-document">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
@@ -943,44 +2189,244 @@ function renderImportDialog(state: AppState): string {
   if (!workspacePath && !importCurrent) {
     return '';
   }
-  const templates = mergeSavedTemplates(state.savedTemplates);
+  const currentWorkspacePath = importCurrent ? currentDocumentWorkspacePath(state) : workspacePath;
+  const workspace = state.workspaces.find((candidate) => candidate.path === currentWorkspacePath) ?? null;
+  const visibility = workspaceTemplateVisibility(workspace);
+  const templates = templatesForDocumentType(mergeSavedTemplates(state.savedTemplates), state.importDocumentType, visibility);
+  const showTemplatePicker = state.importDocumentType === 'hvy';
   const source = state.importSource;
   const title = importCurrent ? 'Import Into Current' : 'Import Document';
-  const baseDisabled = state.busy || (!importCurrent && templates.length === 0);
+  const baseDisabled = state.busy || (!importCurrent && showTemplatePicker && templates.length === 0);
+  const sourceControls = importCurrent
+    ? renderImportCurrentSourceControls(state, workspace)
+    : renderAnywhereImportSourceControls(source);
+  const outputControls = importCurrent ? renderImportCurrentOutputControls(state, workspace) : '';
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="${importCurrent ? 'import-current' : 'import-document'}">
         <h2>${escapeHtml(title)}</h2>
+        ${importCurrent ? '<p class="dialog-note">Uses the current file as an import template, and saves the result to the output file.</p>' : ''}
         ${importCurrent ? '' : `
+          ${renderDocumentTypeControl('import', state.importDocumentType, visibility)}
           <label>
             <span>Name</span>
             <input name="documentName" type="text" autocomplete="off" autofocus required>
           </label>
-          <label>
+          ${showTemplatePicker ? `<label>
             <span>Template</span>
             <select name="templateId">
               ${templates.map(renderTemplateOption).join('')}
             </select>
-          </label>
+          </label>` : ''}
         `}
         <div class="field-group">
           <span>Source</span>
-          <div class="source-picker-row">
-            <button type="button" data-action="choose-import-source">Choose .txt or .md</button>
-            <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
-          </div>
-          <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here"></textarea>
-          <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>
+          ${sourceControls}
         </div>
+        ${outputControls}
         <label>
           <span>Instructions</span>
           <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
         </label>
+        ${renderImportExcludeTagsField(state.importExcludeTags, collectImportSourceTagSuggestions(state.importSource))}
         <div class="dialog-actions">
           <button type="button" data-action="cancel-import">Cancel</button>
           <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !source ? 'disabled' : ''}>Import</button>
         </div>
       </form>
+    </div>`;
+}
+
+function renderImportCurrentOutputControls(state: AppState, workspace: AppState['workspaces'][number] | null): string {
+  const workspaceDisabled = !workspace;
+  const workspaceActive = state.importOutputMode === 'workspace' && !workspaceDisabled;
+  const currentActive = state.importOutputMode === 'current' || workspaceDisabled;
+  const outputName = suggestedImportOutputName(state, workspace);
+  return `
+    <div class="field-group">
+      <span>Output</span>
+      <div class="segmented-control" role="tablist" aria-label="Import output">
+        <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace File</button>
+        <button type="button" class="${currentActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="current" aria-pressed="${currentActive ? 'true' : 'false'}">Current File</button>
+      </div>
+      <input name="importOutputMode" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'current')}">
+      ${workspaceActive ? `
+        <label>
+          <span>Name</span>
+          <input name="importOutputName" type="text" autocomplete="off" value="${escapeAttr(outputName)}" required>
+        </label>
+      ` : ''}
+    </div>`;
+}
+
+function renderImportExcludeTagsField(value: string, suggestions: string[]): string {
+  return `
+    <label class="import-exclude-tags-field">
+      <span>Filter out tags</span>
+      ${renderTagEditor('search-exclude-tags', value, { placeholder: 'Add tag to filter out' }, { escapeAttr, escapeHtml })}
+      <input name="excludeTags" type="hidden" value="${escapeAttr(serializeTags(parseTags(value)))}">
+      ${suggestions.length > 0 ? `
+        <div class="import-exclude-tag-suggestions" data-role="import-exclude-tag-suggestions" hidden>
+          ${suggestions.map((tag) => `<button type="button" data-action="add-import-exclude-tag" data-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</button>`).join('')}
+        </div>
+      ` : ''}
+    </label>`;
+}
+
+function collectImportSourceTagSuggestions(source: AppState['importSource']): string[] {
+  if (!source?.bytes || source.extension === '.txt') {
+    return [];
+  }
+  return collectDocumentTags(deserializeDocumentBytes(new Uint8Array(source.bytes), source.extension));
+}
+
+function collectDocumentTags(document: VisualDocument): string[] {
+  const tags = new Map<string, string>();
+  const visit = (item: unknown): void => {
+    if (!item || typeof item !== 'object') return;
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    Object.entries(item as Record<string, unknown>).forEach(([key, child]) => {
+      if (key === 'tags' && typeof child === 'string') {
+        parseTagSuggestions(child).forEach((tag) => tags.set(tag.toLowerCase(), tag));
+      } else {
+        visit(child);
+      }
+    });
+  };
+  visit(document.meta);
+  visit(document.sections);
+  return [...tags.values()].sort((left, right) => left.localeCompare(right));
+}
+
+function parseTagSuggestions(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[,\s]+/)
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      if (!tag || seen.has(tag.toLowerCase())) {
+        return false;
+      }
+      seen.add(tag.toLowerCase());
+      return true;
+    });
+}
+
+function suggestedImportOutputName(state: AppState, workspace: AppState['workspaces'][number] | null): string {
+  const base = `${displayDocumentName(state.document?.name ?? 'Imported')} import`;
+  if (!workspace || !state.document) {
+    return base;
+  }
+  const extension = importOutputExtension(state.document.extension);
+  const existing = new Set(workspace.files
+    .filter((node): node is Extract<WorkspaceTreeNode, { kind: 'file' }> => node.kind === 'file')
+    .map((node) => node.name.toLowerCase()));
+  if (!existing.has(`${base}${extension}`.toLowerCase())) {
+    return base;
+  }
+  let index = 1;
+  while (existing.has(`${base} (${index})${extension}`.toLowerCase())) {
+    index += 1;
+  }
+  return `${base} (${index})`;
+}
+
+function importOutputExtension(extension: NonNullable<AppState['document']>['extension']): '.hvy' | '.phvy' {
+  return extension === '.phvy' ? '.phvy' : '.hvy';
+}
+
+function renderImportProgressDialog(state: AppState): string {
+  if (!state.importProgressDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-label="Import progress">
+        <h2>Importing</h2>
+        <p class="dialog-note">${escapeHtml(state.status || 'Importing...')}</p>
+      </section>
+    </div>`;
+}
+
+function renderImportCurrentSourceControls(state: AppState, workspace: AppState['workspaces'][number] | null): string {
+  const workspaceFiles = workspace ? sortedWorkspaceHvySourceFiles(workspace.files) : [];
+  const workspaceDisabled = workspaceFiles.length === 0;
+  const workspaceActive = state.importSourceTab === 'workspace' && !workspaceDisabled;
+  const anywhereActive = state.importSourceTab === 'anywhere' || workspaceDisabled;
+  return `
+    <div class="segmented-control import-source-tabs" role="tablist" aria-label="Import source">
+      <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+      <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
+    </div>
+    ${workspaceActive ? renderImportCurrentWorkspaceSourcePicker(state, workspaceFiles) : renderAnywhereImportSourceControls(state.importSource)}
+  `;
+}
+
+function renderAnywhereImportSourceControls(source: AppState['importSource']): string {
+  return `
+    <div class="source-picker-row">
+      <button type="button" data-action="choose-import-source">Choose file</button>
+      <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
+    </div>
+    <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here"></textarea>
+    <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>`;
+}
+
+function renderImportCurrentWorkspaceSourcePicker(state: AppState, options: WorkspaceFileNode[]): string {
+  return `
+    <label>
+      <span>Workspace HVY</span>
+      <select data-field="import-workspace-source">
+        <option value="">Choose from current workspace</option>
+        ${options.map((file) => `
+          <option value="${escapeAttr(file.path)}" ${state.importSource?.path === file.path ? 'selected' : ''}>${escapeHtml(workspaceSourceLabel(file))}</option>
+        `).join('')}
+      </select>
+    </label>`;
+}
+
+function sortedWorkspaceHvySourceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return flattenWorkspaceHvySourceFiles(nodes)
+    .sort((left, right) => workspaceSourceSortKey(left).localeCompare(workspaceSourceSortKey(right)));
+}
+
+function workspaceSourceLabel(file: WorkspaceFileNode): string {
+  return file.relativePath || file.name;
+}
+
+function workspaceSourceSortKey(file: WorkspaceFileNode): string {
+  return workspaceSourceLabel(file).toLocaleLowerCase();
+}
+
+function flattenWorkspaceHvySourceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === 'folder') {
+      return flattenWorkspaceHvySourceFiles(node.children);
+    }
+    return node.extension === '.hvy' ? [node] : [];
+  });
+}
+
+function renderDocumentTypeControl(
+  context: 'new' | 'import',
+  activeType: DocumentCreationType,
+  visibility: WorkspaceTemplateVisibility,
+): string {
+  const action = context === 'new' ? 'set-new-document-type' : 'set-import-document-type';
+  const hvyDisabled = !visibility.thvyTemplates;
+  const thvyDisabled = !visibility.thvyTemplates;
+  const phvyDisabled = !visibility.phvyTemplates;
+  return `
+    <div class="field-group">
+      <span>Document Type</span>
+      <div class="segmented-control document-type-control">
+        <button type="button" class="${activeType === 'hvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="hvy" aria-pressed="${activeType === 'hvy' ? 'true' : 'false'}" ${hvyDisabled ? 'disabled' : ''}>HVY</button>
+        <button type="button" class="${activeType === 'thvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="thvy" aria-pressed="${activeType === 'thvy' ? 'true' : 'false'}" ${thvyDisabled ? 'disabled' : ''}>THVY</button>
+        <button type="button" class="${activeType === 'phvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="phvy" aria-pressed="${activeType === 'phvy' ? 'true' : 'false'}" ${phvyDisabled ? 'disabled' : ''}>PHVY</button>
+      </div>
     </div>`;
 }
 
@@ -1005,55 +2451,82 @@ function updateImportSubmit(form: HTMLFormElement): void {
   }
 }
 
-function renderExportDialog(state: AppState): string {
-  if (!state.saveTemplateDialogOpen) {
-    return '';
-  }
-  const workspaceDisabled = !currentDocumentWorkspacePath(state);
-  const appActive = state.saveTemplateScope === 'app';
-  const workspaceActive = state.saveTemplateScope === 'workspace' && !workspaceDisabled;
+function renderExportPdfSavePrompt(state: AppState): string {
+  if (!state.exportPdfSavePromptOpen || !state.document) return '';
+  const saveLabel = state.document.isNew ? 'Save As' : 'Save';
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="export-document">
-        <h2>Export</h2>
-        <label>
-          <span>Format</span>
-          <select name="format">
-            <option value="template">Template (.thvy)</option>
-          </select>
-        </label>
-        <label>
-          <span>Name</span>
-          <input name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|md)$/i, '') ?? '')}" autofocus required>
-        </label>
-        <div class="field-group">
-          <span>Scope</span>
-          <div class="segmented-control">
-            <button type="button" class="${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
-            <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
-          </div>
-        </div>
-        <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
-        <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'Saved templates use .thvy. App templates are available everywhere; workspace templates stay with this workspace.'}</p>
+      <section class="dialog" role="dialog" aria-modal="true" aria-label="Save before PDF export">
+        <h2>Export PDF</h2>
+        <p class="dialog-note">Save ${escapeHtml(state.document.name)} before exporting it to PDF.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-export">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Export</button>
+          <button type="button" data-action="cancel-export-pdf-save-prompt">Cancel</button>
+          <button type="button" data-action="save-before-export-pdf" ${state.busy ? 'disabled' : ''}>${saveLabel}</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderExportedPdfDialog(state: AppState): string {
+  if (!state.exportedPdfPath) return '';
+  const name = state.exportedPdfPath.split(/[\\/]/).filter(Boolean).pop() ?? 'PDF';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-label="PDF exported">
+        <h2>PDF Exported</h2>
+        <p class="dialog-note">${escapeHtml(name)}</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="open-exported-pdf">Open</button>
+          <button type="button" data-action="reveal-exported-pdf">${escapeHtml(revealMenuLabel())}</button>
+          <button type="button" data-action="close-exported-pdf-dialog">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWorkspaceTemplateVisibilityDialog(state: AppState): string {
+  const workspace = state.workspaceTemplateVisibilityPath
+    ? state.workspaces.find((candidate) => candidate.path === state.workspaceTemplateVisibilityPath) ?? null
+    : null;
+  if (!workspace) return '';
+  const visibility = workspaceTemplateVisibility(workspace);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="workspace-template-visibility">
+        <h2>Template Visibility</h2>
+        <input type="hidden" name="workspacePath" value="${escapeAttr(workspace.path)}">
+        ${visibility.archivedFiles ? '<input type="hidden" name="archivedFiles" value="on">' : ''}
+        <div class="field-group">
+          <span>${escapeHtml(workspace.manifest.name)}</span>
+          <label class="checkbox-row">
+            <input type="checkbox" name="hvyDocuments" ${visibility.hvyDocuments ? 'checked' : ''}>
+            <span>HVY documents</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="thvyTemplates" ${visibility.thvyTemplates ? 'checked' : ''}>
+            <span>THVY templates</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''}>
+            <span>PHVY templates</span>
+          </label>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-workspace-template-visibility">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
     </div>`;
 }
 
 function renderTemplateOption(template: ReturnType<typeof mergeSavedTemplates>[number]): string {
-  const label = template.scope === 'bundled'
-    ? template.name
-    : `${template.name} (${template.scope})`;
+  const name = isBlankBundledTemplate(template) ? 'None' : template.name;
+  const label = template.scope === 'bundled' ? name : `${name} (${template.scope})`;
   return `<option value="${escapeAttr(template.id)}">${escapeHtml(label)}</option>`;
 }
 
-function currentDocumentWorkspacePath(state: AppState): string | null {
-  const path = state.document?.path;
-  if (!path) return null;
-  return state.workspaces.find((workspace) => path.startsWith(workspace.path))?.path ?? null;
+function isBlankBundledTemplate(template: ReturnType<typeof mergeSavedTemplates>[number]): boolean {
+  return template.scope === 'bundled' && /^blank\.(thvy|phvy)$/i.test(template.fileName);
 }
 
 function renderAboutDialog(state: AppState): string {
@@ -1085,10 +2558,11 @@ function renderAiSettingsDialog(state: AppState): string {
   const settings = state.aiSettingsDraft ?? state.aiSettings;
   const providerConfig = activeProviderConfig(settings);
   const provider = aiProviderPreset(settings.activeProviderId);
+  const maxContextChars = normalizeAiMaxContextChars(settings.maxContextChars);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
-        <h2>AI Settings</h2>
+        <h2>LLM Settings</h2>
         <p class="dialog-note">Configure providers once, then choose the provider and model each action should use.</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         <div class="ai-provider-picker" aria-label="Configured AI providers">
@@ -1117,6 +2591,19 @@ function renderAiSettingsDialog(state: AppState): string {
           <span>API Key</span>
           <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
         </label>
+        <label class="ai-range-field">
+          <span>Maximum import chunk size</span>
+          <input
+            name="maxContextChars"
+            data-field="max-context-chars"
+            type="range"
+            min="${AI_MIN_CONTEXT_CHARS}"
+            max="${AI_MAX_CONTEXT_CHARS}"
+            step="${AI_CONTEXT_STEP_CHARS}"
+            value="${escapeAttr(String(maxContextChars))}"
+          >
+          <output data-role="max-context-chars-output">${escapeHtml(formatAiMaxContextChars(maxContextChars))}</output>
+        </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
           ${renderActionConfigField('edit', 'Document and component edit', settings)}
@@ -1144,7 +2631,7 @@ function renderMcpSettingsDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
-        <h2>MCP Server</h2>
+        <h2>MCP Settings</h2>
         <p class="dialog-note">Let local AI agents search workspaces and edit HVY files through the low-context HVY CLI surface.</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         <div class="mcp-settings-grid mcp-settings-grid--global">
@@ -1152,7 +2639,7 @@ function renderMcpSettingsDialog(state: AppState): string {
             <span>Write access</span>
             <select name="writeAccess">
               <option value="searchOnly" ${settings.writeAccess === 'searchOnly' ? 'selected' : ''}>Search only</option>
-              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>Search &amp; Alter files</option>
+              <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>CLI based editor</option>
               <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
             </select>
           </label>
@@ -1229,7 +2716,6 @@ function renderMcpSettingsDialog(state: AppState): string {
             </div>
             <div class="mcp-setup-grid">
               ${renderMcpReadonlyField('Connection URL', endpointUrl, 'mcp-http-url')}
-              ${renderMcpReadonlyField('Bearer token state', settings.bearerToken.trim() ? 'Configured' : 'None', 'mcp-http-token-state')}
             </div>
           </section>
         </div>
@@ -1471,11 +2957,11 @@ function renderRecoveryDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
-        <h2 id="recoveryTitle">Recover Backup</h2>
-        <p class="dialog-note">Backups are kept for two hours and refreshed every five minutes while a document has edits.</p>
+        <h2 id="recoveryTitle">Recover Unsaved Edits</h2>
+        <p class="dialog-note">Recoverable edits are kept for seven days and refreshed while a document has edits.</p>
         ${
           backups.length === 0
-            ? '<div class="empty-panel compact">No backups are available yet.</div>'
+            ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
             : `<div class="recovery-list">
                 ${backups.map((backup) => `
                   <article class="recovery-item">
@@ -1484,13 +2970,77 @@ function renderRecoveryDialog(state: AppState): string {
                       <span>${escapeHtml(formatBackupTimestamp(backup.createdAt))}</span>
                       ${backup.documentPath ? `<small>${escapeHtml(backup.documentPath)}</small>` : '<small>Unsaved document</small>'}
                     </div>
-                    <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore</button>
+                    <div class="recovery-item-actions">
+                      <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
+                      <button type="button" class="danger-button" data-action="discard-backup" data-backup-id="${escapeAttr(backup.id)}">Discard</button>
+                    </div>
                   </article>
                 `).join('')}
               </div>`
         }
         <div class="dialog-actions">
           <button type="button" data-action="cancel-recovery">Close</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderCloseDocumentDialog(state: AppState): string {
+  if (!state.closeDocumentDialogOpen) {
+    return '';
+  }
+  const targetPath = state.closeDocumentTargetPath;
+  const target = state.documentTabs.find((tab) => tab.path === targetPath) ?? state.documentTabs.find((tab) => tab.active);
+  const documentName = target?.name ?? state.document?.name ?? 'this document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentTitle">
+        <h2 id="closeDocumentTitle">Save Changes Before Closing?</h2>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="save-and-close-document">Save and Close</button>
+          <button type="button" data-action="close-document-without-saving">Don't Save</button>
+          <button type="button" data-action="cancel-close-document">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderCloseDocumentDraftDialog(state: AppState): string {
+  if (!state.closeDocumentDraftDialogOpen) {
+    return '';
+  }
+  const targetPath = state.closeDocumentTargetPath;
+  const target = state.documentTabs.find((tab) => tab.path === targetPath) ?? state.documentTabs.find((tab) => tab.active);
+  const documentName = target?.name ?? state.document?.name ?? 'this document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentDraftTitle">
+        <h2 id="closeDocumentDraftTitle">Keep Recovery Draft?</h2>
+        <p class="dialog-note">You can discard the unsaved edits in ${escapeHtml(documentName)} or keep the recovery draft to review later.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="review-close-document-later">Review Later</button>
+          <button type="button" class="danger-button" data-action="discard-close-document-draft">Discard Draft</button>
+          <button type="button" data-action="cancel-close-document">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderAppCloseDialog(state: AppState): string {
+  if (!state.appCloseDialogOpen) {
+    return '';
+  }
+  const documentName = state.document?.name ?? 'this document';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog app-close-dialog" role="dialog" aria-modal="true" aria-labelledby="appCloseTitle">
+        <h2 id="appCloseTitle">Save Changes Before Closing?</h2>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="save-and-close-app">Save and Close</button>
+          <button type="button" class="danger-button" data-action="close-app-without-saving">Close Without Saving</button>
+          <button type="button" data-action="cancel-app-close">Cancel</button>
         </div>
       </section>
     </div>`;
@@ -1537,8 +3087,6 @@ function updateMcpConnectionPreview(form: HTMLFormElement): void {
   const nextUrl = mcpConnectionUrl(settings);
   const httpUrl = form.querySelector<HTMLInputElement>('[data-role="mcp-http-url"]');
   if (httpUrl) httpUrl.value = nextUrl;
-  const token = form.querySelector<HTMLInputElement>('[data-role="mcp-http-token-state"]');
-  if (token) token.value = settings.bearerToken.trim() ? 'Configured' : 'None';
 }
 
 function updateMcpUrlPreview(form: HTMLFormElement): void {
@@ -1575,7 +3123,7 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
       <label>
         <span>Provider</span>
         <select name="${action}ProviderId">
-          <option value="default" ${config.providerId === 'default' ? 'selected' : ''}>Default</option>
+          <option value="default" ${config.providerId === 'default' ? 'selected' : ''}>Default (${escapeHtml(provider.name)})</option>
           ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === config.providerId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
         </select>
       </label>
@@ -1603,13 +3151,16 @@ function readAiSettingsForm(data: FormData): AiSettings {
     activeProviderId: providerId,
     providers,
     actions: readActionSettings(data, providerId),
+    maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
   };
 }
 
 function parseAiSettings(value: string): AiSettings | null {
   try {
     const parsed = JSON.parse(value) as AiSettings;
-    return Array.isArray(parsed.providers) && parsed.actions ? parsed : null;
+    return Array.isArray(parsed.providers) && parsed.actions
+      ? { ...parsed, maxContextChars: normalizeAiMaxContextChars(parsed.maxContextChars) }
+      : null;
   } catch {
     return null;
   }
@@ -1632,6 +3183,46 @@ function readActionConfig(data: FormData, action: AiActionKey, fallbackProviderI
     providerId: String(data.get(`${action}ProviderId`) ?? fallbackProviderId).trim() || fallbackProviderId,
     model: String(data.get(`${action}Model`) ?? '').trim(),
   };
+}
+
+function normalizeAiMaxContextChars(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
+  const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
+  return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function syncAiMaxContextCharsOutput(input: HTMLInputElement): void {
+  const output = input
+    .closest<HTMLElement>('.ai-range-field')
+    ?.querySelector<HTMLOutputElement>('[data-role="max-context-chars-output"]');
+  if (output) {
+    output.value = formatAiMaxContextChars(input.value);
+    output.textContent = output.value;
+  }
+  syncAiRangeFill(input);
+}
+
+function syncAiRangeFields(root: ParentNode): void {
+  root.querySelectorAll<HTMLInputElement>('input[data-field="max-context-chars"]').forEach(syncAiMaxContextCharsOutput);
+}
+
+function syncAiRangeFill(input: HTMLInputElement): void {
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const value = Number(input.value);
+  const range = max - min;
+  const progress = Number.isFinite(range) && range > 0
+    ? Math.min(1, Math.max(0, (value - min) / range))
+    : 0;
+  const thumbSize = Number.parseFloat(getComputedStyle(input).getPropertyValue('--range-thumb-size')) || 18;
+  const width = input.getBoundingClientRect().width;
+  const fillEnd = (thumbSize / 2) + progress * Math.max(0, width - thumbSize);
+  input.style.setProperty('--range-fill-end', `${fillEnd}px`);
+}
+
+function formatAiMaxContextChars(value: unknown): string {
+  return `${new Intl.NumberFormat().format(normalizeAiMaxContextChars(value))} chars`;
 }
 
 function activeProviderConfig(settings: AiSettings): AiProviderConfig {

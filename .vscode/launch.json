@@ -6,14 +6,20 @@
       "type": "node-terminal",
       "request": "launch",
       "command": ". \"$HOME/.cargo/env\" && npm run tauri -- dev",
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}",
+      "windows": {
+        "command": "npm.cmd run tauri -- dev"
+      }
     },
     {
       "name": "HVY Galaxy: Electron Dev (Hot Reload)",
       "type": "node-terminal",
       "request": "launch",
       "command": "npm run electron:dev",
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}",
+      "windows": {
+        "command": "npm.cmd run electron:dev"
+      }
     }
   ]
 }
