@@ -156,18 +156,167 @@ async function mountRawHvyDocument(
   let dirty = false;
   const shell = documentOwner().createElement('div');
   shell.className = 'raw-hvy-shell';
+  const searchBar = documentOwner().createElement('form');
+  searchBar.className = 'raw-hvy-search-bar';
+  searchBar.hidden = true;
+  const searchInput = documentOwner().createElement('input');
+  searchInput.type = 'search';
+  searchInput.className = 'search-input';
+  searchInput.dataset.field = 'raw-hvy-search-query';
+  searchInput.placeholder = 'Find in HVY source...';
+  searchInput.autocomplete = 'off';
+  searchInput.spellcheck = false;
+  const searchStatus = documentOwner().createElement('span');
+  searchStatus.className = 'raw-hvy-search-status';
+  const previousButton = documentOwner().createElement('button');
+  previousButton.type = 'button';
+  previousButton.className = 'tiny';
+  previousButton.textContent = 'Prev';
+  const nextButton = documentOwner().createElement('button');
+  nextButton.type = 'submit';
+  nextButton.className = 'tiny';
+  nextButton.textContent = 'Next';
+  const closeButton = documentOwner().createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'tiny';
+  closeButton.dataset.action = 'close-search';
+  closeButton.textContent = 'Close';
+  searchBar.append(searchInput, searchStatus, previousButton, nextButton, closeButton);
   const textarea = documentOwner().createElement('textarea');
   textarea.className = 'raw-hvy-textarea';
   textarea.spellcheck = false;
   textarea.value = lastSavedText;
-  shell.append(textarea);
+  shell.append(searchBar, textarea);
   root.replaceChildren(shell);
+  const searchCleanup = new AbortController();
+  let rawSearchQuery = '';
+  let rawSearchMatches: number[] = [];
+  let rawSearchIndex = -1;
+  const scrollTextareaSelectionIntoView = (index: number) => {
+    const beforeMatch = textarea.value.slice(0, index);
+    const lineIndex = beforeMatch.split('\n').length - 1;
+    const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+    const targetTop = lineIndex * lineHeight;
+    textarea.scrollTop = Math.max(0, targetTop - textarea.clientHeight / 2);
+  };
+
+  const refreshRawSearchMatches = () => {
+    const query = searchInput.value;
+    if (!query) {
+      rawSearchQuery = '';
+      rawSearchMatches = [];
+      rawSearchIndex = -1;
+      searchStatus.textContent = '';
+      return;
+    }
+    if (query === rawSearchQuery) {
+      return;
+    }
+    rawSearchQuery = query;
+    const source = textarea.value;
+    const normalizedSource = source.toLowerCase();
+    const normalizedQuery = query.toLowerCase();
+    rawSearchMatches = [];
+    let index = normalizedSource.indexOf(normalizedQuery);
+    while (index >= 0) {
+      rawSearchMatches.push(index);
+      index = normalizedSource.indexOf(normalizedQuery, index + normalizedQuery.length);
+    }
+    rawSearchIndex = rawSearchMatches.length > 0 ? 0 : -1;
+  };
+
+  const showRawSearchMatch = (options: { focusSource?: boolean } = {}) => {
+    const query = searchInput.value;
+    if (!query || rawSearchIndex < 0 || rawSearchMatches.length === 0) {
+      searchStatus.textContent = query ? 'No results' : '';
+      return;
+    }
+    const index = rawSearchMatches[rawSearchIndex] ?? -1;
+    if (index < 0) {
+      searchStatus.textContent = 'No results';
+      return;
+    }
+    textarea.setSelectionRange(index, index + query.length);
+    scrollTextareaSelectionIntoView(index);
+    if (options.focusSource) {
+      textarea.focus();
+    }
+    searchStatus.textContent = `${rawSearchIndex + 1} of ${rawSearchMatches.length}`;
+  };
+
+  const findInSource = (direction: 1 | -1 = 1, options: { advance?: boolean; focusSource?: boolean } = {}) => {
+    refreshRawSearchMatches();
+    if (options.advance && rawSearchMatches.length > 0) {
+      rawSearchIndex = (rawSearchIndex + direction + rawSearchMatches.length) % rawSearchMatches.length;
+    }
+    showRawSearchMatch({ focusSource: options.focusSource });
+  };
+
+  const openSourceSearch = () => {
+    searchBar.hidden = false;
+    searchInput.focus();
+    searchInput.setSelectionRange(0, searchInput.value.length);
+  };
+
+  const closeSourceSearch = (options: { focusSource?: boolean } = {}) => {
+    searchBar.hidden = true;
+    searchStatus.textContent = '';
+    if (options.focusSource) {
+      textarea.focus();
+    }
+  };
+
+  shell.addEventListener('hvy:open-raw-search', openSourceSearch);
+  closeButton.addEventListener('click', () => closeSourceSearch({ focusSource: true }));
+  previousButton.addEventListener('click', () => findInSource(-1, { advance: true, focusSource: true }));
+  searchBar.addEventListener('submit', (event) => {
+    event.preventDefault();
+    findInSource(1, { advance: true, focusSource: true });
+  });
+  searchInput.addEventListener('beforeinput', (event) => event.stopPropagation());
+  searchInput.addEventListener('input', (event) => {
+    event.stopPropagation();
+    findInSource(1);
+  });
+  searchInput.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSourceSearch({ focusSource: true });
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      findInSource(event.shiftKey ? -1 : 1, { advance: true, focusSource: true });
+    }
+  });
+  textarea.addEventListener('keydown', (event) => {
+    if (searchBar.hidden || event.key !== 'Enter') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    findInSource(event.shiftKey ? -1 : 1, { advance: true, focusSource: true });
+  });
+  documentOwner().addEventListener('pointerdown', (event) => {
+    if (searchBar.hidden || (event.target instanceof Node && shell.contains(event.target))) {
+      return;
+    }
+    closeSourceSearch();
+  }, { capture: true, signal: searchCleanup.signal });
+  documentOwner().addEventListener('focusin', (event) => {
+    if (searchBar.hidden || (event.target instanceof Node && shell.contains(event.target))) {
+      return;
+    }
+    closeSourceSearch();
+  }, { signal: searchCleanup.signal });
 
   const notifyDirty = (nextDirty: boolean) => {
     dirty = nextDirty;
     options.onDocumentChange?.({ dirty, source: 'editor', reason: 'raw-hvy-input' });
   };
   textarea.addEventListener('input', () => {
+    rawSearchQuery = '';
     notifyDirty(textarea.value !== lastSavedText);
     try {
       currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
@@ -193,6 +342,7 @@ async function mountRawHvyDocument(
 
   const mount: HvyMount = {
     destroy() {
+      searchCleanup.abort();
       root.replaceChildren();
     },
     getDocument() {

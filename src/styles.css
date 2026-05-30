@@ -1225,15 +1225,51 @@ button:disabled {
 }
 
 .raw-hvy-shell {
-  display: grid;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   min-height: 100%;
+  box-sizing: border-box;
   background: var(--hvy-bg, #fbfaf7);
   padding: 20px;
 }
 
+.raw-hvy-search-bar {
+  position: absolute;
+  top: 48px;
+  right: 50px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, calc(100% - 84px));
+  border: 1px solid var(--hvy-border-translucent, #b8c2bd);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--hvy-surface, #ffffff) 90%, transparent);
+  box-shadow: 0 8px 24px var(--hvy-shadow-md, rgba(20, 28, 29, 0.2));
+  backdrop-filter: blur(10px);
+  padding: 6px;
+}
+
+.raw-hvy-search-bar[hidden] {
+  display: none;
+}
+
+.raw-hvy-search-bar .search-input {
+  min-width: 220px;
+}
+
+.raw-hvy-search-status {
+  min-width: 72px;
+  color: var(--hvy-muted-text, #68736f);
+  font-size: 12px;
+}
+
 .raw-hvy-textarea {
   width: 100%;
-  min-height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   resize: none;
   border: 1px solid var(--hvy-border-input, #c8d0cb);
   border-radius: 6px;

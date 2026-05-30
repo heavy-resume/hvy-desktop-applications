@@ -113,6 +113,7 @@ function shortcutCommand(input) {
   if (key === 'n' && !input.shift) return 'new-workspace';
   if (key === 'o' && !input.shift) return 'open-workspace';
   if (key === 'o' && input.shift) return 'open-file';
+  if (key === 'f' && !input.shift) return 'find';
   if (key === ',' && !input.shift) return 'ai-settings';
   return null;
 }
@@ -168,6 +169,8 @@ function buildMenu() {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        { type: 'separator' },
+        menuItem('Find', 'find', 'CmdOrCtrl+F'),
         { type: 'separator' },
         menuItem('Colors', 'colors'),
         { type: 'separator' },

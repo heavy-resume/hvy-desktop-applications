@@ -1356,12 +1356,15 @@ const handlers: UiHandlers = {
   closeDocument: () => void closeCurrentDocument(),
 };
 
+let findShortcutBound = false;
+
 void boot();
 
 async function boot(): Promise<void> {
   setupErrorSurface();
   try {
     mountRoot = render(state, handlers);
+    bindFindShortcut();
     await refreshRecents();
     await refreshArchivedWorkspaces();
     state.aiSettings = await loadAiSettings();
@@ -1390,6 +1393,7 @@ async function boot(): Promise<void> {
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
+      if (event === 'find') openMountedSearch();
       if (event === 'open-guide') void openGuide();
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
@@ -1409,6 +1413,36 @@ async function boot(): Promise<void> {
   } catch (error) {
     showStartupError(error);
   }
+}
+
+function bindFindShortcut(): void {
+  if (findShortcutBound) return;
+  findShortcutBound = true;
+  document.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
+    if (!openMountedSearch()) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, { capture: true });
+}
+
+function openMountedSearch(): boolean {
+  if (!state.document || !mountRoot) return false;
+  const rawSearchBar = mountRoot.querySelector<HTMLElement>('.raw-hvy-search-bar');
+  if (rawSearchBar?.hidden) {
+    rawSearchBar.closest<HTMLElement>('.raw-hvy-shell')?.dispatchEvent(new CustomEvent('hvy:open-raw-search'));
+  }
+  const input = Array.from(mountRoot.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-field="search-query"], [data-field="raw-hvy-search-query"]'))
+    .find((candidate) => !candidate.closest('[hidden]'));
+  if (input) {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    return true;
+  }
+  const launcher = mountRoot.querySelector<HTMLButtonElement>('[data-action="open-search"]');
+  if (!launcher) return false;
+  launcher.click();
+  return true;
 }
 
 function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
