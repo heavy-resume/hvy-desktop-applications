@@ -1,0 +1,29 @@
+---
+hvy_version: 0.1
+title: HVY Galaxy AI Guide
+reader_max_width: 64rem
+---
+
+<!--hvy: {"id":"ai-guide-overview","lock":false,"expanded":true,"highlight":false}-->
+#! HVY Galaxy AI Guide
+
+ <!--hvy:text {}-->
+  # HVY Galaxy AI Guide
+
+ <!--hvy:text {}-->
+  This is a placeholder guide for AI agents working with HVY Galaxy documents and workspaces.
+
+ <!--hvy:text {}-->
+  The final guide should explain how to create workspaces, create documents, inspect existing documents, edit documents with the CLI based editor, work with attachments, use scripting and database-backed components, and archive documents or workspaces without deleting them.
+
+<!--hvy: {"id":"ai-guide-principles","lock":false,"expanded":true,"highlight":false}-->
+#! Agent Principles
+
+ <!--hvy:text {}-->
+  # Agent Principles
+
+ <!--hvy:text {}-->
+  Prefer HVY Galaxy MCP tools for workspace and document operations. Use document.cli_based_editor only for existing documents, and use document.create before editing a new document.
+
+ <!--hvy:text {}-->
+  Do not read or rewrite attachment tail bytes directly. Treat attachments as opaque unless a dedicated HVY Galaxy tool exposes them.
