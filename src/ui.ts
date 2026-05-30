@@ -160,6 +160,8 @@ if (!app) {
 
 const appRoot = app;
 let bindController: AbortController | null = null;
+let uiBound = false;
+let renderedRenameFilePath: string | null = null;
 let activeFileContextMenuCleanup: (() => void) | null = null;
 let dismissBackdropPointerStart: HTMLElement | null = null;
 let workspaceSidebarWidth = 320;
@@ -230,80 +232,143 @@ function updateImportExcludeTagAutocomplete(target: HTMLElement): void {
   menu.hidden = visibleCount === 0;
 }
 
-export function render(state: AppState, handlers: UiHandlers, options: { preserveMount?: HTMLElement | null } = {}): HTMLElement {
-  const workspaceScrollTop = appRoot.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
-  appRoot.innerHTML = `
-    <main class="app-shell">
-      <aside class="workspace-sidebar">
-        <div class="sidebar-header">
-          <div class="brand-lockup">
-            <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
-            <h1>HVY Galaxy</h1>
-          </div>
-          <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
-        </div>
-        <div class="sidebar-actions">
-          <button type="button" data-action="open-file">Open File</button>
-        </div>
-        <section class="workspaces-section">
-          <div class="sidebar-section-heading">
-            <h2>Workspaces</h2>
-            <button type="button" class="icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
-            <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
-          </div>
-          ${renderWorkspaces(state)}
-        </section>
-        <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>
-      </aside>
-      <section class="document-shell">
-        ${renderDocumentTabs(state)}
-        <header class="document-toolbar">
-          ${renderToolbar(state)}
-        </header>
-        <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>
-        <div class="document-stage">
-          ${state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen) : ''}
-          <div id="hvyMount" class="document-host${state.document ? ' hvy-vscode-has-mode-controls' : ''}">
-            ${renderEmptyState(state)}
-          </div>
-        </div>
-      </section>
-      ${renderNewWorkspaceDialog(state)}
-      ${renderWorkspaceManagerDialog(state)}
-      ${renderNewDocumentDialog(state)}
-      ${renderImportDialog(state)}
-      ${renderImportProgressDialog(state)}
-      ${renderSaveAsDialog(state)}
-      ${renderExportPdfSavePrompt(state)}
-      ${renderExportedPdfDialog(state)}
-      ${renderWorkspaceTemplateVisibilityDialog(state)}
-      ${renderAboutDialog(state)}
-      ${renderAiSettingsDialog(state)}
-      ${renderMcpSettingsDialog(state)}
-      ${renderColorThemeDialog(state)}
-      ${renderRecoveryDialog(state)}
-      ${renderTabStackPopover(state)}
-      ${renderCloseDocumentDialog(state)}
-      ${renderCloseDocumentDraftDialog(state)}
-      ${renderAppCloseDialog(state)}
-      ${renderRenameFileDialog(state)}
-      ${renderDeleteFileDialog(state)}
-      ${renderWorkspaceTransferDialog(state)}
-      ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}
-    </main>`;
+export function render(state: AppState, handlers: UiHandlers): HTMLElement {
+  ensureAppFrame();
+  bindOnce(appRoot, handlers, state);
+  renderAllAroundDocument(state);
+  return hvyMountRoot();
+}
+
+export function renderLeftPanel(state: AppState): void {
+  const leftPanel = leftPanelRoot();
+  const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
+  leftPanel.innerHTML = `
+    <div class="sidebar-header">
+      <div class="brand-lockup">
+        <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
+        <h1>HVY Galaxy</h1>
+      </div>
+      <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
+    </div>
+    <div class="sidebar-actions">
+      <button type="button" data-action="open-file">Open File</button>
+    </div>
+    <section class="workspaces-section">
+      <div class="sidebar-section-heading">
+        <h2>Workspaces</h2>
+        <button type="button" class="icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
+        <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
+      </div>
+      ${renderWorkspaces(state)}
+    </section>
+    <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>`;
   applyWorkspaceSidebarWidth(appRoot);
-  const nextWorkspacesSection = appRoot.querySelector<HTMLElement>('.workspaces-section');
+  const nextWorkspacesSection = leftPanel.querySelector<HTMLElement>('.workspaces-section');
   if (nextWorkspacesSection) {
     nextWorkspacesSection.scrollTop = workspaceScrollTop;
   }
+}
 
-  const nextMount = appRoot.querySelector<HTMLElement>('#hvyMount')!;
-  if (options.preserveMount && state.document) {
-    nextMount.replaceWith(options.preserveMount);
+export function renderDocumentControls(state: AppState): void {
+  documentControlsRoot().innerHTML = `
+    ${renderDocumentTabs(state)}
+    <header class="document-toolbar">
+      ${renderToolbar(state)}
+    </header>
+    <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
+  documentModeControlsRoot().innerHTML = state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen) : '';
+  const mount = hvyMountRoot();
+  mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document));
+  if (!state.document || !state.document.mounted) {
+    mount.innerHTML = renderEmptyState(state);
   }
-  bind(appRoot, handlers, state);
-  requestAnimationFrame(() => syncAiRangeFields(appRoot));
-  return options.preserveMount && state.document ? options.preserveMount : nextMount;
+}
+
+export function renderModals(state: AppState): void {
+  modalRoot().innerHTML = `
+    ${renderNewWorkspaceDialog(state)}
+    ${renderWorkspaceManagerDialog(state)}
+    ${renderNewDocumentDialog(state)}
+    ${renderImportDialog(state)}
+    ${renderImportProgressDialog(state)}
+    ${renderSaveAsDialog(state)}
+    ${renderExportPdfSavePrompt(state)}
+    ${renderExportedPdfDialog(state)}
+    ${renderWorkspaceTemplateVisibilityDialog(state)}
+    ${renderAboutDialog(state)}
+    ${renderAiSettingsDialog(state)}
+    ${renderMcpSettingsDialog(state)}
+    ${renderColorThemeDialog(state)}
+    ${renderRecoveryDialog(state)}
+    ${renderTabStackPopover(state)}
+    ${renderCloseDocumentDialog(state)}
+    ${renderCloseDocumentDraftDialog(state)}
+    ${renderAppCloseDialog(state)}
+    ${renderRenameFileDialog(state)}
+    ${renderDeleteFileDialog(state)}
+    ${renderWorkspaceTransferDialog(state)}
+    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}`;
+  refreshRenderedFormState(appRoot, state);
+  if (state.aiSettingsDialogOpen) {
+    requestAnimationFrame(() => syncAiRangeFields(appRoot));
+  }
+}
+
+export function renderAllAroundDocument(state: AppState): void {
+  renderLeftPanel(state);
+  renderDocumentControls(state);
+  renderModals(state);
+}
+
+function ensureAppFrame(): void {
+  if (
+    appRoot.querySelector('#leftPanelRoot')
+    && appRoot.querySelector('#documentControlsRoot')
+    && appRoot.querySelector('#documentModeControlsRoot')
+    && appRoot.querySelector('#hvyMount')
+    && appRoot.querySelector('#modalRoot')
+  ) {
+    return;
+  }
+  appRoot.innerHTML = `
+    <main class="app-shell">
+      <aside id="leftPanelRoot" class="workspace-sidebar"></aside>
+      <section class="document-shell">
+        <div id="documentControlsRoot" class="document-controls-root"></div>
+        <div class="document-stage">
+          <div id="documentModeControlsRoot"></div>
+          <div id="hvyMount" class="document-host"></div>
+        </div>
+      </section>
+      <div id="modalRoot"></div>
+    </main>`;
+  applyWorkspaceSidebarWidth(appRoot);
+}
+
+function leftPanelRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#leftPanelRoot')!;
+}
+
+function documentControlsRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#documentControlsRoot')!;
+}
+
+function documentModeControlsRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#documentModeControlsRoot')!;
+}
+
+function hvyMountRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#hvyMount')!;
+}
+
+function modalRoot(): HTMLElement {
+  return appRoot.querySelector<HTMLElement>('#modalRoot')!;
+}
+
+function bindOnce(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
+  if (uiBound) return;
+  uiBound = true;
+  bind(root, handlers, state);
 }
 
 function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
@@ -622,6 +687,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     const field = target?.dataset.field;
     if (!target || !field || target.closest('#hvyMount')) return;
+    const newWorkspaceForm = target.closest<HTMLFormElement>('form[data-form="new-workspace"]');
+    if (newWorkspaceForm) updateNewWorkspaceSubmit(newWorkspaceForm);
+    const importForm = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
+    if (importForm) updateImportSubmit(importForm);
     if (field === 'workspace-filter-query') {
       handlers.updateWorkspaceFilterQuery(target.value);
       const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
@@ -937,9 +1006,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     event.preventDefault();
     handlers.cancelAiSettings(readAiSettingsForm(new FormData(form)));
   }, { signal });
+}
+
+function refreshRenderedFormState(root: HTMLElement, state: AppState): void {
   root.querySelectorAll<HTMLFormElement>('form[data-form="new-workspace"]').forEach((form) => {
     updateNewWorkspaceSubmit(form);
-    form.addEventListener('input', () => updateNewWorkspaceSubmit(form), { signal });
   });
   root.querySelectorAll<HTMLFormElement>('form[data-form="workspace-filter"]').forEach((form) => {
     updateWorkspaceFilterSubmit(form);
@@ -947,7 +1018,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.querySelectorAll<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]').forEach((form) => {
     updateImportSubmit(form);
   });
-  root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
+  if (state.renameFilePath && state.renameFilePath !== renderedRenameFilePath) {
+    root.querySelector<HTMLInputElement>('form[data-form="rename-file"] input[name="fileName"]')?.focus();
+  }
+  renderedRenameFilePath = state.renameFilePath;
 }
 
 function dismissBackdropFromTarget(target: EventTarget | null): HTMLElement | null {
@@ -1043,7 +1117,9 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
 }
 
 function bindWorkspaceSidebarResize(root: HTMLElement, signal: AbortSignal): void {
-  root.querySelector<HTMLElement>('.workspace-sidebar-resizer')?.addEventListener('pointerdown', (event) => {
+  root.addEventListener('pointerdown', (event) => {
+    const resizer = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-sidebar-resizer') : null;
+    if (!resizer) return;
     if (event.button !== 0) return;
     const shell = root.querySelector<HTMLElement>('.app-shell');
     const sidebar = root.querySelector<HTMLElement>('.workspace-sidebar');
@@ -1062,12 +1138,13 @@ function bindWorkspaceSidebarResize(root: HTMLElement, signal: AbortSignal): voi
     };
     const onEnd = () => {
       sidebar.classList.remove('is-resizing');
-      sidebar.releasePointerCapture(event.pointerId);
+      resizer.releasePointerCapture(event.pointerId);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onEnd);
       window.removeEventListener('pointercancel', onEnd);
     };
 
+    resizer.setPointerCapture(event.pointerId);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onEnd, { once: true });
     window.addEventListener('pointercancel', onEnd, { once: true });

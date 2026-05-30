@@ -81,7 +81,7 @@ import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTem
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { render, type UiHandlers } from './ui';
+import { render, renderAllAroundDocument as renderUiAroundDocument, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
@@ -91,6 +91,9 @@ let backupTimer: number | null = null;
 let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = null;
 let mountThemeReapplyCleanup: (() => void) | null = null;
 let workspaceFilterAbortController: AbortController | null = null;
+let workspaceFilterRenderTimer: number | null = null;
+let workspaceFilterRenderQueued = false;
+let lastFileMenuStateKey: string | null = null;
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
 const MIN_BACKUP_SPACING_MS = 60 * 1000;
@@ -102,6 +105,8 @@ const AI_CONTEXT_STEP_CHARS = 1_000;
 interface MountScrollRatio {
   top: number;
   left: number;
+  topPosition: number;
+  leftPosition: number;
 }
 
 interface DocumentSession {
@@ -1383,7 +1388,7 @@ async function boot(): Promise<void> {
     await loadRecentWorkspaces();
     await refreshSavedTemplates(state.selectedWorkspacePath);
     mountRoot = render(state, handlers);
-    syncFileMenuState();
+    syncFileMenuState({ force: true });
     await openRecoveryDialogOnBoot();
     startBackupTimer();
     setupRecoveryLifecycle();
@@ -1567,6 +1572,7 @@ async function submitWorkspaceFilter(): Promise<void> {
     if (workspaceFilterAbortController === abortController) {
       workspaceFilterAbortController = null;
     }
+    cancelWorkspaceFilterProgressRender();
     state.workspaceFilter.isLoading = false;
     rerender({ preserveMountedDocument: true });
   }
@@ -1649,7 +1655,7 @@ async function createWorkspaceFilterSnapshots(
     const label = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
     state.workspaceFilter.status = label;
     state.status = label;
-    rerender({ preserveMountedDocument: true });
+    scheduleWorkspaceFilterProgressRender();
     const snapshot = await createHvyDocumentFilterSnapshot({
       document: entry.document,
       query: filter.query,
@@ -1663,7 +1669,7 @@ async function createWorkspaceFilterSnapshots(
           state.workspaceFilter.error = null;
           state.workspaceFilter.status = `Semantic windows ${progress.completedWindows}/${progress.totalWindows}; ${progress.matchedCandidates} matches in ${entry.documentTitle ?? displayDocumentName(entry.documentId)}`;
           state.status = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
-          rerender({ preserveMountedDocument: true });
+          scheduleWorkspaceFilterProgressRender();
         }
         : undefined,
     });
@@ -2027,6 +2033,8 @@ function captureMountScrollRatio(root: HTMLElement | null): MountScrollRatio | n
   return {
     top: scrollRatio(scroller.scrollTop, scroller.scrollHeight - scroller.clientHeight),
     left: scrollRatio(scroller.scrollLeft, scroller.scrollWidth - scroller.clientWidth),
+    topPosition: scroller.scrollTop,
+    leftPosition: scroller.scrollLeft,
   };
 }
 
@@ -2039,8 +2047,10 @@ function restoreMountScrollRatio(root: HTMLElement | null, ratio: MountScrollRat
   const restore = () => {
     const scroller = getMountScrollElement(root);
     if (!scroller) return;
-    scroller.scrollTop = ratio.top * Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-    scroller.scrollLeft = ratio.left * Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    scroller.scrollTop = Math.min(ratio.topPosition, maxTop) || ratio.top * maxTop;
+    scroller.scrollLeft = Math.min(ratio.leftPosition, maxLeft) || ratio.left * maxLeft;
   };
   restore();
   window.requestAnimationFrame(() => {
@@ -2670,7 +2680,7 @@ async function openRecoveryDialog(): Promise<void> {
     state.status = 'Ready';
   } finally {
     state.busy = false;
-    rerenderAppChrome();
+    renderAllAroundDocument();
   }
 }
 
@@ -2938,8 +2948,14 @@ function syncMcpWorkspaces(): void {
   void updateMcpWorkspaces(state.workspaces.map((workspace) => workspace.path));
 }
 
-function syncFileMenuState(): void {
-  void updateFileMenuState(getFileActionAvailability(state));
+function syncFileMenuState(options: { force?: boolean } = {}): void {
+  const fileMenuState = getFileActionAvailability(state);
+  const key = JSON.stringify(fileMenuState);
+  if (!options.force && key === lastFileMenuStateKey) return;
+  lastFileMenuStateKey = key;
+  void updateFileMenuState(fileMenuState).catch(() => {
+    // Native menu state is unavailable in browser-only smoke runs.
+  });
 }
 
 function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = null): boolean {
@@ -2948,7 +2964,6 @@ function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = null): 
 }
 
 function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
-  const preserveMount = options.preserveMountedDocument ? mountRoot : null;
   const mountScrollRatio = options.preserveMountedDocument ? captureMountScrollRatio(mountRoot) : null;
   syncDocumentTabs();
   if (!options.preserveMountedDocument) {
@@ -2957,14 +2972,36 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
       state.document.mounted = null;
     }
   }
-  mountRoot = render(state, handlers, { preserveMount });
-  applyAppColorTheme();
+  mountRoot = render(state, handlers);
   syncFileMenuState();
   restoreMountScrollRatio(mountRoot, mountScrollRatio);
 }
 
-function rerenderAppChrome(): void {
+function renderAllAroundDocument(): void {
+  renderUiAroundDocument(state);
+  syncFileMenuState();
+}
+
+function scheduleWorkspaceFilterProgressRender(): void {
+  if (workspaceFilterRenderTimer) {
+    workspaceFilterRenderQueued = true;
+    return;
+  }
   rerender({ preserveMountedDocument: true });
+  workspaceFilterRenderTimer = window.setTimeout(() => {
+    workspaceFilterRenderTimer = null;
+    if (!workspaceFilterRenderQueued) return;
+    workspaceFilterRenderQueued = false;
+    scheduleWorkspaceFilterProgressRender();
+  }, 100);
+}
+
+function cancelWorkspaceFilterProgressRender(): void {
+  if (workspaceFilterRenderTimer) {
+    window.clearTimeout(workspaceFilterRenderTimer);
+  }
+  workspaceFilterRenderTimer = null;
+  workspaceFilterRenderQueued = false;
 }
 
 async function runBusy(label: string, task: () => Promise<void>, options: { preserveMountedDocument?: boolean } = {}): Promise<void> {

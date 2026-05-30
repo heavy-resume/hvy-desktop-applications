@@ -933,6 +933,10 @@ button:disabled {
   background: var(--hvy-bg, #fbfaf7);
 }
 
+.document-controls-root {
+  display: contents;
+}
+
 .document-tabs {
   display: flex;
   min-width: 0;
