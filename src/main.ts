@@ -2658,7 +2658,6 @@ async function discardRecoveryStateForBackup(backup: DocumentBackup): Promise<vo
 
 async function openRecoveryDialog(): Promise<void> {
   if (state.busy) return;
-  const document = state.document?.mounted?.document;
   state.busy = true;
   state.error = null;
   state.status = 'Loading recoverable edits...';
@@ -2671,8 +2670,7 @@ async function openRecoveryDialog(): Promise<void> {
     state.status = 'Ready';
   } finally {
     state.busy = false;
-    rerender();
-    await mountCurrentDocument(document);
+    rerenderAppChrome();
   }
 }
 
@@ -2963,6 +2961,10 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
   applyAppColorTheme();
   syncFileMenuState();
   restoreMountScrollRatio(mountRoot, mountScrollRatio);
+}
+
+function rerenderAppChrome(): void {
+  rerender({ preserveMountedDocument: true });
 }
 
 async function runBusy(label: string, task: () => Promise<void>, options: { preserveMountedDocument?: boolean } = {}): Promise<void> {
