@@ -9,6 +9,7 @@ const packager = packagerModule.packager || packagerModule.default || packagerMo
 
 const appName = 'HVY Galaxy';
 const appIdentifier = 'com.heavyresume.hvy-galaxy';
+const hvyDocumentTypeIdentifier = 'com.heavyresume.hvy-document';
 const outDir = path.resolve('dist-electron');
 const args = parseArgs(process.argv.slice(2));
 const platform = args.platform || process.env.ELECTRON_PLATFORM || process.platform;
@@ -39,6 +40,26 @@ const appPaths = await packager({
   extendInfo: {
     CFBundleDisplayName: appName,
     CFBundleName: appName,
+    CFBundleDocumentTypes: [
+      {
+        CFBundleTypeExtensions: ['hvy', 'thvy', 'phvy'],
+        CFBundleTypeName: 'HVY Document',
+        CFBundleTypeRole: 'Editor',
+        LSHandlerRank: 'Owner',
+        LSItemContentTypes: [hvyDocumentTypeIdentifier],
+      },
+    ],
+    UTExportedTypeDeclarations: [
+      {
+        UTTypeConformsTo: ['public.data'],
+        UTTypeDescription: 'HVY document',
+        UTTypeIdentifier: hvyDocumentTypeIdentifier,
+        UTTypeTagSpecification: {
+          'public.filename-extension': ['hvy', 'thvy', 'phvy'],
+          'public.mime-type': 'application/x-hvy',
+        },
+      },
+    ],
     NSCameraUsageDescription: 'HVY Galaxy uses the camera to capture photos for image components in your HVY documents.',
   },
   extraResource: [

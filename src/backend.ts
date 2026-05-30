@@ -7,6 +7,7 @@ declare global {
     hvyElectron?: {
       invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
       onMenuEvent(callback: (event: string) => void): () => void;
+      onOpenDocumentPath(callback: (path: string) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
     };
   }
@@ -586,6 +587,13 @@ export function openDocumentFile(path: string): Promise<void> {
   return invokeDesktop('open_document_file', { path });
 }
 
+export function loadLaunchDocumentPaths(): Promise<string[]> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve([]);
+  }
+  return invokeDesktop('load_launch_document_paths');
+}
+
 export function renameDocumentFile(request: RenameDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('rename_document_file', { path: request.path, name: request.name });
 }
@@ -692,4 +700,15 @@ export function onMenuEvent(handler: (event: string) => void): Promise<() => voi
     return Promise.resolve(() => undefined);
   }
   return listen<string>('menu-event', (event) => handler(event.payload));
+}
+
+export function onOpenDocumentPath(handler: (path: string) => void): Promise<() => void> {
+  if (isElectronRuntime()) {
+    return Promise.resolve(window.hvyElectron!.onOpenDocumentPath(handler));
+  }
+  if (!isTauriRuntime()) {
+    void handler;
+    return Promise.resolve(() => undefined);
+  }
+  return listen<string>('open-document-path', (event) => handler(event.payload));
 }

@@ -119,12 +119,18 @@ export async function mountHvyDocument(
     plugins: builtInPlugins,
     semanticFilterProvider: chatSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
-    storageKey: mode === 'editor' || mode === 'advanced' ? null : options.storageKey,
+    storageKey: null,
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
-  return { mount: mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted, document };
+  const finalMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  return {
+    mount: finalMount,
+    get document() {
+      return finalMount.getDocument();
+    },
+  };
 }
 
 export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {

@@ -26,6 +26,8 @@ const APP_NAME = 'HVY Galaxy';
 let mainWindow = null;
 let appCloseAllowed = false;
 let fileMenuState = defaultFileMenuState();
+let pendingLaunchDocumentPaths = launchDocumentPathsFromArgv(process.argv);
+let rendererAcceptsOpenDocumentPaths = false;
 let mcpStatus = {
   running: false,
   url: null,
@@ -41,6 +43,11 @@ app.setAboutPanelOptions({
   iconPath: iconPath(appIconFileName()),
 });
 app.setPath('userData', electronProfileDir());
+
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  enqueueOpenDocumentPath(filePath);
+});
 
 app.whenReady().then(async () => {
   mainWindow = createWindow();
@@ -245,6 +252,23 @@ function emitMenu(payload) {
   mainWindow?.webContents.send('hvy:menu-event', payload);
 }
 
+function enqueueOpenDocumentPath(filePath) {
+  const documentPath = launchDocumentPath(filePath);
+  if (!documentPath) return;
+  if (rendererAcceptsOpenDocumentPaths && mainWindow && !mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.send('hvy:open-document-path', documentPath);
+    return;
+  }
+  pendingLaunchDocumentPaths.push(documentPath);
+}
+
+function loadLaunchDocumentPaths() {
+  rendererAcceptsOpenDocumentPaths = true;
+  const paths = pendingLaunchDocumentPaths;
+  pendingLaunchDocumentPaths = [];
+  return paths;
+}
+
 function emitRecent(prefix, index) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const entries = prefix === 'recent-file:' ? recent.files : recent.workspaces;
@@ -372,6 +396,7 @@ async function handleCommand(command, args) {
     case 'add_dropped_files_to_workspace': return addDroppedFilesToWorkspace(args.workspacePath, args.files);
     case 'open_file_dialog': return openFileDialog();
     case 'open_import_source_dialog': return openImportSourceDialog();
+    case 'load_launch_document_paths': return loadLaunchDocumentPaths();
     case 'read_document_file': return readDocumentFile(args.path);
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
@@ -1203,6 +1228,18 @@ function writeBytes(filePath, bytes) {
 function documentExtension(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   return DOCUMENT_EXTENSIONS.has(extension) ? extension : null;
+}
+
+function launchDocumentPathsFromArgv(argv) {
+  return argv.map((arg) => launchDocumentPath(arg)).filter(Boolean);
+}
+
+function launchDocumentPath(value) {
+  if (!value || value.startsWith('-')) return null;
+  const candidate = path.resolve(value);
+  if (!documentExtension(candidate)) return null;
+  if (!fs.existsSync(candidate)) return null;
+  return candidate;
 }
 
 function normalizeTemplateVisibility(value) {

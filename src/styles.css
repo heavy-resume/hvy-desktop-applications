@@ -2463,6 +2463,21 @@ button:disabled {
   display: none;
 }
 
+.hvy-document-host .editor-shell:has(.component-picker[data-open="true"]) .editor-sidebar,
+.hvy-document-host .editor-shell:has(.component-picker:focus-within) .editor-sidebar {
+  z-index: 5;
+}
+
+.hvy-document-host .editor-shell:has(.component-picker[data-open="true"]) .editor-tree,
+.hvy-document-host .editor-shell:has(.component-picker:focus-within) .editor-tree {
+  position: relative;
+  z-index: 30;
+}
+
+.hvy-document-host .component-picker:not([data-active-pane="root"]) .component-picker-popover {
+  width: min(20rem, calc(100vw - 2rem));
+}
+
 .empty-state {
   display: grid;
   place-items: center;

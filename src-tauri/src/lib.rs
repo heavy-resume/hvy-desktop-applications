@@ -236,6 +236,12 @@ struct NativeMenuState {
     file_menu: Mutex<FileMenuState>,
 }
 
+#[derive(Default)]
+struct LaunchDocumentState {
+    pending_paths: Mutex<Vec<String>>,
+    renderer_accepts_open_document_paths: AtomicBool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct ThemeFile {
@@ -1112,6 +1118,15 @@ fn open_import_source_dialog() -> AppResult<Option<ImportSourceFile>> {
 }
 
 #[tauri::command]
+fn load_launch_document_paths(state: State<LaunchDocumentState>) -> AppResult<Vec<String>> {
+    state
+        .renderer_accepts_open_document_paths
+        .store(true, Ordering::SeqCst);
+    let mut pending_paths = state.pending_paths.lock().unwrap();
+    Ok(pending_paths.drain(..).collect())
+}
+
+#[tauri::command]
 fn read_document_file(app: AppHandle, path: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     let file = read_document_at(&path)?;
@@ -1686,9 +1701,13 @@ fn update_file_menu_state(app: AppHandle, native_menu: State<NativeMenuState>, s
 pub fn run() {
     set_native_process_name();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(McpRuntime::default())
         .manage(NativeMenuState::default())
+        .manage(LaunchDocumentState {
+            pending_paths: Mutex::new(launch_document_paths_from_args()),
+            renderer_accepts_open_document_paths: AtomicBool::new(false),
+        })
         .setup(|app| {
             set_native_process_name();
             install_camera_permission_handler(app.handle());
@@ -1729,6 +1748,7 @@ pub fn run() {
             add_dropped_files_to_workspace,
             open_file_dialog,
             open_import_source_dialog,
+            load_launch_document_paths,
             read_document_file,
             save_document_file,
             save_document_as_dialog,
@@ -1759,8 +1779,21 @@ pub fn run() {
             open_external_url,
             close_app_window
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running HVY Galaxy");
+        .build(tauri::generate_context!())
+        .expect("error while building HVY Galaxy");
+
+    app.run(|app, event| {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        if let tauri::RunEvent::Opened { urls } = event {
+            for url in urls {
+                if let Ok(path) = url.to_file_path() {
+                    enqueue_open_document_path(app, &path);
+                }
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        let _ = event;
+    });
 }
 
 #[cfg(target_os = "macos")]
@@ -2144,6 +2177,37 @@ fn document_extension(path: &Path) -> Option<String> {
         "md" => Some(".md".into()),
         _ => None,
     }
+}
+
+fn launch_document_paths_from_args() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter_map(|arg| launch_document_path(&arg))
+        .collect()
+}
+
+fn launch_document_path(value: &str) -> Option<String> {
+    if value.is_empty() || value.starts_with('-') {
+        return None;
+    }
+    let path = PathBuf::from(value);
+    if document_extension(&path).is_none() || !path.exists() {
+        return None;
+    }
+    Some(path_to_string(&path))
+}
+
+fn enqueue_open_document_path(app: &AppHandle, path: &Path) {
+    let Some(path) = launch_document_path(&path_to_string(path)) else {
+        return;
+    };
+    if let Some(state) = app.try_state::<LaunchDocumentState>() {
+        if !state.renderer_accepts_open_document_paths.load(Ordering::SeqCst) {
+            state.pending_paths.lock().unwrap().push(path);
+            return;
+        }
+    }
+    let _ = app.emit("open-document-path", path);
 }
 
 fn import_source_extension(path: &Path) -> Option<String> {

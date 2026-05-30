@@ -23,11 +23,13 @@ import {
   loadMcpServerStatus,
   loadMcpSettings,
   loadMcpStdioLaunchConfig,
+  loadLaunchDocumentPaths,
   loadWorkspace as loadWorkspaceBackend,
   listSavedTemplates,
   listDocumentBackups,
   loadRecentState,
   onMenuEvent,
+  onOpenDocumentPath,
   onAppCloseRequest,
   openDocumentFile,
   openExternalUrl,
@@ -1410,6 +1412,12 @@ async function boot(): Promise<void> {
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
     });
+    await onOpenDocumentPath((path) => {
+      void openLaunchDocumentPath(path);
+    });
+    for (const path of await loadLaunchDocumentPaths()) {
+      await openLaunchDocumentPath(path);
+    }
   } catch (error) {
     showStartupError(error);
   }
@@ -1855,6 +1863,14 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   if (recoveryState && state.document?.mounted) {
     applyMountedRecoveryState(state.document.mounted, recoveryState);
   }
+}
+
+async function openLaunchDocumentPath(path: string): Promise<void> {
+  if (!path) return;
+  await runBusy('Opening file...', async () => {
+    await openDocument(await readDocumentFile(path), { deferMount: true });
+    await refreshRecents();
+  });
 }
 
 function preserveCurrentDocumentSession(): void {
