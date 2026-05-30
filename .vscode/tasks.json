@@ -26,15 +26,39 @@
       "problemMatcher": []
     },
     {
-      "label": "HVY Galaxy: Build Host Installer",
+      "label": "HVY Galaxy: Build All Host Apps",
       "type": "shell",
-      "command": ". \"$HOME/.cargo/env\" && npm run build:universal:dmg",
+      "command": ". \"$HOME/.cargo/env\" && npm run build:host",
       "windows": {
-        "command": "npm.cmd run build:windows"
+        "command": "npm.cmd run build:host"
       },
       "group": {
         "kind": "build",
         "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Tauri Host Installer",
+      "type": "shell",
+      "command": ". \"$HOME/.cargo/env\" && npm run build:tauri:host",
+      "windows": {
+        "command": "npm.cmd run build:tauri:host"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Electron Host App",
+      "type": "shell",
+      "command": "npm run build:electron:host",
+      "windows": {
+        "command": "npm.cmd run build:electron:host"
       },
       "options": {
         "cwd": "${workspaceFolder}"
@@ -54,6 +78,15 @@
       "label": "HVY Galaxy: Build Electron Windows App",
       "type": "shell",
       "command": "npm.cmd run build:electron:windows",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Build Electron macOS DMG",
+      "type": "shell",
+      "command": "npm run build:electron:dmg",
       "options": {
         "cwd": "${workspaceFolder}"
       },
