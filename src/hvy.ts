@@ -258,6 +258,57 @@ async function mountRawHvyDocument(
     showRawSearchMatch({ focusSource: options.focusSource });
   };
 
+  const notifyDirty = (nextDirty: boolean) => {
+    dirty = nextDirty;
+    options.onDocumentChange?.({ dirty, source: 'editor', reason: 'raw-hvy-input' });
+  };
+
+  const replaceTextareaSelection = (nextValue: string, selectionStart: number, selectionEnd: number) => {
+    textarea.value = nextValue;
+    textarea.setSelectionRange(selectionStart, selectionEnd);
+    rawSearchQuery = '';
+    notifyDirty(textarea.value !== lastSavedText);
+    try {
+      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    } catch {
+      // Invalid raw drafts stay editable; Save will surface the parse error.
+    }
+  };
+
+  const toggleMarkdownBoldSelection = () => {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start === end) {
+      return false;
+    }
+    const value = textarea.value;
+    const selected = value.slice(start, end);
+    const hasOuterMarkers = selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4;
+    const hasSurroundingMarkers = value.slice(start - 2, start) === '**' && value.slice(end, end + 2) === '**';
+    if (hasOuterMarkers) {
+      replaceTextareaSelection(
+        `${value.slice(0, start)}${selected.slice(2, -2)}${value.slice(end)}`,
+        start,
+        end - 4
+      );
+      return true;
+    }
+    if (hasSurroundingMarkers) {
+      replaceTextareaSelection(
+        `${value.slice(0, start - 2)}${selected}${value.slice(end + 2)}`,
+        start - 2,
+        end - 2
+      );
+      return true;
+    }
+    replaceTextareaSelection(
+      `${value.slice(0, start)}**${selected}**${value.slice(end)}`,
+      start + 2,
+      end + 2
+    );
+    return true;
+  };
+
   const openSourceSearch = () => {
     searchBar.hidden = false;
     searchInput.focus();
@@ -273,7 +324,15 @@ async function mountRawHvyDocument(
   };
 
   shell.addEventListener('hvy:open-raw-search', openSourceSearch);
-  closeButton.addEventListener('click', () => closeSourceSearch({ focusSource: true }));
+  shell.addEventListener('hvy:toggle-raw-bold', () => {
+    textarea.focus();
+    toggleMarkdownBoldSelection();
+  });
+  closeButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceSearch({ focusSource: true });
+  });
   previousButton.addEventListener('click', () => findInSource(-1, { advance: true, focusSource: true }));
   searchBar.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -296,7 +355,30 @@ async function mountRawHvyDocument(
       findInSource(event.shiftKey ? -1 : 1, { advance: true, focusSource: true });
     }
   });
+  documentOwner().addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key === 'f') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      openSourceSearch();
+      return;
+    }
+    if (key === 'b' && toggleMarkdownBoldSelection()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, { capture: true, signal: searchCleanup.signal });
   textarea.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'b') {
+      if (toggleMarkdownBoldSelection()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
     if (searchBar.hidden || event.key !== 'Enter') {
       return;
     }
@@ -317,10 +399,6 @@ async function mountRawHvyDocument(
     closeSourceSearch();
   }, { signal: searchCleanup.signal });
 
-  const notifyDirty = (nextDirty: boolean) => {
-    dirty = nextDirty;
-    options.onDocumentChange?.({ dirty, source: 'editor', reason: 'raw-hvy-input' });
-  };
   textarea.addEventListener('input', () => {
     rawSearchQuery = '';
     notifyDirty(textarea.value !== lastSavedText);

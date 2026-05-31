@@ -1108,6 +1108,22 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
     handlers.openFile();
     return true;
   }
+  const rawHvyShell = root.querySelector<HTMLElement>('.raw-hvy-shell');
+  if (!event.shiftKey && key === 'f' && rawHvyShell) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    rawHvyShell.dispatchEvent(new CustomEvent('hvy:open-raw-search'));
+    const input = rawHvyShell.querySelector<HTMLInputElement>('[data-field="raw-hvy-search-query"]');
+    input?.focus();
+    input?.setSelectionRange(0, input.value.length);
+    return true;
+  }
+  if (!event.shiftKey && key === 'b' && rawHvyShell) {
+    rawHvyShell.dispatchEvent(new CustomEvent('hvy:toggle-raw-bold'));
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+  }
   if (!event.shiftKey && key === ',') {
     event.preventDefault();
     handlers.openAiSettings();

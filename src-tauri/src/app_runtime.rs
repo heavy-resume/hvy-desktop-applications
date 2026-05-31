@@ -206,6 +206,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&PredefinedMenuItem::copy(app, Some("Copy"))?)
         .item(&PredefinedMenuItem::paste(app, Some("Paste"))?)
         .separator()
+        .item(&app_shortcut_menu_item(app, "Bold", "bold", "CmdOrCtrl+B")?)
+        .separator()
         .item(&app_shortcut_menu_item(app, "Find", "find", "CmdOrCtrl+F")?)
         .separator()
         .item(&MenuItemBuilder::new("Colors").id("colors").build(app)?)

@@ -1401,6 +1401,7 @@ async function boot(): Promise<void> {
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
       if (event === 'find') openMountedSearch();
+      if (event === 'bold') performBold();
       if (event === 'undo') performUndo();
       if (event === 'redo') performRedo();
       if (event === 'open-guide') void openGuide();
@@ -1435,6 +1436,7 @@ function bindFindShortcut(): void {
   findShortcutBound = true;
   document.addEventListener('keydown', (event) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
+    if (state.document?.mode === 'hvy' && currentMountRoot()?.querySelector('.raw-hvy-shell')) return;
     if (!openMountedSearch()) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1442,22 +1444,64 @@ function bindFindShortcut(): void {
 }
 
 function openMountedSearch(): boolean {
-  if (!state.document || !mountRoot) return false;
-  const rawSearchBar = mountRoot.querySelector<HTMLElement>('.raw-hvy-search-bar');
-  if (rawSearchBar?.hidden) {
+  const root = currentMountRoot();
+  if (!state.document || !root) return false;
+  const rawSearchBar = root.querySelector<HTMLElement>('.raw-hvy-search-bar');
+  if (rawSearchBar) {
     rawSearchBar.closest<HTMLElement>('.raw-hvy-shell')?.dispatchEvent(new CustomEvent('hvy:open-raw-search'));
+    const rawInput = root.querySelector<HTMLInputElement>('[data-field="raw-hvy-search-query"]');
+    if (rawInput) {
+      rawInput.focus();
+      rawInput.setSelectionRange(0, rawInput.value.length);
+      return true;
+    }
   }
-  const input = Array.from(mountRoot.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-field="search-query"], [data-field="raw-hvy-search-query"]'))
+  const input = Array.from(root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-field="search-query"], [data-field="raw-hvy-search-query"]'))
     .find((candidate) => !candidate.closest('[hidden]'));
   if (input) {
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     return true;
   }
-  const launcher = mountRoot.querySelector<HTMLButtonElement>('[data-action="open-search"]');
+  const launcher = root.querySelector<HTMLButtonElement>('[data-action="open-search"]');
   if (!launcher) return false;
   launcher.click();
   return true;
+}
+
+function performBold(): void {
+  const root = currentMountRoot();
+  const rawShell = root?.querySelector<HTMLElement>('.raw-hvy-shell');
+  if (rawShell) {
+    rawShell.dispatchEvent(new CustomEvent('hvy:toggle-raw-bold'));
+    return;
+  }
+  const editable = getActiveRichEditable();
+  if (!editable || !root) return;
+  const sectionKey = editable.dataset.sectionKey ?? '';
+  const blockId = editable.dataset.blockId ?? '';
+  const field = editable.dataset.field ?? '';
+  const selector = [
+    '[data-rich-action="bold"]',
+    sectionKey ? `[data-section-key="${cssEscape(sectionKey)}"]` : '',
+    blockId ? `[data-block-id="${cssEscape(blockId)}"]` : '',
+    field ? `[data-field="${cssEscape(field)}"]` : '',
+  ].join('');
+  const button =
+    root.querySelector<HTMLButtonElement>(selector) ??
+    editable.closest<HTMLElement>('.editor-block, .table-inline-edit-shell')?.querySelector<HTMLButtonElement>('[data-rich-action="bold"]');
+  button?.click();
+}
+
+function currentMountRoot(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('#hvyMount') ?? mountRoot;
+}
+
+function getActiveRichEditable(): HTMLElement | null {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLElement) || !target.closest('#hvyMount')) return null;
+  if (target.isContentEditable && target.dataset.field) return target;
+  return target.closest<HTMLElement>('[contenteditable="true"][data-field]');
 }
 
 function performUndo(): void {

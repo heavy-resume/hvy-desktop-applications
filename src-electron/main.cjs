@@ -25,6 +25,7 @@ const APP_NAME = 'HVY Galaxy';
 
 let mainWindow = null;
 let appCloseAllowed = false;
+let nativeQuitRequested = false;
 let fileMenuState = defaultFileMenuState();
 let pendingLaunchDocumentPaths = launchDocumentPathsFromArgv(process.argv);
 let rendererAcceptsOpenDocumentPaths = false;
@@ -74,7 +75,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   if (appCloseAllowed) return;
   event.preventDefault();
-  mainWindow?.webContents.send('hvy:app-close-requested');
+  requestNativeAppClose({ quit: true });
 });
 
 function createWindow() {
@@ -96,7 +97,15 @@ function createWindow() {
   window.on('close', (event) => {
     if (appCloseAllowed) return;
     event.preventDefault();
-    window.webContents.send('hvy:app-close-requested');
+    requestNativeAppClose({ quit: false });
+  });
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null;
+    }
+    if (!nativeQuitRequested) {
+      appCloseAllowed = false;
+    }
   });
   return window;
 }
@@ -121,6 +130,7 @@ function shortcutCommand(input) {
   if (key === 'o' && !input.shift) return 'open-workspace';
   if (key === 'o' && input.shift) return 'open-file';
   if (key === 'f' && !input.shift) return 'find';
+  if (key === 'b' && !input.shift) return 'bold';
   if (key === ',' && !input.shift) return 'ai-settings';
   return null;
 }
@@ -176,6 +186,8 @@ function buildMenu() {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        { type: 'separator' },
+        menuItem('Bold', 'bold', 'CmdOrCtrl+B'),
         { type: 'separator' },
         menuItem('Find', 'find', 'CmdOrCtrl+F'),
         { type: 'separator' },
@@ -249,7 +261,24 @@ function recentSubmenu(label, entries, prefix, emptyLabel = 'No Recent Items') {
 }
 
 function emitMenu(payload) {
-  mainWindow?.webContents.send('hvy:menu-event', payload);
+  if (payload === 'app-close-requested') {
+    requestNativeAppClose({ quit: true });
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('hvy:menu-event', payload);
+}
+
+function requestNativeAppClose({ quit }) {
+  nativeQuitRequested = quit;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hvy:app-close-requested');
+    return;
+  }
+  if (quit) {
+    appCloseAllowed = true;
+    app.quit();
+  }
 }
 
 function enqueueOpenDocumentPath(filePath) {
@@ -432,11 +461,14 @@ async function handleCommand(command, args) {
 
 function closeAppWindow() {
   appCloseAllowed = true;
+  if (nativeQuitRequested || process.platform !== 'darwin') {
+    app.quit();
+    return null;
+  }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.close();
     return null;
   }
-  app.quit();
   return null;
 }
 
