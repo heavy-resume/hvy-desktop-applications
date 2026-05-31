@@ -10,6 +10,7 @@ export interface OpenDocument {
   mode: HvyMode;
   dirty: boolean;
   readOnly: boolean;
+  hiddenFromAi: boolean;
   isNew: boolean;
   metaOpen: boolean;
   mounted: MountedDocument | null;
@@ -21,6 +22,7 @@ export interface OpenDocumentTab {
   name: string;
   dirty: boolean;
   readOnly: boolean;
+  hiddenFromAi: boolean;
   active: boolean;
 }
 

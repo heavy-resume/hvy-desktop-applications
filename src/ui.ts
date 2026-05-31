@@ -112,6 +112,8 @@ export interface UiHandlers {
   renameFile(path: string, currentName: string): void;
   archiveFile(path: string, currentName: string): void;
   restoreFile(path: string, currentName: string): void;
+  setFileLocked(path: string, currentName: string, locked: boolean): void;
+  setFileHiddenFromAi(path: string, currentName: string, hiddenFromAi: boolean): void;
   confirmDeleteFile(path: string, currentName: string): void;
   deleteFile(): void;
   cancelDeleteFile(): void;
@@ -276,7 +278,7 @@ export function renderDocumentControls(state: AppState): void {
       ${renderToolbar(state)}
     </header>
     <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
-  documentModeControlsRoot().innerHTML = state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen) : '';
+  documentModeControlsRoot().innerHTML = state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAi) : '';
   const mount = hvyMountRoot();
   mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document));
   if (!state.document || !state.document.mounted) {
@@ -794,7 +796,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const workspacePath = workspacePathForTreeTarget(fileButton, state);
       if (!workspacePath) return;
       event.preventDefault();
-      showFileContextMenu(event, path, name, workspacePath, archived, state.workspaceClipboard, handlers, state.workspaces.length > 1);
+      const locked = fileButton.dataset.locked === 'true';
+      const hiddenFromAi = fileButton.dataset.hiddenFromAi === 'true';
+      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAi, state.workspaceClipboard, handlers, state.workspaces.length > 1);
       return;
     }
     const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
@@ -1545,6 +1549,8 @@ function showFileContextMenu(
   name: string,
   workspacePath: string,
   archived: boolean,
+  locked: boolean,
+  hiddenFromAi: boolean,
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
   showWorkspaceActions: boolean,
@@ -1560,6 +1566,8 @@ function showFileContextMenu(
     <button type="button" data-menu-action="delete">Delete</button>
   ` : `
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
+    <button type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
+    <button type="button" data-menu-action="${hiddenFromAi ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAi ? 'Unhide from AI' : 'Hide from AI'}</button>
     <button type="button" data-menu-action="rename">Rename</button>
     <button type="button" data-menu-action="archive">Archive</button>
     <button type="button" data-menu-action="copy">Copy</button>
@@ -1587,6 +1595,10 @@ function showFileContextMenu(
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
     if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
     if (button.dataset.menuAction === 'restore') handlers.restoreFile(path, name);
+    if (button.dataset.menuAction === 'lock') handlers.setFileLocked(path, name, true);
+    if (button.dataset.menuAction === 'unlock') handlers.setFileLocked(path, name, false);
+    if (button.dataset.menuAction === 'hide-from-ai') handlers.setFileHiddenFromAi(path, name, true);
+    if (button.dataset.menuAction === 'unhide-from-ai') handlers.setFileHiddenFromAi(path, name, false);
     if (button.dataset.menuAction === 'delete') handlers.confirmDeleteFile(path, name);
     if (button.dataset.menuAction === 'copy') handlers.copyWorkspaceFile(path, name);
     if (button.dataset.menuAction === 'cut') handlers.cutWorkspaceFile(path, name);
@@ -1671,7 +1683,7 @@ function renderDocumentTabs(state: AppState): string {
   return `
     <nav class="document-tabs${state.documentTabs.length === 0 ? ' is-empty' : ''}" aria-label="Open documents">
       ${state.documentTabs.map((tab) => `
-        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}">
+        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAi ? ' is-hidden-from-ai' : ''}">
           <button type="button" class="document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.path)}" title="${escapeAttr(tab.path)}" aria-current="${tab.active ? 'page' : 'false'}">
             <span class="document-tab-dirty" aria-hidden="true"></span>
             <span class="document-tab-name">${escapeHtml(tab.name)}</span>
@@ -1712,7 +1724,7 @@ function renderToolbar(state: AppState): string {
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
-      <span>${document.readOnly ? 'Read-only guide' : document.isNew ? 'Unsaved document' : 'Document'}</span>
+      <span>${document.readOnly ? 'Read-only document' : document.hiddenFromAi ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
@@ -1725,7 +1737,7 @@ function renderToolbar(state: AppState): string {
     </div>`;
 }
 
-function renderModeControls(activeMode: HvyMode, readOnly: boolean, metaOpen: boolean): string {
+function renderModeControls(activeMode: HvyMode, readOnly: boolean, metaOpen: boolean, hiddenFromAi = false): string {
   const modes: Array<{ mode: HvyMode; label: string }> = [
     { mode: 'viewer', label: 'Viewer' },
     { mode: 'ai', label: 'AI' },
@@ -1736,7 +1748,7 @@ function renderModeControls(activeMode: HvyMode, readOnly: boolean, metaOpen: bo
   const showEditorSubmodes = activeMode === 'editor' || activeMode === 'hvy' || activeMode === 'advanced';
   const buttonHtml = ({ mode, label }: { mode: HvyMode; label: string }) => {
     const active = mode === activeMode && !(metaOpen && mode === 'advanced') ? ' is-active' : '';
-    const disabled = readOnly && mode !== 'viewer' ? ' disabled' : '';
+    const disabled = (readOnly && mode !== 'viewer') || (hiddenFromAi && mode === 'ai') ? ' disabled' : '';
     const contents = mode === 'advanced' || mode === 'hvy'
       ? `<span>${escapeHtml(mode === 'advanced' ? 'ADV' : 'HVY')}</span>`
       : `${modeIcon(mode)}<span>${escapeHtml(label)}</span>`;
@@ -2025,14 +2037,18 @@ function renderNode(
   const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
   const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
   const archived = node.archived === true;
+  const locked = node.locked === true;
+  const hiddenFromAi = node.hiddenFromAi === true;
   const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
     ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
     : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAi ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAi ? 'true' : 'false'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
+        ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
+        ${hiddenFromAi ? '<span class="tree-file-archived">AI Hidden</span>' : ''}
         ${extensionBadge}
       </button>
     </li>`;

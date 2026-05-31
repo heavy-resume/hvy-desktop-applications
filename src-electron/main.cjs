@@ -433,6 +433,7 @@ async function handleCommand(command, args) {
     case 'list_saved_templates': return listSavedTemplates(args.workspacePath);
     case 'save_document_template': return saveDocumentTemplate(args.request);
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
+    case 'update_workspace_file_ai_access': return updateWorkspaceFileAiAccess(args.path, args.updates);
     case 'open_color_theme_dialog': return openColorThemeDialog();
     case 'save_color_theme_as_dialog': return saveColorThemeAsDialog(args.suggestedName, args.bytes);
     case 'update_file_menu_state': return updateFileMenuState(args.state);
@@ -616,6 +617,14 @@ function updateWorkspaceTemplateVisibility(workspacePath, templateVisibility) {
   manifest.templateVisibility = normalizeTemplateVisibility(templateVisibility);
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function updateWorkspaceFileAiAccess(filePath, updates) {
+  const workspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (!workspacePath) throw new Error('Document must be inside a workspace.');
+  if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be updated.');
+  updateWorkspaceFileAiAccessAt(workspacePath, filePath, updates || {});
   return loadWorkspaceFromPath(workspacePath);
 }
 
@@ -866,7 +875,7 @@ function renameDocumentFile(filePath, name) {
   if (fs.existsSync(destination)) throw new Error('A document with that name already exists.');
   fs.renameSync(filePath, destination);
   const workspacePath = workspaceRootForDocument(parent);
-  if (workspacePath) touchWorkspaceManifest(workspacePath);
+  if (workspacePath) renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   addRecentFile(destination);
   return readDocumentAt(destination);
 }
@@ -890,6 +899,7 @@ function deleteDocumentFile(filePath) {
   fs.unlinkSync(filePath);
   if (!workspacePath) return null;
   updateArchivedDocumentFile(workspacePath, filePath, false);
+  updateWorkspaceFileAiAccessAt(workspacePath, filePath, { locked: false, hiddenFromAi: false });
   removeRecentFile(filePath);
   return loadWorkspaceFromPath(workspacePath);
 }
@@ -1146,6 +1156,8 @@ function initializeWorkspaceWithName(workspacePath, name) {
     rootFiles: [],
     expandedPaths: [],
     templateVisibility: normalizeTemplateVisibility(null),
+    lockedFiles: [],
+    hiddenFromAiFiles: [],
   };
   writeJson(manifestPath, manifest);
   return loadWorkspaceFromPath(workspacePath);
@@ -1158,7 +1170,7 @@ function loadWorkspaceFromPath(workspacePath, includeTemplates = false) {
   return {
     path: workspacePath,
     manifest,
-    files: readWorkspaceChildren(workspacePath, workspacePath, new Set(manifest?.archivedFiles ?? []), includeTemplates),
+    files: readWorkspaceChildren(workspacePath, workspacePath, manifest, includeTemplates),
   };
 }
 
@@ -1179,7 +1191,10 @@ function touchWorkspaceManifest(workspacePath) {
   writeJson(manifestPath, manifest);
 }
 
-function readWorkspaceChildren(root, directory, archivedFiles = new Set(), includeTemplates = false) {
+function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates = false) {
+  const archivedFiles = new Set(manifest?.archivedFiles ?? []);
+  const lockedFiles = new Set(manifest?.lockedFiles ?? []);
+  const hiddenFromAiFiles = new Set(manifest?.hiddenFromAiFiles ?? []);
   return fs.readdirSync(directory, { withFileTypes: true })
     .filter((entry) => !entry.name.startsWith('.') && (includeTemplates || path.join(directory, entry.name) !== workspaceTemplatesDir(root)))
     .map((entry) => {
@@ -1190,18 +1205,21 @@ function readWorkspaceChildren(root, directory, archivedFiles = new Set(), inclu
           name: entry.name,
           path: entryPath,
           relativePath: relativeWorkspacePath(root, entryPath),
-          children: readWorkspaceChildren(root, entryPath, archivedFiles, includeTemplates),
+          children: readWorkspaceChildren(root, entryPath, manifest, includeTemplates),
         };
       }
       const extension = documentExtension(entryPath);
       if (!extension) return null;
+      const relativePath = relativeWorkspacePath(root, entryPath);
       return {
         kind: 'file',
         name: entry.name,
         path: entryPath,
-        relativePath: relativeWorkspacePath(root, entryPath),
+        relativePath,
         extension,
-        archived: archivedFiles.has(relativeWorkspacePath(root, entryPath)),
+        archived: archivedFiles.has(relativePath),
+        locked: lockedFiles.has(relativePath),
+        hiddenFromAi: hiddenFromAiFiles.has(relativePath),
       };
     })
     .filter(Boolean)
@@ -1295,6 +1313,52 @@ function updateArchivedDocumentFile(workspacePath, filePath, archived) {
   if (manifest.archivedFiles.length === 0) delete manifest.archivedFiles;
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
+}
+
+function updateWorkspaceFileAiAccessAt(workspacePath, filePath, updates) {
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) throw new Error('Workspace manifest was not found.');
+  const manifest = readJson(manifestPath, null);
+  const relative = relativeWorkspacePath(workspacePath, filePath);
+  if (typeof updates.locked === 'boolean') {
+    updateManifestFileSet(manifest, 'lockedFiles', relative, updates.locked);
+  }
+  if (typeof updates.hiddenFromAi === 'boolean') {
+    updateManifestFileSet(manifest, 'hiddenFromAiFiles', relative, updates.hiddenFromAi);
+  }
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+}
+
+function renameWorkspaceFileManifestEntries(workspacePath, previousPath, nextPath) {
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) return;
+  const manifest = readJson(manifestPath, null);
+  const previous = relativeWorkspacePath(workspacePath, previousPath);
+  const next = relativeWorkspacePath(workspacePath, nextPath);
+  renameManifestFileSetEntry(manifest, 'archivedFiles', previous, next);
+  renameManifestFileSetEntry(manifest, 'lockedFiles', previous, next);
+  renameManifestFileSetEntry(manifest, 'hiddenFromAiFiles', previous, next);
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+}
+
+function renameManifestFileSetEntry(manifest, key, previous, next) {
+  const files = new Set(manifest[key] ?? []);
+  if (!files.has(previous)) return;
+  files.delete(previous);
+  files.delete(next);
+  files.add(next);
+  manifest[key] = [...files].sort();
+  if (manifest[key].length === 0) delete manifest[key];
+}
+
+function updateManifestFileSet(manifest, key, relative, enabled) {
+  const files = new Set(manifest[key] ?? []);
+  if (enabled) files.add(relative);
+  else files.delete(relative);
+  manifest[key] = [...files].sort();
+  if (manifest[key].length === 0) delete manifest[key];
 }
 
 function relativeWorkspacePath(root, entryPath) {

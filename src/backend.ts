@@ -34,6 +34,8 @@ export interface WorkspaceManifest {
   expandedPaths?: string[];
   templateVisibility?: WorkspaceTemplateVisibility;
   archivedFiles?: string[];
+  lockedFiles?: string[];
+  hiddenFromAiFiles?: string[];
 }
 
 export interface WorkspaceFileNode {
@@ -42,6 +44,8 @@ export interface WorkspaceFileNode {
   relativePath: string;
   extension: DocumentExtension;
   archived?: boolean;
+  locked?: boolean;
+  hiddenFromAi?: boolean;
 }
 
 export interface WorkspaceFolderNode {
@@ -557,6 +561,13 @@ export function updateWorkspaceTemplateVisibility(
   templateVisibility: WorkspaceTemplateVisibility,
 ): Promise<Workspace> {
   return invokeDesktop('update_workspace_template_visibility', { workspacePath, templateVisibility });
+}
+
+export function updateWorkspaceFileAiAccess(
+  path: string,
+  updates: { locked?: boolean; hiddenFromAi?: boolean },
+): Promise<Workspace> {
+  return invokeDesktop('update_workspace_file_ai_access', { path, updates });
 }
 
 export function openColorThemeDialog(): Promise<ThemeFile | null> {

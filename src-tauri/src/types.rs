@@ -13,6 +13,10 @@ struct WorkspaceManifest {
     template_visibility: WorkspaceTemplateVisibility,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     archived_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    locked_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    hidden_from_ai_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -90,7 +94,16 @@ enum WorkspaceTreeNode {
         relative_path: String,
         extension: String,
         archived: bool,
+        locked: bool,
+        hidden_from_ai: bool,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceFileAiAccessUpdate {
+    locked: Option<bool>,
+    hidden_from_ai: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

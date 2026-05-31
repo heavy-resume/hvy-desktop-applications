@@ -35,6 +35,8 @@ fn initialize_workspace_with_name(path: &Path, name: Option<&str>) -> AppResult<
             expanded_paths: Vec::new(),
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
+            locked_files: Vec::new(),
+            hidden_from_ai_files: Vec::new(),
         }
     };
     write_json_atomically(&manifest_path, &manifest)?;
@@ -91,7 +93,7 @@ fn load_workspace_from_path_with_options(path: &Path, include_templates: bool) -
     let manifest = read_manifest(&manifest_path)?;
     Ok(Workspace {
         path: path_to_string(path),
-        files: scan_workspace_files(path, &manifest.archived_files, include_templates)?,
+        files: scan_workspace_files(path, &manifest, include_templates)?,
         manifest,
     })
 }
@@ -114,6 +116,62 @@ fn touch_workspace_manifest(path: &Path) -> AppResult<()> {
     write_json_atomically(&manifest_path, &manifest)
 }
 
+fn update_workspace_file_ai_access_at(
+    workspace_path: &Path,
+    document_path: &Path,
+    updates: WorkspaceFileAiAccessUpdate,
+) -> AppResult<()> {
+    let manifest_path = workspace_manifest_path(workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let relative = relative_path(workspace_path, document_path);
+    if let Some(locked) = updates.locked {
+        update_manifest_file_set(&mut manifest.locked_files, &relative, locked);
+    }
+    if let Some(hidden_from_ai) = updates.hidden_from_ai {
+        update_manifest_file_set(&mut manifest.hidden_from_ai_files, &relative, hidden_from_ai);
+    }
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)
+}
+
+fn rename_workspace_file_manifest_entries(
+    workspace_path: &Path,
+    previous_path: &Path,
+    next_path: &Path,
+) -> AppResult<()> {
+    let Some(manifest_path) = workspace_manifest_path(workspace_path) else {
+        return Ok(());
+    };
+    let mut manifest = read_manifest(&manifest_path)?;
+    let previous = relative_path(workspace_path, previous_path);
+    let next = relative_path(workspace_path, next_path);
+    rename_manifest_file_set_entry(&mut manifest.archived_files, &previous, &next);
+    rename_manifest_file_set_entry(&mut manifest.locked_files, &previous, &next);
+    rename_manifest_file_set_entry(&mut manifest.hidden_from_ai_files, &previous, &next);
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)
+}
+
+fn rename_manifest_file_set_entry(files: &mut Vec<String>, previous: &str, next: &str) {
+    if !files.iter().any(|path| path == previous) {
+        return;
+    }
+    files.retain(|path| path != previous && path != next);
+    files.push(next.to_string());
+    files.sort();
+    files.dedup();
+}
+
+fn update_manifest_file_set(files: &mut Vec<String>, relative_path: &str, enabled: bool) {
+    files.retain(|path| path != relative_path);
+    if enabled {
+        files.push(relative_path.to_string());
+        files.sort();
+        files.dedup();
+    }
+}
+
 fn workspace_manifest_path(path: &Path) -> Option<PathBuf> {
     let current = path.join(WORKSPACE_MANIFEST);
     if current.exists() {
@@ -123,11 +181,11 @@ fn workspace_manifest_path(path: &Path) -> Option<PathBuf> {
     legacy.exists().then_some(legacy)
 }
 
-fn scan_workspace_files(root: &Path, archived_files: &[String], include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
-    scan_directory(root, root, archived_files, include_templates)
+fn scan_workspace_files(root: &Path, manifest: &WorkspaceManifest, include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
+    scan_directory(root, root, manifest, include_templates)
 }
 
-fn scan_directory(root: &Path, directory: &Path, archived_files: &[String], include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
+fn scan_directory(root: &Path, directory: &Path, manifest: &WorkspaceManifest, include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -139,7 +197,7 @@ fn scan_directory(root: &Path, directory: &Path, archived_files: &[String], incl
             continue;
         }
         if path.is_dir() {
-            let children = scan_directory(root, &path, archived_files, include_templates)?;
+            let children = scan_directory(root, &path, manifest, include_templates)?;
             if !children.is_empty() {
                 folders.push(WorkspaceTreeNode::Folder {
                     name,
@@ -153,7 +211,9 @@ fn scan_directory(root: &Path, directory: &Path, archived_files: &[String], incl
             files.push(WorkspaceTreeNode::File {
                 name,
                 path: path_to_string(&path),
-                archived: archived_files.iter().any(|archived| archived == &relative_path),
+                archived: manifest.archived_files.iter().any(|archived| archived == &relative_path),
+                locked: manifest.locked_files.iter().any(|locked| locked == &relative_path),
+                hidden_from_ai: manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative_path),
                 relative_path,
                 extension,
             });

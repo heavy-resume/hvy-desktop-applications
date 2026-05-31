@@ -133,6 +133,20 @@ fn update_workspace_template_visibility(
 }
 
 #[tauri::command]
+fn update_workspace_file_ai_access(path: String, updates: WorkspaceFileAiAccessUpdate) -> AppResult<Workspace> {
+    let path = PathBuf::from(path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let workspace_path = workspace_root_for_document(parent)
+        .ok_or_else(|| AppError::Message("Document must be inside a workspace.".into()))?;
+    document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be updated.".into()))?;
+    update_workspace_file_ai_access_at(&workspace_path, &path, updates)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
 fn archive_workspace(app: AppHandle, path: String) -> AppResult<()> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
@@ -534,7 +548,7 @@ fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult
     }
     fs::rename(&path, &destination)?;
     if let Some(workspace_path) = workspace_root_for_document(parent) {
-        touch_workspace_manifest(&workspace_path)?;
+        rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
     }
     add_recent_file(&app, &destination)?;
     Ok(read_document_at(&destination)?)
@@ -575,6 +589,14 @@ fn delete_document_file(app: AppHandle, path: String) -> AppResult<Option<Worksp
     remove_recent_file(&app, &path)?;
     if let Some(workspace_path) = workspace_path {
         update_archived_document_file(&workspace_path, &path, false)?;
+        update_workspace_file_ai_access_at(
+            &workspace_path,
+            &path,
+            WorkspaceFileAiAccessUpdate {
+                locked: Some(false),
+                hidden_from_ai: Some(false),
+            },
+        )?;
         return load_workspace_from_path(&workspace_path).map(Some);
     }
     Ok(None)

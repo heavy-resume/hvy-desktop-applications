@@ -255,7 +255,7 @@ pub(crate) fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<ser
                 "name": workspace.manifest.name,
                 "path": workspace.path,
                 "updatedAt": workspace.manifest.updated_at,
-                "fileCount": count_workspace_files(&workspace.files),
+                "fileCount": count_workspace_files(&mcp_visible_workspace_nodes(&workspace.files)),
             }))
             .collect::<Vec<_>>()
     }))
@@ -269,7 +269,7 @@ pub(crate) fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde
         .map(|workspace| serde_json::json!({
             "name": workspace.manifest.name,
             "path": workspace.path,
-            "files": workspace.files,
+            "files": mcp_visible_workspace_nodes(&workspace.files),
         }))
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "workspaces": workspaces }))
@@ -297,6 +297,9 @@ pub(crate) fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: ser
             continue;
         }
         for file in flatten_workspace_file_nodes(&workspace.files) {
+            if file_hidden_from_ai(&file) {
+                continue;
+            }
             if results.len() >= max {
                 break;
             }
@@ -424,8 +427,15 @@ pub(crate) fn mcp_document_archive_from(workspaces: &[Workspace], arguments: ser
     let document_path = PathBuf::from(path);
     let workspace = workspaces
         .iter()
-        .find(|workspace| workspace_contains_document(workspace, &document_path))
+        .find(|workspace| workspace_contains_visible_document(workspace, &document_path))
         .ok_or_else(|| AppError::Message("document.archive path must be an active HVY document in an added workspace.".into()))?;
+    let document_file = flatten_workspace_file_nodes(&workspace.files)
+        .into_iter()
+        .find(|file| Path::new(&file.path) == document_path.as_path())
+        .ok_or_else(|| AppError::Message("document.archive path must be an active HVY document in an added workspace.".into()))?;
+    if file_locked(&document_file) {
+        return Err(AppError::Message("document.archive is not available for locked files.".into()));
+    }
     update_archived_document_file(Path::new(&workspace.path), &document_path, true)?;
     Ok(serde_json::json!({
         "path": path,
@@ -506,8 +516,17 @@ fn mcp_document_cli_from(workspaces: &[Workspace], arguments: serde_json::Value)
     let document_path = PathBuf::from(path);
     let workspace = workspaces
         .iter()
-        .find(|workspace| workspace_contains_document(workspace, &document_path))
+        .find(|workspace| workspace_contains_visible_document(workspace, &document_path))
         .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
+    let document_file = flatten_workspace_file_nodes(&workspace.files)
+        .into_iter()
+        .find(|file| Path::new(&file.path) == document_path.as_path())
+        .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
+    if file_locked(&document_file) && !mcp_cli_command_is_read_only(command) {
+        return Err(AppError::Message(
+            "document.cli_based_editor can only run read commands for locked files.".into(),
+        ));
+    }
     document_extension(&document_path)
         .ok_or_else(|| AppError::Message("document.cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
 
@@ -539,10 +558,65 @@ fn mcp_document_cli_from(workspaces: &[Workspace], arguments: serde_json::Value)
     }))
 }
 
-fn workspace_contains_document(workspace: &Workspace, path: &Path) -> bool {
+fn workspace_contains_visible_document(workspace: &Workspace, path: &Path) -> bool {
     flatten_workspace_file_nodes(&workspace.files)
         .iter()
-        .any(|file| Path::new(&file.path) == path)
+        .any(|file| Path::new(&file.path) == path && !file_hidden_from_ai(file))
+}
+
+fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTreeNode> {
+    nodes
+        .iter()
+        .filter_map(|node| match node {
+            WorkspaceTreeNode::Folder {
+                name,
+                path,
+                relative_path,
+                children,
+            } => {
+                let children = mcp_visible_workspace_nodes(children);
+                (!children.is_empty()).then(|| WorkspaceTreeNode::Folder {
+                    name: name.clone(),
+                    path: path.clone(),
+                    relative_path: relative_path.clone(),
+                    children,
+                })
+            }
+            WorkspaceTreeNode::File { hidden_from_ai: true, .. } => None,
+            WorkspaceTreeNode::File {
+                name,
+                path,
+                relative_path,
+                extension,
+                archived,
+                locked,
+                hidden_from_ai,
+            } => Some(WorkspaceTreeNode::File {
+                name: name.clone(),
+                path: path.clone(),
+                relative_path: relative_path.clone(),
+                extension: extension.clone(),
+                archived: *archived,
+                locked: *locked,
+                hidden_from_ai: *hidden_from_ai,
+            }),
+        })
+        .collect()
+}
+
+fn file_hidden_from_ai(file: &FlatWorkspaceFile) -> bool {
+    file.hidden_from_ai
+}
+
+fn file_locked(file: &FlatWorkspaceFile) -> bool {
+    file.locked
+}
+
+fn mcp_cli_command_is_read_only(command: &str) -> bool {
+    let command = command.trim_start();
+    ["cat", "find", "ls", "man", "pwd", "rg", "grep", "head", "tail", "wc"]
+        .iter()
+        .any(|prefix| command == *prefix || command.starts_with(&format!("{prefix} ")))
 }
 
 const MCP_CLI_NODE_EVAL: &str = r#"
@@ -625,6 +699,8 @@ struct FlatWorkspaceFile {
     path: String,
     relative_path: String,
     extension: String,
+    locked: bool,
+    hidden_from_ai: bool,
 }
 
 fn flatten_workspace_file_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<FlatWorkspaceFile> {
@@ -640,11 +716,15 @@ fn append_workspace_file_nodes(nodes: &[WorkspaceTreeNode], files: &mut Vec<Flat
                 path,
                 relative_path,
                 extension,
+                locked,
+                hidden_from_ai,
                 ..
             } => files.push(FlatWorkspaceFile {
                 path: path.clone(),
                 relative_path: relative_path.clone(),
                 extension: extension.clone(),
+                locked: *locked,
+                hidden_from_ai: *hidden_from_ai,
             }),
             WorkspaceTreeNode::Folder { children, .. } => append_workspace_file_nodes(children, files),
         }

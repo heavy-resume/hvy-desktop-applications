@@ -56,6 +56,7 @@ pub fn run() {
             list_saved_templates,
             save_document_template,
             update_workspace_template_visibility,
+            update_workspace_file_ai_access,
             open_color_theme_dialog,
             save_color_theme_as_dialog,
             update_file_menu_state,

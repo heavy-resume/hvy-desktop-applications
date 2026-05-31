@@ -42,6 +42,8 @@
             expanded_paths: Vec::new(),
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
+            locked_files: Vec::new(),
+            hidden_from_ai_files: Vec::new(),
         };
         write_json_atomically(&dir.path().join(LEGACY_WORKSPACE_MANIFEST), &manifest).unwrap();
 
@@ -67,7 +69,19 @@
         fs::write(dir.path().join(".git").join("hidden.hvy"), "hidden").unwrap();
         fs::write(dir.path().join("skip.txt"), "skip").unwrap();
 
-        let nodes = scan_workspace_files(dir.path(), &[], false).unwrap();
+        let manifest = WorkspaceManifest {
+            schema_version: 1,
+            name: "Test".into(),
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+            root_files: Vec::new(),
+            expanded_paths: Vec::new(),
+            template_visibility: WorkspaceTemplateVisibility::default(),
+            archived_files: Vec::new(),
+            locked_files: Vec::new(),
+            hidden_from_ai_files: Vec::new(),
+        };
+        let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
         assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));
@@ -460,6 +474,49 @@ model = "gpt-5.4"
             .as_str()
             .unwrap()
             .contains("James Hutchison"));
+    }
+
+    #[test]
+    fn mcp_respects_locked_and_hidden_file_access() {
+        let dir = tempdir().unwrap();
+        let locked_path = dir.path().join("locked.hvy");
+        let hidden_path = dir.path().join("hidden.hvy");
+        fs::write(&locked_path, "locked needle").unwrap();
+        fs::write(&hidden_path, "hidden needle").unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Access")).unwrap();
+        update_workspace_file_ai_access_at(
+            dir.path(),
+            &locked_path,
+            WorkspaceFileAiAccessUpdate {
+                locked: Some(true),
+                hidden_from_ai: None,
+            },
+        )
+        .unwrap();
+        update_workspace_file_ai_access_at(
+            dir.path(),
+            &hidden_path,
+            WorkspaceFileAiAccessUpdate {
+                locked: None,
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        let workspace = load_workspace_from_path(dir.path()).unwrap();
+        let workspaces = vec![workspace];
+
+        let list = mcp_workspace_list_from(&workspaces).unwrap();
+        assert_eq!(list["workspaces"][0]["fileCount"], 1);
+        let tree = mcp_workspace_tree_from(&workspaces, serde_json::json!({})).unwrap();
+        let tree_text = tree["workspaces"][0]["files"].to_string();
+        assert!(tree_text.contains("locked.hvy"));
+        assert!(tree_text.contains("\"locked\":true"));
+        assert!(!tree_text.contains("hidden.hvy"));
+
+        let search = mcp_workspace_search_from(&workspaces, serde_json::json!({ "query": "needle" })).unwrap();
+        assert_eq!(search["results"].as_array().unwrap().len(), 1);
+        assert_eq!(search["results"][0]["relativePath"], "locked.hvy");
+        assert!(mcp_document_archive_from(&workspaces, serde_json::json!({ "path": path_to_string(&locked_path) })).is_err());
     }
 
     #[test]
