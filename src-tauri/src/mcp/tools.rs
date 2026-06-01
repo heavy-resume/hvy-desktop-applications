@@ -129,7 +129,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
         },
         {
             "name": "document.cli_based_editor",
-            "description": "CLI based editor for one existing HVY document in a workspace. Use this for edits after finding or creating a document: inspect with commands like ls, find, rg, cat, sed -n, echo, man, hvy request_structure, hvy search, hvy preview, hvy cheatsheet, hvy recipe, and hvy lint. Mutate with hvy insert/remove, sed -i, echo/printf redirection, cp, mv, rm, and plugin commands. Locked documents allow inspection commands and block commands that mutate document state.",
+            "description": "CLI based editor for one existing HVY document in a workspace. Use this for edits after finding or creating a document: inspect with commands like ls, find, rg, cat, sed -n, echo, man, hvy request_structure, hvy search, hvy preview, hvy cheatsheet, hvy recipe, and hvy lint. Mutate with hvy insert/remove, sed -i, echo/printf redirection, cp, mv, rm, and plugin commands. Locked and archived documents allow inspection commands and block commands that mutate document state.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -525,12 +525,12 @@ pub(crate) fn mcp_document_cli_from(
         .into_iter()
         .find(|file| Path::new(&file.path) == document_path.as_path())
         .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
-    let locked = file_locked(&document_file);
+    let read_only = file_locked(&document_file) || file_archived(&document_file);
     document_extension(&document_path)
         .ok_or_else(|| AppError::Message("document.cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
 
-    let result = if locked {
-        mcp_run_locked_cli_command(&document_path, cwd, command)?
+    let result = if read_only {
+        mcp_run_read_only_cli_command(&document_path, cwd, command)?
     } else {
         mcp_run_cli_command(&document_path, cwd, command)?
     };
@@ -545,21 +545,21 @@ pub(crate) fn mcp_document_cli_from(
     }))
 }
 
-fn mcp_run_locked_cli_command(document_path: &Path, cwd: &str, command: &str) -> AppResult<serde_json::Value> {
-    let temp_document_path = mcp_locked_cli_temp_path(document_path);
+fn mcp_run_read_only_cli_command(document_path: &Path, cwd: &str, command: &str) -> AppResult<serde_json::Value> {
+    let temp_document_path = mcp_read_only_cli_temp_path(document_path);
     fs::copy(document_path, &temp_document_path)?;
     let result = mcp_run_cli_command(&temp_document_path, cwd, command);
     let _ = fs::remove_file(&temp_document_path);
     let result = result?;
     if result.get("mutated").and_then(|mutated| mutated.as_bool()).unwrap_or(false) {
         return Err(AppError::Message(
-            "document.cli_based_editor can only run read commands for locked files.".into(),
+            "document.cli_based_editor can only run read commands for locked or archived files.".into(),
         ));
     }
     Ok(result)
 }
 
-fn mcp_locked_cli_temp_path(document_path: &Path) -> PathBuf {
+fn mcp_read_only_cli_temp_path(document_path: &Path) -> PathBuf {
     let extension = document_path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -570,7 +570,7 @@ fn mcp_locked_cli_temp_path(document_path: &Path) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!(
-        "hvy-galaxy-locked-cli-{}-{timestamp}{extension}",
+        "hvy-galaxy-read-only-cli-{}-{timestamp}{extension}",
         std::process::id(),
     ))
 }
@@ -647,6 +647,10 @@ fn file_hidden_from_ai(file: &FlatWorkspaceFile) -> bool {
 
 fn file_locked(file: &FlatWorkspaceFile) -> bool {
     file.locked
+}
+
+fn file_archived(file: &FlatWorkspaceFile) -> bool {
+    file.archived
 }
 
 const MCP_CLI_NODE_EVAL: &str = r#"
@@ -729,6 +733,7 @@ struct FlatWorkspaceFile {
     path: String,
     relative_path: String,
     extension: String,
+    archived: bool,
     locked: bool,
     hidden_from_ai: bool,
 }
@@ -746,6 +751,7 @@ fn append_workspace_file_nodes(nodes: &[WorkspaceTreeNode], files: &mut Vec<Flat
                 path,
                 relative_path,
                 extension,
+                archived,
                 locked,
                 hidden_from_ai,
                 ..
@@ -753,6 +759,7 @@ fn append_workspace_file_nodes(nodes: &[WorkspaceTreeNode], files: &mut Vec<Flat
                 path: path.clone(),
                 relative_path: relative_path.clone(),
                 extension: extension.clone(),
+                archived: *archived,
                 locked: *locked,
                 hidden_from_ai: *hidden_from_ai,
             }),

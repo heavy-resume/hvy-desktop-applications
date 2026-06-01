@@ -226,3 +226,23 @@ export function findFileInWorkspace(workspace: Workspace, path: string): Workspa
 export function workspacePathForFileInWorkspaces(workspaces: Workspace[], path: string): string | null {
   return workspaces.find((workspace) => findFileInWorkspace(workspace, path))?.path ?? null;
 }
+
+export function workspaceFileAccessInWorkspaces(
+  workspaces: Workspace[],
+  path: string,
+): { archived: boolean; locked: boolean; hiddenFromAI: boolean; readOnly: boolean } {
+  for (const workspace of workspaces) {
+    const file = findFileInWorkspace(workspace, path);
+    if (file) {
+      const archived = file.archived === true;
+      const locked = file.locked === true;
+      return {
+        archived,
+        locked,
+        hiddenFromAI: file.hiddenFromAI === true,
+        readOnly: archived || locked,
+      };
+    }
+  }
+  return { archived: false, locked: false, hiddenFromAI: false, readOnly: false };
+}

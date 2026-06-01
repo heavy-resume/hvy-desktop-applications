@@ -761,9 +761,52 @@ model = "gpt-5.4"
         .unwrap_err()
         .to_string();
         assert!(
-            error.contains("document.cli_based_editor can only run read commands for locked files.")
+            error.contains(
+                "document.cli_based_editor can only run read commands for locked or archived files."
+            )
         );
         assert_eq!(fs::read_to_string(&locked_path).unwrap(), original);
+    }
+
+    #[test]
+    fn mcp_cli_archived_document_allows_inspection_commands_and_blocks_mutations() {
+        let dir = tempdir().unwrap();
+        let archived_path = dir.path().join("archived.hvy");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("resources").join("hvy-guide.hvy"),
+            &archived_path,
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Archived CLI")).unwrap();
+        update_archived_document_file(dir.path(), &archived_path, true).unwrap();
+        let workspaces = vec![load_workspace_from_path(dir.path()).unwrap()];
+        let original = fs::read_to_string(&archived_path).unwrap();
+
+        let result = mcp_document_cli_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path_to_string(&archived_path),
+                "command": "hvy request_structure --collapse"
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["mutated"], serde_json::json!(false));
+
+        let error = mcp_document_cli_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path_to_string(&archived_path),
+                "command": "hvy insert 0 text /body archived-test"
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains(
+                "document.cli_based_editor can only run read commands for locked or archived files."
+            )
+        );
+        assert_eq!(fs::read_to_string(&archived_path).unwrap(), original);
     }
 
     #[test]
