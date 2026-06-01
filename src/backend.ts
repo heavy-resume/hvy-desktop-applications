@@ -35,7 +35,7 @@ export interface WorkspaceManifest {
   templateVisibility?: WorkspaceTemplateVisibility;
   archivedFiles?: string[];
   lockedFiles?: string[];
-  hiddenFromAiFiles?: string[];
+  hiddenFromAIFiles?: string[];
 }
 
 export interface WorkspaceFileNode {
@@ -45,7 +45,7 @@ export interface WorkspaceFileNode {
   extension: DocumentExtension;
   archived?: boolean;
   locked?: boolean;
-  hiddenFromAi?: boolean;
+  hiddenFromAI?: boolean;
 }
 
 export interface WorkspaceFolderNode {
@@ -98,6 +98,8 @@ export interface DocumentFile {
   name: string;
   extension: DocumentExtension;
   bytes: number[];
+  locked?: boolean;
+  hiddenFromAI?: boolean;
   recoveryState?: string | null;
 }
 
@@ -565,7 +567,7 @@ export function updateWorkspaceTemplateVisibility(
 
 export function updateWorkspaceFileAiAccess(
   path: string,
-  updates: { locked?: boolean; hiddenFromAi?: boolean },
+  updates: { locked?: boolean; hiddenFromAI?: boolean },
 ): Promise<Workspace> {
   return invokeDesktop('update_workspace_file_ai_access', { path, updates });
 }

@@ -15,7 +15,7 @@ struct WorkspaceManifest {
     archived_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     locked_files: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, rename = "hiddenFromAIFiles", skip_serializing_if = "Vec::is_empty")]
     hidden_from_ai_files: Vec<String>,
 }
 
@@ -45,6 +45,10 @@ impl Default for WorkspaceTemplateVisibility {
 
 fn default_true() -> bool {
     true
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,6 +99,7 @@ enum WorkspaceTreeNode {
         extension: String,
         archived: bool,
         locked: bool,
+        #[serde(rename = "hiddenFromAI")]
         hidden_from_ai: bool,
     },
 }
@@ -103,6 +108,7 @@ enum WorkspaceTreeNode {
 #[serde(rename_all = "camelCase")]
 struct WorkspaceFileAiAccessUpdate {
     locked: Option<bool>,
+    #[serde(rename = "hiddenFromAI")]
     hidden_from_ai: Option<bool>,
 }
 
@@ -130,6 +136,10 @@ struct DocumentFile {
     name: String,
     extension: String,
     bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    locked: bool,
+    #[serde(default, rename = "hiddenFromAI", skip_serializing_if = "is_false")]
+    hidden_from_ai: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_state: Option<String>,
 }

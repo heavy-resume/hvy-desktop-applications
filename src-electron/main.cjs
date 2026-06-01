@@ -943,7 +943,7 @@ function deleteDocumentFile(filePath) {
   fs.unlinkSync(filePath);
   if (!workspacePath) return null;
   updateArchivedDocumentFile(workspacePath, filePath, false);
-  updateWorkspaceFileAiAccessAt(workspacePath, filePath, { locked: false, hiddenFromAi: false });
+  updateWorkspaceFileAiAccessAt(workspacePath, filePath, { locked: false, hiddenFromAI: false });
   removeRecentFile(filePath);
   return loadWorkspaceFromPath(workspacePath);
 }
@@ -1201,7 +1201,7 @@ function initializeWorkspaceWithName(workspacePath, name) {
     expandedPaths: [],
     templateVisibility: normalizeTemplateVisibility(null),
     lockedFiles: [],
-    hiddenFromAiFiles: [],
+    hiddenFromAIFiles: [],
   };
   writeJson(manifestPath, manifest);
   return loadWorkspaceFromPath(workspacePath);
@@ -1238,7 +1238,7 @@ function touchWorkspaceManifest(workspacePath) {
 function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates = false) {
   const archivedFiles = new Set(manifest?.archivedFiles ?? []);
   const lockedFiles = new Set(manifest?.lockedFiles ?? []);
-  const hiddenFromAiFiles = new Set(manifest?.hiddenFromAiFiles ?? []);
+  const hiddenFromAIFiles = new Set(manifest?.hiddenFromAIFiles ?? []);
   return fs.readdirSync(directory, { withFileTypes: true })
     .filter((entry) => !entry.name.startsWith('.') && (includeTemplates || path.join(directory, entry.name) !== workspaceTemplatesDir(root)))
     .map((entry) => {
@@ -1263,7 +1263,7 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
         extension,
         archived: archivedFiles.has(relativePath),
         locked: lockedFiles.has(relativePath),
-        hiddenFromAi: hiddenFromAiFiles.has(relativePath),
+        hiddenFromAI: hiddenFromAIFiles.has(relativePath),
       };
     })
     .filter(Boolean)
@@ -1276,11 +1276,27 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
 function readDocumentAt(filePath) {
   const extension = documentExtension(filePath);
   if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be opened.');
+  const access = documentFileAiAccess(filePath);
   return {
     path: filePath,
     name: path.basename(filePath),
     extension,
     bytes: Array.from(fs.readFileSync(filePath)),
+    locked: access.locked,
+    hiddenFromAI: access.hiddenFromAI,
+  };
+}
+
+function documentFileAiAccess(filePath) {
+  const workspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (!workspacePath) return { locked: false, hiddenFromAI: false };
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) return { locked: false, hiddenFromAI: false };
+  const manifest = readJson(manifestPath, null);
+  const relative = relativeWorkspacePath(workspacePath, filePath);
+  return {
+    locked: (manifest?.lockedFiles ?? []).includes(relative),
+    hiddenFromAI: (manifest?.hiddenFromAIFiles ?? []).includes(relative),
   };
 }
 
@@ -1367,8 +1383,8 @@ function updateWorkspaceFileAiAccessAt(workspacePath, filePath, updates) {
   if (typeof updates.locked === 'boolean') {
     updateManifestFileSet(manifest, 'lockedFiles', relative, updates.locked);
   }
-  if (typeof updates.hiddenFromAi === 'boolean') {
-    updateManifestFileSet(manifest, 'hiddenFromAiFiles', relative, updates.hiddenFromAi);
+  if (typeof updates.hiddenFromAI === 'boolean') {
+    updateManifestFileSet(manifest, 'hiddenFromAIFiles', relative, updates.hiddenFromAI);
   }
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
@@ -1382,7 +1398,7 @@ function renameWorkspaceFileManifestEntries(workspacePath, previousPath, nextPat
   const next = relativeWorkspacePath(workspacePath, nextPath);
   renameManifestFileSetEntry(manifest, 'archivedFiles', previous, next);
   renameManifestFileSetEntry(manifest, 'lockedFiles', previous, next);
-  renameManifestFileSetEntry(manifest, 'hiddenFromAiFiles', previous, next);
+  renameManifestFileSetEntry(manifest, 'hiddenFromAIFiles', previous, next);
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
 }

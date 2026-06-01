@@ -426,6 +426,7 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
     let extension = document_extension(path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
+    let (locked, hidden_from_ai) = document_file_ai_access(path);
     Ok(DocumentFile {
         path: path_to_string(path),
         name: path
@@ -435,8 +436,30 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
             .to_string(),
         extension,
         bytes: fs::read(path)?,
+        locked,
+        hidden_from_ai,
         recovery_state: None,
     })
+}
+
+fn document_file_ai_access(path: &Path) -> (bool, bool) {
+    let Some(parent) = path.parent() else {
+        return (false, false);
+    };
+    let Some(workspace_path) = workspace_root_for_document(parent) else {
+        return (false, false);
+    };
+    let Some(manifest_path) = workspace_manifest_path(&workspace_path) else {
+        return (false, false);
+    };
+    let Ok(manifest) = read_manifest(&manifest_path) else {
+        return (false, false);
+    };
+    let relative = relative_path(&workspace_path, path);
+    (
+        manifest.locked_files.iter().any(|locked| locked == &relative),
+        manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative),
+    )
 }
 
 fn append_saved_templates(templates: &mut Vec<SavedTemplate>, directory: &Path, scope: &str) -> AppResult<()> {

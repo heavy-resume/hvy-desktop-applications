@@ -832,6 +832,8 @@ fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile
         name: snapshot.name,
         extension: snapshot.extension,
         bytes: snapshot.bytes,
+        locked: false,
+        hidden_from_ai: false,
         recovery_state: snapshot.recovery_state,
     })
 }

@@ -80,7 +80,7 @@ import {
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, redoMountedDocument, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, undoMountedDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
-import { state, type WorkspaceFilterConfig } from './state';
+import { state, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { render, renderAllAroundDocument as renderUiAroundDocument, type UiHandlers } from './ui';
 
@@ -117,7 +117,7 @@ interface DocumentSession {
   mode: HvyMode;
   dirty: boolean;
   readOnly: boolean;
-  hiddenFromAi: boolean;
+  hiddenFromAI: boolean;
   isNew: boolean;
   metaOpen: boolean;
   document: VisualDocument;
@@ -949,7 +949,7 @@ const handlers: UiHandlers = {
   }),
   selectFile: (path) => void runBusy('Opening file...', async () => {
     const access = workspaceFileAiAccess(path);
-    await openDocument(await readDocumentFile(path), { deferMount: true, readOnly: access.locked, hiddenFromAi: access.hiddenFromAi });
+    await openDocument(await readDocumentFile(path), { deferMount: true, readOnly: access.locked, hiddenFromAI: access.hiddenFromAI });
     await refreshRecents();
   }),
   refreshWorkspace: (path) => void runBusy('Refreshing workspace...', async () => {
@@ -983,17 +983,19 @@ const handlers: UiHandlers = {
   }),
   setFileLocked: (path, currentName, locked) => void runBusy(`${locked ? 'Locking' : 'Unlocking'} file...`, async () => {
     const workspace = await updateWorkspaceFileAiAccess(path, { locked });
-    upsertWorkspace(await loadWorkspace(workspace.path));
+    ensureWorkspaceFileAiAccess(workspace, path, { locked });
+    upsertWorkspace(workspace);
     syncOpenDocumentAiAccess(path, { locked });
     state.status = `${locked ? 'Locked' : 'Unlocked'} ${currentName}`;
   }),
-  setFileHiddenFromAi: (path, currentName, hiddenFromAi) => void runBusy(`${hiddenFromAi ? 'Hiding file from AI' : 'Unhiding file from AI'}...`, async () => {
-    const workspace = await updateWorkspaceFileAiAccess(path, { hiddenFromAi });
-    upsertWorkspace(await loadWorkspace(workspace.path));
+  setFileHiddenFromAI: (path, currentName, hiddenFromAI) => void runBusy(`${hiddenFromAI ? 'Hiding file from AI' : 'Unhiding file from AI'}...`, async () => {
+    const workspace = await updateWorkspaceFileAiAccess(path, { hiddenFromAI });
+    ensureWorkspaceFileAiAccess(workspace, path, { hiddenFromAI });
+    upsertWorkspace(workspace);
     workspaceFilterDocumentCache.delete(path);
-    syncOpenDocumentAiAccess(path, { hiddenFromAi });
+    syncOpenDocumentAiAccess(path, { hiddenFromAI });
     await applyWorkspaceFilterToCurrentDocument();
-    state.status = `${hiddenFromAi ? 'Hidden from AI' : 'Visible to AI'}: ${currentName}`;
+    state.status = `${hiddenFromAI ? 'Hidden from AI' : 'Visible to AI'}: ${currentName}`;
   }),
   confirmDeleteFile: (path, currentName) => {
     state.deleteFilePath = path;
@@ -1193,7 +1195,7 @@ const handlers: UiHandlers = {
       void mountCurrentDocument();
       return;
     }
-    if (state.document.hiddenFromAi && mode === 'ai') {
+    if (state.document.hiddenFromAI && mode === 'ai') {
       state.status = 'This document is hidden from AI';
       rerender();
       void mountCurrentDocument();
@@ -1702,7 +1704,7 @@ async function createWorkspaceFilterSnapshotForDocument(
   void name;
   void document;
   const workspacePath = workspacePathForFile(path);
-  if (workspaceFileAiAccess(path).hiddenFromAi) {
+  if (workspaceFileAiAccess(path).hiddenFromAI) {
     return null;
   }
   const filter = workspacePath ? state.workspaceFilters[workspacePath] : null;
@@ -1775,7 +1777,7 @@ async function createWorkspaceFilterSnapshots(
 async function buildWorkspaceFilterDocuments(workspace: Awaited<ReturnType<typeof loadWorkspace>>): Promise<HvyDocumentSearchDocument[]> {
   const documents: HvyDocumentSearchDocument[] = [];
   for (const file of flattenWorkspaceFiles(workspace.files)) {
-    if (file.hiddenFromAi) continue;
+    if (file.hiddenFromAI) continue;
     const session = documentSessions.get(file.path);
     const openDocument = state.document?.path === file.path ? state.document : null;
     const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
@@ -1805,25 +1807,38 @@ function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] 
   return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
 }
 
-function workspaceFileAiAccess(path: string): { locked: boolean; hiddenFromAi: boolean } {
+function workspaceFileAiAccess(path: string): { locked: boolean; hiddenFromAI: boolean } {
   for (const workspace of state.workspaces) {
     const file = flattenWorkspaceFiles(workspace.files).find((candidate) => candidate.path === path);
-    if (file) return { locked: file.locked === true, hiddenFromAi: file.hiddenFromAi === true };
+    if (file) return { locked: file.locked === true, hiddenFromAI: file.hiddenFromAI === true };
   }
-  return { locked: false, hiddenFromAi: false };
+  return { locked: false, hiddenFromAI: false };
 }
 
-function syncOpenDocumentAiAccess(path: string, access: { locked?: boolean; hiddenFromAi?: boolean }): void {
+function ensureWorkspaceFileAiAccess(workspace: Workspace, path: string, access: { locked?: boolean; hiddenFromAI?: boolean }): void {
+  const file = flattenWorkspaceFiles(workspace.files).find((candidate) => candidate.path === path);
+  if (!file) {
+    throw new Error('Updated file was not found in the workspace.');
+  }
+  if (typeof access.locked === 'boolean' && file.locked !== access.locked) {
+    throw new Error(`Workspace did not ${access.locked ? 'lock' : 'unlock'} the file.`);
+  }
+  if (typeof access.hiddenFromAI === 'boolean' && file.hiddenFromAI !== access.hiddenFromAI) {
+    throw new Error(`Workspace did not ${access.hiddenFromAI ? 'hide the file from AI' : 'make the file visible to AI'}.`);
+  }
+}
+
+function syncOpenDocumentAiAccess(path: string, access: { locked?: boolean; hiddenFromAI?: boolean }): void {
   const session = documentSessions.get(path);
   if (session) {
     if (typeof access.locked === 'boolean') session.readOnly = access.locked;
-    if (typeof access.hiddenFromAi === 'boolean') session.hiddenFromAi = access.hiddenFromAi;
-    if (session.hiddenFromAi && session.mode === 'ai') session.mode = 'viewer';
+    if (typeof access.hiddenFromAI === 'boolean') session.hiddenFromAI = access.hiddenFromAI;
+    if (session.hiddenFromAI && session.mode === 'ai') session.mode = 'viewer';
   }
   if (state.document?.path !== path) return;
   if (typeof access.locked === 'boolean') state.document.readOnly = access.locked;
-  if (typeof access.hiddenFromAi === 'boolean') state.document.hiddenFromAi = access.hiddenFromAi;
-  if (state.document.readOnly || (state.document.hiddenFromAi && state.document.mode === 'ai')) {
+  if (typeof access.hiddenFromAI === 'boolean') state.document.hiddenFromAI = access.hiddenFromAI;
+  if (state.document.readOnly || (state.document.hiddenFromAI && state.document.mode === 'ai')) {
     state.document.mode = 'viewer';
     void mountCurrentDocument(state.document.mounted?.document ?? pendingMountDocument ?? undefined);
   }
@@ -1900,23 +1915,23 @@ function getTabStackIndex(): number {
   return ((state.tabStackIndex % count) + count) % count;
 }
 
-function defaultDocumentMode(extension: DocumentFile['extension'], options: { defaultDocument?: boolean; hiddenFromAi?: boolean } = {}): HvyMode {
+function defaultDocumentMode(extension: DocumentFile['extension'], options: { defaultDocument?: boolean; hiddenFromAI?: boolean } = {}): HvyMode {
   if (options.defaultDocument) return 'viewer';
-  if (options.hiddenFromAi && extension === '.hvy') return 'viewer';
+  if (options.hiddenFromAI && extension === '.hvy') return 'viewer';
   if (extension === '.thvy' || extension === '.phvy') return 'editor';
   if (extension === '.hvy') return 'ai';
   return 'viewer';
 }
 
 function syncDocumentTabs(): void {
-  const tabs = new Map<string, { path: string; name: string; dirty: boolean; readOnly: boolean; hiddenFromAi: boolean; active: boolean }>();
+  const tabs = new Map<string, { path: string; name: string; dirty: boolean; readOnly: boolean; hiddenFromAI: boolean; active: boolean }>();
   if (state.document) {
     tabs.set(state.document.path, {
       path: state.document.path,
       name: state.document.name,
       dirty: state.document.dirty,
       readOnly: state.document.readOnly,
-      hiddenFromAi: state.document.hiddenFromAi,
+      hiddenFromAI: state.document.hiddenFromAI,
       active: true,
     });
   }
@@ -1928,7 +1943,7 @@ function syncDocumentTabs(): void {
       name: session.name,
       dirty: active ? state.document?.dirty ?? session.dirty : session.dirty,
       readOnly: session.readOnly,
-      hiddenFromAi: session.hiddenFromAi,
+      hiddenFromAI: session.hiddenFromAI,
       active,
     });
   }
@@ -1940,7 +1955,7 @@ function syncDocumentTabs(): void {
       name: session?.name ?? fileNameFromPath(path),
       dirty: session?.dirty ?? false,
       readOnly: session?.readOnly ?? false,
-      hiddenFromAi: session?.hiddenFromAi ?? false,
+      hiddenFromAI: session?.hiddenFromAI ?? false,
       active: false,
     });
   }
@@ -1954,7 +1969,7 @@ function syncDocumentTabs(): void {
   }
 }
 
-async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAi?: boolean } = {}): Promise<void> {
+async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
   preserveCurrentDocumentSession();
   markDocumentTabOpened(file.path);
   state.document?.mounted?.mount.destroy();
@@ -1962,19 +1977,24 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
   const bytes = new Uint8Array(file.bytes);
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
-  const access = options.defaultDocument ? { locked: true, hiddenFromAi: false } : workspaceFileAiAccess(file.path);
+  const access = options.defaultDocument
+    ? { locked: true, hiddenFromAI: false }
+    : {
+        locked: file.locked === true || workspaceFileAiAccess(file.path).locked,
+        hiddenFromAI: file.hiddenFromAI === true || workspaceFileAiAccess(file.path).hiddenFromAI,
+      };
   const readOnly = session?.readOnly ?? (options.readOnly === true || access.locked || options.defaultDocument === true);
-  const hiddenFromAi = session?.hiddenFromAi ?? (options.hiddenFromAi === true || access.hiddenFromAi);
+  const hiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
   const document = session?.document ?? cachedFilterDocument ?? await deserializeHvy(bytes, file.extension);
   const recoveryState = options.recovered ? file.recoveryState ?? null : session?.recoveryState ?? null;
   state.document = {
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
     extension: session?.extension ?? file.extension,
-    mode: session?.mode ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAi }),
+    mode: session?.mode ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI }),
     dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
     readOnly,
-    hiddenFromAi,
+    hiddenFromAI,
     isNew: session?.isNew ?? options.isNew === true,
     metaOpen: session?.metaOpen ?? false,
     mounted: null,
@@ -2025,7 +2045,7 @@ function preserveCurrentDocumentSession(): void {
     mode: openDocument.mode,
     dirty,
     readOnly: openDocument.readOnly,
-    hiddenFromAi: openDocument.hiddenFromAi,
+    hiddenFromAI: openDocument.hiddenFromAI,
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
@@ -2044,7 +2064,7 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
     mode: openDocument.mode,
     dirty: openDocument.dirty,
     readOnly: openDocument.readOnly,
-    hiddenFromAi: openDocument.hiddenFromAi,
+    hiddenFromAI: openDocument.hiddenFromAI,
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
@@ -2082,6 +2102,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   state.document.mounted?.mount.destroy();
   mountThemeReapplyCleanup?.();
   mountThemeReapplyCleanup = null;
+  mountRoot.classList.toggle('is-hidden-from-ai', state.document.hiddenFromAI);
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
     searchSnapshot,
@@ -2363,7 +2384,7 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
     mode: previousMode,
     dirty: false,
     readOnly: false,
-    hiddenFromAi: workspaceFileAiAccess(file.path).hiddenFromAi,
+    hiddenFromAI: workspaceFileAiAccess(file.path).hiddenFromAI,
     isNew: false,
     metaOpen: false,
     mounted: null,
@@ -2841,7 +2862,7 @@ async function restoreBackupsToTabs(backups: DocumentBackup[]): Promise<void> {
       mode: defaultDocumentMode(file.extension),
       dirty: true,
       readOnly: false,
-      hiddenFromAi: workspaceFileAiAccess(file.path).hiddenFromAi,
+      hiddenFromAI: workspaceFileAiAccess(file.path).hiddenFromAI,
       isNew: false,
       metaOpen: false,
       document,
@@ -3031,7 +3052,7 @@ async function droppedWorkspaceFilesFrom(files: File[]): Promise<DroppedWorkspac
 }
 
 function workspacePathForFile(filePath: string): string | null {
-  return state.workspaces.find((workspace) => filePath.startsWith(workspace.path))?.path ?? null;
+  return workspacePathForFileInWorkspaces(state.workspaces, filePath);
 }
 
 function loadWorkspace(path: string): Promise<Workspace> {

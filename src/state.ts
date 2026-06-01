@@ -10,7 +10,7 @@ export interface OpenDocument {
   mode: HvyMode;
   dirty: boolean;
   readOnly: boolean;
-  hiddenFromAi: boolean;
+  hiddenFromAI: boolean;
   isNew: boolean;
   metaOpen: boolean;
   mounted: MountedDocument | null;
@@ -22,7 +22,7 @@ export interface OpenDocumentTab {
   name: string;
   dirty: boolean;
   readOnly: boolean;
-  hiddenFromAi: boolean;
+  hiddenFromAI: boolean;
   active: boolean;
 }
 
@@ -221,4 +221,8 @@ export function findFileInWorkspace(workspace: Workspace, path: string): Workspa
     return null;
   };
   return visit(workspace.files);
+}
+
+export function workspacePathForFileInWorkspaces(workspaces: Workspace[], path: string): string | null {
+  return workspaces.find((workspace) => findFileInWorkspace(workspace, path))?.path ?? null;
 }

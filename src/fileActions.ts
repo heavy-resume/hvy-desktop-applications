@@ -1,4 +1,4 @@
-import type { AppState } from './state';
+import { workspacePathForFileInWorkspaces, type AppState } from './state';
 
 export interface FileActionAvailability {
   closeDocument: boolean;
@@ -40,5 +40,5 @@ export function isWorkspaceTemplatePath(state: AppState, path: string): boolean 
 export function currentDocumentWorkspacePath(state: AppState): string | null {
   const path = state.document?.path;
   if (!path) return null;
-  return state.workspaces.find((workspace) => path.startsWith(workspace.path))?.path ?? null;
+  return workspacePathForFileInWorkspaces(state.workspaces, path);
 }

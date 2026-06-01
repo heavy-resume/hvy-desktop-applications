@@ -19,6 +19,67 @@
     }
 
     #[test]
+    fn workspace_file_ai_access_persists_after_reload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("private.hvy");
+        fs::write(&path, "private notes").unwrap();
+        initialize_workspace(dir.path()).unwrap();
+
+        update_workspace_file_ai_access_at(
+            dir.path(),
+            &path,
+            WorkspaceFileAiAccessUpdate {
+                locked: None,
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+
+        let loaded = load_workspace_from_path(dir.path()).unwrap();
+        assert_eq!(loaded.manifest.hidden_from_ai_files, vec!["private.hvy"]);
+        let file = loaded.files.iter().find_map(|node| match node {
+            WorkspaceTreeNode::File { name, hidden_from_ai, .. } if name == "private.hvy" => {
+                Some(hidden_from_ai)
+            }
+            _ => None,
+        });
+        assert_eq!(file, Some(&true));
+    }
+
+    #[test]
+    fn update_workspace_file_ai_access_command_persists_hidden_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("private.hvy");
+        fs::write(&path, "private notes").unwrap();
+        initialize_workspace(dir.path()).unwrap();
+
+        let workspace = update_workspace_file_ai_access(
+            path_to_string(&path),
+            WorkspaceFileAiAccessUpdate {
+                locked: None,
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(workspace.manifest.hidden_from_ai_files, vec!["private.hvy"]);
+        let loaded = load_workspace_from_path(dir.path()).unwrap();
+        assert_eq!(loaded.manifest.hidden_from_ai_files, vec!["private.hvy"]);
+        let document = read_document_at(&path).unwrap();
+        assert!(document.hidden_from_ai);
+    }
+
+    #[test]
+    fn workspace_file_ai_access_update_deserializes_renderer_hidden_field() {
+        let update: WorkspaceFileAiAccessUpdate = serde_json::from_value(serde_json::json!({
+            "hiddenFromAI": true
+        }))
+        .unwrap();
+
+        assert_eq!(update.hidden_from_ai, Some(true));
+    }
+
+    #[test]
     fn import_source_extension_accepts_pdf() {
         assert_eq!(import_source_extension(Path::new("source.pdf")), Some(".pdf".into()));
     }
