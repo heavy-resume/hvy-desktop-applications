@@ -59,6 +59,25 @@ pub fn run_mcp_stdio_main() -> Result<(), String> {
     mcp::run_mcp_stdio_main()
 }
 
+pub fn extract_pdf_text_cli(path: &str) -> Result<String, String> {
+    extract_pdf_text_at(Path::new(path)).map_err(|error| error.to_string())
+}
+
+pub fn extract_pdf_text_cli_path_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--extract-pdf-text")
+        .map(|pair| pair[1].as_str())
+}
+
+fn extract_pdf_text_at(path: &Path) -> AppResult<String> {
+    let text = pdf_extract::extract_text(path).map_err(|error| AppError::Message(error.to_string()))?;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::Message("PDF did not contain selectable text.".into()));
+    }
+    Ok(trimmed)
+}
+
 include!("types.rs");
 include!("commands.rs");
 include!("app_runtime.rs");

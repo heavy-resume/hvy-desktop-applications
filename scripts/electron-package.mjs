@@ -79,6 +79,7 @@ const appPaths = await packager({
 });
 
 for (const appPath of appPaths) {
+  copyRustHelper(appPath);
   if (platform === 'darwin') {
     brandPackagedMacApp(appPath);
   }
@@ -89,6 +90,38 @@ if (platform === 'darwin' && os.platform() === 'darwin') {
   for (const appPath of appPaths) {
     console.log(`macOS app: ${appPath}`);
   }
+}
+
+function copyRustHelper(appPath) {
+  const source = rustHelperSourcePath();
+  const helperName = platform === 'win32' ? 'hvy-galaxy.exe' : 'hvy-galaxy';
+  const resourcesPath = platform === 'darwin'
+    ? path.join(appPath, `${appName}.app`, 'Contents', 'Resources')
+    : path.join(appPath, 'resources');
+  fs.copyFileSync(source, path.join(resourcesPath, helperName));
+}
+
+function rustHelperSourcePath() {
+  const helperName = platform === 'win32' ? 'hvy-galaxy.exe' : 'hvy-galaxy';
+  const target = rustTargetTriple();
+  const candidates = [
+    target ? path.resolve('src-tauri', 'target', target, 'release', helperName) : null,
+    path.resolve('src-tauri', 'target', 'release', helperName),
+    path.resolve('src-tauri', 'target', 'debug', helperName),
+  ].filter(Boolean);
+  const source = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!source) {
+    throw new Error(`Rust helper binary was not found. Build src-tauri first. Tried: ${candidates.join(', ')}`);
+  }
+  return source;
+}
+
+function rustTargetTriple() {
+  if (platform === 'darwin' && arch === 'arm64') return 'aarch64-apple-darwin';
+  if (platform === 'darwin' && arch === 'x64') return 'x86_64-apple-darwin';
+  if (platform === 'win32' && arch === 'arm64') return 'aarch64-pc-windows-msvc';
+  if (platform === 'win32' && arch === 'x64') return 'x86_64-pc-windows-msvc';
+  return null;
 }
 
 function brandPackagedMacApp(appPath) {

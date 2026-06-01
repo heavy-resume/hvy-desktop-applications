@@ -1,5 +1,5 @@
 import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
@@ -2306,10 +2306,14 @@ function renderImportExcludeTagsField(value: string, suggestions: string[]): str
 }
 
 function collectImportSourceTagSuggestions(source: AppState['importSource']): string[] {
-  if (!source?.bytes || source.extension === '.txt') {
+  if (!source?.bytes || !isImportSourceDocumentExtension(source.extension)) {
     return [];
   }
   return collectDocumentTags(deserializeDocumentBytes(new Uint8Array(source.bytes), source.extension));
+}
+
+function isImportSourceDocumentExtension(extension: NonNullable<AppState['importSource']>['extension']): extension is DocumentExtension {
+  return extension === '.hvy' || extension === '.thvy' || extension === '.phvy' || extension === '.md';
 }
 
 function collectDocumentTags(document: VisualDocument): string[] {
@@ -2398,12 +2402,13 @@ function renderImportCurrentSourceControls(state: AppState, workspace: AppState[
 }
 
 function renderAnywhereImportSourceControls(source: AppState['importSource']): string {
+  const sourceText = source?.extension === '.pdf' ? source.text ?? '' : '';
   return `
     <div class="source-picker-row">
       <button type="button" data-action="choose-import-source">Choose file</button>
       <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
     </div>
-    <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here"></textarea>
+    <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here">${escapeHtml(sourceText)}</textarea>
     <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>`;
 }
 

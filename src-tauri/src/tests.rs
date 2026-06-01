@@ -18,6 +18,22 @@
     }
 
     #[test]
+    fn import_source_extension_accepts_pdf() {
+        assert_eq!(import_source_extension(Path::new("source.pdf")), Some(".pdf".into()));
+    }
+
+    #[test]
+    fn extract_pdf_text_cli_path_arg_reads_following_path() {
+        let args = vec![
+            "hvy-galaxy".to_string(),
+            "--extract-pdf-text".to_string(),
+            "/tmp/source.pdf".to_string(),
+        ];
+
+        assert_eq!(extract_pdf_text_cli_path_arg(&args), Some("/tmp/source.pdf"));
+    }
+
+    #[test]
     fn initializes_workspace_with_user_facing_name() {
         let dir = tempdir().unwrap();
         let workspace = initialize_workspace_with_name(dir.path(), Some("Nebula Drafts")).unwrap();

@@ -1849,10 +1849,14 @@ function importedTemplateOutputExtension(extension: DocumentExtension): Document
 
 async function importSourceFrom(pastedSourceText: string): Promise<PreparedImportSource | null> {
   const pasted = pastedSourceText.trim();
+  const source = state.importSource;
+  if (source?.extension === '.pdf') {
+    const text = pasted || source.text?.trim() || '';
+    return text ? { ...source, text } : null;
+  }
   if (pasted.length >= 50) {
     return { path: '', name: 'Pasted text', extension: '.txt', text: pasted };
   }
-  const source = state.importSource;
   if (!source) {
     return null;
   }

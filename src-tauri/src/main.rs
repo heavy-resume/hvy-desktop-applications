@@ -1,5 +1,17 @@
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
+    if let Some(path) = hvy_galaxy_lib::extract_pdf_text_cli_path_arg(&args) {
+        match hvy_galaxy_lib::extract_pdf_text_cli(path) {
+            Ok(text) => {
+                print!("{text}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if args.iter().any(|arg| arg == "--mcp-stdio") {
         if let Err(error) = hvy_galaxy_lib::run_mcp_stdio_main() {
             eprintln!("{error}");
@@ -64,8 +76,10 @@ fn macos_major_version() -> Option<u64> {
 
 fn launch_electron_shell(args: &[String]) -> Result<i32, String> {
     let executable = electron_executable_path()?;
+    let current = std::env::current_exe().map_err(|error| error.to_string())?;
     let status = std::process::Command::new(&executable)
         .args(args)
+        .env("HVY_GALAXY_RUST_COMMAND", current)
         .status()
         .map_err(|error| format!("Could not launch Electron shell at {}: {error}", executable.display()))?;
     Ok(status.code().unwrap_or(1))

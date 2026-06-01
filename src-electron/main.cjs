@@ -1,8 +1,10 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard } = require('electron');
+const { execFile } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { promisify } = require('node:util');
 
 const WORKSPACE_MANIFEST = '.hvyworkspace.json';
 const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
@@ -17,11 +19,13 @@ const AI_MAX_CONTEXT_CHARS = 750000;
 const AI_CONTEXT_STEP_CHARS = 1000;
 const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.md']);
+const IMPORT_SOURCE_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.txt', '.md', '.pdf']);
 const TEMPLATE_EXTENSIONS = new Set(['.thvy', '.phvy']);
 const PDF_EXTENSIONS = new Set(['.pdf']);
 const THEME_EXTENSIONS = new Set(['.hvytheme', '.json']);
 const APP_IDENTIFIER = 'com.heavyresume.hvy-galaxy';
 const APP_NAME = 'HVY Galaxy';
+const runFile = promisify(execFile);
 
 let mainWindow = null;
 let appCloseAllowed = false;
@@ -729,16 +733,17 @@ async function openImportSourceDialog() {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: [
-      { name: 'Import sources', extensions: ['hvy', 'thvy', 'phvy', 'txt', 'md'] },
+      { name: 'Import sources', extensions: ['hvy', 'thvy', 'phvy', 'txt', 'md', 'pdf'] },
       { name: 'HVY documents', extensions: ['hvy', 'thvy', 'phvy'] },
       { name: 'Markdown', extensions: ['md'] },
       { name: 'Plain text', extensions: ['txt'] },
+      { name: 'PDF', extensions: ['pdf'] },
     ],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   const selected = result.filePaths[0];
   const extension = path.extname(selected).toLowerCase();
-  if (!['.hvy', '.thvy', '.phvy', '.txt', '.md'].includes(extension)) throw new Error('Only .hvy, .thvy, .phvy, .txt, and .md files can be imported.');
+  if (!IMPORT_SOURCE_EXTENSIONS.has(extension)) throw new Error('Only .hvy, .thvy, .phvy, .txt, .md, and .pdf files can be imported.');
   const source = {
     path: selected,
     name: path.basename(selected),
@@ -746,10 +751,37 @@ async function openImportSourceDialog() {
   };
   if (extension === '.txt') {
     source.text = fs.readFileSync(selected, 'utf8');
+  } else if (extension === '.pdf') {
+    source.text = await extractPdfText(selected);
   } else {
     source.bytes = Array.from(fs.readFileSync(selected));
   }
   return source;
+}
+
+async function extractPdfText(filePath) {
+  const executable = rustHelperPath();
+  const { stdout } = await runFile(executable, ['--extract-pdf-text', filePath], {
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  return stdout.trim();
+}
+
+function rustHelperPath() {
+  if (process.env.HVY_GALAXY_RUST_COMMAND) {
+    return process.env.HVY_GALAXY_RUST_COMMAND;
+  }
+  const name = process.platform === 'win32' ? 'hvy-galaxy.exe' : 'hvy-galaxy';
+  const packaged = path.join(process.resourcesPath, name);
+  if (fs.existsSync(packaged)) {
+    return packaged;
+  }
+  const devRustLauncher = path.resolve('src-tauri', 'target', 'debug', name);
+  if (fs.existsSync(devRustLauncher)) {
+    return devRustLauncher;
+  }
+  return packaged;
 }
 
 function readDocumentFile(filePath) {
