@@ -709,6 +709,64 @@ model = "gpt-5.4"
     }
 
     #[test]
+    fn mcp_cli_locked_document_allows_inspection_commands_and_blocks_mutations() {
+        let dir = tempdir().unwrap();
+        let locked_path = dir.path().join("locked.hvy");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("resources").join("hvy-guide.hvy"),
+            &locked_path,
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Locked CLI")).unwrap();
+        update_workspace_file_ai_access_at(
+            dir.path(),
+            &locked_path,
+            WorkspaceFileAiAccessUpdate {
+                locked: Some(true),
+                hidden_from_ai: None,
+            },
+        )
+        .unwrap();
+        let workspaces = vec![load_workspace_from_path(dir.path()).unwrap()];
+        let original = fs::read_to_string(&locked_path).unwrap();
+
+        for command in [
+            "hvy request_structure --collapse",
+            "hvy search hvy --max 3",
+            "hvy preview /body/welcome/text-0",
+            "hvy lint",
+            "hvy cheatsheet common-patterns",
+            "hvy recipe scripting",
+            "sed -n '1,20p' /raw-preview.hvy.txt",
+            "echo test",
+        ] {
+            let result = mcp_document_cli_from(
+                &workspaces,
+                serde_json::json!({
+                    "path": path_to_string(&locked_path),
+                    "command": command
+                }),
+            )
+            .unwrap();
+            assert_eq!(result["mutated"], serde_json::json!(false), "{command}");
+        }
+
+        let error = mcp_document_cli_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path_to_string(&locked_path),
+                "command": "hvy insert 0 text /body locked-test"
+            }),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("document.cli_based_editor can only run read commands for locked files.")
+        );
+        assert_eq!(fs::read_to_string(&locked_path).unwrap(), original);
+    }
+
+    #[test]
     fn mcp_workspace_search_can_be_scoped_and_limited() {
         let first = tempdir().unwrap();
         let second = tempdir().unwrap();

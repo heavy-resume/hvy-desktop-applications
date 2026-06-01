@@ -129,7 +129,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
         },
         {
             "name": "document.cli_based_editor",
-            "description": "CLI based editor for one existing HVY document in a workspace. Use this for edits after finding or creating a document: inspect with commands like ls, find, rg, cat, and man; mutate with hvy insert/remove, sed, echo/printf redirection, cp, mv, rm, and plugin commands. Mutating commands are saved back to the document file.",
+            "description": "CLI based editor for one existing HVY document in a workspace. Use this for edits after finding or creating a document: inspect with commands like ls, find, rg, cat, sed -n, echo, man, hvy request_structure, hvy search, hvy preview, hvy cheatsheet, hvy recipe, and hvy lint. Mutate with hvy insert/remove, sed -i, echo/printf redirection, cp, mv, rm, and plugin commands. Locked documents allow inspection commands and block commands that mutate document state.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -499,7 +499,10 @@ fn hvy_guidance_path() -> AppResult<PathBuf> {
     Err(AppError::Message("HVY guidance document was not found.".into()))
 }
 
-fn mcp_document_cli_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
+pub(crate) fn mcp_document_cli_from(
+    workspaces: &[Workspace],
+    arguments: serde_json::Value,
+) -> AppResult<serde_json::Value> {
     let path = arguments
         .get("path")
         .and_then(|path| path.as_str())
@@ -522,17 +525,60 @@ fn mcp_document_cli_from(workspaces: &[Workspace], arguments: serde_json::Value)
         .into_iter()
         .find(|file| Path::new(&file.path) == document_path.as_path())
         .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
-    if file_locked(&document_file) && !mcp_cli_command_is_read_only(command) {
+    let locked = file_locked(&document_file);
+    document_extension(&document_path)
+        .ok_or_else(|| AppError::Message("document.cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
+
+    let result = if locked {
+        mcp_run_locked_cli_command(&document_path, cwd, command)?
+    } else {
+        mcp_run_cli_command(&document_path, cwd, command)?
+    };
+    if result.get("mutated").and_then(|mutated| mutated.as_bool()).unwrap_or(false) {
+        touch_workspace_manifest(Path::new(&workspace.path))?;
+    }
+    Ok(serde_json::json!({
+        "path": path,
+        "cwd": result.get("cwd").cloned().unwrap_or_else(|| serde_json::json!(cwd)),
+        "mutated": result.get("mutated").cloned().unwrap_or_else(|| serde_json::json!(false)),
+        "results": result.get("results").cloned().unwrap_or_else(|| serde_json::json!([])),
+    }))
+}
+
+fn mcp_run_locked_cli_command(document_path: &Path, cwd: &str, command: &str) -> AppResult<serde_json::Value> {
+    let temp_document_path = mcp_locked_cli_temp_path(document_path);
+    fs::copy(document_path, &temp_document_path)?;
+    let result = mcp_run_cli_command(&temp_document_path, cwd, command);
+    let _ = fs::remove_file(&temp_document_path);
+    let result = result?;
+    if result.get("mutated").and_then(|mutated| mutated.as_bool()).unwrap_or(false) {
         return Err(AppError::Message(
             "document.cli_based_editor can only run read commands for locked files.".into(),
         ));
     }
-    document_extension(&document_path)
-        .ok_or_else(|| AppError::Message("document.cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
+    Ok(result)
+}
 
+fn mcp_locked_cli_temp_path(document_path: &Path) -> PathBuf {
+    let extension = document_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "hvy-galaxy-locked-cli-{}-{timestamp}{extension}",
+        std::process::id(),
+    ))
+}
+
+fn mcp_run_cli_command(document_path: &Path, cwd: &str, command: &str) -> AppResult<serde_json::Value> {
     let package_root = mcp_cli_package_root()?;
     let request = serde_json::json!({
-        "filePath": path_to_string(&document_path),
+        "filePath": path_to_string(document_path),
         "cwd": cwd,
         "commands": [command],
     });
@@ -546,16 +592,7 @@ fn mcp_document_cli_from(workspaces: &[Workspace], arguments: serde_json::Value)
     if !output.status.success() {
         return Err(AppError::Message(mcp_cli_runner_error(&output)));
     }
-    let result: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    if result.get("mutated").and_then(|mutated| mutated.as_bool()).unwrap_or(false) {
-        touch_workspace_manifest(Path::new(&workspace.path))?;
-    }
-    Ok(serde_json::json!({
-        "path": path,
-        "cwd": result.get("cwd").cloned().unwrap_or_else(|| serde_json::json!(cwd)),
-        "mutated": result.get("mutated").cloned().unwrap_or_else(|| serde_json::json!(false)),
-        "results": result.get("results").cloned().unwrap_or_else(|| serde_json::json!([])),
-    }))
+    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
 fn workspace_contains_visible_document(workspace: &Workspace, path: &Path) -> bool {
@@ -610,13 +647,6 @@ fn file_hidden_from_ai(file: &FlatWorkspaceFile) -> bool {
 
 fn file_locked(file: &FlatWorkspaceFile) -> bool {
     file.locked
-}
-
-fn mcp_cli_command_is_read_only(command: &str) -> bool {
-    let command = command.trim_start();
-    ["cat", "find", "ls", "man", "pwd", "rg", "grep", "head", "tail", "wc"]
-        .iter()
-        .any(|prefix| command == *prefix || command.starts_with(&format!("{prefix} ")))
 }
 
 const MCP_CLI_NODE_EVAL: &str = r#"
