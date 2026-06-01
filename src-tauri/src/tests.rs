@@ -92,6 +92,37 @@
         assert!(text.contains("Right cell"));
     }
 
+    #[test]
+    fn extracts_docx_preserved_run_boundary_spaces() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("source.docx");
+        write_docx(&path, r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p>
+                  <w:r><w:t>July</w:t></w:r>
+                  <w:r><w:t xml:space="preserve"> 2014</w:t></w:r>
+                  <w:r><w:t>–March</w:t></w:r>
+                  <w:r><w:t xml:space="preserve"> 2015</w:t></w:r>
+                </w:p>
+                <w:p>
+                  <w:r><w:t>Developed</w:t></w:r>
+                  <w:r><w:t xml:space="preserve"> REST API for </w:t></w:r>
+                  <w:r><w:t>whitelisting</w:t></w:r>
+                  <w:r><w:t xml:space="preserve"> devices</w:t></w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+        "#);
+
+        let text = extract_docx_text_at(&path).unwrap();
+
+        assert!(text.contains("July 2014–March 2015"));
+        assert!(text.contains("Developed REST API for whitelisting devices"));
+        assert!(!text.contains("July2014"));
+        assert!(!text.contains("DevelopedREST"));
+    }
+
     fn write_docx(path: &Path, document_xml: &str) {
         let file = fs::File::create(path).unwrap();
         let mut zip = zip::ZipWriter::new(file);

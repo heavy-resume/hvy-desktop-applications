@@ -885,17 +885,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "docx-lite"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a66db35e6c788cf5624ac83aefbea59f8f7ab9f26a276a73dea53645f66119f8"
-dependencies = [
- "quick-xml 0.36.2",
- "thiserror 1.0.69",
- "zip",
-]
-
-[[package]]
 name = "dom_query"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1660,10 +1649,10 @@ name = "hvy-galaxy"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "docx-lite",
  "libc",
  "objc2-foundation",
  "pdf-extract",
+ "quick-xml 0.36.2",
  "rfd",
  "serde",
  "serde_json",
