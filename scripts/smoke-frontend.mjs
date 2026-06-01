@@ -35,6 +35,7 @@ async function smokeViewport(viewport) {
       page.locator('.error-banner').waitFor({ timeout: 10_000 }),
       page.getByText('Startup error').waitFor({ timeout: 10_000 }),
     ]);
+    await assertAppShellFillsViewport(page, viewport, 'empty document state');
     await page.getByTitle('New HVY document').click();
     await page.locator('.document-tab-name', { hasText: 'Untitled.hvy' }).waitFor({ timeout: 10_000 });
     await page.locator('.dirty-indicator', { hasText: 'Unsaved' }).waitFor({ timeout: 10_000 });
@@ -110,6 +111,37 @@ async function smokeViewport(viewport) {
     }
   } finally {
     await page.close();
+  }
+}
+
+async function assertAppShellFillsViewport(page, viewport, stateName) {
+  const layout = await page.evaluate(() => {
+    const rect = (selector) => {
+      const element = document.querySelector(selector);
+      if (!(element instanceof HTMLElement)) return null;
+      const bounds = element.getBoundingClientRect();
+      return {
+        bottom: bounds.bottom,
+        height: bounds.height,
+      };
+    };
+    return {
+      viewportHeight: window.innerHeight,
+      shell: rect('.app-shell'),
+      sidebar: rect('.workspace-sidebar'),
+      documentShell: rect('.document-shell'),
+      host: rect('#hvyMount'),
+    };
+  });
+  const reachesViewportBottom = (rect) => rect && Math.abs(rect.bottom - layout.viewportHeight) <= 1;
+  if (
+    !reachesViewportBottom(layout.shell)
+    || !reachesViewportBottom(layout.sidebar)
+    || !reachesViewportBottom(layout.documentShell)
+    || !layout.host
+    || layout.host.height <= 0
+  ) {
+    throw new Error(`App shell does not fill viewport in ${stateName} at ${viewport.width}x${viewport.height}: ${JSON.stringify(layout)}`);
   }
 }
 

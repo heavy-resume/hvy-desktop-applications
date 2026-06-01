@@ -24,6 +24,10 @@ fn main() {
             }
         }
     }
+    if let Some(arg) = args.iter().find(|arg| arg.starts_with("--extract-") && arg.ends_with("-text")) {
+        eprintln!("Unknown extraction command: {arg}");
+        std::process::exit(2);
+    }
     if args.iter().any(|arg| arg == "--mcp-stdio") {
         if let Err(error) = hvy_galaxy_lib::run_mcp_stdio_main() {
             eprintln!("{error}");

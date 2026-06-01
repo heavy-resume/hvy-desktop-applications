@@ -39,6 +39,7 @@ process.on('SIGTERM', () => {
 });
 
 await waitForRenderer(rendererUrl);
+await buildRustHelper();
 
 const electronLaunch = await electronLaunchCommand();
 const electron = spawn(electronLaunch.command, electronLaunch.args, {
@@ -76,6 +77,28 @@ function canConnect(url) {
     request.setTimeout(1_000, () => {
       request.destroy();
       resolve(false);
+    });
+  });
+}
+
+function buildRustHelper() {
+  return new Promise((resolve, reject) => {
+    const cargo = spawn('cargo', ['build'], {
+      cwd: path.resolve('src-tauri'),
+      stdio: 'inherit',
+      env: process.env,
+    });
+    cargo.on('error', reject);
+    cargo.on('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`cargo build exited with signal ${signal}`));
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(`cargo build exited with code ${code}`));
+        return;
+      }
+      resolve();
     });
   });
 }

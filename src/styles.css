@@ -157,7 +157,13 @@ button:disabled {
 .app-shell {
   display: grid;
   grid-template-columns: var(--workspace-sidebar-width, 320px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100vh;
+  overflow: hidden;
+}
+
+#modalRoot {
+  display: contents;
 }
 
 .workspace-sidebar {
