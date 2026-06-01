@@ -282,25 +282,28 @@ fn open_file_dialog(app: AppHandle) -> AppResult<Option<DocumentFile>> {
 #[tauri::command]
 fn open_import_source_dialog() -> AppResult<Option<ImportSourceFile>> {
     let Some(path) = rfd::FileDialog::new()
-        .add_filter("Import sources", &["hvy", "thvy", "phvy", "txt", "md", "pdf"])
+        .add_filter("Import sources", &["hvy", "thvy", "phvy", "txt", "md", "pdf", "docx"])
         .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
         .add_filter("Markdown", &["md"])
         .add_filter("Plain text", &["txt"])
         .add_filter("PDF", &["pdf"])
+        .add_filter("DocX", &["docx"])
         .pick_file()
     else {
         return Ok(None);
     };
     let extension = import_source_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, .txt, .md, and .pdf files can be imported.".into()))?;
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, .txt, .md, .pdf, and .docx files can be imported.".into()))?;
     let text = if extension == ".txt" {
         Some(fs::read_to_string(&path)?)
     } else if extension == ".pdf" {
         Some(extract_pdf_text_at(&path)?)
+    } else if extension == ".docx" {
+        Some(extract_docx_text_at(&path)?)
     } else {
         None
     };
-    let bytes = if extension == ".txt" || extension == ".pdf" {
+    let bytes = if extension == ".txt" || extension == ".pdf" || extension == ".docx" {
         None
     } else {
         Some(fs::read(&path)?)

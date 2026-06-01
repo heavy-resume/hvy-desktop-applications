@@ -1,6 +1,7 @@
     use super::mcp::*;
     use super::*;
     use tempfile::tempdir;
+    use zip::write::FileOptions;
 
     #[test]
     fn initializes_and_loads_workspace_manifest() {
@@ -23,6 +24,11 @@
     }
 
     #[test]
+    fn import_source_extension_accepts_docx() {
+        assert_eq!(import_source_extension(Path::new("source.docx")), Some(".docx".into()));
+    }
+
+    #[test]
     fn extract_pdf_text_cli_path_arg_reads_following_path() {
         let args = vec![
             "hvy-galaxy".to_string(),
@@ -31,6 +37,81 @@
         ];
 
         assert_eq!(extract_pdf_text_cli_path_arg(&args), Some("/tmp/source.pdf"));
+    }
+
+    #[test]
+    fn extract_docx_text_cli_path_arg_reads_following_path() {
+        let args = vec![
+            "hvy-galaxy".to_string(),
+            "--extract-docx-text".to_string(),
+            "/tmp/source.docx".to_string(),
+        ];
+
+        assert_eq!(extract_docx_text_cli_path_arg(&args), Some("/tmp/source.docx"));
+    }
+
+    #[test]
+    fn extracts_docx_paragraph_text() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("source.docx");
+        write_docx(&path, r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:p><w:r><w:t>Alpha paragraph</w:t></w:r></w:p>
+                <w:p><w:r><w:t>Beta paragraph</w:t></w:r></w:p>
+              </w:body>
+            </w:document>
+        "#);
+
+        let text = extract_docx_text_at(&path).unwrap();
+
+        assert!(text.contains("Alpha paragraph"));
+        assert!(text.contains("Beta paragraph"));
+    }
+
+    #[test]
+    fn extracts_docx_table_text() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("source.docx");
+        write_docx(&path, r#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <w:tbl>
+                  <w:tr>
+                    <w:tc><w:p><w:r><w:t>Left cell</w:t></w:r></w:p></w:tc>
+                    <w:tc><w:p><w:r><w:t>Right cell</w:t></w:r></w:p></w:tc>
+                  </w:tr>
+                </w:tbl>
+              </w:body>
+            </w:document>
+        "#);
+
+        let text = extract_docx_text_at(&path).unwrap();
+
+        assert!(text.contains("Left cell"));
+        assert!(text.contains("Right cell"));
+    }
+
+    fn write_docx(path: &Path, document_xml: &str) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#).unwrap();
+        zip.start_file("_rels/.rels", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#).unwrap();
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(document_xml.as_bytes()).unwrap();
+        zip.finish().unwrap();
     }
 
     #[test]

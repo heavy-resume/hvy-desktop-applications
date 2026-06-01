@@ -104,7 +104,7 @@ export interface DocumentFile {
 export interface ImportSourceFile {
   path: string;
   name: string;
-  extension: DocumentExtension | '.txt' | '.pdf';
+  extension: DocumentExtension | '.txt' | '.pdf' | '.docx';
   text?: string;
   bytes?: number[];
 }

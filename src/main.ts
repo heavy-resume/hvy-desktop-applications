@@ -1850,7 +1850,7 @@ function importedTemplateOutputExtension(extension: DocumentExtension): Document
 async function importSourceFrom(pastedSourceText: string): Promise<PreparedImportSource | null> {
   const pasted = pastedSourceText.trim();
   const source = state.importSource;
-  if (source?.extension === '.pdf') {
+  if (source?.extension === '.pdf' || source?.extension === '.docx') {
     const text = pasted || source.text?.trim() || '';
     return text ? { ...source, text } : null;
   }

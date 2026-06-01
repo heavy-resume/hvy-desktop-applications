@@ -2402,7 +2402,7 @@ function renderImportCurrentSourceControls(state: AppState, workspace: AppState[
 }
 
 function renderAnywhereImportSourceControls(source: AppState['importSource']): string {
-  const sourceText = source?.extension === '.pdf' ? source.text ?? '' : '';
+  const sourceText = source?.extension === '.pdf' || source?.extension === '.docx' ? source.text ?? '' : '';
   return `
     <div class="source-picker-row">
       <button type="button" data-action="choose-import-source">Choose file</button>

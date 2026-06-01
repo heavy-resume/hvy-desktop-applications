@@ -19,7 +19,7 @@ const AI_MAX_CONTEXT_CHARS = 750000;
 const AI_CONTEXT_STEP_CHARS = 1000;
 const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.md']);
-const IMPORT_SOURCE_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.txt', '.md', '.pdf']);
+const IMPORT_SOURCE_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.txt', '.md', '.pdf', '.docx']);
 const TEMPLATE_EXTENSIONS = new Set(['.thvy', '.phvy']);
 const PDF_EXTENSIONS = new Set(['.pdf']);
 const THEME_EXTENSIONS = new Set(['.hvytheme', '.json']);
@@ -733,17 +733,18 @@ async function openImportSourceDialog() {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: [
-      { name: 'Import sources', extensions: ['hvy', 'thvy', 'phvy', 'txt', 'md', 'pdf'] },
+      { name: 'Import sources', extensions: ['hvy', 'thvy', 'phvy', 'txt', 'md', 'pdf', 'docx'] },
       { name: 'HVY documents', extensions: ['hvy', 'thvy', 'phvy'] },
       { name: 'Markdown', extensions: ['md'] },
       { name: 'Plain text', extensions: ['txt'] },
       { name: 'PDF', extensions: ['pdf'] },
+      { name: 'DocX', extensions: ['docx'] },
     ],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   const selected = result.filePaths[0];
   const extension = path.extname(selected).toLowerCase();
-  if (!IMPORT_SOURCE_EXTENSIONS.has(extension)) throw new Error('Only .hvy, .thvy, .phvy, .txt, .md, and .pdf files can be imported.');
+  if (!IMPORT_SOURCE_EXTENSIONS.has(extension)) throw new Error('Only .hvy, .thvy, .phvy, .txt, .md, .pdf, and .docx files can be imported.');
   const source = {
     path: selected,
     name: path.basename(selected),
@@ -753,6 +754,8 @@ async function openImportSourceDialog() {
     source.text = fs.readFileSync(selected, 'utf8');
   } else if (extension === '.pdf') {
     source.text = await extractPdfText(selected);
+  } else if (extension === '.docx') {
+    source.text = await extractDocxText(selected);
   } else {
     source.bytes = Array.from(fs.readFileSync(selected));
   }
@@ -762,6 +765,15 @@ async function openImportSourceDialog() {
 async function extractPdfText(filePath) {
   const executable = rustHelperPath();
   const { stdout } = await runFile(executable, ['--extract-pdf-text', filePath], {
+    encoding: 'utf8',
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  return stdout.trim();
+}
+
+async function extractDocxText(filePath) {
+  const executable = rustHelperPath();
+  const { stdout } = await runFile(executable, ['--extract-docx-text', filePath], {
     encoding: 'utf8',
     maxBuffer: 20 * 1024 * 1024,
   });

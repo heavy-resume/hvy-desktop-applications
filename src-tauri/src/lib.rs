@@ -63,9 +63,19 @@ pub fn extract_pdf_text_cli(path: &str) -> Result<String, String> {
     extract_pdf_text_at(Path::new(path)).map_err(|error| error.to_string())
 }
 
+pub fn extract_docx_text_cli(path: &str) -> Result<String, String> {
+    extract_docx_text_at(Path::new(path)).map_err(|error| error.to_string())
+}
+
 pub fn extract_pdf_text_cli_path_arg(args: &[String]) -> Option<&str> {
     args.windows(2)
         .find(|pair| pair[0] == "--extract-pdf-text")
+        .map(|pair| pair[1].as_str())
+}
+
+pub fn extract_docx_text_cli_path_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--extract-docx-text")
         .map(|pair| pair[1].as_str())
 }
 
@@ -74,6 +84,15 @@ fn extract_pdf_text_at(path: &Path) -> AppResult<String> {
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() {
         return Err(AppError::Message("PDF did not contain selectable text.".into()));
+    }
+    Ok(trimmed)
+}
+
+fn extract_docx_text_at(path: &Path) -> AppResult<String> {
+    let text = docx_lite::extract_text(path).map_err(|error| AppError::Message(error.to_string()))?;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(AppError::Message("DocX did not contain extractable text.".into()));
     }
     Ok(trimmed)
 }

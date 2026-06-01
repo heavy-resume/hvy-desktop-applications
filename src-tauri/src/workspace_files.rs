@@ -285,6 +285,7 @@ fn import_source_extension(path: &Path) -> Option<String> {
         "txt" => Some(".txt".into()),
         "md" => Some(".md".into()),
         "pdf" => Some(".pdf".into()),
+        "docx" => Some(".docx".into()),
         _ => None,
     }
 }
