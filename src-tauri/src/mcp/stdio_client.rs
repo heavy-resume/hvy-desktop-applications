@@ -19,41 +19,13 @@ where
         .collect::<Vec<_>>();
     let mut reader = BufReader::new(input);
     while let Some(message) = read_mcp_stdio_message(&mut reader)? {
-        let request = match serde_json::from_slice::<serde_json::Value>(&message.body) {
-            Ok(request) => request,
-            Err(error) => {
-                write_mcp_stdio_message(
-                    &mut output,
-                    &json_rpc_error(None, -32700, &format!("Invalid JSON: {error}")),
-                    message.framing,
-                )?;
-                continue;
-            }
-        };
-        let is_tool_call = mcp_request_method(&request) == Some("tools/call");
-        let response = if is_tool_call {
-            let workspaces = load_mcp_stdio_workspaces(&workspace_paths)?;
-            handle_mcp_tool_call_from_with_access_and_config(
-                &workspaces,
-                request.get("params").cloned().unwrap_or(serde_json::Value::Null),
-                &workspace_config.write_access,
-                Some(&workspace_config_path),
-            )
-            .map(|result| {
-                let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                json_rpc_result(id, result)
-            })
-            .unwrap_or_else(|error| {
-                let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                json_rpc_error(Some(id), -32000, &error.to_string())
-            })
-        } else {
-            handle_mcp_json_rpc_for_workspaces(&[], request)
-        };
-        if !response.is_null() {
-            write_mcp_stdio_message(&mut output, &response, message.framing)?;
-        }
-        if is_tool_call {
+        if handle_mcp_stdio_message(
+            message,
+            &mut output,
+            &workspace_config,
+            &workspace_paths,
+            &workspace_config_path,
+        )? {
             if let Ok(next_config) = read_mcp_workspace_config(&workspace_config_path) {
                 workspace_config = next_config;
                 workspace_paths = workspace_config
@@ -65,6 +37,50 @@ where
         }
     }
     Ok(())
+}
+
+fn handle_mcp_stdio_message<W: Write>(
+    message: McpStdioMessage,
+    output: &mut W,
+    workspace_config: &McpWorkspaceConfig,
+    workspace_paths: &[PathBuf],
+    workspace_config_path: &Path,
+) -> AppResult<bool> {
+    let request = match serde_json::from_slice::<serde_json::Value>(&message.body) {
+        Ok(request) => request,
+        Err(error) => {
+            write_mcp_stdio_message(
+                output,
+                &json_rpc_error(None, -32700, &format!("Invalid JSON: {error}")),
+                message.framing,
+            )?;
+            return Ok(false);
+        }
+    };
+    let is_tool_call = mcp_request_method(&request) == Some("tools/call");
+    let response = if is_tool_call {
+        let workspaces = load_mcp_stdio_workspaces(workspace_paths)?;
+        handle_mcp_tool_call_from_with_access_and_config(
+            &workspaces,
+            request.get("params").cloned().unwrap_or(serde_json::Value::Null),
+            &workspace_config.write_access,
+            Some(workspace_config_path),
+        )
+        .map(|result| {
+            let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            json_rpc_result(id, result)
+        })
+        .unwrap_or_else(|error| {
+            let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            json_rpc_error(Some(id), -32000, &error.to_string())
+        })
+    } else {
+        handle_mcp_json_rpc_for_workspaces(&[], request)
+    };
+    if !response.is_null() {
+        write_mcp_stdio_message(output, &response, message.framing)?;
+    }
+    Ok(is_tool_call)
 }
 
 fn mcp_request_method(request: &serde_json::Value) -> Option<&str> {
