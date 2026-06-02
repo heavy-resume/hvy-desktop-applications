@@ -56,8 +56,10 @@ export interface AppState {
   importIntoCurrentDialogOpen: boolean;
   importSourceTab: 'workspace' | 'anywhere';
   importSource: ImportSourceFile | null;
+  importSourceTextDraft: string;
   importOutputMode: 'current' | 'workspace';
   importExcludeTags: string;
+  importNewSectionsOnly: boolean;
   importProgressDialogOpen: boolean;
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
@@ -160,8 +162,10 @@ export const state: AppState = {
   importIntoCurrentDialogOpen: false,
   importSourceTab: 'workspace',
   importSource: null,
+  importSourceTextDraft: '',
   importOutputMode: 'current',
   importExcludeTags: '',
+  importNewSectionsOnly: false,
   importProgressDialogOpen: false,
   saveTemplateScope: 'app',
   saveAsDialogOpen: false,

@@ -255,6 +255,9 @@ const handlers: UiHandlers = {
     state.importWorkspacePath = null;
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
+    state.importSourceTextDraft = '';
+    state.importExcludeTags = '';
+    state.importNewSectionsOnly = false;
     state.status = 'Ready';
     void refreshSavedTemplates(workspacePath).then(() => rerender({ preserveMountedDocument: true }));
     rerender({ preserveMountedDocument: true });
@@ -301,7 +304,9 @@ const handlers: UiHandlers = {
     state.importIntoCurrentDialogOpen = false;
     state.importSourceTab = 'anywhere';
     state.importSource = null;
+    state.importSourceTextDraft = '';
     state.importExcludeTags = '';
+    state.importNewSectionsOnly = false;
     state.status = 'Ready';
     void refreshSavedTemplates(workspacePath).then(() => rerender({ preserveMountedDocument: true }));
     rerender({ preserveMountedDocument: true });
@@ -323,13 +328,16 @@ const handlers: UiHandlers = {
     state.importSourceTab = 'workspace';
     state.importOutputMode = currentDocumentWorkspacePath(state) ? 'workspace' : 'current';
     state.importSource = null;
+    state.importSourceTextDraft = '';
     state.importExcludeTags = '';
+    state.importNewSectionsOnly = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   })(),
   setImportSourceTab: (tab) => {
     state.importSourceTab = tab;
     state.importSource = null;
+    state.importSourceTextDraft = '';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -340,6 +348,12 @@ const handlers: UiHandlers = {
   },
   updateImportExcludeTags: (tags) => {
     state.importExcludeTags = tags;
+  },
+  updateImportSourceText: (text) => {
+    state.importSourceTextDraft = text;
+  },
+  setImportNewSectionsOnly: (newSectionsOnly) => {
+    state.importNewSectionsOnly = newSectionsOnly;
   },
   selectImportWorkspaceSource: (path) => void runBusy('Selecting import source...', async () => {
     if (!path) {
@@ -354,6 +368,7 @@ const handlers: UiHandlers = {
       extension: file.extension,
       bytes: file.bytes,
     };
+    state.importSourceTextDraft = '';
     state.status = `Selected ${file.name}`;
   }, { preserveMountedDocument: true }),
   chooseImportSource: () => void runBusy('Choosing import source...', async () => {
@@ -363,9 +378,10 @@ const handlers: UiHandlers = {
       return;
     }
     state.importSource = source;
+    state.importSourceTextDraft = '';
     state.status = `Selected ${source.name}`;
   }),
-  createImportedDocument: (name, templateId, instructions, pastedSourceText, excludeTags) => void runBusy('Importing document...', async () => {
+  createImportedDocument: (name, templateId, instructions, pastedSourceText, excludeTags, newSectionsOnly) => void runBusy('Importing document...', async () => {
     const workspacePath = state.importWorkspacePath;
     const source = await importSourceFrom(pastedSourceText);
     const fileName = documentFileName(name, state.importDocumentType);
@@ -381,7 +397,9 @@ const handlers: UiHandlers = {
     const template = creationTemplate(workspacePath, state.importDocumentType, templateId, documentTitle(fileName));
     state.importWorkspacePath = null;
     state.importSource = null;
+    state.importSourceTextDraft = '';
     state.importExcludeTags = '';
+    state.importNewSectionsOnly = false;
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
@@ -400,6 +418,7 @@ const handlers: UiHandlers = {
       sourceName: source.name,
       sourceText: source.text,
       instructions,
+      newSectionsOnly,
       excludeTags,
       maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
@@ -415,6 +434,7 @@ const handlers: UiHandlers = {
       sourceText: source.text,
       instructions,
       steps: plan.steps,
+      newSectionsOnly,
       excludeTags,
       maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
       onProgress: (event) => {
@@ -439,7 +459,7 @@ const handlers: UiHandlers = {
       state.importProgressDialogOpen = false;
     }
   }),
-  importIntoCurrent: (instructions, pastedSourceText, excludeTags, outputMode, outputName) => void runBusy('Importing into current document...', async () => {
+  importIntoCurrent: (instructions, pastedSourceText, excludeTags, newSectionsOnly, outputMode, outputName) => void runBusy('Importing into current document...', async () => {
     const source = await importSourceFrom(pastedSourceText);
     if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
     await ensureCurrentDocumentMounted();
@@ -470,7 +490,9 @@ const handlers: UiHandlers = {
     }
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
+    state.importSourceTextDraft = '';
     state.importExcludeTags = '';
+    state.importNewSectionsOnly = false;
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
@@ -489,6 +511,7 @@ const handlers: UiHandlers = {
           sourceName: source.name,
           sourceText: source.text,
           instructions,
+          newSectionsOnly,
           excludeTags,
           requestMode,
           maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
@@ -505,6 +528,7 @@ const handlers: UiHandlers = {
           sourceText: source.text,
           instructions,
           steps: plan.steps,
+          newSectionsOnly,
           excludeTags,
           requestMode,
           maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
@@ -537,7 +561,9 @@ const handlers: UiHandlers = {
     state.importSourceTab = 'workspace';
     state.importOutputMode = 'current';
     state.importSource = null;
+    state.importSourceTextDraft = '';
     state.importExcludeTags = '';
+    state.importNewSectionsOnly = false;
     state.importProgressDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });

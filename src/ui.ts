@@ -41,10 +41,12 @@ export interface UiHandlers {
   setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
   setImportOutputMode(mode: 'current' | 'workspace'): void;
   updateImportExcludeTags(tags: string): void;
+  updateImportSourceText(text: string): void;
+  setImportNewSectionsOnly(newSectionsOnly: boolean): void;
   selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
-  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string): void;
-  importIntoCurrent(instructions: string, pastedSourceText: string, excludeTags: string, outputMode: 'current' | 'workspace', outputName: string): void;
+  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean): void;
+  importIntoCurrent(instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean, outputMode: 'current' | 'workspace', outputName: string): void;
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
@@ -715,6 +717,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       return;
     }
     if (field === 'import-source-text') {
+      handlers.updateImportSourceText(target.value);
       const form = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
       if (form) updateImportSubmit(form);
       return;
@@ -797,6 +800,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
+    if (target instanceof HTMLInputElement && target.name === 'newSectionsOnly') {
+      handlers.setImportNewSectionsOnly(target.checked);
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.dataset.field === 'import-workspace-source') {
       handlers.selectImportWorkspaceSource(target.value);
       return;
@@ -878,7 +885,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         String(data.get('templateId') ?? ''),
         String(data.get('instructions') ?? ''),
         String(data.get('importSourceText') ?? ''),
-        String(data.get('excludeTags') ?? '')
+        String(data.get('excludeTags') ?? ''),
+        data.get('newSectionsOnly') === 'on'
       );
     }
     if (form.dataset.form === 'import-current') {
@@ -889,6 +897,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         String(data.get('instructions') ?? ''),
         String(data.get('importSourceText') ?? ''),
         String(data.get('excludeTags') ?? ''),
+        data.get('newSectionsOnly') === 'on',
         isImportOutputMode(outputMode) ? outputMode : 'current',
         String(data.get('importOutputName') ?? '')
       );
@@ -2271,9 +2280,10 @@ function renderImportDialog(state: AppState): string {
   const source = state.importSource;
   const title = importCurrent ? 'Import Into Current' : 'Import Document';
   const baseDisabled = state.busy || (!importCurrent && showTemplatePicker && templates.length === 0);
+  const hasValidSource = Boolean(source) || state.importSourceTextDraft.trim().length >= MIN_PASTED_IMPORT_CHARS;
   const sourceControls = importCurrent
     ? renderImportCurrentSourceControls(state, workspace)
-    : renderAnywhereImportSourceControls(source);
+    : renderAnywhereImportSourceControls(source, state.importSourceTextDraft);
   const outputControls = importCurrent ? renderImportCurrentOutputControls(state, workspace) : '';
   return `
     <div class="modal-backdrop" role="presentation">
@@ -2302,10 +2312,10 @@ function renderImportDialog(state: AppState): string {
           <span>Instructions</span>
           <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
         </label>
-        ${renderImportExcludeTagsField(state.importExcludeTags, collectImportSourceTagSuggestions(state.importSource))}
+        ${renderImportOptions(state)}
         <div class="dialog-actions">
           <button type="button" data-action="cancel-import">Cancel</button>
-          <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !source ? 'disabled' : ''}>Import</button>
+          <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !hasValidSource ? 'disabled' : ''}>Import</button>
         </div>
       </form>
     </div>`;
@@ -2333,6 +2343,18 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
     </div>`;
 }
 
+function renderImportOptions(state: AppState): string {
+  const tagField = shouldShowImportExcludeTagsField(state)
+    ? renderImportExcludeTagsField(state.importExcludeTags, collectImportSourceTagSuggestions(state.importSource))
+    : '<input name="excludeTags" type="hidden" value="">';
+  return `
+    ${tagField}
+    <label class="checkbox-row">
+      <input name="newSectionsOnly" type="checkbox" ${state.importNewSectionsOnly ? 'checked' : ''}>
+      <span>Only import new sections</span>
+    </label>`;
+}
+
 function renderImportExcludeTagsField(value: string, suggestions: string[]): string {
   return `
     <label class="import-exclude-tags-field">
@@ -2345,6 +2367,10 @@ function renderImportExcludeTagsField(value: string, suggestions: string[]): str
         </div>
       ` : ''}
     </label>`;
+}
+
+function shouldShowImportExcludeTagsField(state: AppState): boolean {
+  return Boolean(state.importSource?.bytes && isImportSourceDocumentExtension(state.importSource.extension));
 }
 
 function collectImportSourceTagSuggestions(source: AppState['importSource']): string[] {
@@ -2439,19 +2465,24 @@ function renderImportCurrentSourceControls(state: AppState, workspace: AppState[
       <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
       <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
     </div>
-    ${workspaceActive ? renderImportCurrentWorkspaceSourcePicker(state, workspaceFiles) : renderAnywhereImportSourceControls(state.importSource)}
+    ${workspaceActive ? renderImportCurrentWorkspaceSourcePicker(state, workspaceFiles) : renderAnywhereImportSourceControls(state.importSource, state.importSourceTextDraft)}
   `;
 }
 
-function renderAnywhereImportSourceControls(source: AppState['importSource']): string {
-  const sourceText = source?.extension === '.pdf' || source?.extension === '.docx' ? source.text ?? '' : '';
+function renderAnywhereImportSourceControls(source: AppState['importSource'], sourceTextDraft = ''): string {
+  const sourceText = sourceTextDraft || (source?.extension === '.pdf' || source?.extension === '.docx' ? source.text ?? '' : '');
+  const sourceNote = source
+    ? 'Using selected file unless pasted text is provided.'
+    : sourceText.trim().length > 0
+    ? `${Math.min(sourceText.trim().length, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
+    : 'Choose a file or paste at least 50 characters.';
   return `
     <div class="source-picker-row">
       <button type="button" data-action="choose-import-source">Choose file</button>
       <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
     </div>
     <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here">${escapeHtml(sourceText)}</textarea>
-    <p class="dialog-note" data-role="import-source-note">${source ? 'Using selected file unless pasted text is provided.' : 'Choose a file or paste at least 50 characters.'}</p>`;
+    <p class="dialog-note" data-role="import-source-note">${escapeHtml(sourceNote)}</p>`;
 }
 
 function renderImportCurrentWorkspaceSourcePicker(state: AppState, options: WorkspaceFileNode[]): string {
