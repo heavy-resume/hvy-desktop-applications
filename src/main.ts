@@ -2119,6 +2119,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
     storageKey: documentStorageKey(state.document.path || state.document.name),
     searchSnapshot,
+    hiddenFromAI: state.document.hiddenFromAI,
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);

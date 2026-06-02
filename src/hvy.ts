@@ -49,6 +49,7 @@ export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
   storageKey?: string;
   searchSnapshot?: HvySearchSnapshotInput | null;
+  hiddenFromAI?: boolean;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -117,7 +118,7 @@ export async function mountHvyDocument(
     mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
-    semanticFilterProvider: chatSemanticFilterProvider,
+    semanticFilterProvider: options.hiddenFromAI ? null : chatSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,
     searchSnapshot: options.searchSnapshot ?? null,
