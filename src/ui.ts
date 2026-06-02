@@ -332,7 +332,7 @@ function ensureAppFrame(): void {
     && appRoot.querySelector('#documentControlsRoot')
     && appRoot.querySelector('#documentModeControlsRoot')
     && appRoot.querySelector('#hvyMount')
-    && appRoot.querySelector('#modalRoot')
+    && appRoot.querySelector('[data-app-modal-root="true"]')
   ) {
     return;
   }
@@ -346,7 +346,7 @@ function ensureAppFrame(): void {
           <div id="hvyMount" class="document-host"></div>
         </div>
       </section>
-      <div id="modalRoot"></div>
+      <div id="modalRoot" data-app-modal-root="true"></div>
     </main>`;
   applyWorkspaceSidebarWidth(appRoot);
 }
@@ -368,7 +368,7 @@ function hvyMountRoot(): HTMLElement {
 }
 
 function modalRoot(): HTMLElement {
-  return appRoot.querySelector<HTMLElement>('#modalRoot')!;
+  return appRoot.querySelector<HTMLElement>('[data-app-modal-root="true"]')!;
 }
 
 function bindOnce(root: HTMLElement, handlers: UiHandlers, state: AppState): void {

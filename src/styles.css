@@ -162,7 +162,7 @@ button:disabled {
   overflow: hidden;
 }
 
-#modalRoot {
+.app-shell > [data-app-modal-root="true"] {
   display: contents;
 }
 
