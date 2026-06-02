@@ -29,6 +29,8 @@ export interface UiHandlers {
   toggleWorkspaceActions(path: string): void;
   closeWorkspaceActions(): void;
   createWorkspace(name: string, location: 'managed' | 'choose'): void;
+  confirmWorkspaceInitialization(): void;
+  cancelWorkspaceInitialization(): void;
   setNewWorkspaceLocation(location: 'managed' | 'choose'): void;
   cancelNewWorkspace(): void;
   newDocumentInWorkspace(workspacePath: string): void;
@@ -70,6 +72,8 @@ export interface UiHandlers {
   openMcpSettings(): void;
   saveMcpSettings(settings: McpSettings): void;
   cancelMcpSettings(settings?: McpSettings): void;
+  discardMcpSettingsChanges(): void;
+  keepEditingMcpSettings(): void;
   startMcpServer(): void;
   stopMcpServer(): void;
   restartMcpServer(): void;
@@ -292,6 +296,7 @@ export function renderDocumentControls(state: AppState): void {
 export function renderModals(state: AppState): void {
   modalRoot().innerHTML = `
     ${renderNewWorkspaceDialog(state)}
+    ${renderWorkspaceInitializationDialog(state)}
     ${renderWorkspaceManagerDialog(state)}
     ${renderNewDocumentDialog(state)}
     ${renderImportDialog(state)}
@@ -304,6 +309,7 @@ export function renderModals(state: AppState): void {
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
+    ${renderMcpSettingsDiscardDialog(state)}
     ${renderColorThemeDialog(state)}
     ${renderRecoveryDialog(state)}
     ${renderTabStackPopover(state)}
@@ -414,12 +420,20 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.closeWorkspaceManager();
           return;
         }
+        if (backdrop.querySelector('.workspace-initialization-dialog')) {
+          handlers.cancelWorkspaceInitialization();
+          return;
+        }
         if (backdrop.querySelector('.color-theme-dialog')) {
           handlers.closeColorTheme();
           return;
         }
         if (backdrop.querySelector('.ai-settings-discard-dialog')) {
           handlers.keepEditingAiSettings();
+          return;
+        }
+        if (backdrop.querySelector('.mcp-settings-discard-dialog')) {
+          handlers.keepEditingMcpSettings();
           return;
         }
         const mcpSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="mcp-settings"]');
@@ -489,6 +503,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.setNewWorkspaceLocation(target.dataset.location);
     }
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
+    if (action === 'confirm-workspace-initialization') handlers.confirmWorkspaceInitialization();
+    if (action === 'cancel-workspace-initialization') handlers.cancelWorkspaceInitialization();
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
     if (action === 'set-new-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setNewDocumentType(target.dataset.documentType);
     if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath);
@@ -534,6 +550,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
       handlers.cancelMcpSettings(form ? readMcpSettingsForm(new FormData(form)) : undefined);
     }
+    if (action === 'discard-mcp-settings-changes') handlers.discardMcpSettingsChanges();
+    if (action === 'keep-editing-mcp-settings') handlers.keepEditingMcpSettings();
     if (action === 'start-mcp-server') handlers.startMcpServer();
     if (action === 'stop-mcp-server') handlers.stopMcpServer();
     if (action === 'restart-mcp-server') handlers.restartMcpServer();
@@ -961,6 +979,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.closeWorkspaceManager();
       return;
     }
+    if (root.querySelector('.workspace-initialization-dialog')) {
+      event.preventDefault();
+      handlers.cancelWorkspaceInitialization();
+      return;
+    }
     if (root.querySelector('.color-theme-dialog')) {
       event.preventDefault();
       handlers.closeColorTheme();
@@ -969,6 +992,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.ai-settings-discard-dialog')) {
       event.preventDefault();
       handlers.keepEditingAiSettings();
+      return;
+    }
+    if (root.querySelector('.mcp-settings-discard-dialog')) {
+      event.preventDefault();
+      handlers.keepEditingMcpSettings();
       return;
     }
     const mcpSettingsForm = target?.closest<HTMLFormElement>('form[data-form="mcp-settings"]')
@@ -2157,6 +2185,24 @@ function renderNewWorkspaceDialog(state: AppState): string {
     </div>`;
 }
 
+function renderWorkspaceInitializationDialog(state: AppState): string {
+  if (!state.workspaceInitializationDialogOpen || !state.workspaceInitializationPath) {
+    return '';
+  }
+  const name = state.workspaceInitializationName ?? state.workspaceInitializationPath;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog workspace-initialization-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceInitializationTitle">
+        <h2 id="workspaceInitializationTitle">Create Workspace Manifest?</h2>
+        <p class="dialog-note">${escapeHtml(name)} is not a workspace yet. Create .hvyworkspace.json in this folder?</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-workspace-initialization">Cancel</button>
+          <button type="button" data-action="confirm-workspace-initialization" ${state.busy ? 'disabled' : ''}>Create</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function updateNewWorkspaceSubmit(form: HTMLFormElement): void {
   const location = new FormData(form).get('workspaceLocation');
   const submit = form.querySelector<HTMLButtonElement>('[data-role="new-workspace-submit"]');
@@ -2856,6 +2902,23 @@ function renderMcpReadonlyField(
         >
         <button type="button" class="icon-button" data-action="${escapeAttr(copyAction)}" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
       </span>
+    </div>`;
+}
+
+function renderMcpSettingsDiscardDialog(state: AppState): string {
+  if (!state.mcpSettingsDiscardDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog mcp-settings-discard-dialog" role="dialog" aria-modal="true" aria-labelledby="mcpSettingsDiscardTitle">
+        <h2 id="mcpSettingsDiscardTitle">Discard MCP Settings Changes?</h2>
+        <p class="dialog-note">Your unsaved MCP server changes will be lost.</p>
+        <div class="dialog-actions">
+          <button type="button" class="danger-button" data-action="discard-mcp-settings-changes">Discard Changes</button>
+          <button type="button" data-action="keep-editing-mcp-settings">Keep Editing</button>
+        </div>
+      </section>
     </div>`;
 }
 

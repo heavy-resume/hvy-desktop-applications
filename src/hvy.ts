@@ -50,6 +50,7 @@ export interface MountHvyDocumentOptions {
   storageKey?: string;
   searchSnapshot?: HvySearchSnapshotInput | null;
   hiddenFromAI?: boolean;
+  maxContextChars?: number;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -118,6 +119,7 @@ export async function mountHvyDocument(
     mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
+    chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
     semanticFilterProvider: options.hiddenFromAI ? null : chatSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,
@@ -463,7 +465,10 @@ async function mountRawHvyDocument(
   const rawImportLlm = async () => {
     const { loadChatSettings } = await import('../../heavy-file-format/src/chat/chat');
     return {
-      settings: loadChatSettings(),
+      settings: {
+        ...loadChatSettings(),
+        ...(options.maxContextChars ? { maxContextChars: options.maxContextChars } : {}),
+      },
       client: window.HVY_CHAT_CLIENT ?? null,
     };
   };
