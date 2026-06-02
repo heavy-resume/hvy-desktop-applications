@@ -212,19 +212,6 @@ theme:
       existing_question_text = "\n".join(["- " + question for question in existing_questions])
       return "USER INSTRUCTIONS:\n" + instructions + "\n\nCARD GENERATION MODE: " + generation_mode + "\n\nNUMBER OF FLASHCARDS: " + str(card_count) + "\n\nANSWER STYLE: " + answer_style + "\n\nEXISTING QUESTIONS TO AVOID:\n" + existing_question_text + "\n\n" + "\n\n---\n\n".join(sections)
     apply: |
-      def strip_code_fence(value):
-          text = value.strip()
-          if not text.startswith("```"):
-              return text
-          first_newline = text.find("\n")
-          if first_newline < 0:
-              return text
-          text = text[first_newline + 1:]
-          end = text.rfind("```")
-          if end >= 0:
-              text = text[:end]
-          return text.strip()
-      
       def normalize_id(value):
           output = ""
           previous_dash = False
@@ -257,70 +244,6 @@ theme:
       def shell_quote(value):
           return "'" + value.replace("'", "'\\''") + "'"
       
-      def read_json_string(source, key, default_value=""):
-          marker = '"' + key + '"'
-          start = source.find(marker)
-          if start < 0:
-              return default_value
-          colon = source.find(":", start + len(marker))
-          if colon < 0:
-              return default_value
-          quote = source.find('"', colon + 1)
-          if quote < 0:
-              return default_value
-          index = quote + 1
-          value = ""
-          escaped = False
-          while index < len(source):
-              char = source[index]
-              if escaped:
-                  if char == "n":
-                      value += "\n"
-                  elif char == "r":
-                      value += "\r"
-                  elif char == "t":
-                      value += "\t"
-                  else:
-                      value += char
-                  escaped = False
-              elif char == "\\":
-                  escaped = True
-              elif char == '"':
-                  return value
-              else:
-                  value += char
-              index += 1
-          return default_value
-      
-      def split_json_objects(value):
-          text = strip_code_fence(value)
-          objects = []
-          depth = 0
-          start = -1
-          in_string = False
-          escaped = False
-          for index in range(len(text)):
-              char = text[index]
-              if in_string:
-                  if escaped:
-                      escaped = False
-                  elif char == "\\":
-                      escaped = True
-                  elif char == '"':
-                      in_string = False
-              elif char == '"':
-                  in_string = True
-              elif char == "{":
-                  if depth == 0:
-                      start = index
-                  depth += 1
-              elif char == "}":
-                  depth -= 1
-                  if depth == 0 and start >= 0:
-                      objects.append(text[start:index + 1])
-                      start = -1
-          return objects
-  
       def find_requested_card_count(value):
           marker = "NUMBER OF FLASHCARDS:"
           start = value.find(marker)
@@ -386,12 +309,12 @@ theme:
       requested_card_count = find_requested_card_count(source)
       generation_mode = find_generation_mode(source)
       existing_questions = find_existing_questions(source)
-      for item in split_json_objects(response):
+      for item in doc.json.parse_array(response):
           if len(cards) >= requested_card_count:
               break
-          source_id = read_json_string(item, "source_id", "card")
-          question = read_json_string(item, "question", "")
-          answer = read_json_string(item, "answer", "")
+          source_id = str(item.get("source_id", "card") or "card")
+          question = str(item.get("question", "") or "")
+          answer = str(item.get("answer", "") or "")
           if len(question.strip()) > 0 and len(answer.strip()) > 0:
               if question.strip().lower() in existing_questions:
                   continue
@@ -625,99 +548,6 @@ theme:
           return ""
       return "QUIZ INSTRUCTIONS:\n" + instructions + "\n\nNUMBER OF QUESTIONS: " + str(question_count) + "\nOPTIONS PER QUESTION: " + str(option_count) + "\n\n" + "\n\n---\n\n".join(sections)
     apply: |
-      def strip_code_fence(value):
-          text = value.strip()
-          if not text.startswith("```"):
-              return text
-          first_newline = text.find("\n")
-          if first_newline < 0:
-              return text
-          text = text[first_newline + 1:]
-          end = text.rfind("```")
-          if end >= 0:
-              text = text[:end]
-          return text.strip()
-  
-      def read_json_quoted_string(source, index):
-          if index >= len(source) or source[index] != '"':
-              return ["", index]
-          index += 1
-          value = ""
-          escaped = False
-          while index < len(source):
-              char = source[index]
-              if escaped:
-                  if char == "n":
-                      value += "\n"
-                  elif char == "r":
-                      value += "\r"
-                  elif char == "t":
-                      value += "\t"
-                  else:
-                      value += char
-                  escaped = False
-              elif char == "\\":
-                  escaped = True
-              elif char == '"':
-                  return [value, index + 1]
-              else:
-                  value += char
-              index += 1
-          return [value, index]
-  
-      def read_json_object_strings(source):
-          fields = {}
-          index = 0
-          while index < len(source):
-              if source[index] != '"':
-                  index += 1
-                  continue
-              key_result = read_json_quoted_string(source, index)
-              key = key_result[0]
-              index = key_result[1]
-              while index < len(source) and source[index].isspace():
-                  index += 1
-              if index >= len(source) or source[index] != ":":
-                  continue
-              index += 1
-              while index < len(source) and source[index].isspace():
-                  index += 1
-              if index >= len(source) or source[index] != '"':
-                  continue
-              value_result = read_json_quoted_string(source, index)
-              fields[key] = value_result[0]
-              index = value_result[1]
-          return fields
-  
-      def split_json_objects(value):
-          text = strip_code_fence(value)
-          objects = []
-          depth = 0
-          start = -1
-          in_string = False
-          escaped = False
-          for index in range(len(text)):
-              char = text[index]
-              if in_string:
-                  if escaped:
-                      escaped = False
-                  elif char == "\\":
-                      escaped = True
-                  elif char == '"':
-                      in_string = False
-              elif char == '"':
-                  in_string = True
-              elif char == "{":
-                  if depth == 0:
-                      start = index
-                  depth += 1
-              elif char == "}":
-                  depth -= 1
-                  if depth == 0 and start >= 0:
-                      objects.append(text[start:index + 1])
-                      start = -1
-          return objects
-  
       def find_requested_count(value, marker, default_value, max_value):
           start = value.find(marker)
           if start < 0:
@@ -776,15 +606,14 @@ theme:
       requested_questions = find_requested_count(source, "NUMBER OF QUESTIONS:", 10, 50)
       requested_options = find_requested_count(source, "OPTIONS PER QUESTION:", 4, 8)
       quiz_items = []
-      for item in split_json_objects(response):
+      for item in doc.json.parse_array(response):
           if len(quiz_items) >= requested_questions:
               break
-          fields = read_json_object_strings(item)
-          question = str(fields.get("question") or "").strip()
-          correct = str(fields.get("correct_option_letter") or "").strip().upper()
+          question = str(item.get("question") or "").strip()
+          correct = str(item.get("correct_option_letter") or "").strip().upper()
           options = []
           for option_index in range(requested_options):
-              option = str(fields.get("option_" + str(option_index + 1)) or "").strip()
+              option = str(item.get("option_" + str(option_index + 1)) or "").strip()
               if len(option) > 0:
                   options.append(option)
           if len(question) > 0 and len(options) == requested_options and correct in letters[:requested_options]:
