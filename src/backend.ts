@@ -261,6 +261,7 @@ export interface AiProviderConfig {
 export interface AiActionConfig {
   providerId: string;
   model: string;
+  modelsByProvider?: Record<string, string>;
 }
 
 export type AiActionSettings = Record<AiActionKey, AiActionConfig>;
@@ -458,13 +459,13 @@ export function defaultAiProviderConfig(): AiProviderConfig {
 
 export function defaultAiActionSettings(providerId = 'default'): AiActionSettings {
   return {
-    chat: { providerId, model: 'gpt-5.4-nano' },
-    edit: { providerId, model: 'gpt-5.4-mini' },
-    importPlanning: { providerId, model: 'gpt-5.4-mini' },
-    importWriting: { providerId, model: 'gpt-5.4-mini' },
-    importCleanup: { providerId, model: 'gpt-5.4-mini' },
-    semanticFilter: { providerId, model: 'gpt-5.4-nano' },
-    compaction: { providerId, model: 'gpt-5.4-nano' },
+    chat: { providerId, model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
+    edit: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    importPlanning: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    importWriting: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    importCleanup: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    semanticFilter: { providerId, model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
+    compaction: { providerId, model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
   };
 }
 

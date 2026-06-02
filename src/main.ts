@@ -631,15 +631,20 @@ const handlers: UiHandlers = {
     closeUiBeforeAiSettings();
     state.aiSettingsDraft = cloneAiSettings(state.aiSettings);
     state.aiSettingsDialogInitialJson = JSON.stringify(canonicalAiSettings(state.aiSettingsDraft));
+    state.aiSettingsDiscardDialogOpen = false;
+    state.aiSettingsSelectedProviderId = state.aiSettingsDraft.activeProviderId;
     state.aiSettingsDialogOpen = true;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
   selectAiProvider: (providerId, settings) => {
-    state.aiSettingsDraft = {
-      ...settings,
-      activeProviderId: providerId,
-    };
+    state.aiSettingsDraft = settings;
+    state.aiSettingsSelectedProviderId = providerId;
+    rerender({ preserveMountedDocument: true });
+  },
+  setDefaultAiProvider: (settings) => {
+    state.aiSettingsDraft = settings;
+    state.aiSettingsSelectedProviderId = settings.activeProviderId;
     rerender({ preserveMountedDocument: true });
   },
   openProviderDocs: (url) => {
@@ -660,13 +665,35 @@ const handlers: UiHandlers = {
     state.aiSettingsDialogOpen = false;
     state.aiSettingsDraft = null;
     state.aiSettingsDialogInitialJson = null;
+    state.aiSettingsDiscardDialogOpen = false;
+    state.aiSettingsSelectedProviderId = null;
     state.status = 'Saved AI settings';
   }),
   cancelAiSettings: (settings) => {
-    if (!confirmDiscardAiSettings(settings)) return;
+    if (aiSettingsChanged(settings)) {
+      state.aiSettingsDiscardDialogOpen = true;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
     state.aiSettingsDialogOpen = false;
     state.aiSettingsDraft = null;
     state.aiSettingsDialogInitialJson = null;
+    state.aiSettingsDiscardDialogOpen = false;
+    state.aiSettingsSelectedProviderId = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  discardAiSettingsChanges: () => {
+    state.aiSettingsDialogOpen = false;
+    state.aiSettingsDraft = null;
+    state.aiSettingsDialogInitialJson = null;
+    state.aiSettingsDiscardDialogOpen = false;
+    state.aiSettingsSelectedProviderId = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  keepEditingAiSettings: () => {
+    state.aiSettingsDiscardDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -3308,6 +3335,8 @@ function closeUiBeforeAiSettings(): void {
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
   closeMountedTransientUi();
 }
 
@@ -3317,6 +3346,8 @@ function closeUiBeforeAbout(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
@@ -3334,6 +3365,8 @@ function closeUiBeforeColorTheme(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
@@ -3350,6 +3383,8 @@ function closeUiBeforeMcpSettings(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
   state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
@@ -3364,6 +3399,8 @@ function closeUiBeforeWorkspaceFilter(): void {
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
@@ -3434,12 +3471,11 @@ function cloneMcpSettings(settings: McpSettings): McpSettings {
   return JSON.parse(JSON.stringify(settings)) as McpSettings;
 }
 
-function confirmDiscardAiSettings(settings: typeof state.aiSettings | undefined): boolean {
+function aiSettingsChanged(settings: typeof state.aiSettings | undefined): boolean {
   const initial = state.aiSettingsDialogInitialJson;
-  if (!initial) return true;
+  if (!initial) return false;
   const current = JSON.stringify(canonicalAiSettings(settings ?? state.aiSettingsDraft ?? state.aiSettings));
-  if (current === initial) return true;
-  return window.confirm('Discard changes to AI settings?');
+  return current !== initial;
 }
 
 function confirmDiscardMcpSettings(settings: McpSettings | undefined): boolean {

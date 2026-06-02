@@ -1,5 +1,5 @@
-import { aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { aiProviderDefaultModel, aiProviderPreset, aiProviderPresets } from './aiProviders';
+import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
@@ -61,9 +61,12 @@ export interface UiHandlers {
   closeAbout(): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
+  setDefaultAiProvider(settings: AiSettings): void;
   openProviderDocs(url: string): void;
   saveAiSettings(settings: AiSettings): void;
   cancelAiSettings(settings?: AiSettings): void;
+  discardAiSettingsChanges(): void;
+  keepEditingAiSettings(): void;
   openMcpSettings(): void;
   saveMcpSettings(settings: McpSettings): void;
   cancelMcpSettings(settings?: McpSettings): void;
@@ -299,6 +302,7 @@ export function renderModals(state: AppState): void {
     ${renderWorkspaceTemplateVisibilityDialog(state)}
     ${renderAboutDialog(state)}
     ${renderAiSettingsDialog(state)}
+    ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
     ${renderColorThemeDialog(state)}
     ${renderRecoveryDialog(state)}
@@ -414,6 +418,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.closeColorTheme();
           return;
         }
+        if (backdrop.querySelector('.ai-settings-discard-dialog')) {
+          handlers.keepEditingAiSettings();
+          return;
+        }
         const mcpSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="mcp-settings"]');
         if (mcpSettingsForm) {
           handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
@@ -506,6 +514,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
       if (settings) handlers.selectAiProvider(target.dataset.providerId, settings);
     }
+    if (action === 'set-default-ai-provider') {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
+      if (settings) handlers.setDefaultAiProvider(settings);
+    }
     if (action === 'provider-docs') {
       const url = target.dataset.url;
       if (url) handlers.openProviderDocs(url);
@@ -514,6 +527,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
       handlers.cancelAiSettings(form ? readAiSettingsForm(new FormData(form)) : undefined);
     }
+    if (action === 'discard-ai-settings-changes') handlers.discardAiSettingsChanges();
+    if (action === 'keep-editing-ai-settings') handlers.keepEditingAiSettings();
     if (action === 'mcp-settings') handlers.openMcpSettings();
     if (action === 'cancel-mcp-settings') {
       const form = target.closest<HTMLFormElement>('form[data-form="mcp-settings"]');
@@ -780,10 +795,14 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     updateImportExcludeTagAutocomplete(target);
   }, { signal });
   root.addEventListener('change', (event) => {
-    const target = event.target instanceof HTMLSelectElement ? event.target : null;
+    const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
-    if (target.dataset.field === 'import-workspace-source') {
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'import-workspace-source') {
       handlers.selectImportWorkspaceSource(target.value);
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-action-provider') {
+      syncAiActionModelForProvider(target);
     }
   }, { signal });
   root.addEventListener('contextmenu', (event) => {
@@ -945,6 +964,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.color-theme-dialog')) {
       event.preventDefault();
       handlers.closeColorTheme();
+      return;
+    }
+    if (root.querySelector('.ai-settings-discard-dialog')) {
+      event.preventDefault();
+      handlers.keepEditingAiSettings();
       return;
     }
     const mcpSettingsForm = target?.closest<HTMLFormElement>('form[data-form="mcp-settings"]')
@@ -2593,8 +2617,9 @@ function renderAiSettingsDialog(state: AppState): string {
     return '';
   }
   const settings = state.aiSettingsDraft ?? state.aiSettings;
-  const providerConfig = activeProviderConfig(settings);
-  const provider = aiProviderPreset(settings.activeProviderId);
+  const selectedProviderId = state.aiSettingsSelectedProviderId ?? settings.activeProviderId;
+  const providerConfig = aiProviderConfig(settings, selectedProviderId);
+  const provider = aiProviderPreset(selectedProviderId);
   const maxContextChars = normalizeAiMaxContextChars(settings.maxContextChars);
   return `
     <div class="modal-backdrop" role="presentation">
@@ -2602,22 +2627,32 @@ function renderAiSettingsDialog(state: AppState): string {
         <h2>LLM Settings</h2>
         <p class="dialog-note">Configure providers once, then choose the provider and model each action should use.</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <input name="selectedProviderId" type="hidden" value="${escapeAttr(selectedProviderId)}">
         <div class="ai-provider-picker" aria-label="Configured AI providers">
           <span>Providers</span>
           <div>
             ${aiProviderPresets.map((option) => `
               <button
                 type="button"
-                class="${option.id === settings.activeProviderId ? 'is-active' : ''}"
+                class="${option.id === selectedProviderId ? 'is-active' : ''}"
                 data-action="select-ai-provider"
                 data-provider-id="${escapeAttr(option.id)}"
-                aria-pressed="${option.id === settings.activeProviderId ? 'true' : 'false'}"
+                aria-pressed="${option.id === selectedProviderId ? 'true' : 'false'}"
               >${escapeHtml(option.name)}</button>
             `).join('')}
           </div>
         </div>
         <button type="button" class="provider-docs-link" data-action="provider-docs" data-provider-docs data-url="${escapeAttr(provider.docsUrl)}">Setup instructions</button>
         <input name="activeProviderId" type="hidden" value="${escapeAttr(settings.activeProviderId)}">
+        <label class="checkbox-row ai-default-provider-row">
+          <input
+            name="defaultProvider"
+            type="checkbox"
+            data-action="set-default-ai-provider"
+            ${selectedProviderId === settings.activeProviderId ? 'checked' : ''}
+          >
+          <span>Use ${escapeHtml(provider.name)} as the default provider</span>
+        </label>
         <div class="ai-provider-fields">
           <label>
             <span>Base URL</span>
@@ -2655,6 +2690,23 @@ function renderAiSettingsDialog(state: AppState): string {
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
+    </div>`;
+}
+
+function renderAiSettingsDiscardDialog(state: AppState): string {
+  if (!state.aiSettingsDiscardDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog ai-settings-discard-dialog" role="dialog" aria-modal="true" aria-labelledby="aiSettingsDiscardTitle">
+        <h2 id="aiSettingsDiscardTitle">Discard LLM Settings Changes?</h2>
+        <p class="dialog-note">Your unsaved provider and model changes will be lost.</p>
+        <div class="dialog-actions">
+          <button type="button" class="danger-button" data-action="discard-ai-settings-changes">Discard Changes</button>
+          <button type="button" data-action="keep-editing-ai-settings">Keep Editing</button>
+        </div>
+      </section>
     </div>`;
 }
 
@@ -3154,40 +3206,47 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
   const config = settings.actions[action];
   const effectiveProviderId = config.providerId && config.providerId !== 'default' ? config.providerId : settings.activeProviderId;
   const provider = aiProviderPreset(effectiveProviderId);
+  const model = aiActionModelForProvider(config, effectiveProviderId, action);
+  const modelsByProvider = aiActionModelsByProvider(config, effectiveProviderId, model);
   return `
     <fieldset class="ai-action-config">
       <legend>${escapeHtml(label)}</legend>
+      <textarea name="${action}ModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
       <label>
         <span>Provider</span>
-        <select name="${action}ProviderId">
+        <select name="${action}ProviderId" data-field="ai-action-provider" data-action-key="${escapeAttr(action)}" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
           <option value="default" ${config.providerId === 'default' ? 'selected' : ''}>Default (${escapeHtml(provider.name)})</option>
           ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === config.providerId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
         </select>
       </label>
       <label>
         <span>Model</span>
-        <input name="${action}Model" type="text" value="${escapeAttr(config.model)}" placeholder="${escapeAttr(provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
+        <input name="${action}Model" type="text" value="${escapeAttr(model)}" placeholder="${escapeAttr(provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
       </label>
     </fieldset>`;
 }
 
 function readAiSettingsForm(data: FormData): AiSettings {
-  const providerId = String(data.get('activeProviderId') ?? '').trim() || 'openai';
+  const selectedProviderId = String(data.get('selectedProviderId') ?? data.get('activeProviderId') ?? '').trim() || 'openai';
+  const parsed = parseAiSettings(String(data.get('settingsJson') ?? ''));
+  const activeProviderId = data.get('defaultProvider') === 'on'
+    ? selectedProviderId
+    : String(data.get('activeProviderId') ?? parsed?.activeProviderId ?? selectedProviderId).trim() || selectedProviderId;
   const current: AiProviderConfig = {
-    provider: providerId,
+    provider: selectedProviderId,
     baseUrl: String(data.get('baseUrl') ?? '').trim(),
     apiKey: String(data.get('apiKey') ?? '').trim(),
   };
-  const settings = parseAiSettings(String(data.get('settingsJson') ?? '')) ?? {
-    activeProviderId: providerId,
+  const settings = parsed ?? {
+    activeProviderId,
     providers: [],
-    actions: readActionSettings(data, providerId),
+    actions: readActionSettings(data, activeProviderId),
   };
-  const providers = [...settings.providers.filter((provider) => provider.provider !== providerId), current];
+  const providers = [...settings.providers.filter((provider) => provider.provider !== selectedProviderId), current];
   return {
-    activeProviderId: providerId,
+    activeProviderId,
     providers,
-    actions: readActionSettings(data, providerId),
+    actions: readActionSettings(data, activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
   };
 }
@@ -3196,7 +3255,7 @@ function parseAiSettings(value: string): AiSettings | null {
   try {
     const parsed = JSON.parse(value) as AiSettings;
     return Array.isArray(parsed.providers) && parsed.actions
-      ? { ...parsed, maxContextChars: normalizeAiMaxContextChars(parsed.maxContextChars) }
+      ? normalizeAiSettingsForForm(parsed)
       : null;
   } catch {
     return null;
@@ -3216,10 +3275,98 @@ function readActionSettings(data: FormData, fallbackProviderId: string): AiActio
 }
 
 function readActionConfig(data: FormData, action: AiActionKey, fallbackProviderId: string) {
+  const providerId = String(data.get(`${action}ProviderId`) ?? fallbackProviderId).trim() || fallbackProviderId;
+  const effectiveProviderId = providerId === 'default' ? fallbackProviderId : providerId;
+  const modelsByProvider = parseAiActionModelsByProvider(String(data.get(`${action}ModelsByProvider`) ?? ''));
+  const previousDefaultProviderId = String(data.get('activeProviderId') ?? '').trim();
+  const modelInput = String(data.get(`${action}Model`) ?? '').trim();
+  if (providerId === 'default' && previousDefaultProviderId && previousDefaultProviderId !== fallbackProviderId && modelInput) {
+    modelsByProvider[previousDefaultProviderId] = modelInput;
+  }
+  const model = providerId === 'default' && previousDefaultProviderId && previousDefaultProviderId !== fallbackProviderId
+    ? modelsByProvider[effectiveProviderId] || aiProviderDefaultModel(effectiveProviderId, action)
+    : modelInput || aiProviderDefaultModel(effectiveProviderId, action);
+  modelsByProvider[effectiveProviderId] = model;
   return {
-    providerId: String(data.get(`${action}ProviderId`) ?? fallbackProviderId).trim() || fallbackProviderId,
-    model: String(data.get(`${action}Model`) ?? '').trim(),
+    providerId,
+    model,
+    modelsByProvider,
   };
+}
+
+function normalizeAiSettingsForForm(settings: AiSettings): AiSettings {
+  const activeProviderId = settings.activeProviderId || 'openai';
+  return {
+    ...settings,
+    activeProviderId,
+    maxContextChars: normalizeAiMaxContextChars(settings.maxContextChars),
+    actions: {
+      chat: normalizeAiActionConfigForForm(settings.actions.chat, activeProviderId, 'chat'),
+      edit: normalizeAiActionConfigForForm(settings.actions.edit, activeProviderId, 'edit'),
+      importPlanning: normalizeAiActionConfigForForm(settings.actions.importPlanning, activeProviderId, 'importPlanning'),
+      importWriting: normalizeAiActionConfigForForm(settings.actions.importWriting, activeProviderId, 'importWriting'),
+      importCleanup: normalizeAiActionConfigForForm(settings.actions.importCleanup, activeProviderId, 'importCleanup'),
+      semanticFilter: normalizeAiActionConfigForForm(settings.actions.semanticFilter, activeProviderId, 'semanticFilter'),
+      compaction: normalizeAiActionConfigForForm(settings.actions.compaction, activeProviderId, 'compaction'),
+    },
+  };
+}
+
+function normalizeAiActionConfigForForm(config: AiActionConfig | undefined, activeProviderId: string, action: AiActionKey): AiActionConfig {
+  const providerId = config?.providerId?.trim() || 'default';
+  const effectiveProviderId = providerId === 'default' ? activeProviderId : providerId;
+  const model = config?.model?.trim() || aiProviderDefaultModel(effectiveProviderId, action);
+  return {
+    providerId,
+    model,
+    modelsByProvider: aiActionModelsByProvider(config, effectiveProviderId, model),
+  };
+}
+
+function aiActionModelsByProvider(config: AiActionConfig | undefined, effectiveProviderId: string, model: string): Record<string, string> {
+  const modelsByProvider = { ...(config?.modelsByProvider ?? {}) };
+  modelsByProvider[effectiveProviderId] = model;
+  return modelsByProvider;
+}
+
+function aiActionModelForProvider(config: AiActionConfig, providerId: string, action: AiActionKey): string {
+  return config.modelsByProvider?.[providerId]?.trim() || aiProviderDefaultModel(providerId, action);
+}
+
+function parseAiActionModelsByProvider(value: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([providerId, model]) => [providerId.trim(), String(model).trim()])
+        .filter(([providerId, model]) => providerId && model)
+    );
+  } catch {
+    return {};
+  }
+}
+
+function syncAiActionModelForProvider(select: HTMLSelectElement): void {
+  const form = select.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+  const fieldset = select.closest<HTMLFieldSetElement>('.ai-action-config');
+  const action = select.dataset.actionKey as AiActionKey | undefined;
+  const modelInput = fieldset?.querySelector<HTMLInputElement>('input[name$="Model"]');
+  const modelsInput = fieldset?.querySelector<HTMLTextAreaElement>('textarea[name$="ModelsByProvider"]');
+  if (!form || !fieldset || !action || !modelInput || !modelsInput) return;
+  const activeProviderId = String(new FormData(form).get('activeProviderId') ?? '').trim() || 'openai';
+  const providerId = select.value === 'default' ? activeProviderId : select.value;
+  const modelsByProvider = parseAiActionModelsByProvider(modelsInput.value);
+  const previousProviderId = select.dataset.effectiveProviderId || activeProviderId;
+  const previousModel = modelInput.value.trim();
+  if (previousProviderId && previousModel) {
+    modelsByProvider[previousProviderId] = previousModel;
+  }
+  const provider = aiProviderPreset(providerId);
+  modelInput.value = modelsByProvider[providerId] || aiProviderDefaultModel(providerId, action);
+  modelInput.placeholder = provider.modelPlaceholder;
+  select.dataset.effectiveProviderId = providerId;
+  modelsInput.value = JSON.stringify(modelsByProvider);
 }
 
 function normalizeAiMaxContextChars(value: unknown): number {
@@ -3262,9 +3409,9 @@ function formatAiMaxContextChars(value: unknown): string {
   return `${new Intl.NumberFormat().format(normalizeAiMaxContextChars(value))} chars`;
 }
 
-function activeProviderConfig(settings: AiSettings): AiProviderConfig {
-  const preset = aiProviderPreset(settings.activeProviderId);
-  return settings.providers.find((provider) => provider.provider === settings.activeProviderId) ?? {
+function aiProviderConfig(settings: AiSettings, providerId: string): AiProviderConfig {
+  const preset = aiProviderPreset(providerId);
+  return settings.providers.find((provider) => provider.provider === providerId) ?? {
     provider: preset.id,
     baseUrl: preset.baseUrl,
     apiKey: '',

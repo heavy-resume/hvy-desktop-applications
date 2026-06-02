@@ -260,6 +260,8 @@ struct DocumentBackupSnapshot {
 struct AiActionConfig {
     provider_id: String,
     model: String,
+    #[serde(default)]
+    models_by_provider: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -277,9 +279,13 @@ struct AiActionSettings {
 
 impl AiActionConfig {
     fn new(provider_id: &str, model: &str) -> Self {
+        let effective_provider_id = if provider_id == "default" { "openai" } else { provider_id };
+        let mut models_by_provider = std::collections::BTreeMap::new();
+        models_by_provider.insert(effective_provider_id.into(), model.into());
         Self {
             provider_id: provider_id.into(),
             model: model.into(),
+            models_by_provider,
         }
     }
 }

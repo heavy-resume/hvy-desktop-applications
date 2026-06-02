@@ -69,6 +69,8 @@ export interface AppState {
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
+  aiSettingsDiscardDialogOpen: boolean;
+  aiSettingsSelectedProviderId: string | null;
   mcpSettingsDialogOpen: boolean;
   mcpSettingsDraft: McpSettings | null;
   mcpSettingsDialogInitialJson: string | null;
@@ -171,6 +173,8 @@ export const state: AppState = {
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
+  aiSettingsDiscardDialogOpen: false,
+  aiSettingsSelectedProviderId: null,
   mcpSettingsDialogOpen: false,
   mcpSettingsDraft: null,
   mcpSettingsDialogInitialJson: null,

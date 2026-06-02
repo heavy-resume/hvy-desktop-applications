@@ -349,9 +349,23 @@ fn normalize_ai_action(
     } else {
         provider_id
     };
+    let model = action.model.trim().to_string();
+    let effective_provider_id = if provider_id == "default" { active_provider_id } else { provider_id };
+    let mut models_by_provider = std::collections::BTreeMap::new();
+    for (provider, model) in action.models_by_provider {
+        let provider = provider.trim();
+        let model = model.trim();
+        if !provider.is_empty() && !model.is_empty() {
+            models_by_provider.insert(provider.into(), model.into());
+        }
+    }
+    if !model.is_empty() {
+        models_by_provider.insert(effective_provider_id.into(), model.clone());
+    }
     AiActionConfig {
         provider_id: provider_id.into(),
-        model: action.model.trim().into(),
+        model,
+        models_by_provider,
     }
 }
 

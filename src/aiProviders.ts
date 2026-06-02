@@ -7,6 +7,8 @@ export interface AiProviderPreset {
   docsUrl: string;
 }
 
+type AiProviderActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
+
 export const aiProviderPresets: AiProviderPreset[] = [
   {
     id: 'ollama',
@@ -26,7 +28,7 @@ export const aiProviderPresets: AiProviderPreset[] = [
   },
   {
     id: 'unsloth',
-    name: 'Unsloth',
+    name: 'Unsloth Studio',
     baseUrl: 'http://127.0.0.1:8888/v1',
     apiKeyPlaceholder: 'optional',
     modelPlaceholder: 'unsloth/GLM-4.7-Flash',
@@ -47,6 +49,14 @@ export const aiProviderPresets: AiProviderPreset[] = [
     apiKeyPlaceholder: 'sk-...',
     modelPlaceholder: 'gpt-5.4-mini',
     docsUrl: 'https://developers.openai.com/api/reference/overview',
+  },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+    apiKeyPlaceholder: 'sk-ant-...',
+    modelPlaceholder: 'claude-sonnet-4-6',
+    docsUrl: 'https://platform.claude.com/docs/en/api/openai-sdk',
   },
   {
     id: 'openrouter',
@@ -92,4 +102,13 @@ export const aiProviderPresets: AiProviderPreset[] = [
 
 export function aiProviderPreset(id: string): AiProviderPreset {
   return aiProviderPresets.find((preset) => preset.id === id) ?? aiProviderPresets[0];
+}
+
+export function aiProviderDefaultModel(id: string, action?: AiProviderActionKey): string {
+  if (id === 'openai') {
+    return action === 'chat' || action === 'semanticFilter' || action === 'compaction'
+      ? 'gpt-5.4-nano'
+      : 'gpt-5.4-mini';
+  }
+  return aiProviderPreset(id).modelPlaceholder;
 }
