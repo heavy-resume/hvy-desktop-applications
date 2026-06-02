@@ -2491,15 +2491,19 @@ button:disabled {
   display: none;
 }
 
-.hvy-document-host .editor-shell:has(.component-picker[data-open="true"]) .editor-sidebar,
-.hvy-document-host .editor-shell:has(.component-picker:focus-within) .editor-sidebar {
-  z-index: 5;
+.hvy-document-host .editor-shell .editor-tree {
+  position: relative;
+  z-index: 0;
 }
 
-.hvy-document-host .editor-shell:has(.component-picker[data-open="true"]) .editor-tree,
-.hvy-document-host .editor-shell:has(.component-picker:focus-within) .editor-tree {
-  position: relative;
+.hvy-document-host .editor-shell:has(.editor-tree .component-picker[data-open="true"]) .editor-tree,
+.hvy-document-host .editor-shell:has(.editor-tree .component-picker:focus-within) .editor-tree {
   z-index: 30;
+}
+
+.hvy-document-host .editor-shell:has(.editor-sidebar .component-picker[data-open="true"]) .editor-sidebar,
+.hvy-document-host .editor-shell:has(.editor-sidebar .component-picker:focus-within) .editor-sidebar {
+  z-index: 40;
 }
 
 .hvy-document-host .component-picker:not([data-active-pane="root"]) .component-picker-popover {
