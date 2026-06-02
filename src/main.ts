@@ -135,6 +135,9 @@ const handlers: UiHandlers = {
   newWorkspace: () => {
     state.openWorkspaceActionsPath = null;
     state.newWorkspaceDialogOpen = true;
+    state.workspaceInitializationDialogOpen = false;
+    state.workspaceInitializationPath = null;
+    state.workspaceInitializationName = null;
     state.newWorkspaceLocation = 'managed';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -238,6 +241,26 @@ const handlers: UiHandlers = {
     state.selectedWorkspacePath = workspace.path;
     await refreshRecents();
   }),
+  confirmWorkspaceInitialization: () => void runBusy('Creating workspace...', async () => {
+    const path = state.workspaceInitializationPath;
+    if (!path) return;
+    const workspace = await initializeWorkspacePath(path);
+    state.workspaceInitializationDialogOpen = false;
+    state.workspaceInitializationPath = null;
+    state.workspaceInitializationName = null;
+    state.newWorkspaceDialogOpen = false;
+    upsertWorkspace(workspace);
+    state.selectedWorkspacePath = workspace.path;
+    await refreshRecents();
+    await refreshArchivedWorkspaces();
+  }),
+  cancelWorkspaceInitialization: () => {
+    state.workspaceInitializationDialogOpen = false;
+    state.workspaceInitializationPath = null;
+    state.workspaceInitializationName = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   setNewWorkspaceLocation: (location) => {
     state.newWorkspaceLocation = location;
     state.status = 'Ready';
@@ -245,6 +268,9 @@ const handlers: UiHandlers = {
   },
   cancelNewWorkspace: () => {
     state.newWorkspaceDialogOpen = false;
+    state.workspaceInitializationDialogOpen = false;
+    state.workspaceInitializationPath = null;
+    state.workspaceInitializationName = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -728,6 +754,7 @@ const handlers: UiHandlers = {
     state.mcpSettingsDraft = cloneMcpSettings(state.mcpSettings);
     state.mcpSettingsDialogInitialJson = JSON.stringify(state.mcpSettingsDraft);
     state.mcpSettingsDialogOpen = true;
+    state.mcpSettingsDiscardDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
     void refreshMcpClientInstallStatus();
@@ -737,13 +764,32 @@ const handlers: UiHandlers = {
     state.mcpSettingsDialogOpen = false;
     state.mcpSettingsDraft = null;
     state.mcpSettingsDialogInitialJson = null;
+    state.mcpSettingsDiscardDialogOpen = false;
     state.status = 'Saved MCP settings';
   }),
   cancelMcpSettings: (settings) => {
-    if (!confirmDiscardMcpSettings(settings)) return;
+    if (mcpSettingsChanged(settings)) {
+      state.mcpSettingsDiscardDialogOpen = true;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
     state.mcpSettingsDialogOpen = false;
     state.mcpSettingsDraft = null;
     state.mcpSettingsDialogInitialJson = null;
+    state.mcpSettingsDiscardDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  discardMcpSettingsChanges: () => {
+    state.mcpSettingsDialogOpen = false;
+    state.mcpSettingsDraft = null;
+    state.mcpSettingsDialogInitialJson = null;
+    state.mcpSettingsDiscardDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  keepEditingMcpSettings: () => {
+    state.mcpSettingsDiscardDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -972,7 +1018,7 @@ const handlers: UiHandlers = {
     if (!candidate) return;
     const workspace = candidate.hasManifest
       ? await loadWorkspace(candidate.path)
-      : await confirmWorkspaceInitialization(candidate.path, candidate.defaultName);
+      : requestWorkspaceInitialization(candidate.path, candidate.defaultName);
     if (!workspace) {
       state.status = 'Ready';
       return;
@@ -2176,6 +2222,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
     storageKey: documentStorageKey(state.document.path || state.document.name),
     searchSnapshot,
     hiddenFromAI: state.document.hiddenFromAI,
+    maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);
@@ -3053,7 +3100,9 @@ async function createTemporaryImportMount(
   const root = globalThis.document.createElement('div');
   root.hidden = true;
   globalThis.document.body.append(root);
-  const mounted = await mountHvyDocument(root, document, mode);
+  const mounted = await mountHvyDocument(root, document, mode, {
+    maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
+  });
   return {
     mounted,
     cleanup() {
@@ -3355,12 +3404,16 @@ function documentStorageKey(identifier: string): string {
 
 function closeUiBeforeAiSettings(): void {
   state.newWorkspaceDialogOpen = false;
+  state.workspaceInitializationDialogOpen = false;
+  state.workspaceInitializationPath = null;
+  state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.colorThemeDialogOpen = false;
   state.aboutDialogOpen = false;
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
+  state.mcpSettingsDiscardDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -3371,6 +3424,9 @@ function closeUiBeforeAiSettings(): void {
 
 function closeUiBeforeAbout(): void {
   state.newWorkspaceDialogOpen = false;
+  state.workspaceInitializationDialogOpen = false;
+  state.workspaceInitializationPath = null;
+  state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
@@ -3380,6 +3436,7 @@ function closeUiBeforeAbout(): void {
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
+  state.mcpSettingsDiscardDialogOpen = false;
   state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
@@ -3389,6 +3446,9 @@ function closeUiBeforeAbout(): void {
 
 function closeUiBeforeColorTheme(): void {
   state.newWorkspaceDialogOpen = false;
+  state.workspaceInitializationDialogOpen = false;
+  state.workspaceInitializationPath = null;
+  state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
   state.aiSettingsDialogOpen = false;
@@ -3399,6 +3459,7 @@ function closeUiBeforeColorTheme(): void {
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
+  state.mcpSettingsDiscardDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -3407,6 +3468,9 @@ function closeUiBeforeColorTheme(): void {
 
 function closeUiBeforeMcpSettings(): void {
   state.newWorkspaceDialogOpen = false;
+  state.workspaceInitializationDialogOpen = false;
+  state.workspaceInitializationPath = null;
+  state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
   state.aiSettingsDialogOpen = false;
@@ -3415,6 +3479,7 @@ function closeUiBeforeMcpSettings(): void {
   state.aiSettingsDiscardDialogOpen = false;
   state.aiSettingsSelectedProviderId = null;
   state.colorThemeDialogOpen = false;
+  state.mcpSettingsDiscardDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -3423,6 +3488,9 @@ function closeUiBeforeMcpSettings(): void {
 
 function closeUiBeforeWorkspaceFilter(): void {
   state.newWorkspaceDialogOpen = false;
+  state.workspaceInitializationDialogOpen = false;
+  state.workspaceInitializationPath = null;
+  state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
   state.aiSettingsDialogOpen = false;
@@ -3433,6 +3501,7 @@ function closeUiBeforeWorkspaceFilter(): void {
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
+  state.mcpSettingsDiscardDialogOpen = false;
   state.colorThemeDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
@@ -3507,12 +3576,11 @@ function aiSettingsChanged(settings: typeof state.aiSettings | undefined): boole
   return current !== initial;
 }
 
-function confirmDiscardMcpSettings(settings: McpSettings | undefined): boolean {
+function mcpSettingsChanged(settings: McpSettings | undefined): boolean {
   const initial = state.mcpSettingsDialogInitialJson;
-  if (!initial) return true;
+  if (!initial) return false;
   const current = JSON.stringify(settings ?? state.mcpSettingsDraft ?? state.mcpSettings);
-  if (current === initial) return true;
-  return window.confirm('Discard changes to MCP server settings?');
+  return current !== initial;
 }
 
 async function copyMcpConnectionUrl(url: string): Promise<void> {
@@ -3557,11 +3625,12 @@ function normalizeAiMaxContextChars(value: unknown): number {
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
 }
 
-async function confirmWorkspaceInitialization(path: string, defaultName: string) {
-  const shouldInitialize = window.confirm(
-    `"${defaultName}" is not a workspace yet. Create .hvyworkspace.json in this folder?`
-  );
-  return shouldInitialize ? initializeWorkspacePath(path) : null;
+function requestWorkspaceInitialization(path: string, defaultName: string): null {
+  state.workspaceInitializationDialogOpen = true;
+  state.workspaceInitializationPath = path;
+  state.workspaceInitializationName = defaultName;
+  state.status = 'Ready';
+  return null;
 }
 
 async function createWorkspaceInChosenFolder() {
@@ -3570,7 +3639,7 @@ async function createWorkspaceInChosenFolder() {
   if (candidate.hasManifest) {
     return loadWorkspace(candidate.path);
   }
-  return initializeWorkspacePath(candidate.path);
+  return requestWorkspaceInitialization(candidate.path, candidate.defaultName);
 }
 
 function setupErrorSurface(): void {

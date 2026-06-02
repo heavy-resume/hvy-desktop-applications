@@ -45,6 +45,9 @@ export interface AppState {
   error: string | null;
   busy: boolean;
   newWorkspaceDialogOpen: boolean;
+  workspaceInitializationDialogOpen: boolean;
+  workspaceInitializationPath: string | null;
+  workspaceInitializationName: string | null;
   workspaceManagerOpen: boolean;
   openWorkspaceActionsPath: string | null;
   workspaceExpanded: Record<string, boolean>;
@@ -76,6 +79,7 @@ export interface AppState {
   mcpSettingsDialogOpen: boolean;
   mcpSettingsDraft: McpSettings | null;
   mcpSettingsDialogInitialJson: string | null;
+  mcpSettingsDiscardDialogOpen: boolean;
   colorThemeDialogOpen: boolean;
   aboutDialogOpen: boolean;
   recoveryDialogOpen: boolean;
@@ -151,6 +155,9 @@ export const state: AppState = {
   error: null,
   busy: false,
   newWorkspaceDialogOpen: false,
+  workspaceInitializationDialogOpen: false,
+  workspaceInitializationPath: null,
+  workspaceInitializationName: null,
   workspaceManagerOpen: false,
   openWorkspaceActionsPath: null,
   workspaceExpanded: {},
@@ -182,6 +189,7 @@ export const state: AppState = {
   mcpSettingsDialogOpen: false,
   mcpSettingsDraft: null,
   mcpSettingsDialogInitialJson: null,
+  mcpSettingsDiscardDialogOpen: false,
   colorThemeDialogOpen: false,
   aboutDialogOpen: false,
   recoveryDialogOpen: false,
