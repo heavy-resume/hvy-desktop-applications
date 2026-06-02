@@ -121,6 +121,7 @@ interface DocumentSession {
   isNew: boolean;
   metaOpen: boolean;
   document: VisualDocument;
+  scrollRatio: MountScrollRatio | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
 }
@@ -2086,6 +2087,7 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   markDocumentTabOpened(file.path);
   state.document?.mounted?.mount.destroy();
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(file.path);
+  const viewSession = storedSession;
   const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
   const bytes = new Uint8Array(file.bytes);
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
@@ -2106,12 +2108,12 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
     extension: session?.extension ?? file.extension,
-    mode: session?.mode ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI }),
+    mode: viewSession?.mode ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI }),
     dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
     readOnly,
     hiddenFromAI,
     isNew: session?.isNew ?? options.isNew === true,
-    metaOpen: session?.metaOpen ?? false,
+    metaOpen: viewSession?.metaOpen ?? false,
     mounted: null,
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
   };
@@ -2132,6 +2134,7 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   }
   rerender();
   await mountCurrentDocument(document);
+  restoreMountScrollRatio(mountRoot, viewSession?.scrollRatio ?? null);
   if (recoveryState && state.document?.mounted) {
     applyMountedRecoveryState(state.document.mounted, recoveryState);
   }
@@ -2164,6 +2167,7 @@ function preserveCurrentDocumentSession(): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
+    scrollRatio: captureMountScrollRatio(mountRoot),
     recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
@@ -2183,6 +2187,7 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
+    scrollRatio: captureMountScrollRatio(mountRoot),
     recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
@@ -2983,6 +2988,7 @@ async function restoreBackupsToTabs(backups: DocumentBackup[]): Promise<void> {
       isNew: false,
       metaOpen: false,
       document,
+      scrollRatio: null,
       recoveryState: file.recoveryState ?? null,
       recoveryBackupId: backup.id,
     });

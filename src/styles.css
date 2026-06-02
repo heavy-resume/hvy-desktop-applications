@@ -95,6 +95,8 @@ input[type="radio"] {
 }
 
 .document-host .hvy-embed-layout input[type="checkbox"],
+.document-host .hvy-embed-layout input[type="radio"],
+.document-host .hvy-form-plugin input[type="radio"],
 .document-host .hvy-form-plugin input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
@@ -114,6 +116,11 @@ input[type="radio"] {
   accent-color: var(--hvy-accent-1);
 }
 
+.document-host .hvy-embed-layout input[type="radio"],
+.document-host .hvy-form-plugin input[type="radio"] {
+  border-radius: 50%;
+}
+
 .document-host .hvy-embed-layout input[type="checkbox"]::before,
 .document-host .hvy-form-plugin input[type="checkbox"]::before {
   content: "";
@@ -126,7 +133,20 @@ input[type="radio"] {
   transform-origin: center;
 }
 
+.document-host .hvy-embed-layout input[type="radio"]::before,
+.document-host .hvy-form-plugin input[type="radio"]::before {
+  content: "";
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 50%;
+  background: var(--hvy-accent-1);
+  transform: scale(0);
+  transform-origin: center;
+}
+
 .document-host .hvy-embed-layout input[type="checkbox"]:checked,
+.document-host .hvy-embed-layout input[type="radio"]:checked,
+.document-host .hvy-form-plugin input[type="radio"]:checked,
 .document-host .hvy-form-plugin input[type="checkbox"]:checked {
   border-color: var(--hvy-accent-1-alt);
   background: linear-gradient(
@@ -140,6 +160,11 @@ input[type="radio"] {
 .document-host .hvy-embed-layout input[type="checkbox"]:checked::before,
 .document-host .hvy-form-plugin input[type="checkbox"]:checked::before {
   transform: rotate(45deg) scale(1);
+}
+
+.document-host .hvy-embed-layout input[type="radio"]:checked::before,
+.document-host .hvy-form-plugin input[type="radio"]:checked::before {
+  transform: scale(1);
 }
 
 button:not(:disabled) {
