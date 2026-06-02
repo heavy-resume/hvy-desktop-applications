@@ -135,6 +135,9 @@ function shortcutCommand(input) {
   if (key === 'o' && input.shift) return 'open-file';
   if (key === 'f' && !input.shift) return 'find';
   if (key === 'b' && !input.shift) return 'bold';
+  if (key === 'i' && !input.shift) return 'italic';
+  if (key === 'u' && !input.shift) return 'underline';
+  if (key === 'x' && input.shift) return 'strikethrough';
   if (key === ',' && !input.shift) return 'ai-settings';
   return null;
 }
@@ -192,6 +195,9 @@ function buildMenu() {
         { role: 'paste' },
         { type: 'separator' },
         menuItem('Bold', 'bold', 'CmdOrCtrl+B'),
+        menuItem('Italic', 'italic', 'CmdOrCtrl+I'),
+        menuItem('Underline', 'underline', 'CmdOrCtrl+U'),
+        menuItem('Strikethrough', 'strikethrough', 'CmdOrCtrl+Shift+X'),
         { type: 'separator' },
         menuItem('Find', 'find', 'CmdOrCtrl+F'),
         { type: 'separator' },

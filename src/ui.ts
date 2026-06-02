@@ -1152,6 +1152,24 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
     event.stopImmediatePropagation();
     return true;
   }
+  if (!event.shiftKey && key === 'i' && rawHvyShell) {
+    rawHvyShell.dispatchEvent(new CustomEvent('hvy:toggle-raw-italic'));
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+  }
+  if (!event.shiftKey && key === 'u' && rawHvyShell) {
+    rawHvyShell.dispatchEvent(new CustomEvent('hvy:toggle-raw-underline'));
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+  }
+  if (event.shiftKey && key === 'x' && rawHvyShell) {
+    rawHvyShell.dispatchEvent(new CustomEvent('hvy:toggle-raw-strikethrough'));
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+  }
   if (!event.shiftKey && key === ',') {
     event.preventDefault();
     handlers.openAiSettings();

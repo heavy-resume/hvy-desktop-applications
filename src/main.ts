@@ -1455,7 +1455,10 @@ async function boot(): Promise<void> {
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
       if (event === 'find') openMountedSearch();
-      if (event === 'bold') performBold();
+      if (event === 'bold') performRichTextAction('bold');
+      if (event === 'italic') performRichTextAction('italic');
+      if (event === 'underline') performRichTextAction('underline');
+      if (event === 'strikethrough') performRichTextAction('strikethrough');
       if (event === 'undo') performUndo();
       if (event === 'redo') performRedo();
       if (event === 'open-guide') void openGuide();
@@ -1523,11 +1526,11 @@ function openMountedSearch(): boolean {
   return true;
 }
 
-function performBold(): void {
+function performRichTextAction(action: 'bold' | 'italic' | 'underline' | 'strikethrough'): void {
   const root = currentMountRoot();
   const rawShell = root?.querySelector<HTMLElement>('.raw-hvy-shell');
   if (rawShell) {
-    rawShell.dispatchEvent(new CustomEvent('hvy:toggle-raw-bold'));
+    rawShell.dispatchEvent(new CustomEvent(`hvy:toggle-raw-${action}`));
     return;
   }
   const editable = getActiveRichEditable();
@@ -1536,14 +1539,14 @@ function performBold(): void {
   const blockId = editable.dataset.blockId ?? '';
   const field = editable.dataset.field ?? '';
   const selector = [
-    '[data-rich-action="bold"]',
+    `[data-rich-action="${action}"]`,
     sectionKey ? `[data-section-key="${cssEscape(sectionKey)}"]` : '',
     blockId ? `[data-block-id="${cssEscape(blockId)}"]` : '',
     field ? `[data-field="${cssEscape(field)}"]` : '',
   ].join('');
   const button =
     root.querySelector<HTMLButtonElement>(selector) ??
-    editable.closest<HTMLElement>('.editor-block, .table-inline-edit-shell')?.querySelector<HTMLButtonElement>('[data-rich-action="bold"]');
+    editable.closest<HTMLElement>('.editor-block, .table-inline-edit-shell')?.querySelector<HTMLButtonElement>(`[data-rich-action="${action}"]`);
   button?.click();
 }
 

@@ -276,7 +276,7 @@ async function mountRawHvyDocument(
     }
   };
 
-  const toggleMarkdownBoldSelection = () => {
+  const toggleMarkdownInlineSelection = (marker: string) => {
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     if (start === end) {
@@ -284,31 +284,37 @@ async function mountRawHvyDocument(
     }
     const value = textarea.value;
     const selected = value.slice(start, end);
-    const hasOuterMarkers = selected.startsWith('**') && selected.endsWith('**') && selected.length >= 4;
-    const hasSurroundingMarkers = value.slice(start - 2, start) === '**' && value.slice(end, end + 2) === '**';
+    const markerLength = marker.length;
+    const hasOuterMarkers = selected.startsWith(marker) && selected.endsWith(marker) && selected.length >= markerLength * 2;
+    const hasSurroundingMarkers = value.slice(start - markerLength, start) === marker && value.slice(end, end + markerLength) === marker;
     if (hasOuterMarkers) {
       replaceTextareaSelection(
-        `${value.slice(0, start)}${selected.slice(2, -2)}${value.slice(end)}`,
+        `${value.slice(0, start)}${selected.slice(markerLength, -markerLength)}${value.slice(end)}`,
         start,
-        end - 4
+        end - markerLength * 2
       );
       return true;
     }
     if (hasSurroundingMarkers) {
       replaceTextareaSelection(
-        `${value.slice(0, start - 2)}${selected}${value.slice(end + 2)}`,
-        start - 2,
-        end - 2
+        `${value.slice(0, start - markerLength)}${selected}${value.slice(end + markerLength)}`,
+        start - markerLength,
+        end - markerLength
       );
       return true;
     }
     replaceTextareaSelection(
-      `${value.slice(0, start)}**${selected}**${value.slice(end)}`,
-      start + 2,
-      end + 2
+      `${value.slice(0, start)}${marker}${selected}${marker}${value.slice(end)}`,
+      start + markerLength,
+      end + markerLength
     );
     return true;
   };
+
+  const toggleMarkdownBoldSelection = () => toggleMarkdownInlineSelection('**');
+  const toggleMarkdownItalicSelection = () => toggleMarkdownInlineSelection('_');
+  const toggleMarkdownUnderlineSelection = () => toggleMarkdownInlineSelection('___');
+  const toggleMarkdownStrikethroughSelection = () => toggleMarkdownInlineSelection('~~');
 
   const openSourceSearch = () => {
     searchBar.hidden = false;
@@ -328,6 +334,18 @@ async function mountRawHvyDocument(
   shell.addEventListener('hvy:toggle-raw-bold', () => {
     textarea.focus();
     toggleMarkdownBoldSelection();
+  });
+  shell.addEventListener('hvy:toggle-raw-italic', () => {
+    textarea.focus();
+    toggleMarkdownItalicSelection();
+  });
+  shell.addEventListener('hvy:toggle-raw-underline', () => {
+    textarea.focus();
+    toggleMarkdownUnderlineSelection();
+  });
+  shell.addEventListener('hvy:toggle-raw-strikethrough', () => {
+    textarea.focus();
+    toggleMarkdownStrikethroughSelection();
   });
   closeButton.addEventListener('click', (event) => {
     event.preventDefault();
@@ -357,24 +375,49 @@ async function mountRawHvyDocument(
     }
   });
   documentOwner().addEventListener('keydown', (event) => {
-    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey) {
       return;
     }
     const key = event.key.toLowerCase();
-    if (key === 'f') {
+    if (!event.shiftKey && key === 'f') {
       event.preventDefault();
       event.stopImmediatePropagation();
       openSourceSearch();
       return;
     }
-    if (key === 'b' && toggleMarkdownBoldSelection()) {
+    if (!event.shiftKey && key === 'b' && toggleMarkdownBoldSelection()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (!event.shiftKey && key === 'i' && toggleMarkdownItalicSelection()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (!event.shiftKey && key === 'u' && toggleMarkdownUnderlineSelection()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (event.shiftKey && key === 'x' && toggleMarkdownStrikethroughSelection()) {
       event.preventDefault();
       event.stopImmediatePropagation();
     }
   }, { capture: true, signal: searchCleanup.signal });
   textarea.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'b') {
-      if (toggleMarkdownBoldSelection()) {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+      const key = event.key.toLowerCase();
+      const handled = !event.shiftKey && key === 'b'
+        ? toggleMarkdownBoldSelection()
+        : !event.shiftKey && key === 'i'
+        ? toggleMarkdownItalicSelection()
+        : !event.shiftKey && key === 'u'
+        ? toggleMarkdownUnderlineSelection()
+        : event.shiftKey && key === 'x'
+        ? toggleMarkdownStrikethroughSelection()
+        : false;
+      if (handled) {
         event.preventDefault();
         event.stopPropagation();
       }
