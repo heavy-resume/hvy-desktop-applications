@@ -1547,8 +1547,9 @@ function performRedo(): void {
 
 function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
   const target = document.activeElement;
-  if (!(target instanceof HTMLElement) || target.closest('#hvyMount')) return false;
+  if (!(target instanceof HTMLElement)) return false;
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return false;
+  if (target.closest('#hvyMount') && target.isContentEditable && !document.queryCommandEnabled(command)) return false;
   document.execCommand(command);
   return true;
 }
