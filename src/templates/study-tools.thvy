@@ -638,18 +638,10 @@ theme:
               text = text[:end]
           return text.strip()
   
-      def read_json_string(source, key, default_value=""):
-          marker = '"' + key + '"'
-          start = source.find(marker)
-          if start < 0:
-              return default_value
-          colon = source.find(":", start + len(marker))
-          if colon < 0:
-              return default_value
-          quote = source.find('"', colon + 1)
-          if quote < 0:
-              return default_value
-          index = quote + 1
+      def read_json_quoted_string(source, index):
+          if index >= len(source) or source[index] != '"':
+              return ["", index]
+          index += 1
           value = ""
           escaped = False
           while index < len(source):
@@ -667,11 +659,35 @@ theme:
               elif char == "\\":
                   escaped = True
               elif char == '"':
-                  return value
+                  return [value, index + 1]
               else:
                   value += char
               index += 1
-          return default_value
+          return [value, index]
+  
+      def read_json_object_strings(source):
+          fields = {}
+          index = 0
+          while index < len(source):
+              if source[index] != '"':
+                  index += 1
+                  continue
+              key_result = read_json_quoted_string(source, index)
+              key = key_result[0]
+              index = key_result[1]
+              while index < len(source) and source[index].isspace():
+                  index += 1
+              if index >= len(source) or source[index] != ":":
+                  continue
+              index += 1
+              while index < len(source) and source[index].isspace():
+                  index += 1
+              if index >= len(source) or source[index] != '"':
+                  continue
+              value_result = read_json_quoted_string(source, index)
+              fields[key] = value_result[0]
+              index = value_result[1]
+          return fields
   
       def split_json_objects(value):
           text = strip_code_fence(value)
@@ -763,11 +779,12 @@ theme:
       for item in split_json_objects(response):
           if len(quiz_items) >= requested_questions:
               break
-          question = read_json_string(item, "question", "").strip()
-          correct = read_json_string(item, "correct_option_letter", "").strip().upper()
+          fields = read_json_object_strings(item)
+          question = str(fields.get("question") or "").strip()
+          correct = str(fields.get("correct_option_letter") or "").strip().upper()
           options = []
           for option_index in range(requested_options):
-              option = read_json_string(item, "option_" + str(option_index + 1), "").strip()
+              option = str(fields.get("option_" + str(option_index + 1)) or "").strip()
               if len(option) > 0:
                   options.append(option)
           if len(question) > 0 and len(options) == requested_options and correct in letters[:requested_options]:
@@ -781,13 +798,11 @@ theme:
           return
       doc.form.clear_error("Quiz instructions")
       lines = ["fields:"]
-      labels = []
-      answers = []
+      answer_pairs = []
       for index in range(len(quiz_items)):
           item = quiz_items[index]
           label = str(index + 1) + ". " + item["question"]
-          labels.append(label)
-          answers.append(item["correct"])
+          answer_pairs.append([label, item["correct"]])
           lines.append("  - label: " + yaml_escape(label))
           lines.append("    type: radio")
           lines.append("    options:")
@@ -802,19 +817,23 @@ theme:
       lines.append("  grade: |")
       lines.append("    score = 0")
       lines.append("    skipped = 0")
-      lines.append("    total = " + str(len(labels)))
-      for index in range(len(labels)):
-          label = labels[index]
-          answer = answers[index]
-          lines.append("    doc.form.clear_error(" + script_escape(label) + ")")
-          lines.append("    selected = doc.form.get_value(" + script_escape(label) + ")")
-          lines.append("    if selected == " + script_escape(answer) + ":")
-          lines.append("        score += 1")
-          lines.append("    elif str(selected or \"\").strip() == \"\":")
-          lines.append("        skipped += 1")
-          lines.append("        doc.form.set_error(" + script_escape(label) + ", " + script_escape("Skipped. Correct answer: " + answer) + ")")
-          lines.append("    else:")
-          lines.append("        doc.form.set_error(" + script_escape(label) + ", " + script_escape("Correct answer: " + answer) + ")")
+      lines.append("    answers = [")
+      for pair in answer_pairs:
+          lines.append("        [" + script_escape(pair[0]) + ", " + script_escape(pair[1]) + "],")
+      lines.append("    ]")
+      lines.append("    total = len(answers)")
+      lines.append("    for answer_item in answers:")
+      lines.append("        label = answer_item[0]")
+      lines.append("        answer = answer_item[1]")
+      lines.append("        doc.form.clear_error(label)")
+      lines.append("        selected = doc.form.get_value(label)")
+      lines.append("        if selected == answer:")
+      lines.append("            score += 1")
+      lines.append("        elif str(selected or \"\").strip() == \"\":")
+      lines.append("            skipped += 1")
+      lines.append("            doc.form.set_error(label, \"Skipped. Correct answer: \" + answer)")
+      lines.append("        else:")
+      lines.append("            doc.form.set_error(label, \"Correct answer: \" + answer)")
       lines.append("    result = " + script_escape("Score: ") + " + str(score) + " + script_escape("/") + " + str(total)")
       lines.append("    if skipped > 0:")
       lines.append("        result += " + script_escape(" (") + " + str(skipped) + " + script_escape(" skipped)") )
