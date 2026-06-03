@@ -4,6 +4,7 @@ import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatch
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
+import { richTextActionForShortcutKey, type RichTextAction } from './uiShortcuts';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
 import ufoLogoUrl from './assets/ufo-no-bg.svg';
@@ -1207,12 +1208,53 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
     event.stopImmediatePropagation();
     return true;
   }
+  const richTextAction = richTextActionForShortcutKey(key, event.shiftKey);
+  if (richTextAction && clickActiveRichTextAction(root, richTextAction)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+  }
   if (!event.shiftKey && key === ',') {
     event.preventDefault();
     handlers.openAiSettings();
     return true;
   }
   return false;
+}
+
+function clickActiveRichTextAction(root: HTMLElement, action: RichTextAction): boolean {
+  const editable = getActiveRichEditable(root);
+  if (!editable) return false;
+  const sectionKey = editable.dataset.sectionKey ?? '';
+  const blockId = editable.dataset.blockId ?? '';
+  const field = editable.dataset.field ?? '';
+  const selector = [
+    `[data-rich-action="${action}"]`,
+    sectionKey ? `[data-section-key="${cssEscape(sectionKey)}"]` : '',
+    blockId ? `[data-block-id="${cssEscape(blockId)}"]` : '',
+    field ? `[data-field="${cssEscape(field)}"]` : '',
+  ].join('');
+  const button =
+    root.querySelector<HTMLButtonElement>(selector) ??
+    editable.closest<HTMLElement>('.editor-block, .table-inline-edit-shell')?.querySelector<HTMLButtonElement>(`[data-rich-action="${action}"]`);
+  if (!button) return false;
+  button.click();
+  return true;
+}
+
+function getActiveRichEditable(root: HTMLElement): HTMLElement | null {
+  const target = document.activeElement;
+  if (!(target instanceof HTMLElement) || !target.closest('#hvyMount')) return null;
+  if (!root.contains(target)) return null;
+  if (target.isContentEditable && target.dataset.field) return target;
+  return target.closest<HTMLElement>('[contenteditable="true"][data-field]');
+}
+
+function cssEscape(value: string): string {
+  if ('CSS' in window && typeof CSS.escape === 'function') {
+    return CSS.escape(value);
+  }
+  return value.replaceAll('"', '\\"');
 }
 
 function bindWorkspaceSidebarResize(root: HTMLElement, signal: AbortSignal): void {

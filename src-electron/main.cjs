@@ -499,9 +499,9 @@ function backupsDir() {
 }
 
 function defaultGuidePath() {
-  const packaged = path.join(process.resourcesPath || '', 'resources', 'hvy-galaxy.hvy');
+  const packaged = path.join(process.resourcesPath || '', 'hvy-galaxy.hvy');
   if (fs.existsSync(packaged)) return packaged;
-  return path.join(__dirname, '..', 'src-tauri', 'resources', 'hvy-galaxy.hvy');
+  return path.join(__dirname, '..', 'src', 'assets', 'hvy-galaxy.hvy');
 }
 
 function hvyGuidePath() {

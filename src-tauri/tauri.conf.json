@@ -56,9 +56,9 @@
       "infoPlist": "Info.plist",
       "minimumSystemVersion": "10.13"
     },
-    "resources": [
-      "resources/hvy-galaxy.hvy",
-      "resources/hvy-guide.hvy"
-    ]
+    "resources": {
+      "../src/assets/hvy-galaxy.hvy": "resources/hvy-galaxy.hvy",
+      "resources/hvy-guide.hvy": "resources/hvy-guide.hvy"
+    }
   }
 }

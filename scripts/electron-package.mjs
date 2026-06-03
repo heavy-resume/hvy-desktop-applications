@@ -64,6 +64,7 @@ const appPaths = await packager({
   },
   extraResource: [
     path.resolve('src-tauri', 'resources'),
+    path.resolve('src', 'assets', 'hvy-galaxy.hvy'),
     path.resolve('src-tauri', 'icons'),
   ],
   quiet: true,
