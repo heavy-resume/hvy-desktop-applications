@@ -612,7 +612,7 @@ button:disabled {
 .search-tab.is-active {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
   background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 12%, var(--hvy-surface, #ffffff));
-  color: var(--hvy-text, #17211f);
+  color: var(--hvy-accent-1-text, #ffffff);
 }
 
 .search-close-button {
@@ -765,7 +765,7 @@ button:disabled {
 .search-filter-mode-button.is-active {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
   background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 12%, var(--hvy-surface, #ffffff));
-  color: var(--hvy-text, #17211f);
+  color: var(--hvy-accent-1-text, #ffffff);
 }
 
 .search-results {
@@ -903,7 +903,7 @@ button:disabled {
 .workspace-filter-trigger.is-active {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
   background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 14%, var(--hvy-surface, #ffffff));
-  color: var(--hvy-text, #17211f);
+  color: var(--hvy-accent-1-text, #ffffff);
 }
 
 .workspace-filter-trigger svg {
@@ -1009,7 +1009,7 @@ button:disabled {
   border-bottom: 0;
   border-radius: 7px 7px 0 0;
   background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 90%, transparent);
-  color: var(--hvy-text-muted, #5f6a66);
+  color: var(--hvy-text, #5f6a66);
   padding: 0 5px 0 0;
 }
 
@@ -1269,7 +1269,7 @@ button:disabled {
 .mode-button.is-active {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
   background: var(--hvy-button-bg, #ffffff);
-  color: var(--hvy-button-text, #163635);
+  color: var(--hvy-accent-1-text, #ffffff);
   font-weight: 650;
 }
 
@@ -1383,6 +1383,11 @@ button:disabled {
   padding-top: 50px;
 }
 
+.document-host .viewer-sidebar-tab,
+.document-host .editor-sidebar-tab {
+  color: var(--hvy-accent-1-text, #ffffff);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1437,7 +1442,7 @@ button:disabled {
 .segmented-control button.is-active {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
   background: var(--hvy-button-bg, #ffffff);
-  color: var(--hvy-button-text, #163635);
+  color: var(--hvy-accent-1-text, #ffffff);
   font-weight: 650;
 }
 
@@ -2309,7 +2314,7 @@ button:disabled {
 .ai-provider-picker button.is-active {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #2f6968));
   background: color-mix(in srgb, var(--hvy-accent-1, #2f6968) 14%, var(--hvy-surface, #ffffff));
-  color: var(--hvy-text, #173a39);
+  color: var(--hvy-accent-1-text, #ffffff);
 }
 
 .ai-provider-fields,
