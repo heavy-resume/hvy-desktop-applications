@@ -24,6 +24,15 @@ fn save_ai_settings(app: AppHandle, settings: AiSettings) -> AppResult<AiSetting
 fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
     let resource_path = app
         .path()
+        .resolve("resources/hvy-galaxy.hvy", tauri::path::BaseDirectory::Resource)
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    read_document_at(&resource_path)
+}
+
+#[tauri::command]
+fn load_hvy_guide(app: AppHandle) -> AppResult<DocumentFile> {
+    let resource_path = app
+        .path()
         .resolve("resources/hvy-guide.hvy", tauri::path::BaseDirectory::Resource)
         .map_err(|error| AppError::Message(error.to_string()))?;
     read_document_at(&resource_path)

@@ -473,6 +473,10 @@ export function loadDefaultGuide(): Promise<DocumentFile> {
   return invokeDesktop('load_default_guide');
 }
 
+export function loadHvyGuide(): Promise<DocumentFile> {
+  return invokeDesktop('load_hvy_guide');
+}
+
 export function openWorkspaceDialog(): Promise<Workspace | null> {
   return invokeDesktop('open_workspace_dialog');
 }

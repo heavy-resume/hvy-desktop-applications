@@ -35,6 +35,7 @@ pub fn run() {
             mcp::stop_mcp_server,
             mcp::update_mcp_workspaces,
             load_default_guide,
+            load_hvy_guide,
             open_workspace_dialog,
             choose_workspace_folder,
             create_workspace,
@@ -220,11 +221,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .build()?;
     let help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
-            &MenuItemBuilder::new("HVY Guide")
+            &MenuItemBuilder::new("HVY Galaxy Guide")
                 .id("open-guide")
                 .accelerator("F1")
                 .build(app)?,
-        );
+        )
+        .item(&MenuItemBuilder::new("HVY Guide").id("open-hvy-guide").build(app)?);
     #[cfg(not(target_os = "macos"))]
     let help_builder = help_builder
         .separator()

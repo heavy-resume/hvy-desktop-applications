@@ -57,6 +57,7 @@
       "minimumSystemVersion": "10.13"
     },
     "resources": [
+      "resources/hvy-galaxy.hvy",
       "resources/hvy-guide.hvy"
     ]
   }

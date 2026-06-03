@@ -226,7 +226,8 @@ function buildMenu() {
     {
       label: 'Help',
       submenu: [
-        menuItem('HVY Guide', 'open-guide', 'F1'),
+        menuItem('HVY Galaxy Guide', 'open-guide', 'F1'),
+        menuItem('HVY Guide', 'open-hvy-guide'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem(`About ${APP_NAME}`, 'about')]),
       ],
     },
@@ -418,6 +419,7 @@ async function handleCommand(command, args) {
       return mcpStatus;
     case 'update_mcp_workspaces': return null;
     case 'load_default_guide': return readDocumentAt(defaultGuidePath());
+    case 'load_hvy_guide': return readDocumentAt(hvyGuidePath());
     case 'open_workspace_dialog': return openWorkspaceDialog();
     case 'choose_workspace_folder': return chooseWorkspaceFolder();
     case 'create_workspace': return createWorkspace(args.name);
@@ -497,6 +499,12 @@ function backupsDir() {
 }
 
 function defaultGuidePath() {
+  const packaged = path.join(process.resourcesPath || '', 'resources', 'hvy-galaxy.hvy');
+  if (fs.existsSync(packaged)) return packaged;
+  return path.join(__dirname, '..', 'src-tauri', 'resources', 'hvy-galaxy.hvy');
+}
+
+function hvyGuidePath() {
   const packaged = path.join(process.resourcesPath || '', 'resources', 'hvy-guide.hvy');
   if (fs.existsSync(packaged)) return packaged;
   return path.join(__dirname, '..', 'src-tauri', 'resources', 'hvy-guide.hvy');

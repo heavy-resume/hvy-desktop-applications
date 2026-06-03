@@ -23,6 +23,7 @@ import {
   loadMcpServerStatus,
   loadMcpSettings,
   loadMcpStdioLaunchConfig,
+  loadHvyGuide,
   loadLaunchDocumentPaths,
   loadWorkspace as loadWorkspaceBackend,
   listSavedTemplates,
@@ -1316,7 +1317,7 @@ const handlers: UiHandlers = {
   openDocumentMeta: () => {
     if (!state.document) return;
     if (state.document.readOnly) {
-      state.status = 'The HVY guide is read-only';
+      state.status = 'The HVY Galaxy guide is read-only';
       rerender();
       void mountCurrentDocument();
       return;
@@ -1535,6 +1536,7 @@ async function boot(): Promise<void> {
       if (event === 'undo') performUndo();
       if (event === 'redo') performRedo();
       if (event === 'open-guide') void openGuide();
+      if (event === 'open-hvy-guide') void openHvyGuide();
       if (event === 'about') handlers.openAbout();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
@@ -1556,6 +1558,7 @@ async function boot(): Promise<void> {
     for (const path of await loadLaunchDocumentPaths()) {
       await openLaunchDocumentPath(path);
     }
+    await openDefaultGuide();
   } catch (error) {
     showStartupError(error);
   }
@@ -1693,17 +1696,23 @@ async function loadRecentWorkspaces(): Promise<void> {
 async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
   if (!options.force && (state.document || state.selectedFilePath)) return;
   try {
-    await openDocument(await loadDefaultGuide(), { defaultDocument: true });
+    await openDocument(await loadDefaultGuide(), { defaultDocument: true, defaultDocumentLabel: 'HVY Galaxy guide' });
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error);
-    state.status = 'Could not load HVY guide';
+    state.status = 'Could not load HVY Galaxy guide';
     mountRoot = render(state, handlers);
   }
 }
 
 async function openGuide(): Promise<void> {
-  await runBusy('Opening HVY guide...', async () => {
+  await runBusy('Opening HVY Galaxy guide...', async () => {
     await openDefaultGuide({ force: true });
+  });
+}
+
+async function openHvyGuide(): Promise<void> {
+  await runBusy('Opening HVY guide...', async () => {
+    await openDocument(await loadHvyGuide(), { defaultDocument: true, defaultDocumentLabel: 'HVY guide' });
   });
 }
 
@@ -2082,7 +2091,7 @@ function syncDocumentTabs(): void {
   }
 }
 
-async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
+async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
   preserveCurrentDocumentSession();
   markDocumentTabOpened(file.path);
   state.document?.mounted?.mount.destroy();
@@ -2118,8 +2127,9 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
   };
   state.selectedFilePath = options.defaultDocument ? null : file.path;
+  const defaultDocumentLabel = options.defaultDocumentLabel ?? 'HVY Galaxy guide';
   state.status = options.defaultDocument
-    ? 'Opened HVY guide'
+    ? `Opened ${defaultDocumentLabel}`
     : session
     ? `Restored unsaved session for ${file.name}`
     : options.recovered
@@ -2408,7 +2418,7 @@ async function saveCurrentDocument(): Promise<void> {
   updateDirtyChrome();
   try {
     if (openDocument.readOnly) {
-      state.status = 'The HVY guide is read-only';
+      state.status = 'The HVY Galaxy guide is read-only';
       return;
     }
     const bytes = Array.from(serializeMountedDocument(mounted));
@@ -2483,7 +2493,7 @@ async function saveBeforeExportPdf(): Promise<void> {
 async function performSaveCurrentDocumentAs(): Promise<void> {
   if (!state.document?.mounted) return;
   if (state.document.readOnly) {
-    state.status = 'The HVY guide is read-only';
+    state.status = 'The HVY Galaxy guide is read-only';
     rerender();
     return;
   }

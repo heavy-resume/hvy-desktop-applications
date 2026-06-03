@@ -55,7 +55,7 @@ theme:
   colors: {}
 ---
 
-<!--hvy: {"id":"flashcards-sidebar","lock":false,"expanded":false,"highlight":true,"location":"sidebar"}-->
+<!--hvy: {"id":"flashcards-sidebar","lock":false,"expanded":false,"highlight":true,"location":"sidebar","protect_from_import":true}-->
 #! Flashcards
 
  <!--hvy:text {"id":"flashcards-title","css":"margin-bottom: 0.4rem;"}-->
@@ -425,7 +425,7 @@ theme:
           card_id = "flashcard-shuffled-" + normalize_id(card["id"]) + "-" + str(index)
           doc.cli.run("hvy insert -1 flashcard-card /body/flashcards-sidebar --id " + card_id + " --using-template " + shell_quote(values_json))
           index += 1
-<!--hvy: {"id":"quiz-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar"}-->
+<!--hvy: {"id":"quiz-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar","protect_from_import":true}-->
 #! Generate Quiz
 
  <!--hvy:text {"id":"quiz-tool-title","css":"margin-bottom: 0.4rem;"}-->
@@ -674,7 +674,7 @@ theme:
   scripts:
     grade: |
       doc.form.set_error("Quiz result", "Generate a quiz first.")
-<!--hvy: {"id":"podcast-transcript-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar"}-->
+<!--hvy: {"id":"podcast-transcript-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar","protect_from_import":true}-->
 #! Podcast Transcript
 
  <!--hvy:text {"id":"podcast-tool-title","css":"margin-bottom: 0.4rem;"}-->
