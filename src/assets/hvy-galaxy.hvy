@@ -61,23 +61,24 @@ heading_styles:
   HVY Galaxy supports configuration of LLMs using API keys. You must configure your LLM provider before these features
   will function. API keys on many providers, such as OpenAI and Anthropic, are billed separately from subscriptions.
   Some providers, like Anthropic, may set an introductory quota so low you cannot reasonably use some of the LLM
-  features such as edint documents. HVY Galaxy makes efforts to minimize these costs by structuring prompts to leverage
-  caching, but mileage will vary. You can set limits to the "per call" token usage to avoid creating accidentally large
-  contexts. You can prepay your tokens and disable automatic purchasing to avoid accidental charges.
+  features such as edit documents. You can set limits to the "per call" token usage to avoid creating accidentally large
+  contexts. You can prepay your tokens and disable automatic purchasing to avoid accidental charges. The software may
+  still fail to keep costs down due to defect or due to user behavior, such as intentionally increasing the character
+  limits.
   
   Alternatively, you can use the MCP functionality to interface with HVY Galaxy from your favorite AI app, such as
   Claude Desktop or OpenAI Codex. With subscription plans, you won't pay for excess token usage. Using subscription
-  plans within the HVY Galaxy is not currently supported.
+  plans _within_ HVY Galaxy is not currently supported.
   
   ## What can I do with HVY files?
   
-  HVY files can be used for taking notes, crafting and sharing data and LLM (large language model) centric applications,
-  storing and presenting information in a presentable way, and more! HVY files are intrinsically offline, but you can
-  configure the client to use LLMs such as `GPT-5.4-mini` to do semantic search, make document changes, respond to
-  scriptable prompts, and more. HVY files can include a database, and has a scripting sandbox for advanced
-  functionality. **A great example of this capability is the _study-tools_ template, which allows for generating flash
-  cards, a multiple choice quiz, and a podcast script from the information in the document.** These are accessible via
-  the side panel.
+  HVY files can be used for presenting information in interactive form, taking notes, crafting and sharing data and LLM
+  (large language model) centric applications, storing and presenting information in a presentable way, and more! HVY
+  files are intrinsically offline, but you can configure the client to use LLMs such as `GPT-5.4-mini` to do semantic
+  search, make document changes, respond to scriptable prompts, and more. HVY files can include a database, and has a
+  scripting sandbox for advanced functionality. **A great example of this capability is the _study-tools_ template,
+  which allows for generating flash cards, a multiple choice quiz, and a podcast script from the information in the
+  document.** These are accessible via the side panel.
   
   ## What can I do with HVY Galaxy?
   
@@ -103,15 +104,6 @@ heading_styles:
   
   HVY documents and HVY sections and components contain meta information. This is additional information such as tags,
   presentation code via CSS, descriptions for AI, and other features that aren't displayed.
-  
-  In addition to HVY files, templates which you can edit are available for creating new files. THVY is a regular HVY
-  template. PHVY is a template for PDF files.
-  
-  HVY files and templates support attachments. Images (a core component) and a file-based SQL database (a core plugin)
-  can be attached to the file.
-  
-  As of this alpha implementation, there is no dedicated editor for the SQL database, but you can make alterations
-  through the plugin. You can also ask the AI to view it and make changes.
 
  <!--hvy:text {"align":"center"}-->
   ## HVY files can be viewed via three modes
@@ -286,8 +278,8 @@ heading_styles:
   <!--hvy:expandable:content {}-->
 
    <!--hvy:text {}-->
-    MCP comes in two flavors. One is **STDIO**, the other is **web server**. The preferred way to use MCP is STDIO,
-    unless you wish to share your workspaces with others on the network.
+    MCP comes in two flavors. One is **STDIO**, the other is **Streamable HTTP**. _The preferred way to use MCP is
+    STDIO_, unless you wish to share your workspaces with others on the network.
 
    <!--hvy:container {"css":"margin: 0.5rem 0;\nborder: 1px solid var(--hvy-border);\nborder-radius: 8px;\npadding: 0.75rem;","containerTitle":"Alpha Warning"}-->
     <!--hvy:text {}-->
@@ -385,7 +377,7 @@ heading_styles:
   # Embedded SQL Database
   
   HVY files can contain an embedded SQL database. This is intended for "small" data volumes, and not a source of large
-  amounts of data. The DB Table plugin allows for
+  amounts of data. The DB Table plugin allows for creating and filtering larger tables programmatically via scripting.
 <!--hvy: {"lock":false,"expanded":true,"highlight":false,"location":"sidebar"}-->
 #! Cheatsheet
 
