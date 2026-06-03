@@ -1,16 +1,29 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 declare global {
   interface Window {
     hvyElectron?: {
       invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
       onMenuEvent(callback: (event: string) => void): () => void;
+      onOpenDocumentPath(callback: (path: string) => void): () => void;
+      onAppCloseRequest(callback: () => void): () => void;
     };
   }
 }
 
-export type DocumentExtension = '.hvy' | '.thvy' | '.md';
+export type DocumentExtension = '.hvy' | '.thvy' | '.phvy' | '.md';
+export type TemplateExtension = '.thvy' | '.phvy';
+export type DocumentCreationType = 'hvy' | 'thvy' | 'phvy';
+export type WorkspaceTemplateVisibilityKey = 'hvyDocuments' | 'thvyTemplates' | 'phvyTemplates' | 'archivedFiles';
+
+export interface WorkspaceTemplateVisibility {
+  hvyDocuments: boolean;
+  thvyTemplates: boolean;
+  phvyTemplates: boolean;
+  archivedFiles: boolean;
+}
 
 export interface WorkspaceManifest {
   schemaVersion: 1;
@@ -19,6 +32,10 @@ export interface WorkspaceManifest {
   updatedAt: string;
   rootFiles?: string[];
   expandedPaths?: string[];
+  templateVisibility?: WorkspaceTemplateVisibility;
+  archivedFiles?: string[];
+  lockedFiles?: string[];
+  hiddenFromAIFiles?: string[];
 }
 
 export interface WorkspaceFileNode {
@@ -26,6 +43,9 @@ export interface WorkspaceFileNode {
   path: string;
   relativePath: string;
   extension: DocumentExtension;
+  archived?: boolean;
+  locked?: boolean;
+  hiddenFromAI?: boolean;
 }
 
 export interface WorkspaceFolderNode {
@@ -45,6 +65,17 @@ export interface Workspace {
   files: WorkspaceTreeNode[];
 }
 
+export interface AddFilesResult {
+  workspace: Workspace;
+  copiedPaths: string[];
+  copiedTemplatePaths?: string[];
+}
+
+export interface DroppedWorkspaceFile {
+  name: string;
+  bytes: number[];
+}
+
 export interface WorkspaceOpenCandidate {
   path: string;
   hasManifest: boolean;
@@ -56,17 +87,28 @@ export interface RecentState {
   files: string[];
 }
 
+export interface ArchivedWorkspace {
+  path: string;
+  name: string;
+  archivedAt: string;
+}
+
 export interface DocumentFile {
   path: string;
   name: string;
   extension: DocumentExtension;
   bytes: number[];
+  locked?: boolean;
+  hiddenFromAI?: boolean;
+  recoveryState?: string | null;
 }
 
 export interface ImportSourceFile {
   path: string;
   name: string;
-  text: string;
+  extension: DocumentExtension | '.txt' | '.pdf' | '.docx';
+  text?: string;
+  bytes?: number[];
 }
 
 export type TemplateScope = 'app' | 'workspace';
@@ -76,6 +118,7 @@ export interface SavedTemplate {
   path: string;
   name: string;
   scope: TemplateScope;
+  extension: TemplateExtension;
   bytes: number[];
 }
 
@@ -85,6 +128,11 @@ export interface SaveDocumentRequest {
 }
 
 export interface SaveDocumentAsRequest {
+  suggestedName: string;
+  bytes: number[];
+}
+
+export interface SavePdfAsRequest {
   suggestedName: string;
   bytes: number[];
 }
@@ -100,6 +148,15 @@ export interface SaveThemeAsRequest {
   bytes: number[];
 }
 
+export interface FileMenuState {
+  closeDocument: boolean;
+  save: boolean;
+  saveAs: boolean;
+  saveToWorkspace: boolean;
+  exportPdf: boolean;
+  importCurrent: boolean;
+}
+
 export interface CreateDocumentRequest {
   workspacePath: string;
   relativePath: string;
@@ -111,17 +168,40 @@ export interface RenameDocumentRequest {
   name: string;
 }
 
+export interface WorkspaceDocumentRequest {
+  workspacePath: string;
+  name: string;
+  bytes: number[];
+}
+
+export interface WorkspaceDocumentMoveRequest {
+  path: string;
+  workspacePath: string;
+}
+
+export interface SystemFileClipboardRequest {
+  paths: string[];
+  operation: 'copy' | 'cut';
+}
+
 export interface DocumentBackupRequest {
   documentPath: string;
   name: string;
   extension: DocumentExtension;
   bytes: number[];
+  recoveryState?: string | null;
+}
+
+export interface DocumentRecoveryDraftRequest {
+  documentPath: string;
+  name: string;
 }
 
 export interface SaveDocumentTemplateRequest {
   scope: TemplateScope;
   workspacePath?: string | null;
   name: string;
+  extension: TemplateExtension;
   bytes: number[];
 }
 
@@ -181,6 +261,7 @@ export interface AiProviderConfig {
 export interface AiActionConfig {
   providerId: string;
   model: string;
+  modelsByProvider?: Record<string, string>;
 }
 
 export type AiActionSettings = Record<AiActionKey, AiActionConfig>;
@@ -189,6 +270,7 @@ export interface AiSettings {
   activeProviderId: string;
   providers: AiProviderConfig[];
   actions: AiActionSettings;
+  maxContextChars: number;
 }
 
 export function isTauriRuntime(): boolean {
@@ -292,6 +374,7 @@ export function defaultAiSettings(): AiSettings {
     activeProviderId: provider.provider,
     providers: [provider],
     actions: defaultAiActionSettings(),
+    maxContextChars: 40_000,
   };
 }
 
@@ -329,7 +412,7 @@ export function defaultMcpClientInstallStatus(): McpClientInstallStatus[] {
     {
       target: 'claude',
       label: 'Claude',
-      configPath: '~/Library/Application Support/Claude/claude_desktop_config.json',
+      configPath: 'Claude/claude_desktop_config.json',
       configExists: false,
       executableExists: false,
       installed: false,
@@ -376,18 +459,22 @@ export function defaultAiProviderConfig(): AiProviderConfig {
 
 export function defaultAiActionSettings(providerId = 'default'): AiActionSettings {
   return {
-    chat: { providerId, model: 'gpt-5.4-nano' },
-    edit: { providerId, model: 'gpt-5.4-mini' },
-    importPlanning: { providerId, model: 'gpt-5.4-mini' },
-    importWriting: { providerId, model: 'gpt-5.4-mini' },
-    importCleanup: { providerId, model: 'gpt-5.4-mini' },
-    semanticFilter: { providerId, model: 'gpt-5.4-nano' },
-    compaction: { providerId, model: 'gpt-5.4-nano' },
+    chat: { providerId, model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
+    edit: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    importPlanning: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    importWriting: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    importCleanup: { providerId, model: 'gpt-5.4-mini', modelsByProvider: { openai: 'gpt-5.4-mini' } },
+    semanticFilter: { providerId, model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
+    compaction: { providerId, model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
   };
 }
 
 export function loadDefaultGuide(): Promise<DocumentFile> {
   return invokeDesktop('load_default_guide');
+}
+
+export function loadHvyGuide(): Promise<DocumentFile> {
+  return invokeDesktop('load_hvy_guide');
 }
 
 export function openWorkspaceDialog(): Promise<Workspace | null> {
@@ -410,12 +497,35 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
   return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export function loadWorkspace(path: string): Promise<Workspace> {
-  return invokeDesktop('load_workspace', { path });
+export function loadWorkspace(path: string, options: { includeTemplates?: boolean } = {}): Promise<Workspace> {
+  return invokeDesktop('load_workspace', { path, includeTemplates: options.includeTemplates === true });
 }
 
-export function addFilesToWorkspace(workspacePath: string): Promise<Workspace | null> {
+export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve([]);
+  }
+  return invokeDesktop('load_archived_workspaces');
+}
+
+export function renameWorkspace(path: string, name: string): Promise<Workspace> {
+  return invokeDesktop('rename_workspace', { path, name });
+}
+
+export function archiveWorkspace(path: string): Promise<void> {
+  return invokeDesktop('archive_workspace', { path });
+}
+
+export function unarchiveWorkspace(path: string): Promise<Workspace> {
+  return invokeDesktop('unarchive_workspace', { path });
+}
+
+export function addFilesToWorkspace(workspacePath: string): Promise<AddFilesResult | null> {
   return invokeDesktop('add_files_to_workspace', { workspacePath });
+}
+
+export function addDroppedFilesToWorkspace(workspacePath: string, files: DroppedWorkspaceFile[]): Promise<AddFilesResult> {
+  return invokeDesktop('add_dropped_files_to_workspace', { workspacePath, files });
 }
 
 export function openFileDialog(): Promise<DocumentFile | null> {
@@ -438,6 +548,10 @@ export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<Do
   return invokeDesktop('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
 }
 
+export function savePdfAsDialog(request: SavePdfAsRequest): Promise<string | null> {
+  return invokeDesktop('save_pdf_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+}
+
 export function listSavedTemplates(workspacePath?: string | null): Promise<SavedTemplate[]> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve([]);
@@ -449,12 +563,30 @@ export function saveDocumentTemplate(request: SaveDocumentTemplateRequest): Prom
   return invokeDesktop('save_document_template', { request });
 }
 
+export function updateWorkspaceTemplateVisibility(
+  workspacePath: string,
+  templateVisibility: WorkspaceTemplateVisibility,
+): Promise<Workspace> {
+  return invokeDesktop('update_workspace_template_visibility', { workspacePath, templateVisibility });
+}
+
+export function updateWorkspaceFileAiAccess(
+  path: string,
+  updates: { locked?: boolean; hiddenFromAI?: boolean },
+): Promise<Workspace> {
+  return invokeDesktop('update_workspace_file_ai_access', { path, updates });
+}
+
 export function openColorThemeDialog(): Promise<ThemeFile | null> {
   return invokeDesktop('open_color_theme_dialog');
 }
 
 export function saveColorThemeAsDialog(request: SaveThemeAsRequest): Promise<ThemeFile | null> {
   return invokeDesktop('save_color_theme_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+}
+
+export function updateFileMenuState(state: FileMenuState): Promise<void> {
+  return invokeDesktop('update_file_menu_state', { state });
 }
 
 export function createDocumentFile(request: CreateDocumentRequest): Promise<DocumentFile> {
@@ -469,8 +601,58 @@ export function revealDocumentFile(path: string): Promise<void> {
   return invokeDesktop('reveal_document_file', { path });
 }
 
+export function openDocumentFile(path: string): Promise<void> {
+  return invokeDesktop('open_document_file', { path });
+}
+
+export function loadLaunchDocumentPaths(): Promise<string[]> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve([]);
+  }
+  return invokeDesktop('load_launch_document_paths');
+}
+
 export function renameDocumentFile(request: RenameDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('rename_document_file', { path: request.path, name: request.name });
+}
+
+export function archiveDocumentFile(path: string): Promise<Workspace> {
+  return invokeDesktop('archive_document_file', { path });
+}
+
+export function restoreDocumentFile(path: string): Promise<Workspace> {
+  return invokeDesktop('restore_document_file', { path });
+}
+
+export function deleteDocumentFile(path: string): Promise<Workspace | null> {
+  return invokeDesktop('delete_document_file', { path });
+}
+
+export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFile> {
+  return invokeDesktop('save_document_to_workspace', {
+    workspacePath: request.workspacePath,
+    name: request.name,
+    bytes: request.bytes,
+  });
+}
+
+export function copyDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
+  return invokeDesktop('copy_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
+}
+
+export function moveDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
+  return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
+}
+
+export function writeSystemFileClipboard(request: SystemFileClipboardRequest): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('write_system_file_clipboard', { request });
+}
+
+export function pasteSystemFilesToWorkspace(workspacePath: string): Promise<AddFilesResult> {
+  return invokeDesktop('paste_system_files_to_workspace', { workspacePath });
 }
 
 export function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {
@@ -488,8 +670,43 @@ export function restoreDocumentBackup(id: string): Promise<DocumentFile> {
   return invokeDesktop('restore_document_backup', { id });
 }
 
+export function discardDocumentBackup(id: string): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('discard_document_backup', { id });
+}
+
+export function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraftRequest): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve();
+  }
+  return invokeDesktop('clear_document_recovery_drafts', { request });
+}
+
 export function openExternalUrl(url: string): Promise<void> {
   return invokeDesktop('open_external_url', { url });
+}
+
+export function requestAppClose(): Promise<void> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    window.close();
+    return Promise.resolve();
+  }
+  return invokeDesktop('close_app_window');
+}
+
+export async function onAppCloseRequest(handler: () => void): Promise<() => void> {
+  if (isElectronRuntime()) {
+    return window.hvyElectron!.onAppCloseRequest(handler);
+  }
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return getCurrentWindow().onCloseRequested((event) => {
+    event.preventDefault();
+    handler();
+  });
 }
 
 export function onMenuEvent(handler: (event: string) => void): Promise<() => void> {
@@ -501,4 +718,15 @@ export function onMenuEvent(handler: (event: string) => void): Promise<() => voi
     return Promise.resolve(() => undefined);
   }
   return listen<string>('menu-event', (event) => handler(event.payload));
+}
+
+export function onOpenDocumentPath(handler: (path: string) => void): Promise<() => void> {
+  if (isElectronRuntime()) {
+    return Promise.resolve(window.hvyElectron!.onOpenDocumentPath(handler));
+  }
+  if (!isTauriRuntime()) {
+    void handler;
+    return Promise.resolve(() => undefined);
+  }
+  return listen<string>('open-document-path', (event) => handler(event.payload));
 }

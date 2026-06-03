@@ -108,6 +108,12 @@ function createBrythonMinimalVfsPlugin(): Plugin {
 export default defineConfig({
   base: './',
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
+  resolve: {
+    alias: {
+      'pdfmake/build/pdfmake.js': require.resolve('pdfmake/build/pdfmake.js'),
+      'pdfmake/build/vfs_fonts.js': require.resolve('pdfmake/build/vfs_fonts.js'),
+    },
+  },
   build: {
     target: ['safari13'],
   },

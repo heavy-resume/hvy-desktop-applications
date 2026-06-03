@@ -6,7 +6,6 @@ import { createRequire } from 'node:module';
 const appName = 'HVY Galaxy';
 const appIdentifier = 'com.heavyresume.hvy-galaxy';
 const rendererUrl = process.env.ELECTRON_RENDERER_URL || 'http://127.0.0.1:1420';
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const require = createRequire(import.meta.url);
 const electronEnv = {
   ...process.env,
@@ -17,7 +16,7 @@ delete electronEnv.ELECTRON_RUN_AS_NODE;
 let vite = null;
 
 if (!(await canConnect(rendererUrl))) {
-  vite = spawn(npmCommand, ['run', 'dev'], {
+  vite = spawn(process.execPath, [path.resolve('node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', '1420'], {
     stdio: 'inherit',
     env: process.env,
   });
@@ -40,6 +39,7 @@ process.on('SIGTERM', () => {
 });
 
 await waitForRenderer(rendererUrl);
+await buildRustHelper();
 
 const electronLaunch = await electronLaunchCommand();
 const electron = spawn(electronLaunch.command, electronLaunch.args, {
@@ -77,6 +77,28 @@ function canConnect(url) {
     request.setTimeout(1_000, () => {
       request.destroy();
       resolve(false);
+    });
+  });
+}
+
+function buildRustHelper() {
+  return new Promise((resolve, reject) => {
+    const cargo = spawn('cargo', ['build'], {
+      cwd: path.resolve('src-tauri'),
+      stdio: 'inherit',
+      env: process.env,
+    });
+    cargo.on('error', reject);
+    cargo.on('exit', (code, signal) => {
+      if (signal) {
+        reject(new Error(`cargo build exited with signal ${signal}`));
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(`cargo build exited with code ${code}`));
+        return;
+      }
+      resolve();
     });
   });
 }

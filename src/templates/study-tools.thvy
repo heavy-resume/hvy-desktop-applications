@@ -55,7 +55,7 @@ theme:
   colors: {}
 ---
 
-<!--hvy: {"id":"flashcards-sidebar","lock":false,"expanded":false,"highlight":true,"location":"sidebar"}-->
+<!--hvy: {"id":"flashcards-sidebar","lock":false,"expanded":false,"highlight":true,"location":"sidebar","protect_from_import":true}-->
 #! Flashcards
 
  <!--hvy:text {"id":"flashcards-title","css":"margin-bottom: 0.4rem;"}-->
@@ -212,19 +212,6 @@ theme:
       existing_question_text = "\n".join(["- " + question for question in existing_questions])
       return "USER INSTRUCTIONS:\n" + instructions + "\n\nCARD GENERATION MODE: " + generation_mode + "\n\nNUMBER OF FLASHCARDS: " + str(card_count) + "\n\nANSWER STYLE: " + answer_style + "\n\nEXISTING QUESTIONS TO AVOID:\n" + existing_question_text + "\n\n" + "\n\n---\n\n".join(sections)
     apply: |
-      def strip_code_fence(value):
-          text = value.strip()
-          if not text.startswith("```"):
-              return text
-          first_newline = text.find("\n")
-          if first_newline < 0:
-              return text
-          text = text[first_newline + 1:]
-          end = text.rfind("```")
-          if end >= 0:
-              text = text[:end]
-          return text.strip()
-      
       def normalize_id(value):
           output = ""
           previous_dash = False
@@ -257,70 +244,6 @@ theme:
       def shell_quote(value):
           return "'" + value.replace("'", "'\\''") + "'"
       
-      def read_json_string(source, key, default_value=""):
-          marker = '"' + key + '"'
-          start = source.find(marker)
-          if start < 0:
-              return default_value
-          colon = source.find(":", start + len(marker))
-          if colon < 0:
-              return default_value
-          quote = source.find('"', colon + 1)
-          if quote < 0:
-              return default_value
-          index = quote + 1
-          value = ""
-          escaped = False
-          while index < len(source):
-              char = source[index]
-              if escaped:
-                  if char == "n":
-                      value += "\n"
-                  elif char == "r":
-                      value += "\r"
-                  elif char == "t":
-                      value += "\t"
-                  else:
-                      value += char
-                  escaped = False
-              elif char == "\\":
-                  escaped = True
-              elif char == '"':
-                  return value
-              else:
-                  value += char
-              index += 1
-          return default_value
-      
-      def split_json_objects(value):
-          text = strip_code_fence(value)
-          objects = []
-          depth = 0
-          start = -1
-          in_string = False
-          escaped = False
-          for index in range(len(text)):
-              char = text[index]
-              if in_string:
-                  if escaped:
-                      escaped = False
-                  elif char == "\\":
-                      escaped = True
-                  elif char == '"':
-                      in_string = False
-              elif char == '"':
-                  in_string = True
-              elif char == "{":
-                  if depth == 0:
-                      start = index
-                  depth += 1
-              elif char == "}":
-                  depth -= 1
-                  if depth == 0 and start >= 0:
-                      objects.append(text[start:index + 1])
-                      start = -1
-          return objects
-  
       def find_requested_card_count(value):
           marker = "NUMBER OF FLASHCARDS:"
           start = value.find(marker)
@@ -386,12 +309,12 @@ theme:
       requested_card_count = find_requested_card_count(source)
       generation_mode = find_generation_mode(source)
       existing_questions = find_existing_questions(source)
-      for item in split_json_objects(response):
+      for item in doc.json.parse_array(response):
           if len(cards) >= requested_card_count:
               break
-          source_id = read_json_string(item, "source_id", "card")
-          question = read_json_string(item, "question", "")
-          answer = read_json_string(item, "answer", "")
+          source_id = str(item.get("source_id", "card") or "card")
+          question = str(item.get("question", "") or "")
+          answer = str(item.get("answer", "") or "")
           if len(question.strip()) > 0 and len(answer.strip()) > 0:
               if question.strip().lower() in existing_questions:
                   continue
@@ -502,7 +425,7 @@ theme:
           card_id = "flashcard-shuffled-" + normalize_id(card["id"]) + "-" + str(index)
           doc.cli.run("hvy insert -1 flashcard-card /body/flashcards-sidebar --id " + card_id + " --using-template " + shell_quote(values_json))
           index += 1
-<!--hvy: {"id":"quiz-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar"}-->
+<!--hvy: {"id":"quiz-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar","protect_from_import":true}-->
 #! Generate Quiz
 
  <!--hvy:text {"id":"quiz-tool-title","css":"margin-bottom: 0.4rem;"}-->
@@ -625,83 +548,6 @@ theme:
           return ""
       return "QUIZ INSTRUCTIONS:\n" + instructions + "\n\nNUMBER OF QUESTIONS: " + str(question_count) + "\nOPTIONS PER QUESTION: " + str(option_count) + "\n\n" + "\n\n---\n\n".join(sections)
     apply: |
-      def strip_code_fence(value):
-          text = value.strip()
-          if not text.startswith("```"):
-              return text
-          first_newline = text.find("\n")
-          if first_newline < 0:
-              return text
-          text = text[first_newline + 1:]
-          end = text.rfind("```")
-          if end >= 0:
-              text = text[:end]
-          return text.strip()
-  
-      def read_json_string(source, key, default_value=""):
-          marker = '"' + key + '"'
-          start = source.find(marker)
-          if start < 0:
-              return default_value
-          colon = source.find(":", start + len(marker))
-          if colon < 0:
-              return default_value
-          quote = source.find('"', colon + 1)
-          if quote < 0:
-              return default_value
-          index = quote + 1
-          value = ""
-          escaped = False
-          while index < len(source):
-              char = source[index]
-              if escaped:
-                  if char == "n":
-                      value += "\n"
-                  elif char == "r":
-                      value += "\r"
-                  elif char == "t":
-                      value += "\t"
-                  else:
-                      value += char
-                  escaped = False
-              elif char == "\\":
-                  escaped = True
-              elif char == '"':
-                  return value
-              else:
-                  value += char
-              index += 1
-          return default_value
-  
-      def split_json_objects(value):
-          text = strip_code_fence(value)
-          objects = []
-          depth = 0
-          start = -1
-          in_string = False
-          escaped = False
-          for index in range(len(text)):
-              char = text[index]
-              if in_string:
-                  if escaped:
-                      escaped = False
-                  elif char == "\\":
-                      escaped = True
-                  elif char == '"':
-                      in_string = False
-              elif char == '"':
-                  in_string = True
-              elif char == "{":
-                  if depth == 0:
-                      start = index
-                  depth += 1
-              elif char == "}":
-                  depth -= 1
-                  if depth == 0 and start >= 0:
-                      objects.append(text[start:index + 1])
-                      start = -1
-          return objects
-  
       def find_requested_count(value, marker, default_value, max_value):
           start = value.find(marker)
           if start < 0:
@@ -760,14 +606,14 @@ theme:
       requested_questions = find_requested_count(source, "NUMBER OF QUESTIONS:", 10, 50)
       requested_options = find_requested_count(source, "OPTIONS PER QUESTION:", 4, 8)
       quiz_items = []
-      for item in split_json_objects(response):
+      for item in doc.json.parse_array(response):
           if len(quiz_items) >= requested_questions:
               break
-          question = read_json_string(item, "question", "").strip()
-          correct = read_json_string(item, "correct_option_letter", "").strip().upper()
+          question = str(item.get("question") or "").strip()
+          correct = str(item.get("correct_option_letter") or "").strip().upper()
           options = []
           for option_index in range(requested_options):
-              option = read_json_string(item, "option_" + str(option_index + 1), "").strip()
+              option = str(item.get("option_" + str(option_index + 1)) or "").strip()
               if len(option) > 0:
                   options.append(option)
           if len(question) > 0 and len(options) == requested_options and correct in letters[:requested_options]:
@@ -781,13 +627,11 @@ theme:
           return
       doc.form.clear_error("Quiz instructions")
       lines = ["fields:"]
-      labels = []
-      answers = []
+      answer_pairs = []
       for index in range(len(quiz_items)):
           item = quiz_items[index]
           label = str(index + 1) + ". " + item["question"]
-          labels.append(label)
-          answers.append(item["correct"])
+          answer_pairs.append([label, item["correct"]])
           lines.append("  - label: " + yaml_escape(label))
           lines.append("    type: radio")
           lines.append("    options:")
@@ -802,19 +646,23 @@ theme:
       lines.append("  grade: |")
       lines.append("    score = 0")
       lines.append("    skipped = 0")
-      lines.append("    total = " + str(len(labels)))
-      for index in range(len(labels)):
-          label = labels[index]
-          answer = answers[index]
-          lines.append("    doc.form.clear_error(" + script_escape(label) + ")")
-          lines.append("    selected = doc.form.get_value(" + script_escape(label) + ")")
-          lines.append("    if selected == " + script_escape(answer) + ":")
-          lines.append("        score += 1")
-          lines.append("    elif str(selected or \"\").strip() == \"\":")
-          lines.append("        skipped += 1")
-          lines.append("        doc.form.set_error(" + script_escape(label) + ", " + script_escape("Skipped. Correct answer: " + answer) + ")")
-          lines.append("    else:")
-          lines.append("        doc.form.set_error(" + script_escape(label) + ", " + script_escape("Correct answer: " + answer) + ")")
+      lines.append("    answers = [")
+      for pair in answer_pairs:
+          lines.append("        [" + script_escape(pair[0]) + ", " + script_escape(pair[1]) + "],")
+      lines.append("    ]")
+      lines.append("    total = len(answers)")
+      lines.append("    for answer_item in answers:")
+      lines.append("        label = answer_item[0]")
+      lines.append("        answer = answer_item[1]")
+      lines.append("        doc.form.clear_error(label)")
+      lines.append("        selected = doc.form.get_value(label)")
+      lines.append("        if selected == answer:")
+      lines.append("            score += 1")
+      lines.append("        elif str(selected or \"\").strip() == \"\":")
+      lines.append("            skipped += 1")
+      lines.append("            doc.form.set_error(label, \"Skipped. Correct answer: \" + answer)")
+      lines.append("        else:")
+      lines.append("            doc.form.set_error(label, \"Correct answer: \" + answer)")
       lines.append("    result = " + script_escape("Score: ") + " + str(score) + " + script_escape("/") + " + str(total)")
       lines.append("    if skipped > 0:")
       lines.append("        result += " + script_escape(" (") + " + str(skipped) + " + script_escape(" skipped)") )
@@ -826,7 +674,7 @@ theme:
   scripts:
     grade: |
       doc.form.set_error("Quiz result", "Generate a quiz first.")
-<!--hvy: {"id":"podcast-transcript-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar"}-->
+<!--hvy: {"id":"podcast-transcript-sidebar","lock":false,"expanded":false,"highlight":false,"location":"sidebar","protect_from_import":true}-->
 #! Podcast Transcript
 
  <!--hvy:text {"id":"podcast-tool-title","css":"margin-bottom: 0.4rem;"}-->
