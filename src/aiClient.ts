@@ -207,6 +207,7 @@ function buildMessages(request: HvyProxyRequest, disableThinking = false): HvyPr
 function taskForRequest(request: HvyProxyRequest, debugLabel = ''): AiActionKey {
   const label = debugLabel.toLowerCase();
   if (label.includes('compaction')) return 'compaction';
+  if (label.includes('description-generation')) return 'semanticFilter';
   if (label.includes('semantic-filter')) return 'semanticFilter';
   if (label.includes('ai-import-plan') || label.includes('preplan') || label.includes('missing-sections')) return 'importPlanning';
   if (label.includes('dedupe') || label.includes('fill-ins') || label.includes('xref') || label.includes('repair')) return 'importCleanup';
