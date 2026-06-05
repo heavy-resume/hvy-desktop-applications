@@ -70,7 +70,6 @@ export interface AppState {
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
   exportedPdfPath: string | null;
-  workspaceTemplateVisibilityPath: string | null;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -180,7 +179,6 @@ export const state: AppState = {
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   exportedPdfPath: null,
-  workspaceTemplateVisibilityPath: null,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

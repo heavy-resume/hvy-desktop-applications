@@ -1462,24 +1462,12 @@ const handlers: UiHandlers = {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  openWorkspaceTemplateVisibility: (workspacePath) => {
-    state.openWorkspaceActionsPath = null;
-    state.workspaceTemplateVisibilityPath = workspacePath;
-    state.status = 'Ready';
-    rerender({ preserveMountedDocument: true });
-  },
   saveWorkspaceTemplateVisibility: (workspacePath, templateVisibility) => void runBusy('Saving template visibility...', async () => {
     if (!workspacePath) return;
     const workspace = await updateWorkspaceTemplateVisibility(workspacePath, templateVisibility);
     upsertWorkspace(workspace);
-    state.workspaceTemplateVisibilityPath = null;
     state.status = 'Saved template visibility';
   }, { preserveMountedDocument: true }),
-  cancelWorkspaceTemplateVisibility: () => {
-    state.workspaceTemplateVisibilityPath = null;
-    state.status = 'Ready';
-    rerender({ preserveMountedDocument: true });
-  },
   createFile: () => {
     const workspacePath = state.selectedWorkspacePath ?? state.workspaces[0]?.path ?? null;
     if (workspacePath) {
