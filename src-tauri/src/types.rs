@@ -119,6 +119,8 @@ struct RecentState {
     workspaces: Vec<String>,
     #[serde(default)]
     files: Vec<String>,
+    #[serde(default)]
+    document_modes: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

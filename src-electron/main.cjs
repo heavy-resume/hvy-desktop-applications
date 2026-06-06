@@ -399,6 +399,7 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
 async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+    case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
     case 'load_ai_settings': return readJson(dataPath(AI_SETTINGS), defaultAiSettings());
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return readJson(dataPath(MCP_SETTINGS), defaultMcpSettings());
@@ -1557,10 +1558,18 @@ function addRecentFile(entryPath) {
   refreshMenu();
 }
 
+function saveDocumentModePreference(entryPath, mode) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  recent.documentModes = { ...(recent.documentModes || {}), [path.resolve(entryPath)]: mode };
+  writeJson(dataPath(RECENT_STATE), recent);
+  return recent;
+}
+
 function removeRecentFile(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const normalized = path.resolve(entryPath);
   recent.files = (recent.files || []).filter((entry) => path.resolve(entry) !== normalized);
+  if (recent.documentModes) delete recent.documentModes[normalized];
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }

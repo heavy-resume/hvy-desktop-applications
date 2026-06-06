@@ -52,6 +52,7 @@ import {
   saveColorThemeAsDialog,
   saveDocumentAsDialog,
   saveDocumentFile,
+  saveDocumentModePreference,
   saveDocumentTemplate,
   savePdfAsDialog,
   moveDocumentToWorkspace,
@@ -103,6 +104,8 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const HOT_RELOAD_SESSION_STORAGE_KEY = 'hvy-galaxy:hot-reload-session';
+const DOCUMENT_MODE_STORAGE_KEY = 'hvy-galaxy:document-modes';
 
 interface MountScrollRatio {
   top: number;
@@ -125,6 +128,20 @@ interface DocumentSession {
   scrollRatio: MountScrollRatio | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
+}
+
+interface HotReloadDocumentSnapshot {
+  path: string;
+  mode: HvyMode;
+  metaOpen: boolean;
+  scrollRatio: MountScrollRatio | null;
+  recoveryState: string | null;
+}
+
+interface HotReloadSessionSnapshot {
+  activePath: string | null;
+  tabPaths: string[];
+  documents: HotReloadDocumentSnapshot[];
 }
 
 type PreparedImportSource = ImportSourceFile & { text: string };
@@ -1308,8 +1325,11 @@ const handlers: UiHandlers = {
     const scrollRatio = captureMountScrollRatio(mountRoot);
     state.document.mode = mode;
     state.document.metaOpen = false;
+    writeDocumentModePreference(state.document.path, mode);
     if (document) {
       updateCurrentDocumentSession(document);
+    } else {
+      writeHotReloadSessionSnapshot();
     }
     rerender();
     void mountCurrentDocument(document).then(() => restoreMountScrollRatio(mountRoot, scrollRatio));
@@ -1546,6 +1566,9 @@ async function boot(): Promise<void> {
     for (const path of await loadLaunchDocumentPaths()) {
       await openLaunchDocumentPath(path);
     }
+    if (!state.document) {
+      await restoreStartupDocument();
+    }
     await openDefaultGuide();
   } catch (error) {
     showStartupError(error);
@@ -1557,10 +1580,9 @@ function bindFindShortcut(): void {
   findShortcutBound = true;
   document.addEventListener('keydown', (event) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
-    if (state.document?.mode === 'hvy' && currentMountRoot()?.querySelector('.raw-hvy-shell')) return;
     if (!openMountedSearch()) return;
     event.preventDefault();
-    event.stopPropagation();
+    event.stopImmediatePropagation();
   }, { capture: true });
 }
 
@@ -1682,7 +1704,7 @@ async function loadRecentWorkspaces(): Promise<void> {
 }
 
 async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
-  if (!options.force && (state.document || state.selectedFilePath)) return;
+  if (!options.force && (state.document || state.documentTabs.length > 0 || state.selectedFilePath)) return;
   try {
     await openDocument(await loadDefaultGuide(), { defaultDocument: true, defaultDocumentLabel: 'HVY Galaxy guide' });
   } catch (error) {
@@ -1690,6 +1712,87 @@ async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void
     state.status = 'Could not load HVY Galaxy guide';
     mountRoot = render(state, handlers);
   }
+}
+
+async function restoreStartupDocument(): Promise<void> {
+  if (documentSessions.size > 0 || openedDocumentTabOrder.length > 0 || state.documentTabs.length > 0) {
+    syncDocumentTabs();
+    const restoredTab = state.documentTabs.find((tab) => tab.dirty && !tab.readOnly) ?? state.documentTabs.find((tab) => !tab.readOnly);
+    if (restoredTab) {
+      await selectDocumentTab(restoredTab.path);
+      return;
+    }
+  }
+  const restoredFromSnapshot = await restoreHotReloadSession();
+  if (restoredFromSnapshot || state.document) return;
+  for (const path of state.recent.files) {
+    try {
+      await openDocument(await readDocumentFile(path));
+      state.status = `Restored ${fileNameFromPath(path)}`;
+      await refreshRecents();
+      return;
+    } catch {
+      // Recents are pruned by the backend when opened from the menu; boot restore just skips stale entries.
+    }
+  }
+}
+
+async function restoreHotReloadSession(): Promise<boolean> {
+  const snapshot = readHotReloadSessionSnapshot();
+  if (!snapshot || snapshot.tabPaths.length === 0) return false;
+  let fallbackActivePath: string | null = null;
+  for (const path of [...snapshot.tabPaths].reverse()) {
+    if (path === snapshot.activePath) continue;
+    const file = await readSnapshotDocumentFile(path);
+    if (!file) continue;
+    const stored = snapshot.documents.find((candidate) => candidate.path === path);
+    documentSessions.set(path, await createSessionFromHotReloadSnapshot(file, stored));
+    markDocumentTabOpened(path);
+    fallbackActivePath = path;
+  }
+  const activePath = snapshot.activePath ?? fallbackActivePath;
+  const activeFile = activePath ? await readSnapshotDocumentFile(activePath) : null;
+  if (activeFile && activePath) {
+    const stored = snapshot.documents.find((candidate) => candidate.path === activePath);
+    documentSessions.set(activePath, await createSessionFromHotReloadSnapshot(activeFile, stored));
+    await openDocument(activeFile);
+    restoreMountScrollRatio(mountRoot, stored?.scrollRatio ?? null);
+    state.status = `Restored ${activeFile.name}`;
+    await refreshRecents();
+    return true;
+  }
+  if (fallbackActivePath) {
+    await openDocument(await readDocumentFile(fallbackActivePath));
+    return true;
+  }
+  return false;
+}
+
+async function readSnapshotDocumentFile(path: string): Promise<DocumentFile | null> {
+  try {
+    return await readDocumentFile(path);
+  } catch {
+    return null;
+  }
+}
+
+async function createSessionFromHotReloadSnapshot(file: DocumentFile, stored: HotReloadDocumentSnapshot | undefined): Promise<DocumentSession> {
+  const workspaceAccess = workspaceFileAiAccess(file.path);
+  return {
+    path: file.path,
+    name: file.name,
+    extension: file.extension,
+    mode: stored?.mode ?? defaultDocumentMode(file.extension, { hiddenFromAI: file.hiddenFromAI || workspaceAccess.hiddenFromAI }),
+    dirty: false,
+    readOnly: file.locked === true || workspaceAccess.readOnly,
+    hiddenFromAI: file.hiddenFromAI === true || workspaceAccess.hiddenFromAI,
+    isNew: false,
+    metaOpen: stored?.metaOpen ?? false,
+    document: await deserializeHvy(new Uint8Array(file.bytes), file.extension),
+    scrollRatio: stored?.scrollRatio ?? null,
+    recoveryState: stored?.recoveryState ?? null,
+    recoveryBackupId: null,
+  };
 }
 
 async function openGuide(): Promise<void> {
@@ -2077,6 +2180,7 @@ function syncDocumentTabs(): void {
   if (state.tabStackIndex >= state.documentTabs.length) {
     state.tabStackIndex = 0;
   }
+  writeHotReloadSessionSnapshot();
 }
 
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
@@ -2100,12 +2204,15 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   const readOnly = session?.readOnly ?? (options.readOnly === true || access.readOnly || options.defaultDocument === true);
   const hiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
   const document = session?.document ?? cachedFilterDocument ?? await deserializeHvy(bytes, file.extension);
-  const recoveryState = options.recovered ? file.recoveryState ?? null : session?.recoveryState ?? null;
+  const recoveryState = options.recovered ? file.recoveryState ?? null : viewSession?.recoveryState ?? null;
+  const restoredMode = viewSession?.mode
+    ?? readDocumentModePreference(file.path)
+    ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI });
   state.document = {
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
     extension: session?.extension ?? file.extension,
-    mode: viewSession?.mode ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI }),
+    mode: normalizeDocumentMode(restoredMode, { readOnly, hiddenFromAI, extension: file.extension }),
     dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
     readOnly,
     hiddenFromAI,
@@ -2151,6 +2258,7 @@ function preserveCurrentDocumentSession(): void {
   if (!openDocument?.path || openDocument.readOnly) return;
   const document = openDocument.mounted?.document ?? pendingMountDocument;
   if (!document) return;
+  writeDocumentModePreference(openDocument.path, openDocument.mode);
   const dirty = openDocument.mounted
     ? openDocument.dirty || isMountedDocumentDirty(openDocument.mounted)
     : openDocument.dirty;
@@ -2169,11 +2277,13 @@ function preserveCurrentDocumentSession(): void {
     recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
+  writeHotReloadSessionSnapshot();
 }
 
 function updateCurrentDocumentSession(document: VisualDocument): void {
   const openDocument = state.document;
   if (!openDocument?.path || openDocument.readOnly) return;
+  writeDocumentModePreference(openDocument.path, openDocument.mode);
   documentSessions.set(openDocument.path, {
     path: openDocument.path,
     name: openDocument.name,
@@ -2189,6 +2299,7 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
     recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
+  writeHotReloadSessionSnapshot();
 }
 
 function cacheWorkspaceFilterDocuments(workspacePath: string, documents: HvyDocumentSearchDocument[]): void {
@@ -2838,13 +2949,19 @@ function scheduleBackupActiveDocument(): void {
 
 function setupRecoveryLifecycle(): void {
   window.addEventListener('pagehide', () => {
+    preserveCurrentDocumentSession();
+    writeHotReloadSessionSnapshot();
     void backupActiveDocument({ force: true }).catch(() => undefined);
   });
   window.addEventListener('beforeunload', () => {
+    preserveCurrentDocumentSession();
+    writeHotReloadSessionSnapshot();
     void backupActiveDocument({ force: true }).catch(() => undefined);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
+      preserveCurrentDocumentSession();
+      writeHotReloadSessionSnapshot();
       void backupActiveDocument({ force: true }).catch(() => undefined);
     }
   });
@@ -3404,6 +3521,150 @@ function applyTemplateTitle(template: string, title: string): string {
 
 function documentStorageKey(identifier: string): string {
   return `hvy-galaxy:document:${identifier}`;
+}
+
+function normalizeDocumentMode(
+  mode: HvyMode,
+  options: { readOnly: boolean; hiddenFromAI: boolean; extension: DocumentFile['extension'] },
+): HvyMode {
+  if (options.readOnly && mode !== 'viewer') return 'viewer';
+  if (options.hiddenFromAI && mode === 'ai') return 'viewer';
+  if (options.extension === '.md' && mode !== 'viewer') return 'viewer';
+  return mode;
+}
+
+function readDocumentModePreference(path: string): HvyMode | null {
+  if (!path) return null;
+  const recentMode = state.recent.documentModes?.[path];
+  if (isHvyMode(recentMode)) return recentMode;
+  try {
+    const raw = localStorage.getItem(DOCUMENT_MODE_STORAGE_KEY)
+      ?? sessionStorage.getItem(DOCUMENT_MODE_STORAGE_KEY);
+    if (!raw) return null;
+    const modes = JSON.parse(raw) as Record<string, unknown>;
+    const mode = modes[path];
+    return isHvyMode(mode) ? mode : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDocumentModePreference(path: string, mode: HvyMode): void {
+  if (!path) return;
+  state.recent = {
+    ...state.recent,
+    documentModes: { ...(state.recent.documentModes ?? {}), [path]: mode },
+  };
+  void saveDocumentModePreference(path, mode).then((recent) => {
+    state.recent = recent;
+  }).catch(() => undefined);
+  try {
+    const raw = localStorage.getItem(DOCUMENT_MODE_STORAGE_KEY)
+      ?? sessionStorage.getItem(DOCUMENT_MODE_STORAGE_KEY)
+      ?? '{}';
+    const modes = JSON.parse(raw) as Record<string, unknown>;
+    modes[path] = mode;
+    const serialized = JSON.stringify(modes);
+    localStorage.setItem(DOCUMENT_MODE_STORAGE_KEY, serialized);
+    sessionStorage.setItem(DOCUMENT_MODE_STORAGE_KEY, serialized);
+  } catch {
+    // Mode preferences are best-effort; document content and recovery drafts are independent.
+  }
+}
+
+function readHotReloadSessionSnapshot(): HotReloadSessionSnapshot | null {
+  try {
+    const raw = localStorage.getItem(HOT_RELOAD_SESSION_STORAGE_KEY)
+      ?? sessionStorage.getItem(HOT_RELOAD_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<HotReloadSessionSnapshot>;
+    return {
+      activePath: typeof parsed.activePath === 'string' ? parsed.activePath : null,
+      tabPaths: Array.isArray(parsed.tabPaths) ? parsed.tabPaths.filter((path): path is string => typeof path === 'string') : [],
+      documents: Array.isArray(parsed.documents)
+        ? parsed.documents
+          .filter((entry): entry is HotReloadDocumentSnapshot => isHotReloadDocumentSnapshot(entry))
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeHotReloadSessionSnapshot(): void {
+  try {
+    const documents = new Map<string, HotReloadDocumentSnapshot>();
+    const tabPaths: string[] = [];
+    const addTabPath = (path: string, readOnly: boolean) => {
+      if (readOnly || tabPaths.includes(path)) return;
+      tabPaths.push(path);
+    };
+    if (state.document) {
+      addTabPath(state.document.path, state.document.readOnly);
+    }
+    for (const session of documentSessions.values()) {
+      if (session.readOnly) continue;
+      addTabPath(session.path, false);
+      documents.set(session.path, {
+        path: session.path,
+        mode: session.mode,
+        metaOpen: session.metaOpen,
+        scrollRatio: session.scrollRatio,
+        recoveryState: session.recoveryState,
+      });
+    }
+    for (const path of openedDocumentTabOrder) {
+      const session = documentSessions.get(path);
+      addTabPath(path, session?.readOnly ?? state.documentTabs.find((tab) => tab.path === path)?.readOnly ?? false);
+    }
+    if (tabPaths.length === 0) {
+      localStorage.removeItem(HOT_RELOAD_SESSION_STORAGE_KEY);
+      sessionStorage.removeItem(HOT_RELOAD_SESSION_STORAGE_KEY);
+      return;
+    }
+    if (state.document && !state.document.readOnly) {
+      documents.set(state.document.path, {
+        path: state.document.path,
+        mode: state.document.mode,
+        metaOpen: state.document.metaOpen,
+        scrollRatio: captureMountScrollRatio(mountRoot),
+        recoveryState: state.document.mounted ? getMountedRecoveryState(state.document.mounted) : pendingMountRecoveryState,
+      });
+    }
+    const snapshot: HotReloadSessionSnapshot = {
+      activePath: state.document && !state.document.readOnly ? state.document.path : tabPaths[0] ?? null,
+      tabPaths,
+      documents: Array.from(documents.values()).filter((entry) => tabPaths.includes(entry.path)),
+    };
+    const serialized = JSON.stringify(snapshot);
+    localStorage.setItem(HOT_RELOAD_SESSION_STORAGE_KEY, serialized);
+    sessionStorage.setItem(HOT_RELOAD_SESSION_STORAGE_KEY, serialized);
+  } catch {
+    // Hot reload state is opportunistic; recents still provide startup restore.
+  }
+}
+
+function isHotReloadDocumentSnapshot(value: unknown): value is HotReloadDocumentSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const entry = value as Partial<HotReloadDocumentSnapshot>;
+  return typeof entry.path === 'string'
+    && isHvyMode(entry.mode)
+    && typeof entry.metaOpen === 'boolean'
+    && (entry.scrollRatio === null || isMountScrollRatio(entry.scrollRatio))
+    && (entry.recoveryState === null || typeof entry.recoveryState === 'string');
+}
+
+function isHvyMode(value: unknown): value is HvyMode {
+  return value === 'viewer' || value === 'editor' || value === 'advanced' || value === 'ai' || value === 'hvy';
+}
+
+function isMountScrollRatio(value: unknown): value is MountScrollRatio {
+  if (!value || typeof value !== 'object') return false;
+  const ratio = value as Partial<MountScrollRatio>;
+  return typeof ratio.top === 'number'
+    && typeof ratio.left === 'number'
+    && typeof ratio.topPosition === 'number'
+    && typeof ratio.leftPosition === 'number';
 }
 
 function closeUiBeforeAiSettings(): void {

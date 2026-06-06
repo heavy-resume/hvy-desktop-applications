@@ -85,6 +85,7 @@ export interface WorkspaceOpenCandidate {
 export interface RecentState {
   workspaces: string[];
   files: string[];
+  documentModes?: Record<string, string>;
 }
 
 export interface ArchivedWorkspace {
@@ -296,6 +297,13 @@ export function loadRecentState(): Promise<RecentState> {
     return Promise.resolve({ workspaces: [], files: [] });
   }
   return invokeDesktop('load_recent_state');
+}
+
+export function saveDocumentModePreference(path: string, mode: string): Promise<RecentState> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve({ workspaces: [], files: [], documentModes: { [path]: mode } });
+  }
+  return invokeDesktop('save_document_mode_preference', { path, mode });
 }
 
 export function loadAiSettings(): Promise<AiSettings> {

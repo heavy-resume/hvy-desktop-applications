@@ -250,6 +250,11 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
             .filter(|entry| Path::new(entry).is_file())
             .take(RECENT_LIMIT)
             .collect(),
+        document_modes: state
+            .document_modes
+            .into_iter()
+            .filter(|(entry, _)| Path::new(entry).is_file())
+            .collect(),
     })
 }
 
