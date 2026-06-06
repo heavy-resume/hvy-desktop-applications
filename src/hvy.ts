@@ -3,7 +3,7 @@ import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/com
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
-import { externalHttpUrlFromHref, shouldOpenExternalLinkForClick } from './linkOpening';
+import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -140,13 +140,46 @@ export async function mountHvyDocument(
 
 function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMount): HvyMount {
   const cleanup = new AbortController();
+  const closeEmailPopover = () => {
+    root.querySelector('.hvy-email-link-popover')?.remove();
+    root.querySelector('.hvy-email-link-popover-backdrop')?.remove();
+  };
   root.addEventListener('click', (event) => {
     const target = event.target;
+    const actionButton = target instanceof Element
+      ? target.closest<HTMLButtonElement>('.hvy-email-link-popover button[data-email-link-action]')
+      : null;
+    if (actionButton && root.contains(actionButton)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = actionButton.dataset.emailLinkAction;
+      const emailAddress = actionButton.dataset.emailAddress ?? '';
+      const url = actionButton.dataset.emailUrl ?? '';
+      closeEmailPopover();
+      if (action === 'copy') {
+        void navigator.clipboard.writeText(emailAddress);
+      }
+      if (action === 'open') {
+        void openExternalUrl(url);
+      }
+      return;
+    }
+    const emailPopover = root.querySelector('.hvy-email-link-popover');
+    if (emailPopover && target instanceof Element && !target.closest('.hvy-email-link-popover')) {
+      closeEmailPopover();
+    }
     if (!(target instanceof Element) || !shouldOpenExternalLinkForClick(mode, event)) {
       return;
     }
     const anchor = target.closest<HTMLAnchorElement>('a[href]');
     if (!anchor || !root.contains(anchor)) {
+      return;
+    }
+    const mailtoLink = mailtoLinkFromHref(anchor.getAttribute('href'));
+    if (mailtoLink) {
+      event.preventDefault();
+      event.stopPropagation();
+      showEmailLinkPopover(root, mailtoLink, event);
       return;
     }
     const url = externalHttpUrlFromHref(anchor.getAttribute('href'));
@@ -157,14 +190,58 @@ function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMou
     event.stopPropagation();
     void openExternalUrl(url);
   }, { capture: true, signal: cleanup.signal });
+  root.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    closeEmailPopover();
+  }, { signal: cleanup.signal });
 
   return {
     ...mount,
     destroy() {
       cleanup.abort();
+      closeEmailPopover();
       mount.destroy();
     },
   };
+}
+
+function showEmailLinkPopover(root: HTMLElement, link: MailtoLink, event: MouseEvent): void {
+  root.querySelector('.hvy-email-link-popover')?.remove();
+  root.querySelector('.hvy-email-link-popover-backdrop')?.remove();
+
+  const backdrop = documentOwner().createElement('div');
+  backdrop.className = 'hvy-context-popover-backdrop hvy-email-link-popover-backdrop';
+  backdrop.setAttribute('aria-hidden', 'true');
+
+  const popover = documentOwner().createElement('section');
+  popover.className = 'hvy-context-popover hvy-email-link-popover';
+  popover.setAttribute('aria-label', 'Email link options');
+  popover.style.position = 'fixed';
+  popover.style.left = `${Math.max(8, event.clientX)}px`;
+  popover.style.top = `${Math.max(8, event.clientY)}px`;
+
+  const address = documentOwner().createElement('div');
+  address.className = 'hvy-email-link-popover-address';
+  address.textContent = link.emailAddress;
+  popover.append(
+    address,
+    createEmailLinkButton('Copy email address', 'copy', link),
+    createEmailLinkButton('Open email app', 'open', link),
+  );
+
+  root.append(backdrop, popover);
+  placeMetaTemplateMenu(popover);
+  popover.querySelector<HTMLButtonElement>('button')?.focus();
+}
+
+function createEmailLinkButton(label: string, action: string, link: MailtoLink): HTMLButtonElement {
+  const button = documentOwner().createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.dataset.emailLinkAction = action;
+  button.dataset.emailAddress = link.emailAddress;
+  button.dataset.emailUrl = link.url;
+  return button;
 }
 
 export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {

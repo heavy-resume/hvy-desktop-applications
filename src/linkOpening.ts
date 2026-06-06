@@ -28,3 +28,26 @@ export function externalHttpUrlFromHref(href: string | null | undefined): string
     return null;
   }
 }
+
+export interface MailtoLink {
+  url: string;
+  emailAddress: string;
+}
+
+export function mailtoLinkFromHref(href: string | null | undefined): MailtoLink | null {
+  const value = href?.trim() ?? '';
+  if (!/^mailto:/i.test(value)) {
+    return null;
+  }
+  const addressPart = value.slice('mailto:'.length).split('?')[0].trim();
+  const emailAddress = decodeMailtoAddress(addressPart).trim();
+  return emailAddress ? { url: value.replace(/^mailto:/i, 'mailto:'), emailAddress } : null;
+}
+
+function decodeMailtoAddress(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}

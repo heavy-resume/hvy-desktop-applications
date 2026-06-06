@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { externalHttpUrlFromHref, shouldOpenExternalLinkForClick } from './linkOpening';
+import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick } from './linkOpening';
 
 const leftClick = {
   altKey: false,
@@ -38,5 +38,24 @@ describe('externalHttpUrlFromHref', () => {
     expect(externalHttpUrlFromHref('/relative')).toBeNull();
     expect(externalHttpUrlFromHref('mailto:hello@example.com')).toBeNull();
     expect(externalHttpUrlFromHref('not a url')).toBeNull();
+  });
+});
+
+describe('mailtoLinkFromHref', () => {
+  it('extracts the email address while preserving the mailto URL', () => {
+    expect(mailtoLinkFromHref(' mailto:hello@example.com?subject=Hi ')).toEqual({
+      url: 'mailto:hello@example.com?subject=Hi',
+      emailAddress: 'hello@example.com',
+    });
+    expect(mailtoLinkFromHref('mailto:hello%2Bdocs@example.com')).toEqual({
+      url: 'mailto:hello%2Bdocs@example.com',
+      emailAddress: 'hello+docs@example.com',
+    });
+  });
+
+  it('ignores non-mailto and empty mailto links', () => {
+    expect(mailtoLinkFromHref('https://example.com')).toBeNull();
+    expect(mailtoLinkFromHref('mailto:?subject=Hi')).toBeNull();
+    expect(mailtoLinkFromHref('not a url')).toBeNull();
   });
 });

@@ -890,8 +890,8 @@ fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraft
 #[tauri::command]
 fn open_external_url(url: String) -> AppResult<()> {
     let url = url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err(AppError::Message("Only http and https links can be opened.".into()));
+    if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:")) {
+        return Err(AppError::Message("Only http, https, and mailto links can be opened.".into()));
     }
     #[cfg(target_os = "macos")]
     let mut command = {

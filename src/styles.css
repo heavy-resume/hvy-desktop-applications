@@ -953,6 +953,18 @@ button:disabled {
   text-align: left;
 }
 
+.hvy-email-link-popover {
+  min-width: min(17rem, calc(100% - 1rem));
+}
+
+.hvy-email-link-popover-address {
+  max-width: 20rem;
+  padding: 0.45rem 0.6rem 0.25rem;
+  color: var(--hvy-text-alt);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
 .tree-file.is-selected {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
   background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 10%, var(--hvy-surface, #ffffff));
