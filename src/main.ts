@@ -1503,6 +1503,13 @@ let findShortcutBound = false;
 
 void boot();
 
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    preserveCurrentDocumentSession();
+    writeHotReloadSessionSnapshot();
+  });
+}
+
 async function boot(): Promise<void> {
   setupErrorSurface();
   try {
@@ -1578,7 +1585,7 @@ async function boot(): Promise<void> {
 function bindFindShortcut(): void {
   if (findShortcutBound) return;
   findShortcutBound = true;
-  document.addEventListener('keydown', (event) => {
+  window.addEventListener('keydown', (event) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return;
     if (!openMountedSearch()) return;
     event.preventDefault();

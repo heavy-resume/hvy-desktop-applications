@@ -1,8 +1,9 @@
-import type { DocumentExtension } from './backend';
+import { openExternalUrl, type DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
+import { externalHttpUrlFromHref, shouldOpenExternalLinkForClick } from './linkOpening';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -127,11 +128,41 @@ export async function mountHvyDocument(
     onDocumentChange: options.onDocumentChange,
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
-  const finalMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  const interactiveMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  const finalMount = withExternalLinkOpening(root, mode, interactiveMount);
   return {
     mount: finalMount,
     get document() {
       return finalMount.getDocument();
+    },
+  };
+}
+
+function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMount): HvyMount {
+  const cleanup = new AbortController();
+  root.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element) || !shouldOpenExternalLinkForClick(mode, event)) {
+      return;
+    }
+    const anchor = target.closest<HTMLAnchorElement>('a[href]');
+    if (!anchor || !root.contains(anchor)) {
+      return;
+    }
+    const url = externalHttpUrlFromHref(anchor.getAttribute('href'));
+    if (!url) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void openExternalUrl(url);
+  }, { capture: true, signal: cleanup.signal });
+
+  return {
+    ...mount,
+    destroy() {
+      cleanup.abort();
+      mount.destroy();
     },
   };
 }
