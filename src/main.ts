@@ -106,6 +106,8 @@ const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
 const HOT_RELOAD_SESSION_STORAGE_KEY = 'hvy-galaxy:hot-reload-session';
 const DOCUMENT_MODE_STORAGE_KEY = 'hvy-galaxy:document-modes';
+const ZOOM_STORAGE_KEY = 'hvy-galaxy:zoom';
+const ZOOM_LEVELS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
 interface MountScrollRatio {
   top: number;
@@ -1496,6 +1498,12 @@ const handlers: UiHandlers = {
     }
     void createBlankDocument();
   },
+  zoomAppIn: () => setAppZoom(nextZoomLevel(state.appZoom, 1)),
+  zoomAppOut: () => setAppZoom(nextZoomLevel(state.appZoom, -1)),
+  resetAppZoom: () => setAppZoom(1),
+  zoomDocumentIn: () => setDocumentZoom(nextZoomLevel(state.documentZoom, 1)),
+  zoomDocumentOut: () => setDocumentZoom(nextZoomLevel(state.documentZoom, -1)),
+  resetDocumentZoom: () => setDocumentZoom(1),
   closeDocument: () => void closeCurrentDocument(),
 };
 
@@ -1513,7 +1521,9 @@ if (import.meta.hot) {
 async function boot(): Promise<void> {
   setupErrorSurface();
   try {
+    loadZoomSettings();
     mountRoot = render(state, handlers);
+    applyZoomSettings();
     bindFindShortcut();
     await refreshRecents();
     await refreshArchivedWorkspaces();
@@ -1531,6 +1541,7 @@ async function boot(): Promise<void> {
     await loadRecentWorkspaces();
     await refreshSavedTemplates(state.selectedWorkspacePath);
     mountRoot = render(state, handlers);
+    applyZoomSettings();
     syncFileMenuState({ force: true });
     await openRecoveryDialogOnBoot();
     startBackupTimer();
@@ -1556,6 +1567,12 @@ async function boot(): Promise<void> {
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
       if (event === 'colors') handlers.openColorTheme();
+      if (event === 'zoom-app-in') handlers.zoomAppIn();
+      if (event === 'zoom-app-out') handlers.zoomAppOut();
+      if (event === 'zoom-app-reset') handlers.resetAppZoom();
+      if (event === 'zoom-document-in') handlers.zoomDocumentIn();
+      if (event === 'zoom-document-out') handlers.zoomDocumentOut();
+      if (event === 'zoom-document-reset') handlers.resetDocumentZoom();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'app-close-requested') void handleAppCloseRequest();
       if (event === 'close-document') handlers.closeDocument();
@@ -2356,6 +2373,7 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   applyAppColorTheme();
   mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
   state.document.mounted = mounted;
+  applyDocumentZoom();
   setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
 }
 
@@ -3376,13 +3394,94 @@ function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
     }
   }
   mountRoot = render(state, handlers);
+  applyZoomSettings();
   syncFileMenuState();
   restoreMountScrollRatio(mountRoot, mountScrollRatio);
 }
 
 function renderAllAroundDocument(): void {
   renderUiAroundDocument(state);
+  applyZoomSettings();
   syncFileMenuState();
+}
+
+function loadZoomSettings(): void {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ZOOM_STORAGE_KEY) ?? '{}') as { appZoom?: unknown; documentZoom?: unknown };
+    state.appZoom = normalizeZoomLevel(parsed.appZoom, 1);
+    state.documentZoom = normalizeZoomLevel(parsed.documentZoom, 1);
+  } catch {
+    state.appZoom = 1;
+    state.documentZoom = 1;
+  }
+}
+
+function saveZoomSettings(): void {
+  localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify({
+    appZoom: state.appZoom,
+    documentZoom: state.documentZoom,
+  }));
+}
+
+function setAppZoom(zoom: number): void {
+  state.appZoom = normalizeZoomLevel(zoom, 1);
+  saveZoomSettings();
+  applyAppZoom();
+  state.status = `Workspace zoom ${zoomPercent(state.appZoom)}`;
+  renderAllAroundDocument();
+}
+
+function setDocumentZoom(zoom: number): void {
+  state.documentZoom = normalizeZoomLevel(zoom, 1);
+  saveZoomSettings();
+  const scrollRatio = captureMountScrollRatio(mountRoot);
+  applyDocumentZoom();
+  restoreMountScrollRatio(mountRoot, scrollRatio);
+  state.status = `Document zoom ${zoomPercent(state.documentZoom)}`;
+  renderAllAroundDocument();
+}
+
+function applyZoomSettings(): void {
+  applyAppZoom();
+  applyDocumentZoom();
+}
+
+function applyAppZoom(): void {
+  if (state.appZoom === 1) {
+    document.body.style.removeProperty('zoom');
+    return;
+  }
+  document.body.style.setProperty('zoom', String(state.appZoom));
+}
+
+function applyDocumentZoom(): void {
+  if (!mountRoot) return;
+  if (state.documentZoom === 1) {
+    mountRoot.style.removeProperty('zoom');
+    return;
+  }
+  mountRoot.style.setProperty('zoom', String(state.documentZoom));
+}
+
+function normalizeZoomLevel(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return ZOOM_LEVELS.includes(value) ? value : closestZoomLevel(value);
+}
+
+function nextZoomLevel(current: number, direction: 1 | -1): number {
+  const normalized = normalizeZoomLevel(current, 1);
+  const index = ZOOM_LEVELS.indexOf(normalized);
+  return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, Math.max(0, index + direction))] ?? 1;
+}
+
+function closestZoomLevel(value: number): number {
+  return ZOOM_LEVELS.reduce((best, candidate) => (
+    Math.abs(candidate - value) < Math.abs(best - value) ? candidate : best
+  ), 1);
+}
+
+function zoomPercent(zoom: number): string {
+  return `${Math.round(zoom * 100)}%`;
 }
 
 function scheduleWorkspaceFilterProgressRender(): void {

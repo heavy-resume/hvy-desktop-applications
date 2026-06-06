@@ -220,6 +220,32 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
         .build()?;
+    let view = SubmenuBuilder::with_id(app, "view-menu", "View")
+        .item(&app_shortcut_menu_item(
+            app,
+            "Zoom Document In",
+            "zoom-document-in",
+            "CmdOrCtrl+=",
+        )?)
+        .item(&app_shortcut_menu_item(
+            app,
+            "Zoom Document Out",
+            "zoom-document-out",
+            "CmdOrCtrl+-",
+        )?)
+        .item(&app_shortcut_menu_item(
+            app,
+            "Reset Document Zoom",
+            "zoom-document-reset",
+            "CmdOrCtrl+0",
+        )?)
+        .separator()
+        .item(&app_shortcut_menu_item(app, "Zoom Workspace In", "zoom-app-in", "CmdOrCtrl+Shift+=")?)
+        .item(&app_shortcut_menu_item(app, "Zoom Workspace Out", "zoom-app-out", "CmdOrCtrl+Shift+-")?)
+        .item(&app_shortcut_menu_item(app, "Reset Workspace Zoom", "zoom-app-reset", "CmdOrCtrl+Shift+0")?)
+        .separator()
+        .item(&PredefinedMenuItem::fullscreen(app, Some("Toggle Full Screen"))?)
+        .build()?;
     let help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
             &MenuItemBuilder::new("HVY Galaxy Guide")
@@ -237,7 +263,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let builder = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
-    builder.item(&file).item(&edit).item(&ai).item(&help).build()
+    builder.item(&file).item(&edit).item(&view).item(&ai).item(&help).build()
 }
 
 fn app_shortcut_menu_item(

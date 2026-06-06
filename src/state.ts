@@ -98,6 +98,8 @@ export interface AppState {
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
   workspaceFileViews: Record<string, WorkspaceFileView>;
+  appZoom: number;
+  documentZoom: number;
 }
 
 export type WorkspaceFileView = 'documents' | 'templates';
@@ -217,6 +219,8 @@ export const state: AppState = {
   },
   workspaceFilters: {},
   workspaceFileViews: {},
+  appZoom: 1,
+  documentZoom: 1,
 };
 
 export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {

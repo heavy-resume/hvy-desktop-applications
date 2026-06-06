@@ -125,8 +125,15 @@ function bindWindowShortcuts(window) {
 
 function shortcutCommand(input) {
   if (!input.control && !input.meta) return null;
-  if (input.alt || input.isAutoRepeat) return null;
+  if (input.isAutoRepeat) return null;
   const key = String(input.key ?? '').toLowerCase();
+  if (input.alt) return null;
+  if ((key === '=' || key === '+') && input.shift) return 'zoom-app-in';
+  if ((key === '-' || key === '_') && input.shift) return 'zoom-app-out';
+  if ((key === '0' || key === ')') && input.shift) return 'zoom-app-reset';
+  if ((key === '=' || key === '+') && !input.shift) return 'zoom-document-in';
+  if ((key === '-' || key === '_') && !input.shift) return 'zoom-document-out';
+  if (key === '0' && !input.shift) return 'zoom-document-reset';
   if (key === 's' && !input.shift) return fileMenuState.save ? 'save' : null;
   if (key === 's' && input.shift) return fileMenuState.saveAs ? 'save-as' : null;
   if (key === 'w' && !input.shift) return fileMenuState.closeDocument ? 'close-document' : null;
@@ -209,9 +216,13 @@ function buildMenu() {
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        menuItem('Zoom Document In', 'zoom-document-in', 'CmdOrCtrl+='),
+        menuItem('Zoom Document Out', 'zoom-document-out', 'CmdOrCtrl+-'),
+        menuItem('Reset Document Zoom', 'zoom-document-reset', 'CmdOrCtrl+0'),
+        { type: 'separator' },
+        menuItem('Zoom Workspace In', 'zoom-app-in', 'CmdOrCtrl+Shift+='),
+        menuItem('Zoom Workspace Out', 'zoom-app-out', 'CmdOrCtrl+Shift+-'),
+        menuItem('Reset Workspace Zoom', 'zoom-app-reset', 'CmdOrCtrl+Shift+0'),
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],

@@ -160,6 +160,12 @@ export interface UiHandlers {
   cancelSaveTemplate(): void;
   saveWorkspaceTemplateVisibility(workspacePath: string, visibility: WorkspaceTemplateVisibility): void;
   createFile(): void;
+  zoomAppIn(): void;
+  zoomAppOut(): void;
+  resetAppZoom(): void;
+  zoomDocumentIn(): void;
+  zoomDocumentOut(): void;
+  resetDocumentZoom(): void;
 }
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -1120,7 +1126,7 @@ function sanitizeFolderlessNameInputValue(value: string): string {
 }
 
 function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
-  if (event.isComposing || event.altKey || event.defaultPrevented) return false;
+  if (event.isComposing || event.defaultPrevented) return false;
   if (event.key === 'Escape') {
     handlers.cancelTabStack();
   }
@@ -1129,6 +1135,38 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
   const key = event.key.toLowerCase();
   const meta = event.metaKey || event.ctrlKey;
   if (!meta) return false;
+
+  if (event.altKey) return false;
+  if (event.shiftKey && (key === '=' || key === '+')) {
+    event.preventDefault();
+    handlers.zoomAppIn();
+    return true;
+  }
+  if (event.shiftKey && (key === '-' || key === '_')) {
+    event.preventDefault();
+    handlers.zoomAppOut();
+    return true;
+  }
+  if (event.shiftKey && (key === '0' || key === ')')) {
+    event.preventDefault();
+    handlers.resetAppZoom();
+    return true;
+  }
+  if (!event.shiftKey && (key === '=' || key === '+')) {
+    event.preventDefault();
+    handlers.zoomDocumentIn();
+    return true;
+  }
+  if (!event.shiftKey && (key === '-' || key === '_')) {
+    event.preventDefault();
+    handlers.zoomDocumentOut();
+    return true;
+  }
+  if (!event.shiftKey && key === '0') {
+    event.preventDefault();
+    handlers.resetDocumentZoom();
+    return true;
+  }
 
   if (key === 'p') {
     event.preventDefault();
