@@ -106,6 +106,7 @@ export interface DocumentFile {
 }
 
 type DocumentFileMetadata = Omit<DocumentFile, 'bytes'>;
+type BufferJson = { type: 'Buffer'; data: number[] };
 
 export interface ImportSourceFile {
   path: string;
@@ -295,14 +296,33 @@ function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Prom
   return invoke<T>(command, args);
 }
 
-function normalizeDesktopBytes(bytes: ArrayBuffer | Uint8Array | number[]): Uint8Array {
+function normalizeDesktopBytes(bytes: ArrayBuffer | Uint8Array | number[] | BufferJson): Uint8Array {
   if (bytes instanceof Uint8Array) {
     return bytes;
   }
   if (bytes instanceof ArrayBuffer) {
     return new Uint8Array(bytes);
   }
+  if (isBufferJson(bytes)) {
+    return new Uint8Array(bytes.data);
+  }
   return new Uint8Array(bytes);
+}
+
+function isBufferJson(value: unknown): value is BufferJson {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && (value as BufferJson).type === 'Buffer'
+    && Array.isArray((value as BufferJson).data)
+  );
+}
+
+function normalizeDocumentFileBytes(file: DocumentFile): DocumentFile {
+  return {
+    ...file,
+    bytes: normalizeDesktopBytes(file.bytes),
+  };
 }
 
 export function loadRecentState(): Promise<RecentState> {
@@ -491,11 +511,11 @@ export function defaultAiActionSettings(providerId = 'default'): AiActionSetting
 }
 
 export function loadDefaultGuide(): Promise<DocumentFile> {
-  return invokeDesktop('load_default_guide');
+  return invokeDesktop<DocumentFile>('load_default_guide').then(normalizeDocumentFileBytes);
 }
 
 export function loadHvyGuide(): Promise<DocumentFile> {
-  return invokeDesktop('load_hvy_guide');
+  return invokeDesktop<DocumentFile>('load_hvy_guide').then(normalizeDocumentFileBytes);
 }
 
 export function openWorkspaceDialog(): Promise<Workspace | null> {
@@ -550,7 +570,10 @@ export function addDroppedFilesToWorkspace(workspacePath: string, files: Dropped
 }
 
 export function openFileDialog(): Promise<DocumentFile | null> {
-  return measureDebugAsync('load', 'backend:openFileDialog', undefined, () => invokeDesktop('open_file_dialog'));
+  return measureDebugAsync('load', 'backend:openFileDialog', undefined, async () => {
+    const file = await invokeDesktop<DocumentFile | null>('open_file_dialog');
+    return file ? normalizeDocumentFileBytes(file) : null;
+  });
 }
 
 export function openImportSourceDialog(): Promise<ImportSourceFile | null> {
@@ -559,16 +582,16 @@ export function openImportSourceDialog(): Promise<ImportSourceFile | null> {
 
 export function readDocumentFile(path: string): Promise<DocumentFile> {
   return measureDebugAsync('load', 'backend:readDocumentFile', { path }, async () => {
-    if (isTauriRuntime()) {
+    if (isTauriRuntime() || isElectronRuntime()) {
       const metadata = await invokeDesktop<DocumentFileMetadata>('read_document_file_metadata', { path });
       const bytes = await measureDebugAsync('load', 'backend:readDocumentFileBytes', { path }, () =>
-        invokeDesktop<ArrayBuffer | Uint8Array | number[]>('read_document_file_bytes', { path }));
+        invokeDesktop<ArrayBuffer | Uint8Array | number[] | BufferJson>('read_document_file_bytes', { path }));
       return {
         ...metadata,
         bytes: normalizeDesktopBytes(bytes),
       };
     }
-    return invokeDesktop('read_document_file', { path });
+    return normalizeDocumentFileBytes(await invokeDesktop('read_document_file', { path }));
   });
 }
 

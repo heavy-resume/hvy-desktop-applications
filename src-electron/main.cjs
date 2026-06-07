@@ -450,6 +450,8 @@ async function handleCommand(command, args) {
     case 'open_import_source_dialog': return openImportSourceDialog();
     case 'load_launch_document_paths': return loadLaunchDocumentPaths();
     case 'read_document_file': return readDocumentFile(args.path);
+    case 'read_document_file_metadata': return readDocumentFileMetadata(args.path);
+    case 'read_document_file_bytes': return readDocumentBytesAt(args.path);
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
@@ -825,6 +827,12 @@ function readDocumentFile(filePath) {
   const file = readDocumentAt(filePath);
   addRecentFile(filePath);
   return file;
+}
+
+function readDocumentFileMetadata(filePath) {
+  const metadata = readDocumentMetadataAt(filePath);
+  addRecentFile(filePath);
+  return metadata;
 }
 
 function saveDocumentFile(filePath, bytes) {
@@ -1299,6 +1307,13 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
 }
 
 function readDocumentAt(filePath) {
+  return {
+    ...readDocumentMetadataAt(filePath),
+    bytes: readDocumentBytesAt(filePath),
+  };
+}
+
+function readDocumentMetadataAt(filePath) {
   const extension = documentExtension(filePath);
   if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be opened.');
   const access = documentFileAiAccess(filePath);
@@ -1306,10 +1321,15 @@ function readDocumentAt(filePath) {
     path: filePath,
     name: path.basename(filePath),
     extension,
-    bytes: Array.from(fs.readFileSync(filePath)),
     locked: access.locked,
     hiddenFromAI: access.hiddenFromAI,
   };
+}
+
+function readDocumentBytesAt(filePath) {
+  const extension = documentExtension(filePath);
+  if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be opened.');
+  return fs.readFileSync(filePath);
 }
 
 function documentFileAiAccess(filePath) {
