@@ -424,10 +424,23 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
 }
 
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
+    let metadata = read_document_metadata_at(path)?;
+    Ok(DocumentFile {
+        path: metadata.path,
+        name: metadata.name,
+        extension: metadata.extension,
+        bytes: fs::read(path)?,
+        locked: metadata.locked,
+        hidden_from_ai: metadata.hidden_from_ai,
+        recovery_state: metadata.recovery_state,
+    })
+}
+
+fn read_document_metadata_at(path: &Path) -> AppResult<DocumentFileMetadata> {
     let extension = document_extension(path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
     let (locked, hidden_from_ai) = document_file_ai_access(path);
-    Ok(DocumentFile {
+    Ok(DocumentFileMetadata {
         path: path_to_string(path),
         name: path
             .file_name()
@@ -435,7 +448,6 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
             .unwrap_or("Untitled")
             .to_string(),
         extension,
-        bytes: fs::read(path)?,
         locked,
         hidden_from_ai,
         recovery_state: None,

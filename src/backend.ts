@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { measureDebugAsync } from './debugLog';
 
 declare global {
   interface Window {
@@ -98,18 +99,20 @@ export interface DocumentFile {
   path: string;
   name: string;
   extension: DocumentExtension;
-  bytes: number[];
+  bytes: number[] | Uint8Array;
   locked?: boolean;
   hiddenFromAI?: boolean;
   recoveryState?: string | null;
 }
+
+type DocumentFileMetadata = Omit<DocumentFile, 'bytes'>;
 
 export interface ImportSourceFile {
   path: string;
   name: string;
   extension: DocumentExtension | '.txt' | '.pdf' | '.docx';
   text?: string;
-  bytes?: number[];
+  bytes?: number[] | Uint8Array;
 }
 
 export type TemplateScope = 'app' | 'workspace';
@@ -290,6 +293,16 @@ function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Prom
     return Promise.reject(new Error(`Desktop command unavailable in browser: ${command}`));
   }
   return invoke<T>(command, args);
+}
+
+function normalizeDesktopBytes(bytes: ArrayBuffer | Uint8Array | number[]): Uint8Array {
+  if (bytes instanceof Uint8Array) {
+    return bytes;
+  }
+  if (bytes instanceof ArrayBuffer) {
+    return new Uint8Array(bytes);
+  }
+  return new Uint8Array(bytes);
 }
 
 export function loadRecentState(): Promise<RecentState> {
@@ -537,7 +550,7 @@ export function addDroppedFilesToWorkspace(workspacePath: string, files: Dropped
 }
 
 export function openFileDialog(): Promise<DocumentFile | null> {
-  return invokeDesktop('open_file_dialog');
+  return measureDebugAsync('load', 'backend:openFileDialog', undefined, () => invokeDesktop('open_file_dialog'));
 }
 
 export function openImportSourceDialog(): Promise<ImportSourceFile | null> {
@@ -545,7 +558,18 @@ export function openImportSourceDialog(): Promise<ImportSourceFile | null> {
 }
 
 export function readDocumentFile(path: string): Promise<DocumentFile> {
-  return invokeDesktop('read_document_file', { path });
+  return measureDebugAsync('load', 'backend:readDocumentFile', { path }, async () => {
+    if (isTauriRuntime()) {
+      const metadata = await invokeDesktop<DocumentFileMetadata>('read_document_file_metadata', { path });
+      const bytes = await measureDebugAsync('load', 'backend:readDocumentFileBytes', { path }, () =>
+        invokeDesktop<ArrayBuffer | Uint8Array | number[]>('read_document_file_bytes', { path }));
+      return {
+        ...metadata,
+        bytes: normalizeDesktopBytes(bytes),
+      };
+    }
+    return invokeDesktop('read_document_file', { path });
+  });
 }
 
 export function saveDocumentFile(request: SaveDocumentRequest): Promise<void> {

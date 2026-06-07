@@ -80,6 +80,7 @@ import {
   writeSystemFileClipboard,
 } from './backend';
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
+import { clearDebugLogEntries, getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, redoMountedDocument, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, undoMountedDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
@@ -698,6 +699,27 @@ const handlers: UiHandlers = {
   closeAbout: () => {
     state.aboutDialogOpen = false;
     state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  openDebugLog: () => {
+    closeUiBeforeAbout();
+    state.debugLogDialogOpen = true;
+    state.debugLogEntries = getDebugLogEntries();
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  closeDebugLog: () => {
+    state.debugLogDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  refreshDebugLog: () => {
+    state.debugLogEntries = getDebugLogEntries();
+    rerender({ preserveMountedDocument: true });
+  },
+  clearDebugLog: () => {
+    clearDebugLogEntries();
+    state.debugLogEntries = getDebugLogEntries();
     rerender({ preserveMountedDocument: true });
   },
   openAiSettings: () => {
@@ -1564,6 +1586,7 @@ async function boot(): Promise<void> {
       if (event === 'open-guide') void openGuide();
       if (event === 'open-hvy-guide') void openHvyGuide();
       if (event === 'about') handlers.openAbout();
+      if (event === 'debug-log') handlers.openDebugLog();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
       if (event === 'colors') handlers.openColorTheme();
@@ -1583,6 +1606,11 @@ async function boot(): Promise<void> {
       if (event === 'export-pdf') handlers.exportPdf();
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
+    });
+    window.addEventListener('hvy:debug-log-changed', () => {
+      if (!state.debugLogDialogOpen) return;
+      state.debugLogEntries = getDebugLogEntries();
+      rerender({ preserveMountedDocument: true });
     });
     await onOpenDocumentPath((path) => {
       void openLaunchDocumentPath(path);
@@ -2208,13 +2236,23 @@ function syncDocumentTabs(): void {
 }
 
 async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
+  const loadStartedAt = performance.now();
+  logDebugEvent('load', 'openDocument:start', {
+    path: file.path,
+    name: file.name,
+    extension: file.extension,
+    byteCount: file.bytes.length,
+    deferMount: options.deferMount === true,
+  });
   preserveCurrentDocumentSession();
   markDocumentTabOpened(file.path);
-  state.document?.mounted?.mount.destroy();
+  measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, () => {
+    state.document?.mounted?.mount.destroy();
+  });
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(file.path);
   const viewSession = storedSession;
   const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
-  const bytes = new Uint8Array(file.bytes);
+  const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
   const workspaceAccess = workspaceFileAiAccess(file.path);
   const access = options.defaultDocument
@@ -2227,7 +2265,12 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
       };
   const readOnly = session?.readOnly ?? (options.readOnly === true || access.readOnly || options.defaultDocument === true);
   const hiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
-  const document = session?.document ?? cachedFilterDocument ?? await deserializeHvy(bytes, file.extension);
+  const document = session?.document ?? cachedFilterDocument ?? await measureDebugAsync(
+    'load',
+    'openDocument:deserialize',
+    { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
+    () => deserializeHvy(bytes, file.extension),
+  );
   const recoveryState = options.recovered ? file.recoveryState ?? null : viewSession?.recoveryState ?? null;
   const restoredMode = viewSession?.mode
     ?? readDocumentModePreference(file.path)
@@ -2259,14 +2302,28 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
   if (options.deferMount) {
     pendingMountDocument = document;
     pendingMountRecoveryState = recoveryState;
+    logDebugEvent('load', 'openDocument:deferred', {
+      path: file.path,
+      durationMs: Math.round((performance.now() - loadStartedAt) * 10) / 10,
+    });
     return;
   }
-  rerender();
+  measureDebug('load', 'openDocument:rerenderBeforeMount', { path: file.path }, () => rerender());
   await mountCurrentDocument(document);
   restoreMountScrollRatio(mountRoot, viewSession?.scrollRatio ?? null);
   if (recoveryState && state.document?.mounted) {
-    applyMountedRecoveryState(state.document.mounted, recoveryState);
+    measureDebug('load', 'openDocument:applyRecoveryState', { path: file.path }, () => {
+      applyMountedRecoveryState(state.document!.mounted!, recoveryState);
+    });
   }
+  logDebugEvent('load', 'openDocument:complete', {
+    path: file.path,
+    durationMs: Math.round((performance.now() - loadStartedAt) * 10) / 10,
+  });
+}
+
+function documentFileBytes(file: DocumentFile): Uint8Array {
+  return file.bytes instanceof Uint8Array ? file.bytes : new Uint8Array(file.bytes);
 }
 
 async function openLaunchDocumentPath(path: string): Promise<void> {
@@ -2350,31 +2407,46 @@ function pathStartsWithWorkspace(path: string, workspacePath: string): boolean {
 async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
   if (!state.document || !mountRoot || !document) return;
   const generation = ++mountGeneration;
-  const searchSnapshot = await createWorkspaceFilterSnapshotForDocument(state.document.path, state.document.name, document);
+  const path = state.document.path;
+  const searchSnapshot = await measureDebugAsync(
+    'load',
+    'mountCurrentDocument:createWorkspaceFilterSnapshot',
+    { path, name: state.document.name },
+    () => createWorkspaceFilterSnapshotForDocument(state.document!.path, state.document!.name, document),
+  );
   if (generation !== mountGeneration || !state.document || !mountRoot) return;
-  state.document.mounted?.mount.destroy();
-  mountThemeReapplyCleanup?.();
+  measureDebug('close', 'mountCurrentDocument:destroyExistingMount', { path }, () => {
+    state.document?.mounted?.mount.destroy();
+  });
+  measureDebug('close', 'mountCurrentDocument:cleanupThemeReapply', { path }, () => {
+    mountThemeReapplyCleanup?.();
+  });
   mountThemeReapplyCleanup = null;
-  mountRoot.classList.toggle('is-hidden-from-ai', state.document.hiddenFromAI);
-  const mounted = await mountHvyDocument(mountRoot, document, state.document.mode, {
-    storageKey: documentStorageKey(state.document.path || state.document.name),
+  const currentDocument = state.document;
+  mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
+  const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
+    storageKey: documentStorageKey(currentDocument.path || currentDocument.name),
     searchSnapshot,
-    hiddenFromAI: state.document.hiddenFromAI,
+    hiddenFromAI: currentDocument.hiddenFromAI,
     maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       setDocumentDirty(event.dirty);
     },
-  });
+  }));
   if (pendingMountRecoveryState) {
-    applyMountedRecoveryState(mounted, pendingMountRecoveryState);
+    measureDebug('load', 'mountCurrentDocument:applyPendingRecoveryState', { path }, () => {
+      applyMountedRecoveryState(mounted, pendingMountRecoveryState);
+    });
     pendingMountRecoveryState = null;
   }
-  applyAppColorTheme();
-  mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
+  measureDebug('load', 'mountCurrentDocument:applyColorTheme', { path }, () => applyAppColorTheme());
+  mountThemeReapplyCleanup = measureDebug('load', 'mountCurrentDocument:bindThemeReapply', { path }, () => bindMountThemeReapply(mountRoot!));
   state.document.mounted = mounted;
-  applyDocumentZoom();
-  setDocumentDirty(state.document.dirty || state.document.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
+  measureDebug('load', 'mountCurrentDocument:applyDocumentZoom', { path }, () => applyDocumentZoom());
+  measureDebug('load', 'mountCurrentDocument:setDirtyState', { path }, () => {
+    setDocumentDirty(state.document!.dirty || state.document!.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
+  });
 }
 
 async function ensureCurrentDocumentMounted(): Promise<void> {
@@ -2857,8 +2929,14 @@ async function closeActiveDocumentAfterUnsavedChoice(options: { discardDraft: bo
   if (!openDocument) return;
   const path = openDocument.path;
   const name = openDocument.name;
-  openDocument.mounted?.mount.destroy();
-  mountThemeReapplyCleanup?.();
+  const closeStartedAt = performance.now();
+  logDebugEvent('close', 'closeActiveDocumentAfterUnsavedChoice:start', { path, name, discardDraft: options.discardDraft });
+  measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:destroyMount', { path }, () => {
+    openDocument.mounted?.mount.destroy();
+  });
+  measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:cleanupThemeReapply', { path }, () => {
+    mountThemeReapplyCleanup?.();
+  });
   mountThemeReapplyCleanup = null;
   pendingMountDocument = null;
   pendingMountRecoveryState = null;
@@ -2868,7 +2946,7 @@ async function closeActiveDocumentAfterUnsavedChoice(options: { discardDraft: bo
   removeDocumentTabPath(path);
   backupSnapshots.delete(backupDocumentKey(path, name));
   if (options.discardDraft) {
-    await clearRecoveryDraftsForDocument(path, name);
+    await measureDebugAsync('close', 'closeActiveDocumentAfterUnsavedChoice:clearRecoveryDrafts', { path, name }, () => clearRecoveryDraftsForDocument(path, name));
   }
   state.closeDocumentDialogOpen = false;
   state.closeDocumentDraftDialogOpen = false;
@@ -2876,7 +2954,11 @@ async function closeActiveDocumentAfterUnsavedChoice(options: { discardDraft: bo
   state.document = null;
   state.selectedFilePath = null;
   state.status = options.discardDraft ? 'Discarded unsaved edits' : 'Kept recovery draft for later';
-  rerender();
+  measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:rerender', { path }, () => rerender());
+  logDebugEvent('close', 'closeActiveDocumentAfterUnsavedChoice:complete', {
+    path,
+    durationMs: Math.round((performance.now() - closeStartedAt) * 10) / 10,
+  });
 }
 
 async function closeCurrentDocument(options: { discard?: boolean } = {}): Promise<void> {
@@ -2891,8 +2973,14 @@ async function closeCurrentDocument(options: { discard?: boolean } = {}): Promis
   }
   const path = openDocument.path;
   const name = openDocument.name;
-  openDocument.mounted?.mount.destroy();
-  mountThemeReapplyCleanup?.();
+  const closeStartedAt = performance.now();
+  logDebugEvent('close', 'closeCurrentDocument:start', { path, name, discard: options.discard === true });
+  measureDebug('close', 'closeCurrentDocument:destroyMount', { path }, () => {
+    openDocument.mounted?.mount.destroy();
+  });
+  measureDebug('close', 'closeCurrentDocument:cleanupThemeReapply', { path }, () => {
+    mountThemeReapplyCleanup?.();
+  });
   mountThemeReapplyCleanup = null;
   pendingMountDocument = null;
   pendingMountRecoveryState = null;
@@ -2903,14 +2991,18 @@ async function closeCurrentDocument(options: { discard?: boolean } = {}): Promis
   }
   removeDocumentTabPath(path);
   backupSnapshots.delete(backupDocumentKey(path, name));
-  await clearRecoveryDraftsForDocument(path, name);
+  await measureDebugAsync('close', 'closeCurrentDocument:clearRecoveryDrafts', { path, name }, () => clearRecoveryDraftsForDocument(path, name));
   state.closeDocumentDialogOpen = false;
   state.closeDocumentDraftDialogOpen = false;
   state.closeDocumentTargetPath = null;
   state.document = null;
   state.selectedFilePath = null;
   state.status = 'Closed document';
-  rerender();
+  measureDebug('close', 'closeCurrentDocument:rerender', { path }, () => rerender());
+  logDebugEvent('close', 'closeCurrentDocument:complete', {
+    path,
+    durationMs: Math.round((performance.now() - closeStartedAt) * 10) / 10,
+  });
 }
 
 async function handleAppCloseRequest(): Promise<void> {
@@ -3781,6 +3873,7 @@ function closeUiBeforeAiSettings(): void {
   state.newDocumentWorkspacePath = null;
   state.colorThemeDialogOpen = false;
   state.aboutDialogOpen = false;
+  state.debugLogDialogOpen = false;
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
@@ -3799,6 +3892,7 @@ function closeUiBeforeAbout(): void {
   state.workspaceInitializationPath = null;
   state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
+  state.debugLogDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
@@ -3822,6 +3916,7 @@ function closeUiBeforeColorTheme(): void {
   state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
+  state.debugLogDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
@@ -3844,6 +3939,7 @@ function closeUiBeforeMcpSettings(): void {
   state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
+  state.debugLogDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
@@ -3864,6 +3960,7 @@ function closeUiBeforeWorkspaceFilter(): void {
   state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
+  state.debugLogDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;

@@ -239,6 +239,8 @@ function buildMenu() {
       submenu: [
         menuItem('HVY Galaxy Guide', 'open-guide', 'F1'),
         menuItem('HVY Guide', 'open-hvy-guide'),
+        { type: 'separator' },
+        menuItem('Debug Log...', 'debug-log'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem(`About ${APP_NAME}`, 'about')]),
       ],
     },

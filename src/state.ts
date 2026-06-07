@@ -1,5 +1,6 @@
 import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
+import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
@@ -81,6 +82,8 @@ export interface AppState {
   mcpSettingsDiscardDialogOpen: boolean;
   colorThemeDialogOpen: boolean;
   aboutDialogOpen: boolean;
+  debugLogDialogOpen: boolean;
+  debugLogEntries: DebugLogEntry[];
   recoveryDialogOpen: boolean;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
@@ -192,6 +195,8 @@ export const state: AppState = {
   mcpSettingsDiscardDialogOpen: false,
   colorThemeDialogOpen: false,
   aboutDialogOpen: false,
+  debugLogDialogOpen: false,
+  debugLogEntries: [],
   recoveryDialogOpen: false,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,

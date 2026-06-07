@@ -1,5 +1,6 @@
 import type { AiActionKey, AiProviderConfig, AiSettings } from './backend';
 import { aiProviderPreset } from './aiProviders';
+import { logDebugEvent } from './debugLog';
 
 type HvyChatProvider = 'openai' | 'anthropic' | 'qwen';
 type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit' | 'pdf-template-import';
@@ -70,6 +71,18 @@ async function requestOpenAiCompatibleCompletion(
   }
   const stream = provider.provider === 'unsloth';
   const body = buildChatCompletionBody(model, request, task, provider.provider, stream);
+  logDebugEvent('llm', 'llm:request', {
+    task,
+    mode: request.mode,
+    provider: provider.provider,
+    model,
+    stream,
+    contextChars: request.context.length,
+    messageCount: body.messages.length,
+    messageChars: body.messages.reduce((total, message) => total + message.content.length, 0),
+    body,
+  });
+  const startedAt = performance.now();
   const response = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -78,6 +91,14 @@ async function requestOpenAiCompatibleCompletion(
     },
     body: JSON.stringify(body),
     signal,
+  });
+  logDebugEvent('llm', 'llm:response', {
+    task,
+    provider: provider.provider,
+    model,
+    ok: response.ok,
+    status: response.status,
+    durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
   });
   if (stream) {
     return readStreamingChatCompletionResponse(response);

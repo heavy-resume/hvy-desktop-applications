@@ -1937,6 +1937,94 @@ button:disabled {
   text-align: center;
 }
 
+.debug-log-dialog {
+  width: min(860px, calc(100vw - 32px));
+}
+
+.debug-log-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.debug-log-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.debug-log-list {
+  display: grid;
+  gap: 8px;
+  min-height: 220px;
+  max-height: min(58vh, 620px);
+  overflow: auto;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+  background: var(--hvy-surface-alt, #edf1ed);
+  padding: 10px;
+}
+
+.debug-log-empty {
+  margin: auto;
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
+.debug-log-entry {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 7px;
+  background: var(--hvy-surface, #fbfaf7);
+  padding: 9px;
+}
+
+.debug-log-entry-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debug-log-entry-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-log-kind,
+.debug-log-duration,
+.debug-log-entry time {
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-log-kind {
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 999px;
+  padding: 2px 7px;
+  text-transform: uppercase;
+}
+
+.debug-log-entry pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--hvy-text, #152223) 7%, var(--hvy-surface, #fbfaf7));
+  color: var(--hvy-text, #152223);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px;
+}
+
 .about-logo {
   width: 184px;
   height: 184px;

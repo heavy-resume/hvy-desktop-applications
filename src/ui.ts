@@ -64,6 +64,10 @@ export interface UiHandlers {
   clearWorkspaceFilter(): void;
   openAbout(): void;
   closeAbout(): void;
+  openDebugLog(): void;
+  closeDebugLog(): void;
+  refreshDebugLog(): void;
+  clearDebugLog(): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
   setDefaultAiProvider(settings: AiSettings): void;
@@ -312,6 +316,7 @@ export function renderModals(state: AppState): void {
     ${renderExportPdfSavePrompt(state)}
     ${renderExportedPdfDialog(state)}
     ${renderAboutDialog(state)}
+    ${renderDebugLogDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
@@ -420,6 +425,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       if (backdrop && backdrop === event.target && dismissBackdropClick) {
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
+          return;
+        }
+        if (backdrop.querySelector('.debug-log-dialog')) {
+          handlers.closeDebugLog();
           return;
         }
         if (backdrop.querySelector('.workspace-manager-dialog')) {
@@ -678,6 +687,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-exported-pdf') handlers.openExportedPdf();
     if (action === 'reveal-exported-pdf') handlers.revealExportedPdf();
     if (action === 'close-exported-pdf-dialog') handlers.closeExportedPdfDialog();
+    if (action === 'close-debug-log') handlers.closeDebugLog();
+    if (action === 'refresh-debug-log') handlers.refreshDebugLog();
+    if (action === 'clear-debug-log') handlers.clearDebugLog();
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
     if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
     if (action === 'cancel-export-pdf-save-prompt') handlers.cancelExportPdfSavePrompt();
@@ -979,6 +991,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.about-dialog')) {
       event.preventDefault();
       handlers.closeAbout();
+      return;
+    }
+    if (root.querySelector('.debug-log-dialog')) {
+      event.preventDefault();
+      handlers.closeDebugLog();
       return;
     }
     if (root.querySelector('.workspace-manager-dialog')) {
@@ -2738,6 +2755,61 @@ function renderAboutDialog(state: AppState): string {
         </div>
       </section>
     </div>`;
+}
+
+function renderDebugLogDialog(state: AppState): string {
+  if (!state.debugLogDialogOpen) {
+    return '';
+  }
+  const entries = state.debugLogEntries;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog debug-log-dialog" role="dialog" aria-modal="true" aria-labelledby="debugLogTitle">
+        <div class="debug-log-header">
+          <div>
+            <h2 id="debugLogTitle">Debug Log</h2>
+            <p class="dialog-note">Recent load, close, and LLM prompt events.</p>
+          </div>
+          <div class="debug-log-actions">
+            <button type="button" data-action="refresh-debug-log">Refresh</button>
+            <button type="button" data-action="clear-debug-log">Clear</button>
+          </div>
+        </div>
+        <div class="debug-log-list">
+          ${entries.length
+            ? entries.map(renderDebugLogEntry).join('')
+            : '<p class="debug-log-empty">No debug entries yet.</p>'}
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="close-debug-log">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string {
+  const details = entry.details ? JSON.stringify(entry.details, null, 2) : '';
+  const duration = typeof entry.details?.durationMs === 'number'
+    ? `${entry.details.durationMs.toFixed(1)} ms`
+    : typeof entry.durationMs === 'number'
+    ? `${entry.durationMs.toFixed(1)} ms`
+    : '';
+  return `
+    <article class="debug-log-entry" data-kind="${escapeAttr(entry.kind)}">
+      <div class="debug-log-entry-summary">
+        <span class="debug-log-kind">${escapeHtml(entry.kind)}</span>
+        <strong>${escapeHtml(entry.label)}</strong>
+        ${duration ? `<span class="debug-log-duration">${escapeHtml(duration)}</span>` : ''}
+        <time datetime="${escapeAttr(entry.startedAt)}">${escapeHtml(formatDebugLogTime(entry.startedAt))}</time>
+      </div>
+      ${details ? `<pre>${escapeHtml(details)}</pre>` : ''}
+    </article>`;
+}
+
+function formatDebugLogTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function renderAiSettingsDialog(state: AppState): string {

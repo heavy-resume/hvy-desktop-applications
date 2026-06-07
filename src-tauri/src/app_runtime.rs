@@ -52,6 +52,8 @@ pub fn run() {
             open_import_source_dialog,
             load_launch_document_paths,
             read_document_file,
+            read_document_file_metadata,
+            read_document_file_bytes,
             save_document_file,
             save_document_as_dialog,
             save_pdf_as_dialog,
@@ -253,7 +255,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 .accelerator("F1")
                 .build(app)?,
         )
-        .item(&MenuItemBuilder::new("HVY Guide").id("open-hvy-guide").build(app)?);
+        .item(&MenuItemBuilder::new("HVY Guide").id("open-hvy-guide").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Debug Log...").id("debug-log").build(app)?);
     #[cfg(not(target_os = "macos"))]
     let help_builder = help_builder
         .separator()

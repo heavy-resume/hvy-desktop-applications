@@ -357,6 +357,22 @@ fn read_document_file(app: AppHandle, path: String) -> AppResult<DocumentFile> {
 }
 
 #[tauri::command]
+fn read_document_file_metadata(app: AppHandle, path: String) -> AppResult<DocumentFileMetadata> {
+    let path = PathBuf::from(path);
+    let metadata = read_document_metadata_at(&path)?;
+    add_recent_file(&app, &path)?;
+    Ok(metadata)
+}
+
+#[tauri::command]
+fn read_document_file_bytes(path: String) -> AppResult<tauri::ipc::Response> {
+    let path = PathBuf::from(path);
+    document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
+    Ok(tauri::ipc::Response::new(fs::read(path)?))
+}
+
+#[tauri::command]
 fn save_document_file(app: AppHandle, path: String, bytes: Vec<u8>) -> AppResult<()> {
     let path = PathBuf::from(path);
     write_file_atomically(&path, &bytes)?;

@@ -148,6 +148,20 @@ struct DocumentFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct DocumentFileMetadata {
+    path: String,
+    name: String,
+    extension: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    locked: bool,
+    #[serde(default, rename = "hiddenFromAI", skip_serializing_if = "is_false")]
+    hidden_from_ai: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct ImportSourceFile {
     path: String,
     name: String,
