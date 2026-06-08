@@ -121,6 +121,8 @@ struct RecentState {
     files: Vec<String>,
     #[serde(default)]
     document_modes: HashMap<String, String>,
+    #[serde(default)]
+    document_color_uses: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

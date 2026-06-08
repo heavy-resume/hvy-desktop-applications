@@ -81,6 +81,7 @@ export interface AppState {
   mcpSettingsDialogInitialJson: string | null;
   mcpSettingsDiscardDialogOpen: boolean;
   colorThemeDialogOpen: boolean;
+  colorThemeDialogMode: 'global' | 'document';
   aboutDialogOpen: boolean;
   debugLogDialogOpen: boolean;
   debugLogEntries: DebugLogEntry[];
@@ -194,6 +195,7 @@ export const state: AppState = {
   mcpSettingsDialogInitialJson: null,
   mcpSettingsDiscardDialogOpen: false,
   colorThemeDialogOpen: false,
+  colorThemeDialogMode: 'global',
   aboutDialogOpen: false,
   debugLogDialogOpen: false,
   debugLogEntries: [],

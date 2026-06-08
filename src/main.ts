@@ -1,6 +1,6 @@
 import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
-import { readDocumentFile, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type ImportSourceFile } from './backend';
+import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, exportHvySourceMarkdown, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type VisualDocument } from './hvy';
@@ -837,6 +837,21 @@ export function writeDocumentModePreference(path: string, mode: HvyMode): void {
   } catch {
     // Mode preferences are best-effort; document content and recovery drafts are independent.
   }
+}
+
+export function readDocumentColorPreference(path: string): boolean {
+  return Boolean(path && state.recent.documentColorUses?.[path] === true);
+}
+
+export function writeDocumentColorPreference(path: string, useDocumentColors: boolean): void {
+  if (!path) return;
+  state.recent = {
+    ...state.recent,
+    documentColorUses: { ...(state.recent.documentColorUses ?? {}), [path]: useDocumentColors },
+  };
+  void saveDocumentColorPreference(path, useDocumentColors).then((recent) => {
+    state.recent = recent;
+  }).catch(() => undefined);
 }
 export function readHotReloadSessionSnapshot(): HotReloadSessionSnapshot | null {
   try {

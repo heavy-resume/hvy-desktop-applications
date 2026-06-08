@@ -21,6 +21,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_recent_state,
             save_document_mode_preference,
+            save_document_color_preference,
             load_ai_settings,
             save_ai_settings,
             mcp::load_mcp_settings,
@@ -183,10 +184,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&recent_files)
         .separator();
     let file_builder = file_builder
-        .item(&disabled_app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
-        .item(&disabled_app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
-        .item(&disabled_app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
-        .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
@@ -279,20 +276,6 @@ fn app_shortcut_menu_item(
     accelerator: &str,
 ) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
     let builder = MenuItemBuilder::new(label).id(id);
-    #[cfg(target_os = "macos")]
-    let builder = builder.accelerator(accelerator);
-    #[cfg(not(target_os = "macos"))]
-    let _ = accelerator;
-    builder.build(app)
-}
-
-fn disabled_app_shortcut_menu_item(
-    app: &AppHandle,
-    label: &str,
-    id: &str,
-    accelerator: &str,
-) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
-    let builder = MenuItemBuilder::new(label).id(id).enabled(false);
     #[cfg(target_os = "macos")]
     let builder = builder.accelerator(accelerator);
     #[cfg(not(target_os = "macos"))]

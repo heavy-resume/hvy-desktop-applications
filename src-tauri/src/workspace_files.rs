@@ -609,6 +609,7 @@ fn remove_recent_file(app: &AppHandle, path: &Path) -> AppResult<()> {
     let normalized = path_to_string(path);
     state.files.retain(|entry| entry != &normalized);
     state.document_modes.remove(&normalized);
+    state.document_color_uses.remove(&normalized);
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
 }

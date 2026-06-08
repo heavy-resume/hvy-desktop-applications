@@ -3,8 +3,43 @@ import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClien
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings } from './colorTheme';
 import { clearDebugLogEntries, getDebugLogEntries } from './debugLog';
 import { state } from './state';
-import { refreshMcpClientInstallStatus, mountCurrentDocument, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneMcpSettings, aiSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings } from './main';
+import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneMcpSettings, aiSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
+
+interface DocumentColorTheme {
+  name: string;
+  colors: Record<string, string>;
+}
+
+function currentDocumentColorTheme(): DocumentColorTheme {
+  const theme = state.document?.mounted?.document.meta.theme;
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return { name: '', colors: {} };
+  const record = theme as { name?: unknown; colors?: unknown };
+  const colors = record.colors && typeof record.colors === 'object' && !Array.isArray(record.colors)
+    ? Object.fromEntries(Object.entries(record.colors).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {};
+  return {
+    name: typeof record.name === 'string' ? record.name : '',
+    colors,
+  };
+}
+
+function updateDocumentColorTheme(nextTheme: DocumentColorTheme): void {
+  const document = state.document?.mounted?.document;
+  if (!document) return;
+  const meta = document.meta as Record<string, unknown>;
+  meta.theme = {
+    name: nextTheme.name,
+    colors: nextTheme.colors,
+  };
+  applyAppColorTheme();
+  setDocumentDirty(true);
+  state.status = 'Updated document colors';
+}
+
+function editingDocumentColorTheme(): boolean {
+  return state.colorThemeDialogMode === 'document';
+}
 
 export function createSettingsHandlers(): Partial<UiHandlers> {
   return {
@@ -186,6 +221,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   openColorTheme: () => {
     closeUiBeforeColorTheme();
     state.colorThemeDialogOpen = true;
+    state.colorThemeDialogMode = 'global';
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  openDocumentColorTheme: () => {
+    closeUiBeforeColorTheme();
+    state.colorThemeDialogOpen = true;
+    state.colorThemeDialogMode = 'document';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -195,8 +238,18 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   updateColorThemeName: (name) => {
+    if (editingDocumentColorTheme()) {
+      updateDocumentColorTheme({ ...currentDocumentColorTheme(), name });
+      return;
+    }
     state.colorTheme = { ...state.colorTheme, themeName: name };
     saveColorThemeSettings(state.colorTheme);
+  },
+  setDocumentColorsEnabled: (enabled) => {
+    writeDocumentColorPreference(state.document?.path ?? '', enabled);
+    applyAppColorTheme();
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
   },
   saveColorTheme: () => {
     const name = state.colorTheme.themeName.trim() || currentThemeDisplayName() || 'Untitled Theme';
@@ -240,6 +293,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       themeName: theme.name,
       savedThemes,
       themeUses: state.colorTheme.themeUses,
+      overrideDocumentColors: state.colorTheme.overrideDocumentColors,
     };
     persistAndApplyColorTheme();
     state.colorThemeDialogOpen = true;
@@ -247,6 +301,28 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   }),
   selectColorTheme: (id) => {
     const now = Date.now();
+    if (editingDocumentColorTheme()) {
+      const current = currentDocumentColorTheme();
+      if (id === 'default') {
+        updateDocumentColorTheme({ ...current, colors: {}, name: 'Default' });
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      if (id.startsWith('palette:')) {
+        const palette = getPaletteById(id.slice('palette:'.length));
+        if (!palette) return;
+        updateDocumentColorTheme({ ...current, colors: { ...palette.colors }, name: palette.name });
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      if (id.startsWith('custom:')) {
+        const theme = state.colorTheme.savedThemes.find((item) => item.id === id.slice('custom:'.length));
+        if (!theme) return;
+        updateDocumentColorTheme({ ...current, colors: { ...theme.colors }, name: theme.name });
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+    }
     if (id === 'default') {
       state.colorTheme = {
         ...state.colorTheme,
@@ -290,6 +366,18 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   updateColorTheme: (name, value) => {
     if (!isCssVariableName(name)) return;
+    if (editingDocumentColorTheme()) {
+      const theme = currentDocumentColorTheme();
+      const next = { ...theme.colors };
+      if (value.trim()) {
+        next[name] = value.trim();
+      } else {
+        delete next[name];
+      }
+      updateDocumentColorTheme({ ...theme, colors: next });
+      updateThemeRowChrome(name, next[name] ?? '');
+      return;
+    }
     const next = { ...state.colorTheme.colors };
     if (value.trim()) {
       next[name] = value.trim();
@@ -301,6 +389,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     updateThemeRowChrome(name, next[name] ?? '');
   },
   resetColorTheme: (name) => {
+    if (editingDocumentColorTheme()) {
+      const theme = currentDocumentColorTheme();
+      const next = { ...theme.colors };
+      delete next[name];
+      updateDocumentColorTheme({ ...theme, colors: next });
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
     const next = { ...state.colorTheme.colors };
     delete next[name];
     state.colorTheme = { ...state.colorTheme, colors: next };
@@ -309,12 +405,22 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   applyColorThemePalette: (id) => {
     const palette = id ? getPaletteById(id) : null;
+    if (editingDocumentColorTheme()) {
+      updateDocumentColorTheme({
+        ...currentDocumentColorTheme(),
+        colors: palette ? { ...palette.colors } : {},
+        name: palette?.name ?? '',
+      });
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
     const themeUseId = id ? `palette:${id}` : 'default';
     state.colorTheme = {
       colors: palette ? { ...palette.colors } : {},
       themeName: palette?.name ?? '',
       savedThemes: state.colorTheme.savedThemes,
       themeUses: { ...state.colorTheme.themeUses, [themeUseId]: Date.now() },
+      overrideDocumentColors: state.colorTheme.overrideDocumentColors,
     };
     persistAndApplyColorTheme();
     rerender({ preserveMountedDocument: true });

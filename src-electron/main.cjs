@@ -177,10 +177,6 @@ function buildMenu() {
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
-        menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
-        menuItem('Save', 'save', 'CmdOrCtrl+S'),
-        menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
-        menuItem('Save to Workspace...', 'save-to-workspace'),
         menuItem('Export PDF...', 'export-pdf'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
@@ -413,6 +409,7 @@ async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
     case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
+    case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
     case 'load_ai_settings': return readJson(dataPath(AI_SETTINGS), defaultAiSettings());
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return readJson(dataPath(MCP_SETTINGS), defaultMcpSettings());
@@ -1649,11 +1646,19 @@ function saveDocumentModePreference(entryPath, mode) {
   return recent;
 }
 
+function saveDocumentColorPreference(entryPath, useDocumentColors) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  recent.documentColorUses = { ...(recent.documentColorUses || {}), [path.resolve(entryPath)]: Boolean(useDocumentColors) };
+  writeJson(dataPath(RECENT_STATE), recent);
+  return recent;
+}
+
 function removeRecentFile(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const normalized = path.resolve(entryPath);
   recent.files = (recent.files || []).filter((entry) => path.resolve(entry) !== normalized);
   if (recent.documentModes) delete recent.documentModes[normalized];
+  if (recent.documentColorUses) delete recent.documentColorUses[normalized];
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }

@@ -87,6 +87,7 @@ export interface RecentState {
   workspaces: string[];
   files: string[];
   documentModes?: Record<string, string>;
+  documentColorUses?: Record<string, boolean>;
 }
 
 export interface ArchivedWorkspace {
@@ -362,6 +363,13 @@ export function saveDocumentModePreference(path: string, mode: string): Promise<
     return Promise.resolve({ workspaces: [], files: [], documentModes: { [path]: mode } });
   }
   return invokeDesktop('save_document_mode_preference', { path, mode });
+}
+
+export function saveDocumentColorPreference(path: string, useDocumentColors: boolean): Promise<RecentState> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve({ workspaces: [], files: [], documentColorUses: { [path]: useDocumentColors } });
+  }
+  return invokeDesktop('save_document_color_preference', { path, useDocumentColors });
 }
 
 export function loadAiSettings(): Promise<AiSettings> {

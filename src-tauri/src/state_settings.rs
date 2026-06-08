@@ -288,6 +288,11 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
             .into_iter()
             .filter(|(entry, _)| Path::new(entry).is_file())
             .collect(),
+        document_color_uses: state
+            .document_color_uses
+            .into_iter()
+            .filter(|(entry, _)| Path::new(entry).is_file())
+            .collect(),
     })
 }
 

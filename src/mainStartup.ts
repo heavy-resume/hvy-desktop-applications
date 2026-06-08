@@ -1,10 +1,10 @@
 import { installAiChatClient } from './aiClient';
 import { loadAiSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onMenuEvent, onOpenDocumentPath, readDocumentFile, startMcpServer, type DocumentFile } from './backend';
-import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
+import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
 import { measureDebug } from './debugLog';
 import { deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
-import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspace, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, upsertWorkspace, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspace, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, upsertWorkspace, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 
@@ -200,7 +200,23 @@ export function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
 }
 
 export function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
-  applyColorTheme(state.colorTheme, root);
+  applyColorTheme(state.colorTheme);
+  if (!root) return;
+  applyMountedDocumentColorTheme(root);
+}
+
+function applyMountedDocumentColorTheme(root: HTMLElement): void {
+  clearColorTheme(root);
+  if (!readDocumentColorPreference(state.document?.path ?? '')) return;
+  const theme = state.document?.mounted?.document.meta.theme;
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return;
+  const colors = (theme as { colors?: unknown }).colors;
+  if (!colors || typeof colors !== 'object' || Array.isArray(colors)) return;
+  for (const [name, value] of Object.entries(colors)) {
+    if (isCssVariableName(name) && typeof value === 'string' && value.trim()) {
+      root.style.setProperty(name, value.trim());
+    }
+  }
 }
 
 export async function refreshRecents(): Promise<void> {

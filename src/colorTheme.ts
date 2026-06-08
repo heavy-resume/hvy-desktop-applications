@@ -10,6 +10,7 @@ export interface ColorThemeSettings {
   themeName: string;
   savedThemes: SavedColorTheme[];
   themeUses: Record<string, number>;
+  overrideDocumentColors: boolean;
 }
 
 export interface SavedColorTheme {
@@ -206,7 +207,7 @@ export const HVY_PALETTES: readonly HvyPalette[] = [
 ];
 
 export function defaultColorThemeSettings(): ColorThemeSettings {
-  return { colors: {}, themeName: '', savedThemes: [], themeUses: {} };
+  return { colors: {}, themeName: '', savedThemes: [], themeUses: {}, overrideDocumentColors: true };
 }
 
 export function loadColorThemeSettings(): ColorThemeSettings {
@@ -231,6 +232,7 @@ export function loadColorThemeSettings(): ColorThemeSettings {
       themeName: typeof parsed.themeName === 'string' ? parsed.themeName : '',
       savedThemes,
       themeUses,
+      overrideDocumentColors: typeof parsed.overrideDocumentColors === 'boolean' ? parsed.overrideDocumentColors : true,
     };
   } catch {
     return defaultColorThemeSettings();
@@ -248,6 +250,7 @@ export function saveColorThemeSettings(settings: ColorThemeSettings): void {
       lastUsedAt: theme.lastUsedAt,
     })),
     themeUses: settings.themeUses,
+    overrideDocumentColors: settings.overrideDocumentColors,
   }));
 }
 

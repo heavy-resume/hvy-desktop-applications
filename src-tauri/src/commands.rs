@@ -13,6 +13,15 @@ fn save_document_mode_preference(app: AppHandle, path: String, mode: String) -> 
 }
 
 #[tauri::command]
+fn save_document_color_preference(app: AppHandle, path: String, use_document_colors: bool) -> AppResult<RecentState> {
+    let recent_path = recent_state_path(&app)?;
+    let mut state = read_recent_state(&recent_path)?;
+    state.document_color_uses.insert(path_to_string(Path::new(&path)), use_document_colors);
+    write_json_atomically(&recent_path, &state)?;
+    Ok(state)
+}
+
+#[tauri::command]
 fn load_archived_workspaces(app: AppHandle) -> AppResult<Vec<ArchivedWorkspace>> {
     read_archived_workspaces(&archived_workspaces_path(&app)?)
 }

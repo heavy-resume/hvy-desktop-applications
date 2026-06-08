@@ -91,8 +91,10 @@ export interface UiHandlers {
   copyMcpBearerToken(token: string): void;
   copyMcpSetupValue(value: string, label: string): void;
   openColorTheme(): void;
+  openDocumentColorTheme(): void;
   closeColorTheme(): void;
   updateColorThemeName(name: string): void;
+  setDocumentColorsEnabled(enabled: boolean): void;
   saveColorTheme(): void;
   exportColorTheme(): void;
   importColorTheme(): void;
@@ -639,6 +641,26 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'theme-apply-palette') handlers.applyColorThemePalette(target.dataset.paletteId ?? null);
     if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
+    if (action === 'theme-preview-select-component' && target.dataset.themeComponent) {
+      const dialog = target.closest<HTMLElement>('.color-theme-dialog');
+      dialog?.querySelectorAll<HTMLElement>('.theme-component-picker-button').forEach((button) => {
+        button.classList.toggle('is-active', button === target);
+      });
+      dialog?.querySelectorAll<HTMLElement>('[data-theme-preview-component]').forEach((preview) => {
+        preview.classList.toggle('is-active', preview.dataset.themePreviewComponent === target.dataset.themeComponent);
+      });
+    }
+    if (action === 'theme-preview-set-state' && target.dataset.themeState) {
+      const preview = target.closest<HTMLElement>('[data-theme-preview-component]');
+      if (preview) {
+        preview.dataset.themePreviewState = target.dataset.themeState;
+        preview.querySelectorAll<HTMLElement>('.theme-preview-state-button').forEach((button) => {
+          button.classList.toggle('is-active', button === target);
+        });
+      }
+      applyThemeColorFilter(target);
+    }
+    if (action === 'theme-filter-to-colors') applyThemeColorFilter(target);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
@@ -648,6 +670,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
     if (action === 'open-document-meta') handlers.openDocumentMeta();
+    if (action === 'open-document-colors') handlers.openDocumentColorTheme();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
     if (action === 'set-save-as-kind' && isSaveAsKind(target.dataset.kind)) handlers.setSaveAsKind(target.dataset.kind);
@@ -782,6 +805,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (field === 'theme-name') {
       handlers.updateColorThemeName(target.value);
+      return;
+    }
+    if (field === 'use-document-colors' && target instanceof HTMLInputElement) {
+      handlers.setDocumentColorsEnabled(target.checked);
       return;
     }
     if (field !== 'theme-color-picker' && field !== 'theme-color-value' && field !== 'theme-color-alpha') return;
@@ -1886,6 +1913,8 @@ function renderToolbar(state: AppState): string {
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   const fileActions = getFileActionAvailability(state);
   const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
+  const documentTheme = getDocumentTheme(state);
+  const documentColorsEnabled = getDocumentColorsEnabled(state);
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
@@ -1893,12 +1922,13 @@ function renderToolbar(state: AppState): string {
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
-      ${fileActions.saveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
-      <button type="button" data-action="save" ${fileActions.save ? '' : 'disabled'}>Save</button>
-      <button type="button" data-action="save-as" ${fileActions.saveAs ? '' : 'disabled'}>Save As...</button>
+      <label class="document-color-toggle">
+        <input type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${document.readOnly ? 'disabled' : ''}>
+        <span>Use document colors</span>
+      </label>
+      <button type="button" data-action="open-document-colors" ${document.readOnly || !documentColorsEnabled ? 'disabled' : ''}>Document Colors...</button>
       <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
       ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
-      <button type="button" data-action="close-document">Close</button>
     </div>`;
 }
 
@@ -3062,41 +3092,48 @@ function renderColorThemeDialog(state: AppState): string {
   if (!state.colorThemeDialogOpen) {
     return '';
   }
-  const colors = state.colorTheme.colors;
+  const documentMode = state.colorThemeDialogMode === 'document';
+  const documentTheme = getDocumentTheme(state);
+  const colors = documentMode ? documentTheme.colors : state.colorTheme.colors;
   const selectedPaletteId = getMatchedPaletteId(colors);
   const selectedCustomThemeId = getMatchedSavedThemeId(colors, state.colorTheme.savedThemes);
-  const themeName = state.colorTheme.themeName || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state) || 'Untitled Theme';
+  const themeName = documentMode
+    ? documentTheme.name || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state, colors) || 'Untitled Theme'
+    : state.colorTheme.themeName || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state, colors) || 'Untitled Theme';
+  const activeThemeName = selectedThemeName(selectedPaletteId, selectedCustomThemeId, state, colors) || themeName;
+  const title = documentMode ? 'Document Colors' : 'Colors';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle">
-        <h2 id="colorThemeTitle">Colors</h2>
-        <p class="dialog-note">Global HVY colors apply across documents on this device.</p>
-        <div class="theme-file-panel">
-          <label class="theme-name-field">
-            <span>Theme Name</span>
-            <input data-field="theme-name" value="${escapeAttr(themeName)}" placeholder="Untitled Theme" spellcheck="false">
-          </label>
-          <div class="theme-file-actions">
-            <button type="button" class="secondary-action" data-action="theme-save">Save Theme</button>
-            <button type="button" class="secondary-action" data-action="theme-export">Export</button>
-            <button type="button" class="secondary-action" data-action="theme-import">Import</button>
-          </div>
-        </div>
-        <div class="theme-palette-grid" aria-label="Theme palettes">
-          ${renderThemeCards(state, selectedPaletteId, selectedCustomThemeId)}
-        </div>
+        <h2 id="colorThemeTitle">${escapeHtml(title)}</h2>
+        ${renderThemeSwitcher(state, selectedPaletteId, selectedCustomThemeId, activeThemeName, colors, true)}
+        ${renderThemePreviewPanel(true)}
         <div class="theme-filter-shell">
-          <span>Filter</span>
-          <input type="search" placeholder="Color name or variable" data-field="theme-color-filter">
+          <span>Filter Colors</span>
+          <input type="search" placeholder="Type a role, component, or click a preview" data-field="theme-color-filter">
         </div>
         <div class="theme-color-list">
-          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]))).join('')}
-        </div>
-        <div class="dialog-actions">
-          <button type="button" data-action="cancel-color-theme">Done</button>
+          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]), true)).join('')}
         </div>
       </section>
     </div>`;
+}
+
+function getDocumentColorsEnabled(state: AppState): boolean {
+  return Boolean(state.document?.path && state.recent.documentColorUses?.[state.document.path] === true);
+}
+
+function getDocumentTheme(state: AppState): { name: string; colors: Record<string, string> } {
+  const theme = state.document?.mounted?.document.meta.theme;
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return { name: '', colors: {} };
+  const record = theme as { name?: unknown; colors?: unknown };
+  const colors = record.colors && typeof record.colors === 'object' && !Array.isArray(record.colors)
+    ? Object.fromEntries(Object.entries(record.colors).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {};
+  return {
+    name: typeof record.name === 'string' ? record.name : '',
+    colors,
+  };
 }
 
 interface ThemeCard {
@@ -3109,7 +3146,23 @@ interface ThemeCard {
   lastUsedAt: number;
 }
 
-function renderThemeCards(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null): string {
+function renderThemeSwitcher(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null, activeThemeName: string, colors: Record<string, string>, enabled: boolean): string {
+  return `
+    <details class="theme-switcher"${enabled ? '' : ' aria-disabled="true"'}>
+      <summary>
+        <span class="theme-switcher-copy">
+          <span>Switch to theme ...</span>
+          <strong>${escapeHtml(activeThemeName)}</strong>
+        </span>
+        <span class="theme-switcher-chevron" aria-hidden="true">v</span>
+      </summary>
+      <div class="theme-palette-grid" aria-label="Theme palettes">
+        ${renderThemeCards(state, selectedPaletteId, selectedCustomThemeId, colors, enabled)}
+      </div>
+    </details>`;
+}
+
+function renderThemeCards(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null, colors: Record<string, string>, enabled = true): string {
   const cards: ThemeCard[] = [
     {
       id: 'default',
@@ -3117,7 +3170,7 @@ function renderThemeCards(state: AppState, selectedPaletteId: string | null, sel
       description: 'Use the built-in HVY colors.',
       colors: {},
       builtIn: true,
-      selected: selectedCustomThemeId === null && selectedPaletteId === null && Object.keys(state.colorTheme.colors).length === 0,
+      selected: selectedCustomThemeId === null && selectedPaletteId === null && Object.keys(colors).length === 0,
       lastUsedAt: state.colorTheme.themeUses.default ?? 0,
     },
     ...HVY_PALETTES.map((palette) => ({
@@ -3141,11 +3194,11 @@ function renderThemeCards(state: AppState, selectedPaletteId: string | null, sel
   ];
   return cards
     .sort((left, right) => (right.lastUsedAt - left.lastUsedAt) || left.name.localeCompare(right.name))
-    .map(renderThemeCard)
+    .map((theme) => renderThemeCard(theme, enabled))
     .join('');
 }
 
-function renderThemeCard(theme: ThemeCard): string {
+function renderThemeCard(theme: ThemeCard, enabled = true): string {
   const preview = [
     theme.colors['--hvy-bg'] ?? '#f5f9ff',
     theme.colors['--hvy-accent-1'] ?? '#4a8fab',
@@ -3161,19 +3214,192 @@ function renderThemeCard(theme: ThemeCard): string {
         <span>${escapeHtml(theme.description)}</span>
       </div>
       <div class="theme-palette-actions">
-        <button type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}">${theme.selected ? 'Using' : 'Use'}</button>
-        ${theme.builtIn ? '' : `<button type="button" class="ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}">Delete</button>`}
+        <button type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>${theme.selected ? 'Using' : 'Use'}</button>
+        ${theme.builtIn ? '' : `<button type="button" class="ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>Delete</button>`}
       </div>
     </article>`;
 }
 
-function selectedThemeName(paletteId: string | null, customThemeId: string | null, state: AppState): string | null {
+function selectedThemeName(paletteId: string | null, customThemeId: string | null, state: AppState, colors = state.colorTheme.colors): string | null {
   if (customThemeId) return state.colorTheme.savedThemes.find((theme) => theme.id === customThemeId)?.name ?? null;
   if (paletteId) return HVY_PALETTES.find((palette) => palette.id === paletteId)?.name ?? null;
-  return Object.keys(state.colorTheme.colors).length === 0 ? 'Default' : null;
+  return Object.keys(colors).length === 0 ? 'Default' : null;
 }
 
-function renderThemeColorRow(name: string, value: string, displayValue: string): string {
+interface ThemePreviewItem {
+  id: string;
+  label: string;
+  detail: string;
+  className: string;
+  variables: string[];
+  states: Array<{ id: string; label: string; variables: string[] }>;
+  html: string;
+}
+
+function renderThemePreviewPanel(enabled: boolean): string {
+  const items: ThemePreviewItem[] = [
+    {
+      id: 'surface',
+      label: 'Surface',
+      detail: 'Page, panel, container, and focused target colors',
+      className: 'theme-preview-surface-card',
+      variables: ['--hvy-bg', '--hvy-bg-alt', '--hvy-surface', '--hvy-surface-alt', '--hvy-surface-tint', '--hvy-border', '--hvy-text', '--hvy-text-alt', '--hvy-focus-ring', '--hvy-focus-glow'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-bg', '--hvy-bg-alt', '--hvy-surface', '--hvy-border', '--hvy-text'] },
+        { id: 'target', label: 'Target', variables: ['--hvy-surface-tint', '--hvy-focus-ring', '--hvy-focus-glow'] },
+      ],
+      html: `<div class="theme-demo-surface">
+        <div class="theme-demo-page">
+          <div class="theme-demo-container">
+            <strong>Container</strong>
+            <span>Collapsed preview text</span>
+          </div>
+          <button type="button" class="theme-demo-target theme-demo-ai-target" data-theme-demo-state="target" data-action="theme-filter-to-colors" data-theme-filter="--hvy-surface-tint --hvy-focus-ring --hvy-focus-glow" ${enabled ? '' : 'disabled'}>AI target</button>
+        </div>
+      </div>`,
+    },
+    {
+      id: 'text',
+      label: 'Text',
+      detail: 'Primary text, muted text, links, fill-ins, and highlights',
+      className: 'theme-preview-text-card',
+      variables: ['--hvy-text', '--hvy-text-alt', '--hvy-text-muted', '--hvy-link-color', '--hvy-link-hover-color', '--hvy-highlight-1', '--hvy-highlight-2', '--hvy-focus-ring'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-text', '--hvy-text-alt', '--hvy-text-muted', '--hvy-link-color'] },
+        { id: 'search', label: 'Search', variables: ['--hvy-highlight-1', '--hvy-highlight-2'] },
+        { id: 'fill-in', label: 'Fill-in', variables: ['--hvy-text-muted', '--hvy-focus-ring'] },
+      ],
+      html: `<div class="theme-demo-text">
+        <p data-theme-demo-state="rest">Paragraph with <span>alternate text</span> and an <a href="#" tabindex="-1">inline link</a>.</p>
+        <div class="theme-demo-highlight" data-theme-demo-state="search"><span>Filtered match</span><b>active result</b></div>
+        <div class="theme-demo-fill-in" data-theme-demo-state="fill-in">The answer is <span>[____]</span>.</div>
+      </div>`,
+    },
+    {
+      id: 'controls',
+      label: 'Controls',
+      detail: 'Button, input, and ghost component controls',
+      className: 'theme-preview-button-card',
+      variables: ['--hvy-button-bg', '--hvy-button-text', '--hvy-button-hover-bg', '--hvy-button-hover-text', '--hvy-border-input', '--hvy-ghost-border', '--hvy-focus', '--hvy-shadow-md'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-button-bg', '--hvy-button-text', '--hvy-border-input'] },
+        { id: 'hover', label: 'Hover', variables: ['--hvy-button-hover-bg', '--hvy-button-hover-text', '--hvy-focus', '--hvy-shadow-md'] },
+        { id: 'ghost', label: 'Ghost', variables: ['--hvy-surface-alt', '--hvy-ghost-border', '--hvy-text-muted'] },
+      ],
+      html: `<div class="theme-demo-controls">
+        <button type="button" class="theme-demo-button" data-theme-demo-state="rest" ${enabled ? '' : 'disabled'}>Generate</button>
+        <button type="button" class="theme-demo-button theme-demo-button-hover" data-theme-demo-state="hover" ${enabled ? '' : 'disabled'}>Generate</button>
+        <div class="theme-demo-ghost-input" data-theme-demo-state="ghost">Add component</div>
+      </div>`,
+    },
+    {
+      id: 'xref',
+      label: 'Xref Card',
+      detail: 'Reference cards in rest, hover, and invalid states',
+      className: 'theme-preview-xref-card',
+      variables: ['--hvy-xref-card-bg', '--hvy-xref-card-hover-bg', '--hvy-border', '--hvy-border-alt', '--hvy-focus', '--hvy-text', '--hvy-text-alt', '--hvy-text-muted', '--hvy-shadow', '--hvy-shadow-md'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-xref-card-bg', '--hvy-border', '--hvy-text', '--hvy-text-alt', '--hvy-shadow'] },
+        { id: 'hover', label: 'Hover', variables: ['--hvy-xref-card-hover-bg', '--hvy-focus', '--hvy-shadow-md'] },
+        { id: 'invalid', label: 'Invalid', variables: ['--hvy-border-alt', '--hvy-text-muted'] },
+      ],
+      html: `<div class="theme-demo-xref-stack">
+        <div class="theme-demo-xref" data-theme-demo-state="rest"><strong>TypeScript</strong><span>Primary language</span></div>
+        <div class="theme-demo-xref theme-demo-xref-hover" data-theme-demo-state="hover"><strong>TypeScript</strong><span>Primary language</span></div>
+        <div class="theme-demo-xref theme-demo-xref-invalid" data-theme-demo-state="invalid"><strong>Missing target</strong><span>Invalid reference</span></div>
+      </div>`,
+    },
+    {
+      id: 'table',
+      label: 'Table',
+      detail: 'Header and alternating row colors',
+      className: 'theme-preview-table-card',
+      variables: ['--hvy-table-header', '--hvy-table-row-bg-1', '--hvy-table-row-bg-2', '--hvy-border-input', '--hvy-text'],
+      states: [
+        { id: 'header', label: 'Header', variables: ['--hvy-table-header', '--hvy-text', '--hvy-border-input'] },
+        { id: 'row-1', label: 'Row 1', variables: ['--hvy-table-row-bg-1', '--hvy-text', '--hvy-border-input'] },
+        { id: 'row-2', label: 'Row 2', variables: ['--hvy-table-row-bg-2', '--hvy-text', '--hvy-border-input'] },
+      ],
+      html: `<table class="theme-demo-table">
+        <thead><tr><th>Name</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td>Ada</td><td>Engineer</td></tr>
+          <tr><td>Grace</td><td>Compiler</td></tr>
+        </tbody>
+      </table>`,
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      detail: 'Warnings, errors, and success feedback',
+      className: 'theme-preview-status-card',
+      variables: ['--hvy-warning-bg', '--hvy-warning-border', '--hvy-warning-text', '--hvy-danger', '--hvy-success', '--hvy-success-bg', '--hvy-success-border'],
+      states: [
+        { id: 'warning', label: 'Warning', variables: ['--hvy-warning-bg', '--hvy-warning-border', '--hvy-warning-text'] },
+        { id: 'error', label: 'Error', variables: ['--hvy-danger', '--hvy-surface', '--hvy-border'] },
+        { id: 'success', label: 'Success', variables: ['--hvy-success', '--hvy-success-bg', '--hvy-success-border'] },
+      ],
+      html: `<div class="theme-demo-diagnostics">
+        <span class="theme-demo-warning" data-theme-demo-state="warning">Warning</span>
+        <span class="theme-demo-error" data-theme-demo-state="error">Error</span>
+        <span class="theme-demo-success" data-theme-demo-state="success">Saved</span>
+      </div>`,
+    },
+    {
+      id: 'code',
+      label: 'Code',
+      detail: 'Code block and syntax colors',
+      className: 'theme-preview-code-card',
+      variables: ['--hvy-code-bg', '--hvy-code-text', '--hvy-code-muted', '--hvy-code-string', '--hvy-code-builtin', '--hvy-code-keyword', '--hvy-code-function', '--hvy-code-number', '--hvy-border-input'],
+      states: [
+        { id: 'block', label: 'Block', variables: ['--hvy-code-bg', '--hvy-code-text', '--hvy-code-muted', '--hvy-border-input'] },
+        { id: 'syntax', label: 'Syntax', variables: ['--hvy-code-string', '--hvy-code-builtin', '--hvy-code-keyword', '--hvy-code-function', '--hvy-code-number'] },
+      ],
+      html: `<pre class="theme-demo-code" data-theme-demo-state="block"><code><i>// theme</i>
+<span>const</span> value = <b>"HVY"</b>;</code></pre>
+      <pre class="theme-demo-code" data-theme-demo-state="syntax"><code><span>const</span> value = <b>"HVY"</b>;</code></pre>`,
+    },
+  ];
+  return `
+    <div class="theme-component-preview-picker" aria-label="Theme component preview picker">
+      ${items.map((item, index) => `<button type="button" class="theme-component-picker-button${index === 0 ? ' is-active' : ''}" data-action="theme-preview-select-component" data-theme-component="${escapeAttr(item.id)}" ${enabled ? '' : 'disabled'}>${escapeHtml(item.label)}</button>`).join('')}
+    </div>
+    <div class="theme-preview-grid" aria-label="Theme component preview">
+      ${items.map((item, index) => renderThemePreviewCard(item, index, enabled)).join('')}
+    </div>`;
+}
+
+function renderThemePreviewCard(item: ThemePreviewItem, index: number, enabled: boolean): string {
+  const stateButtons = item.states.map((previewState, stateIndex) => `<button
+    type="button"
+    class="theme-preview-state-button${stateIndex === 0 ? ' is-active' : ''}"
+    data-action="theme-preview-set-state"
+    data-theme-state="${escapeAttr(previewState.id)}"
+    data-theme-filter="${escapeAttr(previewState.variables.join(' '))}"
+    ${enabled ? '' : 'disabled'}
+  >${escapeHtml(previewState.label)}</button>`).join('');
+  return `<article
+    class="theme-preview-card ${escapeAttr(item.className)}${index === 0 ? ' is-active' : ''}"
+    data-theme-preview-component="${escapeAttr(item.id)}"
+    data-theme-preview-state="${escapeAttr(item.states[0]?.id ?? 'rest')}"
+  >
+    <span class="theme-preview-card-copy">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${escapeHtml(item.detail)}</span>
+    </span>
+    <span class="theme-preview-state-row">${stateButtons}</span>
+    ${item.html}
+    <button
+      type="button"
+      class="theme-preview-all"
+      data-action="theme-filter-to-colors"
+      data-theme-filter="${escapeAttr(item.variables.join(' '))}"
+      ${enabled ? '' : 'disabled'}
+    >All ${escapeHtml(item.label)} colors</button>
+  </article>`;
+}
+
+function renderThemeColorRow(name: string, value: string, displayValue: string, enabled = true): string {
   const label = getThemeColorLabel(name);
   const search = `${name} ${label} ${value} ${displayValue}`;
   const overridden = value.trim().length > 0;
@@ -3192,6 +3418,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string):
         data-color-name="${escapeAttr(name)}"
         value="${escapeAttr(pickerValue)}"
         aria-label="${escapeAttr(`${label} color picker`)}"
+        ${enabled ? '' : 'disabled'}
       >
       <input
         class="theme-color-value"
@@ -3201,6 +3428,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string):
         placeholder="CSS color"
         aria-label="${escapeAttr(valueLabel)}"
         spellcheck="false"
+        ${enabled ? '' : 'disabled'}
       >
       <label class="theme-alpha-control" title="Alpha">
         <span>A</span>
@@ -3213,12 +3441,13 @@ function renderThemeColorRow(name: string, value: string, displayValue: string):
           data-color-name="${escapeAttr(name)}"
           value="${escapeAttr(String(alphaValue))}"
           aria-label="${escapeAttr(`${label} alpha`)}"
+          ${enabled ? '' : 'disabled'}
         >
         <output>${escapeHtml(String(Math.round(alphaValue * 100)))}</output>
       </label>
       <span class="theme-color-swatch" style="${displayValue ? `background: ${escapeAttr(displayValue)};` : ''}" aria-hidden="true"></span>
       ${overridden
-        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default">Reset</button></span>`
+        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
         : '<span class="theme-color-action theme-color-default muted">Default</span>'}
     </div>`;
 }
@@ -3248,6 +3477,18 @@ function syncThemeOverrideAction(row: HTMLElement | null | undefined, name: stri
   if (!overridden && resetGroup) {
     resetGroup.outerHTML = '<span class="theme-color-action theme-color-default muted">Default</span>';
   }
+}
+
+function applyThemeColorFilter(target: HTMLElement): void {
+  const dialog = target.closest<HTMLElement>('.color-theme-dialog');
+  const input = dialog?.querySelector<HTMLInputElement>('[data-field="theme-color-filter"]');
+  if (!dialog || !input) return;
+  input.value = target.dataset.themeFilter ?? '';
+  const filter = input.value.trim().toLowerCase();
+  dialog.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
+    row.hidden = filter.length > 0 && !(row.dataset.themeSearch ?? '').includes(filter);
+  });
+  input.focus();
 }
 
 function getResolvedThemeColor(name: string, overrideValue: string | undefined): string {
