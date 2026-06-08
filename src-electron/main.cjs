@@ -452,6 +452,7 @@ async function handleCommand(command, args) {
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
+    case 'save_binary_as_dialog': return saveBinaryAsDialog(args.suggestedName, args.bytes);
     case 'list_saved_templates': return listSavedTemplates(args.workspacePath);
     case 'save_document_template': return saveDocumentTemplate(args.request);
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
@@ -893,6 +894,15 @@ async function savePdfAsDialog(suggestedName, bytes) {
   }
   writeBytes(selected, bytes);
   return selected;
+}
+
+async function saveBinaryAsDialog(suggestedName, bytes) {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: suggestedName,
+  });
+  if (result.canceled || !result.filePath) return null;
+  writeBytes(result.filePath, bytes);
+  return result.filePath;
 }
 
 async function openColorThemeDialog() {

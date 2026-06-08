@@ -156,6 +156,11 @@ export interface SavePdfAsRequest {
   bytes: number[];
 }
 
+export interface SaveBinaryAsRequest {
+  suggestedName: string;
+  bytes: number[] | Uint8Array;
+}
+
 export interface ThemeFile {
   path: string;
   name: string;
@@ -730,6 +735,13 @@ export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Prom
   return invokeDesktop('save_document_to_workspace', {
     workspacePath: request.workspacePath,
     name: request.name,
+    bytes: request.bytes,
+  });
+}
+
+export function saveBinaryAsDialog(request: SaveBinaryAsRequest): Promise<string | null> {
+  return invokeDesktop('save_binary_as_dialog', {
+    suggestedName: request.suggestedName,
     bytes: request.bytes,
   });
 }

@@ -1,4 +1,4 @@
-import { openExternalUrl, type DocumentExtension } from './backend';
+import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
@@ -208,11 +208,32 @@ export async function mountHvyDocument(
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
   const interactiveMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
-  const finalMount = withExternalLinkOpening(root, mode, interactiveMount);
+  const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
   return {
     mount: finalMount,
     get document() {
       return finalMount.getDocument();
+    },
+  };
+}
+
+function withAttachmentDownload(root: HTMLElement, mount: HvyMount): HvyMount {
+  const cleanup = new AbortController();
+  root.addEventListener('hvy:download-attachment', (event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const detail = event.detail as { filename?: unknown; bytes?: unknown };
+    if (typeof detail.filename !== 'string' || !(detail.bytes instanceof Uint8Array)) return;
+    event.preventDefault();
+    void saveBinaryAsDialog({ suggestedName: detail.filename, bytes: detail.bytes }).catch((error) => {
+      console.error('[hvy:download] Failed to save attachment.', error);
+    });
+  }, { signal: cleanup.signal });
+  const destroy = mount.destroy;
+  return {
+    ...mount,
+    destroy() {
+      cleanup.abort();
+      destroy.call(mount);
     },
   };
 }

@@ -517,6 +517,18 @@ fn save_pdf_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Optio
 }
 
 #[tauri::command]
+fn save_binary_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Option<String>> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_file_name(suggested_name)
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    write_file_atomically(&path, &bytes)?;
+    Ok(Some(path_to_string(&path)))
+}
+
+#[tauri::command]
 fn list_saved_templates(app: AppHandle, workspace_path: Option<String>) -> AppResult<Vec<SavedTemplate>> {
     let mut templates = Vec::new();
     append_saved_templates(&mut templates, &app_templates_dir(&app)?, "app")?;
