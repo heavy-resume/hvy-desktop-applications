@@ -82,10 +82,10 @@ import {
 import { applyColorTheme, createColorThemeFile, createSavedThemeId, getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, loadColorThemeSettings, parseColorThemeFile, saveColorThemeSettings, serializeColorThemeFile } from './colorTheme';
 import { clearDebugLogEntries, getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
-import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, redoMountedDocument, serializeHvy, serializeMountedDocument, setMountedSearchSnapshot, undoMountedDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, buildMountedImportPlan, createHvyDocumentFilterSnapshot, deserializeHvy, exportHvySourceMarkdown, getMountedDocument, getMountedRecoveryState, getPhvyCompatibilityErrors, importTextIntoMountedDocument, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, openMountedDocumentMeta, profileHvySerializationCosts, redoMountedDocument, serializeHvy, serializeMountedDocumentAsync, setMountedSearchSnapshot, undoMountedDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { render, renderAllAroundDocument as renderUiAroundDocument, type UiHandlers } from './ui';
+import { render, renderAllAroundDocument as renderUiAroundDocument, renderModals, type UiHandlers } from './ui';
 
 let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
@@ -109,6 +109,8 @@ const HOT_RELOAD_SESSION_STORAGE_KEY = 'hvy-galaxy:hot-reload-session';
 const DOCUMENT_MODE_STORAGE_KEY = 'hvy-galaxy:document-modes';
 const ZOOM_STORAGE_KEY = 'hvy-galaxy:zoom';
 const ZOOM_LEVELS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+const CHANGE_PERF_LOG_THRESHOLD_MS = 8;
+const CHANGE_PERF_SAMPLE_INTERVAL = 50;
 
 interface MountScrollRatio {
   top: number;
@@ -150,8 +152,31 @@ interface HotReloadSessionSnapshot {
 type PreparedImportSource = ImportSourceFile & { text: string };
 const documentSessions = new Map<string, DocumentSession>();
 const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
-const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number }>();
+const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number; revision: number }>();
+const documentBackupRevisions = new Map<string, number>();
+const restoredBackupSuppressionKeys = new Set<string>();
 let openedDocumentTabOrder: string[] = [];
+let documentChangeEventCount = 0;
+
+function measurePerf<T>(
+  label: string,
+  details: Record<string, unknown> | undefined,
+  callback: () => T,
+  thresholdMs = CHANGE_PERF_LOG_THRESHOLD_MS,
+): T {
+  const startedAt = performance.now();
+  try {
+    return callback();
+  } finally {
+    const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    if (durationMs >= thresholdMs) {
+      logDebugEvent('perf', label, {
+        ...details,
+        durationMs,
+      });
+    }
+  }
+}
 
 const handlers: UiHandlers = {
   newWorkspace: () => {
@@ -493,7 +518,7 @@ const handlers: UiHandlers = {
     if (result.status !== 'complete') {
       throw new Error(result.message ?? 'Import failed.');
     }
-    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+    const bytes = await serializeMountedDocumentAsync(state.document.mounted);
     await saveDocumentFile({ path: state.document.path, bytes });
     markMountedDocumentSaved(state.document.mounted);
     state.document.dirty = false;
@@ -714,13 +739,11 @@ const handlers: UiHandlers = {
     rerender({ preserveMountedDocument: true });
   },
   refreshDebugLog: () => {
-    state.debugLogEntries = getDebugLogEntries();
-    rerender({ preserveMountedDocument: true });
+    refreshDebugLogModal();
   },
   clearDebugLog: () => {
     clearDebugLogEntries();
-    state.debugLogEntries = getDebugLogEntries();
-    rerender({ preserveMountedDocument: true });
+    refreshDebugLogModal();
   },
   openAiSettings: () => {
     closeUiBeforeAiSettings();
@@ -1004,11 +1027,11 @@ const handlers: UiHandlers = {
     rerender({ preserveMountedDocument: true });
   },
   restoreBackup: (id) => void runBusy('Restoring unsaved edits...', async () => {
-    const file = await restoreDocumentBackup(id);
+    const file = await measureDebugAsync('load', 'recovery:restoreBackup', { backupId: id }, () => restoreDocumentBackup(id));
     if (file.path) {
       documentSessions.delete(file.path);
       workspaceFilterDocumentCache.delete(file.path);
-      backupSnapshots.delete(backupDocumentKey(file.path, file.name));
+      deleteBackupTracking(backupDocumentKey(file.path, file.name));
     }
     state.recoveryDialogOpen = false;
     state.recoveryBackups = [];
@@ -1162,7 +1185,7 @@ const handlers: UiHandlers = {
       documentSessions.delete(path);
       workspaceFilterDocumentCache.delete(path);
       removeDocumentTabPath(path);
-      backupSnapshots.delete(backupDocumentKey(path, name));
+      deleteBackupTracking(backupDocumentKey(path, name));
       if (state.selectedFilePath === path) state.selectedFilePath = null;
       if (state.document?.path === path) {
         state.document = null;
@@ -1274,11 +1297,7 @@ const handlers: UiHandlers = {
           }
         }
         if (oldBackupKey) {
-          const backup = backupSnapshots.get(oldBackupKey);
-          if (backup) {
-            backupSnapshots.delete(oldBackupKey);
-            backupSnapshots.set(backupDocumentKey(file.path, file.name), backup);
-          }
+          moveBackupTracking(oldBackupKey, backupDocumentKey(file.path, file.name));
         }
       }
       if (workspacePath) {
@@ -1560,14 +1579,6 @@ async function boot(): Promise<void> {
     state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme();
     installAiChatClient(state.aiSettings);
-    await loadRecentWorkspaces();
-    await refreshSavedTemplates(state.selectedWorkspacePath);
-    mountRoot = render(state, handlers);
-    applyZoomSettings();
-    syncFileMenuState({ force: true });
-    await openRecoveryDialogOnBoot();
-    startBackupTimer();
-    setupRecoveryLifecycle();
     await onAppCloseRequest(() => {
       void handleAppCloseRequest();
     });
@@ -1607,17 +1618,25 @@ async function boot(): Promise<void> {
       if (event.startsWith('recent-workspace:')) handlers.openRecentWorkspace(event.slice('recent-workspace:'.length));
       if (event.startsWith('recent-file:')) handlers.openRecentFile(event.slice('recent-file:'.length));
     });
-    window.addEventListener('hvy:debug-log-changed', () => {
-      if (!state.debugLogDialogOpen) return;
-      state.debugLogEntries = getDebugLogEntries();
-      rerender({ preserveMountedDocument: true });
-    });
     await onOpenDocumentPath((path) => {
       void openLaunchDocumentPath(path);
     });
-    for (const path of await loadLaunchDocumentPaths()) {
+    const launchDocumentPaths = await loadLaunchDocumentPaths();
+    for (const path of launchDocumentPaths) {
       await openLaunchDocumentPath(path);
     }
+    if (state.document) {
+      void loadStartupWorkspacesInBackground();
+    } else {
+      await loadRecentWorkspaces();
+      await refreshSavedTemplates(state.selectedWorkspacePath);
+      mountRoot = render(state, handlers);
+      applyZoomSettings();
+    }
+    syncFileMenuState({ force: true });
+    await openRecoveryDialogOnBoot();
+    startBackupTimer();
+    setupRecoveryLifecycle();
     if (!state.document) {
       await restoreStartupDocument();
     }
@@ -1700,17 +1719,17 @@ function getActiveRichEditable(): HTMLElement | null {
 }
 
 function performUndo(): void {
-  if (routeNativeEditCommand('undo')) return;
+  if (measureDebug('perf', 'undo:routeNativeEditCommand', undefined, () => routeNativeEditCommand('undo'))) return;
   const mounted = state.document?.mounted;
   if (!mounted) return;
-  undoMountedDocument(mounted);
+  measureDebug('perf', 'undo:mountedDocument', { path: state.document?.path }, () => undoMountedDocument(mounted));
 }
 
 function performRedo(): void {
-  if (routeNativeEditCommand('redo')) return;
+  if (measureDebug('perf', 'redo:routeNativeEditCommand', undefined, () => routeNativeEditCommand('redo'))) return;
   const mounted = state.document?.mounted;
   if (!mounted) return;
-  redoMountedDocument(mounted);
+  measureDebug('perf', 'redo:mountedDocument', { path: state.document?.path }, () => redoMountedDocument(mounted));
 }
 
 function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
@@ -1753,6 +1772,17 @@ async function loadRecentWorkspaces(): Promise<void> {
   }
   state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
   syncMcpWorkspaces();
+}
+
+async function loadStartupWorkspacesInBackground(): Promise<void> {
+  try {
+    await loadRecentWorkspaces();
+    await refreshSavedTemplates(state.selectedWorkspacePath);
+    renderAllAroundDocument();
+  } catch (error) {
+    state.error = error instanceof Error ? error.message : String(error);
+    renderAllAroundDocument();
+  }
 }
 
 async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
@@ -2288,6 +2318,9 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     mounted: null,
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
   };
+  if (options.recovered && state.document.recoveryBackupId) {
+    restoredBackupSuppressionKeys.add(backupDocumentKey(state.document.path, state.document.name));
+  }
   state.selectedFilePath = options.defaultDocument ? null : file.path;
   const defaultDocumentLabel = options.defaultDocumentLabel ?? 'HVY Galaxy guide';
   state.status = options.defaultDocument
@@ -2339,10 +2372,16 @@ function preserveCurrentDocumentSession(): void {
   if (!openDocument?.path || openDocument.readOnly) return;
   const document = openDocument.mounted?.document ?? pendingMountDocument;
   if (!document) return;
-  writeDocumentModePreference(openDocument.path, openDocument.mode);
+  measurePerf('session:writeDocumentModePreference', { path: openDocument.path }, () => {
+    writeDocumentModePreference(openDocument.path, openDocument.mode);
+  });
   const dirty = openDocument.mounted
-    ? openDocument.dirty || isMountedDocumentDirty(openDocument.mounted)
+    ? openDocument.dirty || measurePerf('session:isMountedDocumentDirty', { path: openDocument.path }, () => isMountedDocumentDirty(openDocument.mounted!))
     : openDocument.dirty;
+  const scrollRatioValue = measurePerf('session:captureMountScrollRatio', { path: openDocument.path }, () => captureMountScrollRatio(mountRoot));
+  const recoveryStateValue = openDocument.mounted
+    ? measurePerf('session:getRecoveryState', { path: openDocument.path }, () => getMountedRecoveryState(openDocument.mounted!))
+    : null;
   documentSessions.set(openDocument.path, {
     path: openDocument.path,
     name: openDocument.name,
@@ -2354,17 +2393,23 @@ function preserveCurrentDocumentSession(): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
-    scrollRatio: captureMountScrollRatio(mountRoot),
-    recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
+    scrollRatio: scrollRatioValue,
+    recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
-  writeHotReloadSessionSnapshot();
+  measurePerf('session:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
 }
 
 function updateCurrentDocumentSession(document: VisualDocument): void {
   const openDocument = state.document;
   if (!openDocument?.path || openDocument.readOnly) return;
-  writeDocumentModePreference(openDocument.path, openDocument.mode);
+  measurePerf('session:update:writeDocumentModePreference', { path: openDocument.path }, () => {
+    writeDocumentModePreference(openDocument.path, openDocument.mode);
+  });
+  const scrollRatioValue = measurePerf('session:update:captureMountScrollRatio', { path: openDocument.path }, () => captureMountScrollRatio(mountRoot));
+  const recoveryStateValue = openDocument.mounted
+    ? measurePerf('session:update:getRecoveryState', { path: openDocument.path }, () => getMountedRecoveryState(openDocument.mounted!))
+    : null;
   documentSessions.set(openDocument.path, {
     path: openDocument.path,
     name: openDocument.name,
@@ -2376,11 +2421,11 @@ function updateCurrentDocumentSession(document: VisualDocument): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
-    scrollRatio: captureMountScrollRatio(mountRoot),
-    recoveryState: openDocument.mounted ? getMountedRecoveryState(openDocument.mounted) : null,
+    scrollRatio: scrollRatioValue,
+    recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
-  writeHotReloadSessionSnapshot();
+  measurePerf('session:update:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
 }
 
 function cacheWorkspaceFilterDocuments(workspacePath: string, documents: HvyDocumentSearchDocument[]): void {
@@ -2431,7 +2476,20 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
     maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
+      const changeStartedAt = performance.now();
       setDocumentDirty(event.dirty);
+      const durationMs = Math.round((performance.now() - changeStartedAt) * 10) / 10;
+      documentChangeEventCount += 1;
+      if (durationMs >= CHANGE_PERF_LOG_THRESHOLD_MS || documentChangeEventCount % CHANGE_PERF_SAMPLE_INTERVAL === 0) {
+        logDebugEvent('perf', 'documentChange:onDocumentChange', {
+          path,
+          dirty: event.dirty,
+          source: event.source,
+          reason: event.reason,
+          eventCount: documentChangeEventCount,
+          durationMs,
+        });
+      }
     },
   }));
   if (pendingMountRecoveryState) {
@@ -2467,8 +2525,13 @@ function bindMountThemeReapply(root: HTMLElement): () => void {
       });
     });
   };
+  const clearRestoredBackupSuppressionForInput = () => clearActiveRestoredBackupSuppression();
   root.addEventListener('click', schedule, { signal: controller.signal });
+  root.addEventListener('beforeinput', clearRestoredBackupSuppressionForInput, { signal: controller.signal });
+  root.addEventListener('input', clearRestoredBackupSuppressionForInput, { signal: controller.signal });
   root.addEventListener('input', schedule, { signal: controller.signal });
+  root.addEventListener('paste', clearRestoredBackupSuppressionForInput, { signal: controller.signal });
+  root.addEventListener('drop', clearRestoredBackupSuppressionForInput, { signal: controller.signal });
   root.addEventListener('submit', schedule, { signal: controller.signal });
   root.addEventListener('keydown', schedule, { signal: controller.signal });
   const overlayObserver = new MutationObserver(schedule);
@@ -2543,19 +2606,23 @@ function restoreMountScrollRatio(root: HTMLElement | null, ratio: MountScrollRat
 
 function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {
   if (!state.document || state.document.readOnly) return;
-  const changed = state.document.dirty !== dirty;
-  state.document.dirty = dirty;
-  if (!options.preserveStatus || changed) {
-    state.status = dirty ? 'Unsaved changes' : `Saved ${state.document.name}`;
-  }
-  const document = state.document.mounted?.document ?? pendingMountDocument;
-  if (document) {
-    updateCurrentDocumentSession(document);
-  }
-  if (dirty) {
-    scheduleBackupActiveDocument();
-  }
-  updateDirtyChrome();
+  const path = state.document.path;
+  measurePerf('dirty:setDocumentDirty', { path, dirty, preserveStatus: options.preserveStatus === true }, () => {
+    const changed = state.document!.dirty !== dirty;
+    state.document!.dirty = dirty;
+    if (!options.preserveStatus || changed) {
+      state.status = dirty ? 'Unsaved changes' : `Saved ${state.document!.name}`;
+    }
+    const document = state.document!.mounted?.document ?? pendingMountDocument;
+    if (document) {
+      measurePerf('dirty:updateCurrentDocumentSession', { path }, () => updateCurrentDocumentSession(document));
+    }
+    if (dirty) {
+      markActiveDocumentBackupChanged();
+      scheduleBackupActiveDocument();
+    }
+    measurePerf('dirty:updateDirtyChrome', { path }, () => updateDirtyChrome());
+  });
 }
 
 function updateDirtyChrome(): void {
@@ -2612,22 +2679,44 @@ async function saveCurrentDocument(): Promise<void> {
   state.error = null;
   state.status = 'Saving...';
   updateDirtyChrome();
+  const saveStartedAt = performance.now();
   try {
     if (openDocument.readOnly) {
       state.status = 'The HVY Galaxy guide is read-only';
       return;
     }
-    const bytes = Array.from(serializeMountedDocument(mounted));
-    await saveDocumentFile({ path: openDocument.path, bytes });
+    const document = mounted.document;
+    await logSerializationCostProfile('save', openDocument.path, null, document);
+    const bytes = await measureDebugAsync('perf', 'save:serializeMountedDocument', { path: openDocument.path }, () => serializeMountedDocumentAsync(mounted));
+    const writeStartedAt = performance.now();
+    const writeResult = await saveDocumentFile({ path: openDocument.path, bytes });
+    const writeDurationMs = Math.round((performance.now() - writeStartedAt) * 10) / 10;
+    logDebugEvent('perf', 'save:writeDocumentFile', { path: openDocument.path, byteCount: bytes.length, durationMs: writeDurationMs });
+    if (writeResult?.debugTimings) {
+      logDebugEvent('perf', 'save:persistenceTimings', { path: openDocument.path, byteCount: bytes.length, ...writeResult.debugTimings });
+      if (typeof writeResult.debugTimings.totalMs === 'number') {
+        logDebugEvent('perf', 'save:bridgeOverhead', {
+          path: openDocument.path,
+          byteCount: bytes.length,
+          durationMs: Math.max(0, Math.round((writeDurationMs - writeResult.debugTimings.totalMs) * 10) / 10),
+          writeDurationMs,
+          hostTotalMs: writeResult.debugTimings.totalMs,
+        });
+      }
+    }
     markMountedDocumentSaved(mounted);
     openDocument.dirty = false;
     openDocument.recoveryBackupId = null;
     state.status = `Saved ${openDocument.name}`;
-    const document = mounted.document;
     updateCurrentDocumentSession(document);
     await refreshOpenWorkspaceForFile(openDocument.path);
     await refreshRecents();
     await clearRecoveryDraftsForDocument(openDocument.path, openDocument.name);
+    logDebugEvent('perf', 'save:complete', {
+      path: openDocument.path,
+      byteCount: bytes.length,
+      durationMs: Math.round((performance.now() - saveStartedAt) * 10) / 10,
+    });
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error);
     state.status = 'Ready';
@@ -2693,13 +2782,13 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
     rerender();
     return;
   }
-  const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const bytes = await serializeMountedDocumentAsync(state.document.mounted);
   const previousPath = state.document.path;
   const previousName = state.document.name;
   const previousMode = state.document.mode;
+  const document = getMountedDocument(state.document.mounted);
   const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
   if (!file) return;
-  const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
   if (previousPath && previousPath !== file.path) {
     documentSessions.delete(previousPath);
     removeDocumentTabPath(previousPath);
@@ -2727,6 +2816,12 @@ async function performSaveCurrentDocumentAs(): Promise<void> {
   await clearRecoveryDraftsForDocument(file.path, file.name);
   rerender();
   await mountCurrentDocument(document);
+  if (state.document?.mounted) {
+    markMountedDocumentSaved(state.document.mounted);
+    setDocumentDirty(false, { preserveStatus: true });
+    state.status = `Saved ${file.name}`;
+    updateCurrentDocumentSession(document);
+  }
 }
 
 async function selectDocumentTab(path: string): Promise<void> {
@@ -2831,7 +2926,7 @@ async function saveAndCloseDocument(): Promise<void> {
     documentSessions.delete(session.path);
     removeDocumentTabPath(session.path);
     workspaceFilterDocumentCache.delete(session.path);
-    backupSnapshots.delete(backupDocumentKey(session.path, session.name));
+    deleteBackupTracking(backupDocumentKey(session.path, session.name));
     await clearRecoveryDraftsForDocument(session.path, session.name);
     await refreshOpenWorkspaceForFile(session.path);
     await refreshRecents();
@@ -2854,7 +2949,7 @@ async function promptCloseDocumentDraftChoice(): Promise<void> {
 async function ensureCloseDocumentRecoveryDraft(targetPath: string): Promise<string | null> {
   if (state.document?.path === targetPath && state.document.mounted) {
     if (state.document.recoveryBackupId) return state.document.recoveryBackupId;
-    const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+    const bytes = await serializeMountedDocumentAsync(state.document.mounted);
     const backup = await createDocumentBackup({
       documentPath: state.document.path,
       name: state.document.name,
@@ -2868,7 +2963,7 @@ async function ensureCloseDocumentRecoveryDraft(targetPath: string): Promise<str
   const session = documentSessions.get(targetPath);
   if (!session) return null;
   if (session.recoveryBackupId) return session.recoveryBackupId;
-  const bytes = Array.from(await serializeHvy(session.document));
+  const bytes = await serializeHvy(session.document);
   const backup = await createDocumentBackup({
     documentPath: session.path,
     name: session.name,
@@ -2913,7 +3008,7 @@ async function closeTargetDocumentWithoutSaving(options: { discardDraft: boolean
   const session = documentSessions.get(targetPath);
   if (options.discardDraft && session) {
     await clearRecoveryDraftsForDocument(session.path, session.name);
-    backupSnapshots.delete(backupDocumentKey(session.path, session.name));
+    deleteBackupTracking(backupDocumentKey(session.path, session.name));
   }
   documentSessions.delete(targetPath);
   removeDocumentTabPath(targetPath);
@@ -2944,7 +3039,7 @@ async function closeActiveDocumentAfterUnsavedChoice(options: { discardDraft: bo
   documentSessions.delete(path);
   workspaceFilterDocumentCache.delete(path);
   removeDocumentTabPath(path);
-  backupSnapshots.delete(backupDocumentKey(path, name));
+  deleteBackupTracking(backupDocumentKey(path, name));
   if (options.discardDraft) {
     await measureDebugAsync('close', 'closeActiveDocumentAfterUnsavedChoice:clearRecoveryDrafts', { path, name }, () => clearRecoveryDraftsForDocument(path, name));
   }
@@ -2990,7 +3085,7 @@ async function closeCurrentDocument(options: { discard?: boolean } = {}): Promis
     workspaceFilterDocumentCache.delete(path);
   }
   removeDocumentTabPath(path);
-  backupSnapshots.delete(backupDocumentKey(path, name));
+  deleteBackupTracking(backupDocumentKey(path, name));
   await measureDebugAsync('close', 'closeCurrentDocument:clearRecoveryDrafts', { path, name }, () => clearRecoveryDraftsForDocument(path, name));
   state.closeDocumentDialogOpen = false;
   state.closeDocumentDraftDialogOpen = false;
@@ -3057,8 +3152,15 @@ function startBackupTimer(): void {
 
 function scheduleBackupActiveDocument(): void {
   if (pendingBackupIdleHandle !== null) return;
+  logDebugEvent('perf', 'recoveryDraft:schedule', {
+    path: state.document?.path ?? null,
+    debounceMs: BACKUP_DEBOUNCE_MS,
+  });
   const callback = () => {
     pendingBackupIdleHandle = null;
+    logDebugEvent('perf', 'recoveryDraft:debounceElapsed', {
+      path: state.document?.path ?? null,
+    });
     void backupActiveDocument();
   };
   pendingBackupIdleHandle = globalThis.setTimeout(callback, BACKUP_DEBOUNCE_MS);
@@ -3087,26 +3189,109 @@ function setupRecoveryLifecycle(): void {
 async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
   if (!state.document?.mounted || state.document.readOnly) return;
   if (!state.document.dirty) return;
-  const bytes = Array.from(serializeMountedDocument(state.document.mounted));
-  const recoveryState = getMountedRecoveryState(state.document.mounted);
+  const path = state.document.path;
+  const name = state.document.name;
+  const backupStartedAt = performance.now();
   const documentKey = backupDocumentKey(state.document.path, state.document.name);
-  const bytesKey = backupBytesKey(bytes);
+  const revision = currentBackupRevision(documentKey);
   const previousBackup = backupSnapshots.get(documentKey);
   const now = Date.now();
-  if (previousBackup?.bytesKey === bytesKey) return;
-  if (!options.force && previousBackup && now - previousBackup.createdAtMs < MIN_BACKUP_SPACING_MS) return;
+  logDebugEvent('perf', 'recoveryDraft:start', { path, force: options.force === true, revision });
+  if (!options.force && state.busy) {
+    logDebugEvent('perf', 'recoveryDraft:skipBusy', {
+      path,
+      revision,
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
+    return;
+  }
+  if (previousBackup?.revision === revision) {
+    logDebugEvent('perf', 'recoveryDraft:skipNoRevisionChange', {
+      path,
+      revision,
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
+    return;
+  }
+  if (!options.force && previousBackup && now - previousBackup.createdAtMs < MIN_BACKUP_SPACING_MS) {
+    logDebugEvent('perf', 'recoveryDraft:skipRecent', {
+      path,
+      elapsedMs: now - previousBackup.createdAtMs,
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
+    return;
+  }
+  if (state.document.recoveryBackupId && restoredBackupSuppressionKeys.has(documentKey)) {
+    logDebugEvent('perf', 'recoveryDraft:skipRestoredDraftBaseline', {
+      path,
+      revision,
+      recoveryBackupId: state.document.recoveryBackupId,
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
+    return;
+  }
+  const documentProfile = measureDebug('perf', 'recoveryDraft:profileDocument', { path, revision }, () => profileDocumentForDebug(getMountedDocument(state.document!.mounted!)));
+  logDebugEvent('perf', 'recoveryDraft:documentProfile', { path, revision, ...documentProfile });
+  await logSerializationCostProfile('recoveryDraft', path, revision, getMountedDocument(state.document!.mounted!));
+  const bytes = await measureDebugAsync('perf', 'recoveryDraft:serializeMountedDocument', { path, revision }, () => serializeMountedDocumentAsync(state.document!.mounted!));
+  const recoveryState = measureDebug('perf', 'recoveryDraft:getRecoveryState', { path, revision }, () => getMountedRecoveryState(state.document!.mounted!));
+  const bytesKey = measureDebug('perf', 'recoveryDraft:hashBytes', { path, revision, byteCount: bytes.length }, () => backupBytesKey(bytes));
+  if (previousBackup?.bytesKey === bytesKey) {
+    logDebugEvent('perf', 'recoveryDraft:skipUnchangedBytes', {
+      path,
+      revision,
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
+    backupSnapshots.set(documentKey, { ...previousBackup, revision });
+    return;
+  }
   try {
+    const createStartedAt = performance.now();
     const backup = await createDocumentBackup({
-      documentPath: state.document.path,
-      name: state.document.name,
-      extension: state.document.extension,
+      documentPath: path,
+      name,
+      extension: state.document!.extension,
       bytes,
       recoveryState,
     });
+    const createDurationMs = Math.round((performance.now() - createStartedAt) * 10) / 10;
+    logDebugEvent('perf', 'recoveryDraft:create', { path, revision, byteCount: bytes.length, durationMs: createDurationMs });
     if (backup) {
-      backupSnapshots.set(documentKey, { bytesKey, createdAtMs: Date.parse(backup.createdAt) || now });
+      const hostTotalMs = typeof backup.debugTimings?.totalMs === 'number' ? backup.debugTimings.totalMs : null;
+      if (backup.debugTimings) {
+        logDebugEvent('perf', 'recoveryDraft:persistenceTimings', {
+          path,
+          revision,
+          byteCount: bytes.length,
+          ...backup.debugTimings,
+        });
+      }
+      if (hostTotalMs !== null && !('indexedDbPutMs' in (backup.debugTimings ?? {}))) {
+        logDebugEvent('perf', 'recoveryDraft:bridgeOverhead', {
+          path,
+          revision,
+          byteCount: bytes.length,
+          durationMs: Math.max(0, Math.round((createDurationMs - hostTotalMs) * 10) / 10),
+          createDurationMs,
+          hostTotalMs,
+        });
+      }
+      backupSnapshots.set(documentKey, { bytesKey, createdAtMs: Date.parse(backup.createdAt) || now, revision });
+      restoredBackupSuppressionKeys.delete(documentKey);
+      state.document.recoveryBackupId = backup.id;
     }
+    logDebugEvent('perf', 'recoveryDraft:complete', {
+      path,
+      revision,
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
   } catch (error) {
+    logDebugEvent('perf', 'recoveryDraft:error', {
+      path,
+      revision,
+      message: error instanceof Error ? error.message : String(error),
+      durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
+    });
     if (options.force) {
       throw error;
     }
@@ -3118,7 +3303,46 @@ function backupDocumentKey(path: string, name: string): string {
   return path || `untitled:${name}`;
 }
 
-function backupBytesKey(bytes: number[]): string {
+function deleteBackupTracking(key: string): void {
+  backupSnapshots.delete(key);
+  restoredBackupSuppressionKeys.delete(key);
+}
+
+function clearActiveRestoredBackupSuppression(): void {
+  const document = state.document;
+  if (!document?.recoveryBackupId) return;
+  restoredBackupSuppressionKeys.delete(backupDocumentKey(document.path, document.name));
+}
+
+function markActiveDocumentBackupChanged(): void {
+  const document = state.document;
+  if (!document) return;
+  const key = backupDocumentKey(document.path, document.name);
+  documentBackupRevisions.set(key, (documentBackupRevisions.get(key) ?? 0) + 1);
+}
+
+function currentBackupRevision(key: string): number {
+  return documentBackupRevisions.get(key) ?? 0;
+}
+
+function moveBackupTracking(fromKey: string, toKey: string): void {
+  const backup = backupSnapshots.get(fromKey);
+  if (backup) {
+    backupSnapshots.delete(fromKey);
+    backupSnapshots.set(toKey, backup);
+  }
+  if (restoredBackupSuppressionKeys.has(fromKey)) {
+    restoredBackupSuppressionKeys.delete(fromKey);
+    restoredBackupSuppressionKeys.add(toKey);
+  }
+  const revision = documentBackupRevisions.get(fromKey);
+  if (revision !== undefined) {
+    documentBackupRevisions.delete(fromKey);
+    documentBackupRevisions.set(toKey, revision);
+  }
+}
+
+function backupBytesKey(bytes: Uint8Array | number[]): string {
   let hash = 2166136261;
   for (const byte of bytes) {
     hash ^= byte;
@@ -3127,8 +3351,127 @@ function backupBytesKey(bytes: number[]): string {
   return `${bytes.length}:${hash >>> 0}`;
 }
 
+async function logSerializationCostProfile(
+  prefix: 'save' | 'recoveryDraft',
+  path: string,
+  revision: number | null,
+  document: VisualDocument,
+): Promise<void> {
+  const details = revision === null ? { path } : { path, revision };
+  const profile = await measureDebugAsync('perf', `${prefix}:profileSerializationCosts`, details, () => profileHvySerializationCosts(document));
+  logDebugEvent('perf', `${prefix}:serializationCostProfile`, {
+    ...details,
+    totalProfileMs: profile.totalProfileMs,
+    sectionCount: profile.sectionCount,
+    blockCount: profile.blockCount,
+    componentTotals: profile.componentTotals,
+    slowestSections: profile.slowestSections,
+    slowestBlocks: profile.slowestBlocks,
+  });
+}
+
+function profileDocumentForDebug(document: VisualDocument): Record<string, unknown> {
+  const root = document as unknown as Record<string, unknown>;
+  const attachments = profileAttachmentDescriptors(root);
+  const blockProfile = profileDocumentBlocks(root);
+  return {
+    sectionCount: blockProfile.sectionCount,
+    blockCount: blockProfile.blockCount,
+    componentCounts: blockProfile.componentCounts,
+    attachmentCount: attachments.count,
+    attachmentBytes: attachments.bytes,
+    attachmentMediaTypes: attachments.mediaTypes,
+    largestAttachments: attachments.largest,
+  };
+}
+
+function profileAttachmentDescriptors(document: Record<string, unknown>): {
+  count: number;
+  bytes: number;
+  mediaTypes: Record<string, number>;
+  largest: Array<{ id: string; bytes: number; mediaType: string | null }>;
+} {
+  const store = document.attachmentStore as { listDescriptors?: () => unknown[] } | undefined;
+  const descriptors = Array.isArray(store?.listDescriptors?.())
+    ? store!.listDescriptors!()
+    : Array.isArray(document.attachments)
+    ? document.attachments
+    : [];
+  const mediaTypes: Record<string, number> = {};
+  const largest: Array<{ id: string; bytes: number; mediaType: string | null }> = [];
+  let bytes = 0;
+  for (const descriptor of descriptors) {
+    if (!isRecord(descriptor)) continue;
+    const id = typeof descriptor.id === 'string' ? descriptor.id : '';
+    const meta = isRecord(descriptor.meta) ? descriptor.meta : {};
+    const mediaType = typeof meta.mediaType === 'string' ? meta.mediaType : typeof meta.type === 'string' ? meta.type : null;
+    const length = typeof descriptor.length === 'number'
+      ? descriptor.length
+      : isByteLike(descriptor.bytes)
+      ? descriptor.bytes.length
+      : 0;
+    bytes += length;
+    mediaTypes[mediaType ?? 'unknown'] = (mediaTypes[mediaType ?? 'unknown'] ?? 0) + 1;
+    largest.push({ id, bytes: length, mediaType });
+  }
+  largest.sort((left, right) => right.bytes - left.bytes);
+  return { count: descriptors.length, bytes, mediaTypes, largest: largest.slice(0, 8) };
+}
+
+function profileDocumentBlocks(document: Record<string, unknown>): {
+  sectionCount: number;
+  blockCount: number;
+  componentCounts: Record<string, number>;
+} {
+  const componentCounts: Record<string, number> = {};
+  let sectionCount = 0;
+  let blockCount = 0;
+  const visitBlock = (block: unknown) => {
+    if (!isRecord(block)) return;
+    blockCount += 1;
+    const schema = isRecord(block.schema) ? block.schema : {};
+    const component = typeof block.component === 'string'
+      ? block.component
+      : typeof schema.component === 'string'
+      ? schema.component
+      : typeof schema.type === 'string'
+      ? schema.type
+      : 'unknown';
+    componentCounts[component] = (componentCounts[component] ?? 0) + 1;
+    visitBlocks(schema.containerBlocks);
+    visitBlocks(schema.componentListBlocks);
+    if (Array.isArray(schema.gridItems)) {
+      for (const item of schema.gridItems) {
+        if (isRecord(item)) visitBlock(item.block);
+      }
+    }
+    if (isRecord(schema.expandableStubBlocks)) visitBlocks(schema.expandableStubBlocks.children);
+    if (isRecord(schema.expandableContentBlocks)) visitBlocks(schema.expandableContentBlocks.children);
+  };
+  const visitBlocks = (blocks: unknown) => {
+    if (!Array.isArray(blocks)) return;
+    blocks.forEach(visitBlock);
+  };
+  const visitSection = (section: unknown) => {
+    if (!isRecord(section)) return;
+    sectionCount += 1;
+    visitBlocks(section.blocks);
+    if (Array.isArray(section.children)) section.children.forEach(visitSection);
+  };
+  if (Array.isArray(document.sections)) document.sections.forEach(visitSection);
+  return { sectionCount, blockCount, componentCounts };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object');
+}
+
+function isByteLike(value: unknown): value is { length: number } {
+  return Boolean(value && typeof value === 'object' && typeof (value as { length?: unknown }).length === 'number');
+}
+
 async function clearRecoveryDraftsForDocument(documentPath: string, name: string): Promise<void> {
-  backupSnapshots.delete(backupDocumentKey(documentPath, name));
+  deleteBackupTracking(backupDocumentKey(documentPath, name));
   try {
     await clearDocumentRecoveryDrafts({ documentPath, name });
   } catch {
@@ -3138,7 +3481,7 @@ async function clearRecoveryDraftsForDocument(documentPath: string, name: string
 
 async function discardRecoveryStateForBackup(backup: DocumentBackup): Promise<void> {
   const key = backupDocumentKey(backup.documentPath, backup.name);
-  backupSnapshots.delete(key);
+  deleteBackupTracking(key);
   if (backup.documentPath) {
     documentSessions.delete(backup.documentPath);
     workspaceFilterDocumentCache.delete(backup.documentPath);
@@ -3181,7 +3524,7 @@ async function openRecoveryDialog(): Promise<void> {
   state.error = null;
   state.status = 'Loading recoverable edits...';
   try {
-    state.recoveryBackups = await listDocumentBackups();
+    state.recoveryBackups = await measureDebugAsync('load', 'recovery:listBackups', undefined, () => listDocumentBackups());
     state.recoveryDialogOpen = true;
     state.status = state.recoveryBackups.length > 0 ? 'Loaded recoverable edits' : 'No recoverable edits available';
   } catch (error) {
@@ -3195,37 +3538,13 @@ async function openRecoveryDialog(): Promise<void> {
 
 async function openRecoveryDialogOnBoot(): Promise<void> {
   try {
-    state.recoveryBackups = await listDocumentBackups();
+    state.recoveryBackups = await measureDebugAsync('load', 'recovery:listBackupsOnBoot', undefined, () => listDocumentBackups());
     if (state.recoveryBackups.length === 0) return;
-    await restoreBackupsToTabs(state.recoveryBackups);
-    state.status = 'Recoverable edits restored as tabs';
+    state.recoveryDialogOpen = true;
+    state.status = 'Recoverable edits available';
     rerender({ preserveMountedDocument: true });
   } catch {
     state.recoveryBackups = [];
-  }
-}
-
-async function restoreBackupsToTabs(backups: DocumentBackup[]): Promise<void> {
-  for (const backup of [...backups].reverse()) {
-    const file = await restoreDocumentBackup(backup.id);
-    const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
-    documentSessions.set(file.path, {
-      path: file.path,
-      name: file.name,
-      extension: file.extension,
-      mode: defaultDocumentMode(file.extension),
-      dirty: true,
-      readOnly: false,
-      hiddenFromAI: workspaceFileAiAccess(file.path).hiddenFromAI,
-      isNew: false,
-      metaOpen: false,
-      document,
-      scrollRatio: null,
-      recoveryState: file.recoveryState ?? null,
-      recoveryBackupId: backup.id,
-    });
-    markDocumentTabOpened(file.path);
-    backupSnapshots.delete(backupDocumentKey(file.path, file.name));
   }
 }
 
@@ -3280,7 +3599,7 @@ async function saveCurrentDocumentToWorkspace(workspacePath: string, name: strin
   if (!state.document?.mounted) return;
   const previousPath = state.document.path;
   const previousName = state.document.name;
-  const bytes = Array.from(serializeMountedDocument(state.document.mounted));
+  const bytes = await serializeMountedDocumentAsync(state.document.mounted);
   const file = await saveDocumentToWorkspace({
     workspacePath,
     name: documentFileName(name, documentTypeForExtension(state.document.extension)) ?? name,
@@ -3370,11 +3689,7 @@ async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: str
       updateCurrentDocumentSession(mountedDocument);
     }
     if (oldBackupKey) {
-      const backup = backupSnapshots.get(oldBackupKey);
-      if (backup) {
-        backupSnapshots.delete(oldBackupKey);
-        backupSnapshots.set(backupDocumentKey(file.path, file.name), backup);
-      }
+      moveBackupTracking(oldBackupKey, backupDocumentKey(file.path, file.name));
     }
   }
   if (sourceWorkspacePath) {
@@ -3495,6 +3810,12 @@ function renderAllAroundDocument(): void {
   renderUiAroundDocument(state);
   applyZoomSettings();
   syncFileMenuState();
+}
+
+function refreshDebugLogModal(): void {
+  if (!state.debugLogDialogOpen) return;
+  state.debugLogEntries = getDebugLogEntries();
+  renderModals(state);
 }
 
 function loadZoomSettings(): void {

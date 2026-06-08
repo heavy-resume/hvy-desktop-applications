@@ -2768,7 +2768,7 @@ function renderDebugLogDialog(state: AppState): string {
         <div class="debug-log-header">
           <div>
             <h2 id="debugLogTitle">Debug Log</h2>
-            <p class="dialog-note">Recent load, close, and LLM prompt events.</p>
+            <p class="dialog-note">Snapshot of recent load, close, LLM prompt, and performance events. Refresh to update.</p>
           </div>
           <div class="debug-log-actions">
             <button type="button" data-action="refresh-debug-log">Refresh</button>

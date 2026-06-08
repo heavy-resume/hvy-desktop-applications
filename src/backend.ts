@@ -105,8 +105,17 @@ export interface DocumentFile {
   recoveryState?: string | null;
 }
 
-type DocumentFileMetadata = Omit<DocumentFile, 'bytes'>;
+export type DocumentFileMetadata = Omit<DocumentFile, 'bytes'>;
 type BufferJson = { type: 'Buffer'; data: number[] };
+type RecoveryDraftRecord = {
+  id: string;
+  documentPath: string;
+  name: string;
+  extension: DocumentExtension;
+  createdAt: string;
+  bytes: Blob;
+  recoveryState?: string | null;
+};
 
 export interface ImportSourceFile {
   path: string;
@@ -129,12 +138,16 @@ export interface SavedTemplate {
 
 export interface SaveDocumentRequest {
   path: string;
-  bytes: number[];
+  bytes: number[] | Uint8Array;
+}
+
+export interface DocumentWriteResult {
+  debugTimings?: Record<string, number>;
 }
 
 export interface SaveDocumentAsRequest {
   suggestedName: string;
-  bytes: number[];
+  bytes: number[] | Uint8Array;
 }
 
 export interface SavePdfAsRequest {
@@ -176,7 +189,7 @@ export interface RenameDocumentRequest {
 export interface WorkspaceDocumentRequest {
   workspacePath: string;
   name: string;
-  bytes: number[];
+  bytes: number[] | Uint8Array;
 }
 
 export interface WorkspaceDocumentMoveRequest {
@@ -193,7 +206,7 @@ export interface DocumentBackupRequest {
   documentPath: string;
   name: string;
   extension: DocumentExtension;
-  bytes: number[];
+  bytes: number[] | Uint8Array;
   recoveryState?: string | null;
 }
 
@@ -216,7 +229,15 @@ export interface DocumentBackup {
   name: string;
   extension: DocumentExtension;
   createdAt: string;
+  debugTimings?: Record<string, number>;
 }
+
+const RECOVERY_DRAFT_DB_NAME = 'hvy-galaxy-recovery-drafts';
+const RECOVERY_DRAFT_STORE = 'drafts';
+const RECOVERY_DRAFT_ID_PREFIX = 'idb-';
+const RECOVERY_DRAFT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+let recoveryDraftDbPromise: Promise<IDBDatabase> | null = null;
 
 export type McpWriteAccess = 'searchOnly' | 'hvyCliEdits' | 'createImportSave';
 
@@ -307,6 +328,10 @@ function normalizeDesktopBytes(bytes: ArrayBuffer | Uint8Array | number[] | Buff
     return new Uint8Array(bytes.data);
   }
   return new Uint8Array(bytes);
+}
+
+function toUint8Array(bytes: number[] | Uint8Array): Uint8Array {
+  return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 }
 
 function isBufferJson(value: unknown): value is BufferJson {
@@ -595,11 +620,21 @@ export function readDocumentFile(path: string): Promise<DocumentFile> {
   });
 }
 
-export function saveDocumentFile(request: SaveDocumentRequest): Promise<void> {
+export function saveDocumentFile(request: SaveDocumentRequest): Promise<DocumentWriteResult | void> {
+  if (isTauriRuntime()) {
+    return invoke<DocumentWriteResult>('save_document_file_raw', toUint8Array(request.bytes), {
+      headers: { 'x-hvy-document-path': encodeURIComponent(request.path) },
+    });
+  }
   return invokeDesktop('save_document_file', { path: request.path, bytes: request.bytes });
 }
 
-export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFile | null> {
+export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFileMetadata | null> {
+  if (isTauriRuntime()) {
+    return invoke<DocumentFileMetadata | null>('save_document_as_dialog_raw', toUint8Array(request.bytes), {
+      headers: { 'x-hvy-suggested-name': encodeURIComponent(request.suggestedName) },
+    });
+  }
   return invokeDesktop('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
 }
 
@@ -710,33 +745,176 @@ export function pasteSystemFilesToWorkspace(workspacePath: string): Promise<AddF
   return invokeDesktop('paste_system_files_to_workspace', { workspacePath });
 }
 
-export function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {
-  return invokeDesktop('create_document_backup', { request });
-}
-
-export function listDocumentBackups(): Promise<DocumentBackup[]> {
-  if (!isTauriRuntime() && !isElectronRuntime()) {
-    return Promise.resolve([]);
+export async function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {
+  if (!canUseRecoveryDraftDb()) {
+    return invokeDesktop('create_document_backup', { request });
   }
-  return invokeDesktop('list_document_backups');
+  const startedAt = performance.now();
+  await pruneIndexedRecoveryDrafts();
+  const createdAt = new Date().toISOString();
+  const id = `${RECOVERY_DRAFT_ID_PREFIX}${createdAt.replace(/[^a-zA-Z0-9]/g, '-')}-${Math.random().toString(36).slice(2, 10)}`;
+  const bytes = request.bytes instanceof Uint8Array ? request.bytes : new Uint8Array(request.bytes);
+  const record: RecoveryDraftRecord = {
+    id,
+    documentPath: request.documentPath,
+    name: request.name,
+    extension: request.extension,
+    createdAt,
+    bytes: new Blob([bytes as unknown as BlobPart], { type: 'application/octet-stream' }),
+    recoveryState: request.recoveryState ?? null,
+  };
+  const putStartedAt = performance.now();
+  await recoveryDraftStoreRequest('readwrite', (store) => store.put(record));
+  const putMs = roundDebugDuration(performance.now() - putStartedAt);
+  return {
+    id,
+    documentPath: request.documentPath,
+    name: request.name,
+    extension: request.extension,
+    createdAt,
+    debugTimings: {
+      indexedDbPutMs: putMs,
+      totalMs: roundDebugDuration(performance.now() - startedAt),
+    },
+  };
 }
 
-export function restoreDocumentBackup(id: string): Promise<DocumentFile> {
+export async function listDocumentBackups(): Promise<DocumentBackup[]> {
+  const indexedBackups = canUseRecoveryDraftDb() ? await listIndexedRecoveryDrafts() : [];
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return indexedBackups;
+  }
+  const nativeBackups = await invokeDesktop<DocumentBackup[]>('list_document_backups');
+  return [...indexedBackups, ...nativeBackups]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+export async function restoreDocumentBackup(id: string): Promise<DocumentFile> {
+  if (id.startsWith(RECOVERY_DRAFT_ID_PREFIX) && canUseRecoveryDraftDb()) {
+    return restoreIndexedRecoveryDraft(id);
+  }
   return invokeDesktop('restore_document_backup', { id });
 }
 
-export function discardDocumentBackup(id: string): Promise<void> {
-  if (!isTauriRuntime() && !isElectronRuntime()) {
-    return Promise.resolve();
+export async function discardDocumentBackup(id: string): Promise<void> {
+  if (id.startsWith(RECOVERY_DRAFT_ID_PREFIX) && canUseRecoveryDraftDb()) {
+    await deleteIndexedRecoveryDraft(id);
+    return;
   }
-  return invokeDesktop('discard_document_backup', { id });
+  if (isTauriRuntime() || isElectronRuntime()) {
+    await invokeDesktop('discard_document_backup', { id });
+  }
 }
 
-export function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraftRequest): Promise<void> {
-  if (!isTauriRuntime() && !isElectronRuntime()) {
-    return Promise.resolve();
+export async function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraftRequest): Promise<void> {
+  if (canUseRecoveryDraftDb()) {
+    await clearIndexedRecoveryDrafts(request);
   }
-  return invokeDesktop('clear_document_recovery_drafts', { request });
+  if (isTauriRuntime() || isElectronRuntime()) {
+    await invokeDesktop('clear_document_recovery_drafts', { request });
+  }
+}
+
+function canUseRecoveryDraftDb(): boolean {
+  return typeof indexedDB !== 'undefined' && typeof Blob !== 'undefined';
+}
+
+function openRecoveryDraftDb(): Promise<IDBDatabase> {
+  recoveryDraftDbPromise ??= new Promise((resolve, reject) => {
+    const request = indexedDB.open(RECOVERY_DRAFT_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(RECOVERY_DRAFT_STORE)) {
+        const store = db.createObjectStore(RECOVERY_DRAFT_STORE, { keyPath: 'id' });
+        store.createIndex('createdAt', 'createdAt');
+        store.createIndex('documentKey', ['documentPath', 'name']);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('Unable to open recovery draft store.'));
+  });
+  return recoveryDraftDbPromise;
+}
+
+async function recoveryDraftStoreRequest<T>(
+  mode: IDBTransactionMode,
+  callback: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+  const db = await openRecoveryDraftDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(RECOVERY_DRAFT_STORE, mode);
+    const request = callback(transaction.objectStore(RECOVERY_DRAFT_STORE));
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('Recovery draft store request failed.'));
+    transaction.onerror = () => reject(transaction.error ?? new Error('Recovery draft store transaction failed.'));
+  });
+}
+
+async function listIndexedRecoveryDrafts(): Promise<DocumentBackup[]> {
+  await pruneIndexedRecoveryDrafts();
+  const records = await recoveryDraftStoreRequest<RecoveryDraftRecord[]>('readonly', (store) => store.getAll());
+  const latestByDocument = new Map<string, RecoveryDraftRecord>();
+  for (const record of records) {
+    const key = recoveryDraftDocumentKey(record.documentPath, record.name);
+    const previous = latestByDocument.get(key);
+    if (!previous || record.createdAt > previous.createdAt) {
+      latestByDocument.set(key, record);
+    }
+  }
+  return [...latestByDocument.values()].map(indexedRecoveryDraftMetadata);
+}
+
+async function restoreIndexedRecoveryDraft(id: string): Promise<DocumentFile> {
+  const record = await recoveryDraftStoreRequest<RecoveryDraftRecord | undefined>('readonly', (store) => store.get(id));
+  if (!record) throw new Error('Recovery draft was not found.');
+  return {
+    path: record.documentPath,
+    name: record.name,
+    extension: record.extension,
+    bytes: new Uint8Array(await record.bytes.arrayBuffer()),
+    recoveryState: record.recoveryState ?? null,
+  };
+}
+
+async function deleteIndexedRecoveryDraft(id: string): Promise<void> {
+  await recoveryDraftStoreRequest('readwrite', (store) => store.delete(id));
+}
+
+async function clearIndexedRecoveryDrafts(request: DocumentRecoveryDraftRequest): Promise<void> {
+  const records = await recoveryDraftStoreRequest<RecoveryDraftRecord[]>('readonly', (store) => store.getAll());
+  const key = recoveryDraftDocumentKey(request.documentPath, request.name);
+  await Promise.all(records
+    .filter((record) => recoveryDraftDocumentKey(record.documentPath, record.name) === key)
+    .map((record) => deleteIndexedRecoveryDraft(record.id)));
+}
+
+async function pruneIndexedRecoveryDrafts(): Promise<void> {
+  const cutoff = Date.now() - RECOVERY_DRAFT_RETENTION_MS;
+  const records = await recoveryDraftStoreRequest<RecoveryDraftRecord[]>('readonly', (store) => store.getAll());
+  await Promise.all(records
+    .filter((record) => {
+      const createdAt = Date.parse(record.createdAt);
+      return !Number.isFinite(createdAt) || createdAt < cutoff;
+    })
+    .map((record) => deleteIndexedRecoveryDraft(record.id)));
+}
+
+function indexedRecoveryDraftMetadata(record: RecoveryDraftRecord): DocumentBackup {
+  return {
+    id: record.id,
+    documentPath: record.documentPath,
+    name: record.name,
+    extension: record.extension,
+    createdAt: record.createdAt,
+  };
+}
+
+function recoveryDraftDocumentKey(documentPath: string, name: string): string {
+  return documentPath || `untitled:${name}`;
+}
+
+function roundDebugDuration(value: number): number {
+  return Math.round(value * 10) / 10;
 }
 
 export function openExternalUrl(url: string): Promise<void> {

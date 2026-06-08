@@ -373,11 +373,32 @@ fn read_document_file_bytes(path: String) -> AppResult<tauri::ipc::Response> {
 }
 
 #[tauri::command]
-fn save_document_file(app: AppHandle, path: String, bytes: Vec<u8>) -> AppResult<()> {
-    let path = PathBuf::from(path);
-    write_file_atomically(&path, &bytes)?;
-    add_recent_file(&app, &path)?;
-    Ok(())
+fn save_document_file(app: AppHandle, path: String, bytes: Vec<u8>) -> AppResult<DocumentWriteResult> {
+    persist_document_file(&app, PathBuf::from(path), &bytes)
+}
+
+#[tauri::command]
+fn save_document_file_raw(app: AppHandle, request: tauri::ipc::Request<'_>) -> AppResult<DocumentWriteResult> {
+    let path = decode_ipc_header(request.headers(), "x-hvy-document-path")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw document bytes.".into()));
+    };
+    persist_document_file(&app, PathBuf::from(path), bytes)
+}
+
+fn persist_document_file(app: &AppHandle, path: PathBuf, bytes: &[u8]) -> AppResult<DocumentWriteResult> {
+    let started_at = std::time::Instant::now();
+    let mut timings = HashMap::new();
+    let write_started_at = std::time::Instant::now();
+    write_file_atomically(&path, bytes)?;
+    timings.insert("writeBytesMs".to_string(), write_started_at.elapsed().as_millis());
+    let recent_started_at = std::time::Instant::now();
+    add_recent_file(app, &path)?;
+    timings.insert("addRecentMs".to_string(), recent_started_at.elapsed().as_millis());
+    timings.insert("totalMs".to_string(), started_at.elapsed().as_millis());
+    Ok(DocumentWriteResult {
+        debug_timings: Some(timings),
+    })
 }
 
 #[tauri::command]
@@ -385,7 +406,7 @@ fn save_document_as_dialog(
     app: AppHandle,
     suggested_name: String,
     bytes: Vec<u8>,
-) -> AppResult<Option<DocumentFile>> {
+) -> AppResult<Option<DocumentFileMetadata>> {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
         .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
@@ -400,7 +421,71 @@ fn save_document_as_dialog(
     }
     write_file_atomically(&path, &bytes)?;
     add_recent_file(&app, &path)?;
-    Ok(Some(read_document_at(&path)?))
+    Ok(Some(read_document_metadata_at(&path)?))
+}
+
+#[tauri::command]
+fn save_document_as_dialog_raw(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> AppResult<Option<DocumentFileMetadata>> {
+    let suggested_name = decode_ipc_header(request.headers(), "x-hvy-suggested-name")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw document bytes.".into()));
+    };
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
+        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
+        .add_filter("Markdown", &["md"])
+        .set_file_name(suggested_name)
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
+    write_file_atomically(&path, bytes)?;
+    add_recent_file(&app, &path)?;
+    Ok(Some(read_document_metadata_at(&path)?))
+}
+
+fn decode_ipc_header(headers: &tauri::http::HeaderMap, name: &str) -> AppResult<String> {
+    let encoded = headers
+        .get(name)
+        .ok_or_else(|| AppError::Message(format!("Missing {name} header.")))?
+        .to_str()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    percent_decode_header_value(encoded)
+}
+
+fn percent_decode_header_value(value: &str) -> AppResult<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(AppError::Message("Invalid encoded header value.".into()));
+            }
+            let high = decode_hex_digit(bytes[index + 1])?;
+            let low = decode_hex_digit(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn decode_hex_digit(value: u8) -> AppResult<u8> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err(AppError::Message("Invalid encoded header value.".into())),
+    }
 }
 
 #[tauri::command]
@@ -817,34 +902,52 @@ fn run_apple_script(script: &str) -> AppResult<String> {
 
 #[tauri::command]
 fn create_document_backup(app: AppHandle, request: DocumentBackupRequest) -> AppResult<Option<DocumentBackup>> {
+    let started_at = std::time::Instant::now();
+    let mut timings = HashMap::new();
     if document_extension(Path::new(&request.name)).is_none() {
         return Err(AppError::Message("Recovery draft document name must end in .hvy, .thvy, .phvy, or .md.".into()));
     }
+    let prune_started_at = std::time::Instant::now();
     prune_document_backups(&app)?;
+    timings.insert("pruneMs".to_string(), prune_started_at.elapsed().as_millis());
+    let id_started_at = std::time::Instant::now();
     let created_at = Utc::now().to_rfc3339();
     let id = document_backup_id(&request, &created_at);
+    timings.insert("idMs".to_string(), id_started_at.elapsed().as_millis());
+    let write_bytes_started_at = std::time::Instant::now();
+    write_file_atomically(&document_backup_bytes_path(&app, &id)?, &request.bytes)?;
+    timings.insert("writeBytesMs".to_string(), write_bytes_started_at.elapsed().as_millis());
     let snapshot = DocumentBackupSnapshot {
         id: id.clone(),
         document_path: request.document_path,
         name: request.name,
         extension: request.extension,
         created_at,
-        bytes: request.bytes,
+        bytes: Vec::new(),
+        bytes_path: Some(format!("{id}.bytes")),
         recovery_state: request.recovery_state,
     };
+    let write_metadata_started_at = std::time::Instant::now();
     write_json_atomically(&document_backup_path(&app, &id)?, &snapshot)?;
-    Ok(Some(snapshot_metadata(&snapshot)))
+    timings.insert("writeMetadataMs".to_string(), write_metadata_started_at.elapsed().as_millis());
+    timings.insert("totalMs".to_string(), started_at.elapsed().as_millis());
+    let mut backup = snapshot_metadata(&snapshot);
+    backup.debug_timings = Some(timings);
+    Ok(Some(backup))
 }
 
 #[tauri::command]
 fn list_document_backups(app: AppHandle) -> AppResult<Vec<DocumentBackup>> {
     prune_document_backups(&app)?;
-    let mut snapshots = read_document_backup_snapshots(&app)?;
-    snapshots.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    let mut snapshot_entries = read_document_backup_snapshot_paths(&app)?
+        .into_iter()
+        .filter_map(|path| read_document_backup_snapshot(&path).ok().map(|snapshot| (path, snapshot)))
+        .collect::<Vec<_>>();
+    snapshot_entries.sort_by(|left, right| right.1.created_at.cmp(&left.1.created_at));
     let mut seen_documents = HashSet::new();
     let mut backups = Vec::new();
-    for snapshot in snapshots {
-        if document_backup_matches_saved_file(&snapshot) {
+    for (path, snapshot) in snapshot_entries {
+        if document_backup_matches_saved_file(&snapshot, &path) {
             continue;
         }
         let document_key = document_backup_key(&snapshot);
@@ -860,7 +963,7 @@ fn list_document_backups(app: AppHandle) -> AppResult<Vec<DocumentBackup>> {
 #[tauri::command]
 fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile> {
     prune_document_backups(&app)?;
-    let snapshot = read_document_backup_snapshot(&document_backup_path(&app, &id)?)?;
+    let snapshot = read_document_backup_snapshot_with_bytes(&document_backup_path(&app, &id)?)?;
     Ok(DocumentFile {
         path: snapshot.document_path,
         name: snapshot.name,
@@ -877,6 +980,10 @@ fn discard_document_backup(app: AppHandle, id: String) -> AppResult<()> {
     let path = document_backup_path(&app, &id)?;
     if path.exists() {
         fs::remove_file(path)?;
+    }
+    let bytes_path = document_backup_bytes_path(&app, &id)?;
+    if bytes_path.exists() {
+        fs::remove_file(bytes_path)?;
     }
     Ok(())
 }
@@ -897,7 +1004,11 @@ fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraft
             continue;
         };
         if document_backup_key(&snapshot) == key {
-            let _ = fs::remove_file(path);
+            let id = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+            let _ = fs::remove_file(&path);
+            if let Ok(bytes_path) = document_backup_bytes_path(&app, id) {
+                let _ = fs::remove_file(bytes_path);
+            }
         }
     }
     Ok(())

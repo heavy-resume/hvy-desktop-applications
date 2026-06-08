@@ -1,4 +1,4 @@
-export type DebugLogKind = 'load' | 'close' | 'llm' | 'event';
+export type DebugLogKind = 'load' | 'close' | 'llm' | 'event' | 'perf';
 
 export interface DebugLogEntry {
   id: number;

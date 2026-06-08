@@ -5,10 +5,11 @@ fn snapshot_metadata(snapshot: &DocumentBackupSnapshot) -> DocumentBackup {
         name: snapshot.name.clone(),
         extension: snapshot.extension.clone(),
         created_at: snapshot.created_at.clone(),
+        debug_timings: None,
     }
 }
 
-fn document_backup_matches_saved_file(snapshot: &DocumentBackupSnapshot) -> bool {
+fn document_backup_matches_saved_file(snapshot: &DocumentBackupSnapshot, snapshot_path: &Path) -> bool {
     if snapshot.document_path.is_empty() {
         return false;
     }
@@ -25,7 +26,10 @@ fn document_backup_matches_saved_file(snapshot: &DocumentBackupSnapshot) -> bool
     let Ok(saved_bytes) = fs::read(&snapshot.document_path) else {
         return false;
     };
-    saved_bytes == snapshot.bytes
+    let Ok(backup_bytes) = read_document_backup_bytes(snapshot, snapshot_path) else {
+        return false;
+    };
+    saved_bytes == backup_bytes
 }
 
 fn document_backup_key(snapshot: &DocumentBackupSnapshot) -> String {
@@ -40,26 +44,44 @@ fn document_recovery_draft_key(document_path: &str, name: &str) -> String {
     }
 }
 
-fn read_document_backup_snapshots(app: &AppHandle) -> AppResult<Vec<DocumentBackupSnapshot>> {
+fn read_document_backup_snapshot_paths(app: &AppHandle) -> AppResult<Vec<PathBuf>> {
     let directory = document_backups_dir(app)?;
     if !directory.exists() {
         return Ok(Vec::new());
     }
-    let mut snapshots = Vec::new();
+    let mut paths = Vec::new();
     for entry in fs::read_dir(directory)? {
         let path = entry?.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-            continue;
-        }
-        if let Ok(snapshot) = read_document_backup_snapshot(&path) {
-            snapshots.push(snapshot);
+        if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            paths.push(path);
         }
     }
-    Ok(snapshots)
+    Ok(paths)
 }
 
 fn read_document_backup_snapshot(path: &Path) -> AppResult<DocumentBackupSnapshot> {
     Ok(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+fn read_document_backup_snapshot_with_bytes(path: &Path) -> AppResult<DocumentBackupSnapshot> {
+    let mut snapshot = read_document_backup_snapshot(path)?;
+    snapshot.bytes = read_document_backup_bytes(&snapshot, path)?;
+    Ok(snapshot)
+}
+
+fn read_document_backup_bytes(snapshot: &DocumentBackupSnapshot, snapshot_path: &Path) -> AppResult<Vec<u8>> {
+    if !snapshot.bytes.is_empty() {
+        return Ok(snapshot.bytes.clone());
+    }
+    if let Some(bytes_path) = &snapshot.bytes_path {
+        return Ok(fs::read(
+            snapshot_path
+                .parent()
+                .unwrap_or_else(|| Path::new(""))
+                .join(bytes_path),
+        )?);
+    }
+    Ok(Vec::new())
 }
 
 fn prune_document_backups(app: &AppHandle) -> AppResult<()> {
@@ -79,7 +101,11 @@ fn prune_document_backups(app: &AppHandle) -> AppResult<()> {
             .map(|created_at| created_at.with_timezone(&Utc) < cutoff)
             .unwrap_or(true);
         if should_remove {
-            let _ = fs::remove_file(path);
+            let id = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");
+            let _ = fs::remove_file(&path);
+            if let Ok(bytes_path) = document_backup_bytes_path(app, id) {
+                let _ = fs::remove_file(bytes_path);
+            }
         }
     }
     Ok(())
@@ -106,6 +132,13 @@ fn document_backup_path(app: &AppHandle, id: &str) -> AppResult<PathBuf> {
         return Err(AppError::Message("Invalid backup id.".into()));
     }
     Ok(document_backups_dir(app)?.join(format!("{id}.json")))
+}
+
+fn document_backup_bytes_path(app: &AppHandle, id: &str) -> AppResult<PathBuf> {
+    if id.contains('/') || id.contains('\\') || id.contains("..") || id.trim().is_empty() {
+        return Err(AppError::Message("Invalid backup id.".into()));
+    }
+    Ok(document_backups_dir(app)?.join(format!("{id}.bytes")))
 }
 
 fn document_backups_dir(app: &AppHandle) -> AppResult<PathBuf> {

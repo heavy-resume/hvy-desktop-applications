@@ -836,9 +836,16 @@ function readDocumentFileMetadata(filePath) {
 }
 
 function saveDocumentFile(filePath, bytes) {
+  const startedAt = performance.now();
+  const timings = {};
+  const writeStartedAt = performance.now();
   writeBytes(filePath, bytes);
+  timings.writeBytesMs = Math.round((performance.now() - writeStartedAt) * 10) / 10;
+  const recentStartedAt = performance.now();
   addRecentFile(filePath);
-  return null;
+  timings.addRecentMs = Math.round((performance.now() - recentStartedAt) * 10) / 10;
+  timings.totalMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  return { debugTimings: timings };
 }
 
 async function saveDocumentAsDialog(suggestedName, bytes) {
@@ -854,7 +861,7 @@ async function saveDocumentAsDialog(suggestedName, bytes) {
   if (!documentExtension(result.filePath)) throw new Error('Save As path must end in .hvy, .thvy, .phvy, or .md.');
   writeBytes(result.filePath, bytes);
   addRecentFile(result.filePath);
-  return readDocumentAt(result.filePath);
+  return readDocumentMetadataAt(result.filePath);
 }
 
 function listSavedTemplates(workspacePath) {
@@ -1102,17 +1109,31 @@ function xmlUnescape(value) {
 }
 
 function createDocumentBackup(request) {
+  const startedAt = performance.now();
+  const timings = {};
   if (!documentExtension(request.name)) throw new Error('Recovery draft document name must end in .hvy, .thvy, .phvy, or .md.');
   fs.mkdirSync(backupsDir(), { recursive: true });
+  const pruneStartedAt = performance.now();
   pruneDocumentBackups();
+  timings.pruneMs = Math.round((performance.now() - pruneStartedAt) * 10) / 10;
+  const idStartedAt = performance.now();
   const createdAt = new Date().toISOString();
   const id = crypto.createHash('sha256')
     .update(`${request.documentPath}|${request.name}|${createdAt}`)
     .digest('hex')
     .slice(0, 24);
-  const snapshot = { ...request, id, createdAt };
-  writeJson(path.join(backupsDir(), `${id}.json`), snapshot);
-  return { id, documentPath: request.documentPath, name: request.name, extension: request.extension, createdAt };
+  timings.idMs = Math.round((performance.now() - idStartedAt) * 10) / 10;
+  const bytesPath = documentBackupBytesPath(id);
+  const snapshot = { ...request, id, createdAt, bytesPath: path.basename(bytesPath) };
+  delete snapshot.bytes;
+  const writeBytesStartedAt = performance.now();
+  fs.writeFileSync(bytesPath, Buffer.from(request.bytes || []));
+  timings.writeBytesMs = Math.round((performance.now() - writeBytesStartedAt) * 10) / 10;
+  const writeMetadataStartedAt = performance.now();
+  writeJson(documentBackupPath(id), snapshot);
+  timings.writeMetadataMs = Math.round((performance.now() - writeMetadataStartedAt) * 10) / 10;
+  timings.totalMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  return { id, documentPath: request.documentPath, name: request.name, extension: request.extension, createdAt, debugTimings: timings };
 }
 
 function listDocumentBackups() {
@@ -1142,21 +1163,25 @@ function listDocumentBackups() {
 
 function restoreDocumentBackup(id) {
   pruneDocumentBackups();
-  const snapshot = readJson(path.join(backupsDir(), `${id}.json`), null);
+  const snapshot = readJson(documentBackupPath(id), null);
   if (!snapshot) throw new Error('Recovery draft was not found.');
   return {
     path: snapshot.documentPath,
     name: snapshot.name,
     extension: snapshot.extension,
-    bytes: snapshot.bytes,
+    bytes: readDocumentBackupBytes(snapshot),
     recoveryState: snapshot.recoveryState ?? null,
   };
 }
 
 function discardDocumentBackup(id) {
-  const backupPath = path.join(backupsDir(), `${id}.json`);
+  const backupPath = documentBackupPath(id);
   if (fs.existsSync(backupPath)) {
     fs.unlinkSync(backupPath);
+  }
+  const bytesPath = documentBackupBytesPath(id);
+  if (fs.existsSync(bytesPath)) {
+    fs.unlinkSync(bytesPath);
   }
   return null;
 }
@@ -1167,7 +1192,11 @@ function documentBackupMatchesSavedFile(snapshot) {
   const createdAt = Date.parse(snapshot.createdAt);
   if (Number.isFinite(createdAt) && savedAt >= createdAt) return true;
   const savedBytes = fs.readFileSync(snapshot.documentPath);
-  return Buffer.compare(savedBytes, Buffer.from(snapshot.bytes || [])) === 0;
+  try {
+    return Buffer.compare(savedBytes, readDocumentBackupBytes(snapshot)) === 0;
+  } catch {
+    return false;
+  }
 }
 
 function documentBackupKey(snapshot) {
@@ -1186,11 +1215,30 @@ function pruneDocumentBackups() {
     if (!Number.isFinite(createdAt) || createdAt < cutoff) {
       try {
         fs.unlinkSync(backupPath);
+        const id = path.basename(entry, '.json');
+        const bytesPath = documentBackupBytesPath(id);
+        if (fs.existsSync(bytesPath)) fs.unlinkSync(bytesPath);
       } catch {
         // Best effort cleanup; stale recovery drafts should not block recovery.
       }
     }
   }
+}
+
+function documentBackupPath(id) {
+  return path.join(backupsDir(), `${id}.json`);
+}
+
+function documentBackupBytesPath(id) {
+  return path.join(backupsDir(), `${id}.bytes`);
+}
+
+function readDocumentBackupBytes(snapshot) {
+  if (Array.isArray(snapshot.bytes)) return Buffer.from(snapshot.bytes);
+  if (snapshot.bytesPath) {
+    return fs.readFileSync(path.join(backupsDir(), path.basename(snapshot.bytesPath)));
+  }
+  return Buffer.alloc(0);
 }
 
 function clearDocumentRecoveryDrafts(request) {
@@ -1204,6 +1252,9 @@ function clearDocumentRecoveryDrafts(request) {
     if (snapshot && documentBackupKey(snapshot) === key) {
       try {
         fs.unlinkSync(draftPath);
+        const id = path.basename(entry, '.json');
+        const bytesPath = documentBackupBytesPath(id);
+        if (fs.existsSync(bytesPath)) fs.unlinkSync(bytesPath);
       } catch {
         // Best effort cleanup.
       }

@@ -193,6 +193,13 @@ struct SaveDocumentTemplateRequest {
     bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentWriteResult {
+    #[serde(default, rename = "debugTimings", skip_serializing_if = "Option::is_none")]
+    debug_timings: Option<HashMap<String, u128>>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct FileMenuState {
@@ -256,6 +263,8 @@ struct DocumentBackup {
     name: String,
     extension: String,
     created_at: String,
+    #[serde(default, rename = "debugTimings", skip_serializing_if = "Option::is_none")]
+    debug_timings: Option<HashMap<String, u128>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -266,7 +275,10 @@ struct DocumentBackupSnapshot {
     name: String,
     extension: String,
     created_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bytes_path: Option<String>,
     #[serde(default)]
     recovery_state: Option<String>,
 }
