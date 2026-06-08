@@ -157,6 +157,7 @@ const documentBackupRevisions = new Map<string, number>();
 const restoredBackupSuppressionKeys = new Set<string>();
 let openedDocumentTabOrder: string[] = [];
 let documentChangeEventCount = 0;
+let documentZoomDirtySuppressionDepth = 0;
 
 function measurePerf<T>(
   label: string,
@@ -2318,6 +2319,19 @@ async function openDocument(file: DocumentFile, options: { defaultDocument?: boo
     mounted: null,
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
   };
+  logDebugEvent('load', 'openDocument:stateInitialized', {
+    path: file.path,
+    hasStoredSession: Boolean(storedSession),
+    storedSessionDirty: storedSession?.dirty ?? null,
+    storedSessionIsNew: storedSession?.isNew ?? null,
+    usingDirtySession: Boolean(session),
+    usingCachedFilterDocument: !session && Boolean(cachedFilterDocument),
+    initialDirty: state.document.dirty,
+    isNew: state.document.isNew,
+    recovered: options.recovered === true,
+    readOnly: state.document.readOnly,
+    recoveryState: Boolean(recoveryState),
+  });
   if (options.recovered && state.document.recoveryBackupId) {
     restoredBackupSuppressionKeys.add(backupDocumentKey(state.document.path, state.document.name));
   }
@@ -2468,6 +2482,15 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   });
   mountThemeReapplyCleanup = null;
   const currentDocument = state.document;
+  const mountShouldStartSaved = !currentDocument.dirty && !currentDocument.isNew;
+  logDebugEvent('load', 'mountCurrentDocument:baselineBeforeMount', {
+    path,
+    dirty: currentDocument.dirty,
+    isNew: currentDocument.isNew,
+    readOnly: currentDocument.readOnly,
+    pendingRecoveryState: Boolean(pendingMountRecoveryState),
+    shouldStartSaved: mountShouldStartSaved,
+  });
   mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
   const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
     storageKey: documentStorageKey(currentDocument.path || currentDocument.name),
@@ -2477,13 +2500,27 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       const changeStartedAt = performance.now();
+      const dirtyBefore = state.document?.dirty ?? null;
+      if (event.dirty && documentZoomDirtySuppressionDepth > 0) {
+        documentChangeEventCount += 1;
+        logDebugEvent('perf', 'documentChange:suppressZoomDirty', {
+          path,
+          dirtyBefore,
+          source: event.source,
+          reason: event.reason,
+          eventCount: documentChangeEventCount,
+        });
+        return;
+      }
       setDocumentDirty(event.dirty);
       const durationMs = Math.round((performance.now() - changeStartedAt) * 10) / 10;
       documentChangeEventCount += 1;
-      if (durationMs >= CHANGE_PERF_LOG_THRESHOLD_MS || documentChangeEventCount % CHANGE_PERF_SAMPLE_INTERVAL === 0) {
+      if (dirtyBefore !== event.dirty || durationMs >= CHANGE_PERF_LOG_THRESHOLD_MS || documentChangeEventCount <= 20 || documentChangeEventCount % CHANGE_PERF_SAMPLE_INTERVAL === 0) {
         logDebugEvent('perf', 'documentChange:onDocumentChange', {
           path,
           dirty: event.dirty,
+          dirtyBefore,
+          dirtyAfter: state.document?.dirty ?? null,
           source: event.source,
           reason: event.reason,
           eventCount: documentChangeEventCount,
@@ -2503,7 +2540,24 @@ async function mountCurrentDocument(document = state.document?.mounted?.document
   state.document.mounted = mounted;
   measureDebug('load', 'mountCurrentDocument:applyDocumentZoom', { path }, () => applyDocumentZoom());
   measureDebug('load', 'mountCurrentDocument:setDirtyState', { path }, () => {
-    setDocumentDirty(state.document!.dirty || state.document!.isNew ? true : isMountedDocumentDirty(mounted), { preserveStatus: true });
+    const dirtyBeforeBaseline = state.document!.dirty;
+    const mountedDirtyBeforeBaseline = isMountedDocumentDirty(mounted);
+    if (mountShouldStartSaved) {
+      markMountedDocumentSaved(mounted);
+      state.document!.dirty = false;
+    }
+    const mountedDirtyAfterBaseline = isMountedDocumentDirty(mounted);
+    const nextDirty = state.document!.dirty || state.document!.isNew ? true : mountedDirtyAfterBaseline;
+    logDebugEvent('load', 'mountCurrentDocument:baselineAfterMount', {
+      path,
+      shouldStartSaved: mountShouldStartSaved,
+      dirtyBeforeBaseline,
+      mountedDirtyBeforeBaseline,
+      mountedDirtyAfterBaseline,
+      nextDirty,
+      isNew: state.document!.isNew,
+    });
+    setDocumentDirty(nextDirty, { preserveStatus: true });
   });
 }
 
@@ -2609,7 +2663,19 @@ function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } 
   const path = state.document.path;
   measurePerf('dirty:setDocumentDirty', { path, dirty, preserveStatus: options.preserveStatus === true }, () => {
     const changed = state.document!.dirty !== dirty;
+    const previousDirty = state.document!.dirty;
     state.document!.dirty = dirty;
+    if (changed) {
+      logDebugEvent('perf', 'dirty:stateChanged', {
+        path,
+        dirty,
+        previousDirty,
+        preserveStatus: options.preserveStatus === true,
+        isNew: state.document!.isNew,
+        mounted: Boolean(state.document!.mounted),
+        statusBefore: state.status,
+      });
+    }
     if (!options.preserveStatus || changed) {
       state.status = dirty ? 'Unsaved changes' : `Saved ${state.document!.name}`;
     }
@@ -3869,11 +3935,21 @@ function applyAppZoom(): void {
 
 function applyDocumentZoom(): void {
   if (!mountRoot) return;
-  if (state.documentZoom === 1) {
-    mountRoot.style.removeProperty('zoom');
-    return;
+  documentZoomDirtySuppressionDepth += 1;
+  try {
+    if (state.documentZoom === 1) {
+      mountRoot.style.removeProperty('zoom');
+      return;
+    }
+    mountRoot.style.setProperty('zoom', String(state.documentZoom));
+  } finally {
+    const releaseSuppression = () => {
+      documentZoomDirtySuppressionDepth = Math.max(0, documentZoomDirtySuppressionDepth - 1);
+    };
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(releaseSuppression);
+    });
   }
-  mountRoot.style.setProperty('zoom', String(state.documentZoom));
 }
 
 function normalizeZoomLevel(value: unknown, fallback: number): number {
