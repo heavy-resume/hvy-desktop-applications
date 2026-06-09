@@ -1,6 +1,6 @@
 [package]
 name = "hvy-galaxy"
-version = "0.1.0"
+version = "0.1.0-alpha.2"
 description = "HVY Galaxy desktop app"
 authors = ["HVY"]
 edition = "2021"
