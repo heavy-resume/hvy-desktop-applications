@@ -28,7 +28,7 @@ const hostBuilds = {
     },
     electron: {
       script: 'build:electron:windows',
-      output: ['dist-electron/HVY Galaxy-win32-x64'],
+      output: ['dist-electron/HVY Galaxy-win32-x64', 'dist-electron/installer/win32-x64'],
     },
   },
 };
@@ -59,7 +59,11 @@ async function runScripts(scripts) {
 
 function runScript(script) {
   return new Promise((resolve, reject) => {
-    const child = spawn(npmCommand, ['run', script], {
+    const command = process.platform === 'win32' ? 'cmd.exe' : npmCommand;
+    const commandArgs = process.platform === 'win32'
+      ? ['/d', '/s', '/c', `${npmCommand} run ${script}`]
+      : ['run', script];
+    const child = spawn(command, commandArgs, {
       stdio: 'inherit',
       shell: false,
     });

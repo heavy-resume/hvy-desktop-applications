@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard } = require('electron');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -30,6 +30,10 @@ const THEME_EXTENSIONS = new Set(['.hvytheme', '.json']);
 const APP_IDENTIFIER = 'com.heavyresume.hvy-galaxy';
 const APP_NAME = 'HVY Galaxy';
 const runFile = promisify(execFile);
+
+if (handleSquirrelStartupEvent()) {
+  return;
+}
 
 let mainWindow = null;
 let appCloseAllowed = false;
@@ -85,6 +89,36 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   requestNativeAppClose({ quit: true });
 });
+
+function handleSquirrelStartupEvent() {
+  if (process.platform !== 'win32' || process.argv.length < 2) {
+    return false;
+  }
+
+  const squirrelEvent = process.argv[1];
+  const appFolder = path.dirname(process.execPath);
+  const updateExe = path.resolve(appFolder, '..', 'Update.exe');
+  const exeName = path.basename(process.execPath);
+
+  if (squirrelEvent === '--squirrel-install' || squirrelEvent === '--squirrel-updated') {
+    spawn(updateExe, ['--createShortcut', exeName], { detached: true });
+    setTimeout(app.quit, 1000);
+    return true;
+  }
+
+  if (squirrelEvent === '--squirrel-uninstall') {
+    spawn(updateExe, ['--removeShortcut', exeName], { detached: true });
+    setTimeout(app.quit, 1000);
+    return true;
+  }
+
+  if (squirrelEvent === '--squirrel-obsolete') {
+    app.quit();
+    return true;
+  }
+
+  return false;
+}
 
 function createWindow() {
   const window = new BrowserWindow({

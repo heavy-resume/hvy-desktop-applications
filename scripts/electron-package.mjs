@@ -37,6 +37,13 @@ const appPaths = await packager({
   appCategoryType: 'public.app-category.productivity',
   appCopyright: `Copyright ${new Date().getFullYear()} HVY`,
   darwinDarkModeSupport: true,
+  win32metadata: {
+    CompanyName: 'HVY',
+    FileDescription: appName,
+    InternalName: appName,
+    OriginalFilename: `${appName}.exe`,
+    ProductName: appName,
+  },
   extendInfo: {
     CFBundleDisplayName: appName,
     CFBundleName: appName,

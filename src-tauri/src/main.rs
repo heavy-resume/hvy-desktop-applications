@@ -1,3 +1,5 @@
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     if let Some(path) = hvy_galaxy_lib::extract_pdf_text_cli_path_arg(&args) {
