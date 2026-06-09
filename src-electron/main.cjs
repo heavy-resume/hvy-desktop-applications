@@ -11,12 +11,16 @@ const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
 const RECENT_STATE = 'recent.json';
 const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
+const APP_SETTINGS = 'app-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
 const RECENT_LIMIT = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
 const AI_MIN_CONTEXT_CHARS = 1000;
 const AI_MAX_CONTEXT_CHARS = 750000;
 const AI_CONTEXT_STEP_CHARS = 1000;
+const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
+const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
+const MAX_IMAGE_ATTACHMENT_DIMENSION = 16384;
 const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.md']);
 const IMPORT_SOURCE_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.txt', '.md', '.pdf', '.docx']);
@@ -142,7 +146,7 @@ function shortcutCommand(input) {
   if (key === 'o' && input.shift) return 'open-file';
   if (key === 'f' && !input.shift) return 'find';
   if (key === 'x' && input.shift) return 'strikethrough';
-  if (key === ',' && !input.shift) return 'ai-settings';
+  if (key === ',' && !input.shift) return 'app-settings';
   return null;
 }
 
@@ -161,6 +165,7 @@ function buildMenu() {
       label: APP_NAME,
       submenu: [
         menuItem(`About ${APP_NAME}`, 'about'),
+        menuItem('Settings...', 'app-settings', 'CmdOrCtrl+,'),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -173,6 +178,7 @@ function buildMenu() {
         menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),
         menuItem('Open Workspace', 'open-workspace', 'CmdOrCtrl+O'),
         menuItem('Manage Workspaces...', 'manage-workspaces'),
+        ...(process.platform === 'darwin' ? [] : [menuItem('Settings...', 'app-settings', 'CmdOrCtrl+,')]),
         menuItem('Open File', 'open-file', 'CmdOrCtrl+Shift+O'),
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
@@ -231,7 +237,7 @@ function buildMenu() {
     {
       label: 'AI',
       submenu: [
-        menuItem('LLM Settings...', 'ai-settings', 'CmdOrCtrl+,'),
+        menuItem('LLM Settings...', 'ai-settings'),
         menuItem('MCP Settings...', 'mcp-settings'),
       ],
     },
@@ -415,7 +421,9 @@ async function handleCommand(command, args) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
     case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
     case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
-    case 'load_ai_settings': return readJson(dataPath(AI_SETTINGS), defaultAiSettings());
+    case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
+    case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
+    case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return readJson(dataPath(MCP_SETTINGS), defaultMcpSettings());
     case 'save_mcp_settings': return writeJson(dataPath(MCP_SETTINGS), normalizeMcpSettings(args.settings));
@@ -1704,6 +1712,23 @@ function defaultAiSettings() {
   };
 }
 
+function defaultAppSettings() {
+  return {
+    imageAttachmentMaxDimensions: {
+      width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
+      height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
+    },
+  };
+}
+
+function normalizeAppSettings(settings) {
+  return {
+    ...defaultAppSettings(),
+    ...(settings || {}),
+    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
+  };
+}
+
 function normalizeAiSettings(settings) {
   return {
     ...defaultAiSettings(),
@@ -1717,6 +1742,20 @@ function normalizeAiMaxContextChars(value) {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeImageAttachmentMaxDimensions(value) {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    width: normalizeImageAttachmentDimension(record.width),
+    height: normalizeImageAttachmentDimension(record.height),
+  };
+}
+
+function normalizeImageAttachmentDimension(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
+  return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
 }
 
 function defaultMcpSettings() {

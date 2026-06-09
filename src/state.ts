@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
@@ -33,6 +33,7 @@ export interface AppState {
   selectedWorkspacePath: string | null;
   selectedFilePath: string | null;
   recent: RecentState;
+  appSettings: AppSettings;
   aiSettings: AiSettings;
   mcpSettings: McpSettings;
   mcpServerStatus: McpServerStatus;
@@ -71,6 +72,10 @@ export interface AppState {
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
   exportedPdfPath: string | null;
+  appSettingsDialogOpen: boolean;
+  appSettingsDraft: AppSettings | null;
+  appSettingsDialogInitialJson: string | null;
+  appSettingsDiscardDialogOpen: boolean;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -147,6 +152,7 @@ export const state: AppState = {
   selectedWorkspacePath: null,
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
+  appSettings: defaultAppSettings(),
   aiSettings: defaultAiSettings(),
   mcpSettings: defaultMcpSettings(),
   mcpServerStatus: defaultMcpServerStatus(),
@@ -185,6 +191,10 @@ export const state: AppState = {
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   exportedPdfPath: null,
+  appSettingsDialogOpen: false,
+  appSettingsDraft: null,
+  appSettingsDialogInitialJson: null,
+  appSettingsDiscardDialogOpen: false,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

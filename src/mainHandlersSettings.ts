@@ -1,9 +1,9 @@
 import { installAiChatClient } from './aiClient';
-import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type McpClientInstallTarget } from './backend';
+import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type McpClientInstallTarget } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, getDebugLogEntries } from './debugLog';
 import { state } from './state';
-import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneMcpSettings, aiSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
+import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 
 interface DocumentColorTheme {
@@ -56,6 +56,50 @@ function editingDocumentColorTheme(): boolean {
 
 export function createSettingsHandlers(): Partial<UiHandlers> {
   return {
+  openAppSettings: () => {
+    closeUiBeforeAppSettings();
+    state.appSettingsDraft = cloneAppSettings(state.appSettings);
+    state.appSettingsDialogInitialJson = JSON.stringify(canonicalAppSettings(state.appSettingsDraft));
+    state.appSettingsDiscardDialogOpen = false;
+    state.appSettingsDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {
+    state.appSettings = await saveAppSettings(settings);
+    state.appSettingsDialogOpen = false;
+    state.appSettingsDraft = null;
+    state.appSettingsDialogInitialJson = null;
+    state.appSettingsDiscardDialogOpen = false;
+    state.status = 'Saved settings';
+    await mountCurrentDocument();
+  }),
+  cancelAppSettings: (settings) => {
+    if (appSettingsChanged(settings)) {
+      state.appSettingsDiscardDialogOpen = true;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    state.appSettingsDialogOpen = false;
+    state.appSettingsDraft = null;
+    state.appSettingsDialogInitialJson = null;
+    state.appSettingsDiscardDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  discardAppSettingsChanges: () => {
+    state.appSettingsDialogOpen = false;
+    state.appSettingsDraft = null;
+    state.appSettingsDialogInitialJson = null;
+    state.appSettingsDiscardDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  keepEditingAppSettings: () => {
+    state.appSettingsDiscardDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   openAbout: () => {
     closeUiBeforeAbout();
     state.aboutDialogOpen = true;

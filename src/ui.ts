@@ -1,5 +1,5 @@
 import { aiProviderDefaultModel, aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
@@ -68,6 +68,11 @@ export interface UiHandlers {
   closeDebugLog(): void;
   refreshDebugLog(): void;
   clearDebugLog(): void;
+  openAppSettings(): void;
+  saveAppSettings(settings: AppSettings): void;
+  cancelAppSettings(settings?: AppSettings): void;
+  discardAppSettingsChanges(): void;
+  keepEditingAppSettings(): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
   setDefaultAiProvider(settings: AiSettings): void;
@@ -194,6 +199,9 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
+const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
+const MAX_IMAGE_ATTACHMENT_DIMENSION = 16_384;
 const importExcludeTagHelpers = {
   getTagState(target: HTMLElement): string[] {
     return parseTags(importExcludeTagsInput(target)?.value ?? '');
@@ -319,6 +327,8 @@ export function renderModals(state: AppState): void {
     ${renderExportedPdfDialog(state)}
     ${renderAboutDialog(state)}
     ${renderDebugLogDialog(state)}
+    ${renderAppSettingsDialog(state)}
+    ${renderAppSettingsDiscardDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
@@ -445,6 +455,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.closeColorTheme();
           return;
         }
+        if (backdrop.querySelector('.app-settings-discard-dialog')) {
+          handlers.keepEditingAppSettings();
+          return;
+        }
         if (backdrop.querySelector('.ai-settings-discard-dialog')) {
           handlers.keepEditingAiSettings();
           return;
@@ -456,6 +470,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         const mcpSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="mcp-settings"]');
         if (mcpSettingsForm) {
           handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
+          return;
+        }
+        const appSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
+        if (appSettingsForm) {
+          handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm)));
           return;
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
@@ -540,6 +559,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
+    if (action === 'app-settings') handlers.openAppSettings();
+    if (action === 'cancel-app-settings') {
+      const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
+      handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form)) : undefined);
+    }
+    if (action === 'discard-app-settings-changes') handlers.discardAppSettingsChanges();
+    if (action === 'keep-editing-app-settings') handlers.keepEditingAppSettings();
     if (action === 'ai-settings') handlers.openAiSettings();
     if (action === 'select-ai-provider' && target.dataset.providerId) {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -978,6 +1004,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         isTemplateExtension(extension) ? extension : '.thvy'
       );
     }
+    if (form.dataset.form === 'app-settings') {
+      const data = new FormData(form);
+      handlers.saveAppSettings(readAppSettingsForm(data));
+    }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
       handlers.saveAiSettings(readAiSettingsForm(data));
@@ -1037,6 +1067,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.closeColorTheme();
       return;
     }
+    if (root.querySelector('.app-settings-discard-dialog')) {
+      event.preventDefault();
+      handlers.keepEditingAppSettings();
+      return;
+    }
     if (root.querySelector('.ai-settings-discard-dialog')) {
       event.preventDefault();
       handlers.keepEditingAiSettings();
@@ -1052,6 +1087,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (mcpSettingsForm) {
       event.preventDefault();
       handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
+      return;
+    }
+    const appSettingsForm = target?.closest<HTMLFormElement>('form[data-form="app-settings"]')
+      ?? root.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
+    if (appSettingsForm) {
+      event.preventDefault();
+      handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm)));
       return;
     }
     if (root.querySelector('.workspace-filter-dialog')) {
@@ -1286,7 +1328,7 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
   }
   if (!event.shiftKey && key === ',') {
     event.preventDefault();
-    handlers.openAiSettings();
+    handlers.openAppSettings();
     return true;
   }
   return false;
@@ -2844,6 +2886,68 @@ function formatDebugLogTime(value: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function renderAppSettingsDialog(state: AppState): string {
+  if (!state.appSettingsDialogOpen) {
+    return '';
+  }
+  const settings = state.appSettingsDraft ?? state.appSettings;
+  const imageAttachmentMaxDimensions = normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="app-settings">
+        <h2>Settings</h2>
+        <p class="dialog-note">Configure application defaults used when a document does not set its own value.</p>
+        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <fieldset class="ai-action-config">
+          <legend>Attached image defaults</legend>
+          <label>
+            <span>Reduce width</span>
+            <input
+              name="imageAttachmentMaxWidth"
+              type="number"
+              min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
+              max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
+              step="1"
+              value="${escapeAttr(String(imageAttachmentMaxDimensions.width))}"
+            >
+          </label>
+          <label>
+            <span>Reduce height</span>
+            <input
+              name="imageAttachmentMaxHeight"
+              type="number"
+              min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
+              max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
+              step="1"
+              value="${escapeAttr(String(imageAttachmentMaxDimensions.height))}"
+            >
+          </label>
+        </fieldset>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-app-settings">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderAppSettingsDiscardDialog(state: AppState): string {
+  if (!state.appSettingsDiscardDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog app-settings-discard-dialog" role="dialog" aria-modal="true" aria-labelledby="appSettingsDiscardTitle">
+        <h2 id="appSettingsDiscardTitle">Discard Settings Changes?</h2>
+        <p class="dialog-note">You have unsaved settings changes.</p>
+        <div class="dialog-actions">
+          <button type="button" class="danger-button" data-action="discard-app-settings-changes">Discard Changes</button>
+          <button type="button" data-action="keep-editing-app-settings">Keep Editing</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function renderAiSettingsDialog(state: AppState): string {
   if (!state.aiSettingsDialogOpen) {
     return '';
@@ -3705,6 +3809,29 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
     </fieldset>`;
 }
 
+function readAppSettingsForm(data: FormData): AppSettings {
+  return {
+    ...parseAppSettings(String(data.get('settingsJson') ?? '')),
+    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions({
+      width: data.get('imageAttachmentMaxWidth'),
+      height: data.get('imageAttachmentMaxHeight'),
+    }),
+  };
+}
+
+function parseAppSettings(value: string): AppSettings {
+  try {
+    const parsed = JSON.parse(value) as Partial<AppSettings>;
+    return {
+      imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
+    };
+  } catch {
+    return {
+      imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(null),
+    };
+  }
+}
+
 function readAiSettingsForm(data: FormData): AiSettings {
   const selectedProviderId = String(data.get('selectedProviderId') ?? data.get('activeProviderId') ?? '').trim() || 'openai';
   const parsed = parseAiSettings(String(data.get('settingsJson') ?? ''));
@@ -3853,6 +3980,22 @@ function normalizeAiMaxContextChars(value: unknown): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeImageAttachmentMaxDimensions(value: unknown): ImageAttachmentMaxDimensions {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as { width?: unknown; height?: unknown }
+    : {};
+  return {
+    width: normalizeImageAttachmentDimension(record.width),
+    height: normalizeImageAttachmentDimension(record.height),
+  };
+}
+
+function normalizeImageAttachmentDimension(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
+  return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
 }
 
 function syncAiMaxContextCharsOutput(input: HTMLInputElement): void {

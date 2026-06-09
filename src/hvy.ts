@@ -18,6 +18,7 @@ import type {
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
 type HvyEmbedMount = ReturnType<HvyEmbedModule['mountHvy']>;
+type ImageAttachmentMaxDimensions = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['imageAttachmentMaxDimensions']>;
 type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
@@ -61,6 +62,7 @@ export interface MountHvyDocumentOptions {
   searchSnapshot?: HvySearchSnapshotInput | null;
   hiddenFromAI?: boolean;
   maxContextChars?: number;
+  imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -201,6 +203,7 @@ export async function mountHvyDocument(
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
+    imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : chatSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,

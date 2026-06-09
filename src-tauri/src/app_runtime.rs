@@ -23,7 +23,9 @@ pub fn run() {
             save_document_mode_preference,
             save_document_color_preference,
             load_ai_settings,
+            load_app_settings,
             save_ai_settings,
+            save_app_settings,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             mcp::load_mcp_server_status,
@@ -180,6 +182,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
+        .item(&app_shortcut_menu_item(app, "Settings...", "app-settings", "CmdOrCtrl+,")?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
@@ -210,7 +213,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&app_shortcut_menu_item(app, "Quit HVY Galaxy", "app-close-requested", "CmdOrCtrl+Q")?);
     let file = file_builder.build()?;
     let ai = SubmenuBuilder::with_id(app, "ai-menu", "AI")
-        .item(&app_shortcut_menu_item(app, "LLM Settings...", "ai-settings", "CmdOrCtrl+,")?)
+        .item(&MenuItemBuilder::new("LLM Settings...").id("ai-settings").build(app)?)
         .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")

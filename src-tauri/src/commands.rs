@@ -32,9 +32,21 @@ fn load_ai_settings(app: AppHandle) -> AppResult<AiSettings> {
 }
 
 #[tauri::command]
+fn load_app_settings(app: AppHandle) -> AppResult<AppSettings> {
+    read_app_settings(&app_settings_path(&app)?)
+}
+
+#[tauri::command]
 fn save_ai_settings(app: AppHandle, settings: AiSettings) -> AppResult<AiSettings> {
     let settings = normalize_ai_settings(settings)?;
     write_json_atomically(&ai_settings_path(&app)?, &settings)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+fn save_app_settings(app: AppHandle, settings: AppSettings) -> AppResult<AppSettings> {
+    let settings = normalize_app_settings(settings);
+    write_json_atomically(&app_settings_path(&app)?, &settings)?;
     Ok(settings)
 }
 

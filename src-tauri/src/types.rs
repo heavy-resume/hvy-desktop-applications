@@ -374,6 +374,43 @@ impl Default for AiProviderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct ImageAttachmentMaxDimensions {
+    #[serde(default = "default_image_attachment_max_dimension")]
+    width: u32,
+    #[serde(default = "default_image_attachment_max_dimension")]
+    height: u32,
+}
+
+impl Default for ImageAttachmentMaxDimensions {
+    fn default() -> Self {
+        Self {
+            width: default_image_attachment_max_dimension(),
+            height: default_image_attachment_max_dimension(),
+        }
+    }
+}
+
+fn default_image_attachment_max_dimension() -> u32 {
+    DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AppSettings {
+    #[serde(default)]
+    image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct AiSettings {
     active_provider_id: String,
     providers: Vec<AiProviderConfig>,

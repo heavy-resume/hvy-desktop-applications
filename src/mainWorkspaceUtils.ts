@@ -3,7 +3,7 @@ import { state, workspacePathForFileInWorkspaces } from './state';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, normalizeAiMaxContextChars } from './mainUtilities';
+import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, markDocumentTabOpened, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession, writeDocumentColorPreference } from './main';
 
@@ -123,6 +123,7 @@ export async function createTemporaryImportMount(
   globalThis.document.body.append(root);
   const mounted = await mountHvyDocument(root, document, mode, {
     maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
+    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(state.appSettings.imageAttachmentMaxDimensions),
   });
   return {
     mounted,

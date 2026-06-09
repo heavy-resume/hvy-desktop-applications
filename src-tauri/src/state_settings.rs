@@ -316,6 +316,20 @@ fn read_ai_settings(path: &Path) -> AppResult<AiSettings> {
     }
 }
 
+fn read_app_settings(path: &Path) -> AppResult<AppSettings> {
+    if !path.exists() {
+        return Ok(AppSettings::default());
+    }
+    let settings: AppSettings = serde_json::from_slice(&fs::read(path)?)?;
+    Ok(normalize_app_settings(settings))
+}
+
+fn normalize_app_settings(settings: AppSettings) -> AppSettings {
+    AppSettings {
+        image_attachment_max_dimensions: normalize_image_attachment_max_dimensions(settings.image_attachment_max_dimensions),
+    }
+}
+
 fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
     let mut providers = Vec::new();
     for provider in settings.providers {
@@ -345,6 +359,20 @@ fn normalize_ai_max_context_chars(value: u32) -> u32 {
     }
     let stepped = (value.saturating_add(AI_CONTEXT_STEP_CHARS / 2) / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
     stepped.clamp(AI_MIN_CONTEXT_CHARS, AI_MAX_CONTEXT_CHARS)
+}
+
+fn normalize_image_attachment_max_dimensions(value: ImageAttachmentMaxDimensions) -> ImageAttachmentMaxDimensions {
+    ImageAttachmentMaxDimensions {
+        width: normalize_image_attachment_dimension(value.width),
+        height: normalize_image_attachment_dimension(value.height),
+    }
+}
+
+fn normalize_image_attachment_dimension(value: u32) -> u32 {
+    if value == 0 {
+        return default_image_attachment_max_dimension();
+    }
+    value.clamp(MIN_IMAGE_ATTACHMENT_DIMENSION, MAX_IMAGE_ATTACHMENT_DIMENSION)
 }
 
 fn normalize_ai_provider(provider_config: AiProviderConfig) -> AppResult<AiProviderConfig> {
@@ -490,4 +518,13 @@ fn ai_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
         .map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     Ok(directory.join(AI_SETTINGS))
+}
+
+fn app_settings_path(app: &AppHandle) -> AppResult<PathBuf> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(APP_SETTINGS))
 }

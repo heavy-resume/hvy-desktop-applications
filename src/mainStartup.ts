@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { loadAiSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onMenuEvent, onOpenDocumentPath, readDocumentFile, startMcpServer, type DocumentFile } from './backend';
+import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onMenuEvent, onOpenDocumentPath, readDocumentFile, startMcpServer, type DocumentFile } from './backend';
 import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
 import { measureDebug } from './debugLog';
 import { deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
@@ -26,6 +26,7 @@ export async function boot(): Promise<void> {
     bindFindShortcut();
     await refreshRecents();
     await refreshArchivedWorkspaces();
+    state.appSettings = await loadAppSettings();
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
     state.mcpServerStatus = await loadMcpServerStatus();
@@ -56,6 +57,7 @@ export async function boot(): Promise<void> {
       if (event === 'open-hvy-guide') void openHvyGuide();
       if (event === 'about') handlers.openAbout();
       if (event === 'debug-log') handlers.openDebugLog();
+      if (event === 'app-settings') handlers.openAppSettings();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
       if (event === 'colors') handlers.openColorTheme();

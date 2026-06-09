@@ -1,4 +1,4 @@
-import { chooseWorkspaceFolder, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
+import { chooseWorkspaceFolder, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
 import { getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, saveColorThemeSettings } from './colorTheme';
 import { state } from './state';
 import type { HvyMode, VisualDocument } from './hvy';
@@ -8,6 +8,9 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
+const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
+const MAX_IMAGE_ATTACHMENT_DIMENSION = 16_384;
 
 export function defaultHvyDocument(title = 'Untitled'): string {
   return `---
@@ -128,6 +131,10 @@ export function closeUiBeforeAiSettings(): void {
   state.colorThemeDialogOpen = false;
   state.aboutDialogOpen = false;
   state.debugLogDialogOpen = false;
+  state.appSettingsDialogOpen = false;
+  state.appSettingsDraft = null;
+  state.appSettingsDialogInitialJson = null;
+  state.appSettingsDiscardDialogOpen = false;
   state.mcpSettingsDialogOpen = false;
   state.mcpSettingsDraft = null;
   state.mcpSettingsDialogInitialJson = null;
@@ -147,6 +154,10 @@ export function closeUiBeforeAbout(): void {
   state.workspaceInitializationName = null;
   state.newDocumentWorkspacePath = null;
   state.debugLogDialogOpen = false;
+  state.appSettingsDialogOpen = false;
+  state.appSettingsDraft = null;
+  state.appSettingsDialogInitialJson = null;
+  state.appSettingsDiscardDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
@@ -171,6 +182,10 @@ export function closeUiBeforeColorTheme(): void {
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
   state.debugLogDialogOpen = false;
+  state.appSettingsDialogOpen = false;
+  state.appSettingsDraft = null;
+  state.appSettingsDialogInitialJson = null;
+  state.appSettingsDiscardDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
@@ -194,6 +209,10 @@ export function closeUiBeforeMcpSettings(): void {
   state.newDocumentWorkspacePath = null;
   state.aboutDialogOpen = false;
   state.debugLogDialogOpen = false;
+  state.appSettingsDialogOpen = false;
+  state.appSettingsDraft = null;
+  state.appSettingsDialogInitialJson = null;
+  state.appSettingsDiscardDialogOpen = false;
   state.aiSettingsDialogOpen = false;
   state.aiSettingsDraft = null;
   state.aiSettingsDialogInitialJson = null;
@@ -201,6 +220,31 @@ export function closeUiBeforeMcpSettings(): void {
   state.aiSettingsSelectedProviderId = null;
   state.colorThemeDialogOpen = false;
   state.mcpSettingsDiscardDialogOpen = false;
+  state.recoveryDialogOpen = false;
+  state.recoveryBackups = [];
+  state.openWorkspaceActionsPath = null;
+  closeMountedTransientUi();
+}
+
+export function closeUiBeforeAppSettings(): void {
+  state.newWorkspaceDialogOpen = false;
+  state.workspaceInitializationDialogOpen = false;
+  state.workspaceInitializationPath = null;
+  state.workspaceInitializationName = null;
+  state.newDocumentWorkspacePath = null;
+  state.aboutDialogOpen = false;
+  state.debugLogDialogOpen = false;
+  state.aiSettingsDialogOpen = false;
+  state.aiSettingsDraft = null;
+  state.aiSettingsDialogInitialJson = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
+  state.mcpSettingsDialogOpen = false;
+  state.mcpSettingsDraft = null;
+  state.mcpSettingsDialogInitialJson = null;
+  state.mcpSettingsDiscardDialogOpen = false;
+  state.colorThemeDialogOpen = false;
+  state.appSettingsDiscardDialogOpen = false;
   state.recoveryDialogOpen = false;
   state.recoveryBackups = [];
   state.openWorkspaceActionsPath = null;
@@ -294,6 +338,10 @@ export function cloneAiSettings(settings: typeof state.aiSettings): typeof state
   return JSON.parse(JSON.stringify(settings)) as typeof state.aiSettings;
 }
 
+export function cloneAppSettings(settings: AppSettings): AppSettings {
+  return JSON.parse(JSON.stringify(settings)) as AppSettings;
+}
+
 export function cloneMcpSettings(settings: McpSettings): McpSettings {
   return JSON.parse(JSON.stringify(settings)) as McpSettings;
 }
@@ -302,6 +350,13 @@ export function aiSettingsChanged(settings: typeof state.aiSettings | undefined)
   const initial = state.aiSettingsDialogInitialJson;
   if (!initial) return false;
   const current = JSON.stringify(canonicalAiSettings(settings ?? state.aiSettingsDraft ?? state.aiSettings));
+  return current !== initial;
+}
+
+export function appSettingsChanged(settings: AppSettings | undefined): boolean {
+  const initial = state.appSettingsDialogInitialJson;
+  if (!initial) return false;
+  const current = JSON.stringify(canonicalAppSettings(settings ?? state.appSettingsDraft ?? state.appSettings));
   return current !== initial;
 }
 
@@ -347,11 +402,42 @@ export function canonicalAiSettings(settings: typeof state.aiSettings): typeof s
   };
 }
 
+export function canonicalAppSettings(settings: AppSettings): AppSettings {
+  return {
+    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
+  };
+}
+
 export function normalizeAiMaxContextChars(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+export function normalizeImageAttachmentMaxDimensions(value: unknown): { width: number; height: number } {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as { width?: unknown; height?: unknown }
+    : {};
+  return {
+    width: normalizeImageAttachmentDimension(record.width),
+    height: normalizeImageAttachmentDimension(record.height),
+  };
+}
+
+export function effectiveImageAttachmentMaxDimensions(
+  document: { meta: Record<string, unknown> },
+  globalDefault: unknown,
+): { width: number; height: number } {
+  return normalizeImageAttachmentMaxDimensions(
+    document.meta.image_attachment_max_dimensions ?? globalDefault,
+  );
+}
+
+function normalizeImageAttachmentDimension(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
+  return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
 }
 
 export function requestWorkspaceInitialization(path: string, defaultName: string): null {

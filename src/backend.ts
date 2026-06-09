@@ -305,6 +305,15 @@ export interface AiSettings {
   maxContextChars: number;
 }
 
+export interface ImageAttachmentMaxDimensions {
+  width: number;
+  height: number;
+}
+
+export interface AppSettings {
+  imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
+}
+
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -388,6 +397,17 @@ export function saveAiSettings(settings: AiSettings): Promise<AiSettings> {
   return invokeDesktop('save_ai_settings', { settings });
 }
 
+export function loadAppSettings(): Promise<AppSettings> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve(defaultAppSettings());
+  }
+  return invokeDesktop('load_app_settings');
+}
+
+export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
+  return invokeDesktop('save_app_settings', { settings });
+}
+
 export function loadMcpSettings(): Promise<McpSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpSettings());
@@ -454,6 +474,12 @@ export function defaultAiSettings(): AiSettings {
     providers: [provider],
     actions: defaultAiActionSettings(),
     maxContextChars: 40_000,
+  };
+}
+
+export function defaultAppSettings(): AppSettings {
+  return {
+    imageAttachmentMaxDimensions: { width: 1080, height: 1080 },
   };
 }
 
