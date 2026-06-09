@@ -2818,7 +2818,7 @@ function renderAboutDialog(state: AppState): string {
       <section class="dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
         <img class="about-logo" src="${escapeAttr(appIconUrl)}" alt="" aria-hidden="true">
         <h2 id="aboutTitle">HVY Galaxy</h2>
-        <p class="about-version">Version 0.1.0</p>
+        <p class="about-version">Version ${escapeHtml(__APP_VERSION__)}</p>
         <p class="about-copy">Desktop app for HVY files</p>
         <div class="about-attribution">
           <span>Created by Heavy Resume</span>

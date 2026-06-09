@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
 const require = createRequire(import.meta.url);
+const packageJson = require('./package.json') as { version: string };
 const BUILT_IN_PLUGINS_ID = 'virtual:hvy-built-in-plugins';
 const BUILT_IN_PLUGINS_RESOLVED_ID = `\0${BUILT_IN_PLUGINS_ID}`;
 const BRYTHON_MINIMAL_VFS_ID = 'virtual:hvy-brython-minimal-vfs';
@@ -107,6 +108,9 @@ function createBrythonMinimalVfsPlugin(): Plugin {
 
 export default defineConfig({
   base: './',
+  define: {
+    __APP_VERSION__: JSON.stringify(packageJson.version),
+  },
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   resolve: {
     alias: {
