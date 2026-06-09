@@ -1,6 +1,6 @@
 import { aiProviderDefaultModel, aiProviderPreset, aiProviderPresets } from './aiProviders';
 import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
-import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
+import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
@@ -797,10 +797,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (field === 'theme-color-filter') {
       const dialog = target.closest<HTMLElement>('.color-theme-dialog');
-      const filter = target.value.trim().toLowerCase();
-      dialog?.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
-        row.hidden = filter.length > 0 && !(row.dataset.themeSearch ?? '').includes(filter);
-      });
+      if (dialog) applyThemeFilter(dialog, target.value);
       return;
     }
     if (field === 'theme-name') {
@@ -1551,6 +1548,9 @@ function renderWorkspaceTransferDialog(state: AppState): string {
   const transfer = state.workspaceTransfer;
   if (!transfer) return '';
   const workspaces = state.workspaces.filter((workspace) => workspace.path !== transfer.excludedWorkspacePath);
+  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
+    ? state.selectedWorkspacePath
+    : workspaces[0]?.path ?? null;
   const title = transfer.mode === 'saveCurrent'
     ? 'Save to Workspace'
     : transfer.mode === 'copyFile'
@@ -1564,7 +1564,7 @@ function renderWorkspaceTransferDialog(state: AppState): string {
         <label>
           <span>Workspace</span>
           <select name="workspacePath" required>
-            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
           </select>
         </label>
         ${transfer.mode === 'saveCurrent' ? `
@@ -1592,6 +1592,9 @@ function renderSaveAsDialog(state: AppState): string {
   const workspaceDisabled = workspaces.length === 0;
   const workspaceActive = state.saveAsScope === 'workspace' && !workspaceDisabled;
   const anywhereActive = state.saveAsScope === 'anywhere' || workspaceDisabled;
+  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
+    ? state.selectedWorkspacePath
+    : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
   const name = displayDocumentName(state.document.name);
   return `
     <div class="modal-backdrop" role="presentation">
@@ -1607,7 +1610,7 @@ function renderSaveAsDialog(state: AppState): string {
           <label>
             <span>Workspace</span>
             <select name="workspacePath" required>
-              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
             </select>
           </label>
           <label>
@@ -1913,7 +1916,6 @@ function renderToolbar(state: AppState): string {
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   const fileActions = getFileActionAvailability(state);
   const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
-  const documentTheme = getDocumentTheme(state);
   const documentColorsEnabled = getDocumentColorsEnabled(state);
   return `
     <div class="toolbar-title">
@@ -3104,7 +3106,7 @@ function renderColorThemeDialog(state: AppState): string {
   const title = documentMode ? 'Document Colors' : 'Colors';
   return `
     <div class="modal-backdrop" role="presentation">
-      <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle">
+      <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle" style="${escapeAttr(renderThemeVariableStyle(colors))}">
         <h2 id="colorThemeTitle">${escapeHtml(title)}</h2>
         ${renderThemeSwitcher(state, selectedPaletteId, selectedCustomThemeId, activeThemeName, colors, true)}
         ${renderThemePreviewPanel(true)}
@@ -3117,6 +3119,13 @@ function renderColorThemeDialog(state: AppState): string {
         </div>
       </section>
     </div>`;
+}
+
+function renderThemeVariableStyle(colors: Record<string, string>): string {
+  return Object.entries(colors)
+    .filter(([name, value]) => isCssVariableName(name) && value.trim())
+    .map(([name, value]) => `${name}: ${value.trim()};`)
+    .join(' ');
 }
 
 function getDocumentColorsEnabled(state: AppState): boolean {
@@ -3484,11 +3493,23 @@ function applyThemeColorFilter(target: HTMLElement): void {
   const input = dialog?.querySelector<HTMLInputElement>('[data-field="theme-color-filter"]');
   if (!dialog || !input) return;
   input.value = target.dataset.themeFilter ?? '';
-  const filter = input.value.trim().toLowerCase();
-  dialog.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
-    row.hidden = filter.length > 0 && !(row.dataset.themeSearch ?? '').includes(filter);
-  });
+  applyThemeFilter(dialog, input.value);
   input.focus();
+}
+
+function applyThemeFilter(dialog: HTMLElement, value: string): void {
+  const tokens = themeFilterTokens(value);
+  dialog.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
+    row.hidden = tokens.length > 0 && !tokens.some((token) => (row.dataset.themeSearch ?? '').includes(token));
+  });
+}
+
+function themeFilterTokens(value: string): string[] {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 function getResolvedThemeColor(name: string, overrideValue: string | undefined): string {

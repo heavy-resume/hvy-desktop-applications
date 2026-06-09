@@ -241,6 +241,13 @@ export function updateThemeRowChrome(name: string, value: string): void {
   const row = document.querySelector<HTMLElement>(`.theme-color-row[data-theme-color-name="${cssEscape(name)}"]`);
   row?.querySelector<HTMLElement>('.theme-color-swatch')?.setAttribute('style', value ? `background: ${value};` : '');
   row?.querySelector<HTMLButtonElement>('[data-action="theme-reset-color"]')?.toggleAttribute('disabled', !value);
+  const dialog = row?.closest<HTMLElement>('.color-theme-dialog');
+  if (!dialog) return;
+  if (value.trim()) {
+    dialog.style.setProperty(name, value.trim());
+  } else {
+    dialog.style.removeProperty(name);
+  }
 }
 
 export function currentThemeDisplayName(): string | null {
@@ -363,4 +370,3 @@ export async function createWorkspaceInChosenFolder() {
   }
   return requestWorkspaceInitialization(candidate.path, candidate.defaultName);
 }
-

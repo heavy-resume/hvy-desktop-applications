@@ -167,6 +167,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
+    let close_document = app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?;
+    close_document.set_enabled(false)?;
+    let save = app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?;
+    save.set_enabled(false)?;
+    let save_as = app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?;
+    save_as.set_enabled(false)?;
+    let save_to_workspace = MenuItemBuilder::new("Save to Workspace...")
+        .id("save-to-workspace")
+        .enabled(false)
+        .build(app)?;
     #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
@@ -185,6 +195,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&recent_files)
         .separator();
     let file_builder = file_builder
+        .item(&close_document)
+        .item(&save)
+        .item(&save_as)
+        .item(&save_to_workspace)
+        .separator()
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()

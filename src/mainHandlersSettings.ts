@@ -1,9 +1,9 @@
 import { installAiChatClient } from './aiClient';
 import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type McpClientInstallTarget } from './backend';
-import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings } from './colorTheme';
+import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, getDebugLogEntries } from './debugLog';
 import { state } from './state';
-import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneMcpSettings, aiSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
+import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneMcpSettings, aiSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 
 interface DocumentColorTheme {
@@ -35,6 +35,19 @@ function updateDocumentColorTheme(nextTheme: DocumentColorTheme): void {
   applyAppColorTheme();
   setDocumentDirty(true);
   state.status = 'Updated document colors';
+}
+
+function initializeDocumentColorThemeFromCurrentTheme(): void {
+  const current = currentDocumentColorTheme();
+  applyAppColorTheme();
+  const computed = window.getComputedStyle(mountRoot ?? document.documentElement);
+  const colors = Object.fromEntries(THEME_COLOR_NAMES
+    .map((name) => [name, computed.getPropertyValue(name).trim()] as const)
+    .filter((entry) => entry[1].length > 0));
+  updateDocumentColorTheme({
+    name: current.name || currentThemeDisplayName() || 'Document Theme',
+    colors: { ...colors, ...current.colors },
+  });
 }
 
 function editingDocumentColorTheme(): boolean {
@@ -227,6 +240,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   openDocumentColorTheme: () => {
     closeUiBeforeColorTheme();
+    initializeDocumentColorThemeFromCurrentTheme();
     state.colorThemeDialogOpen = true;
     state.colorThemeDialogMode = 'document';
     state.status = 'Ready';

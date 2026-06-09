@@ -5,7 +5,7 @@ import { deserializeHvy, mountHvyDocument, serializeHvy, serializeMountedDocumen
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, normalizeAiMaxContextChars } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
-import { backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, markDocumentTabOpened, moveBackupTracking, openDocument, pendingMountDocument, refreshRecents, removeDocumentTabPath, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession } from './main';
+import { backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, markDocumentTabOpened, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession, writeDocumentColorPreference } from './main';
 
 let lastFileMenuStateKey: string | null = null;
 
@@ -60,6 +60,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
   if (!state.document?.mounted) return;
   const previousPath = state.document.path;
   const previousName = state.document.name;
+  const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const bytes = await serializeMountedDocumentAsync(state.document.mounted);
   const file = await saveDocumentToWorkspace({
     workspacePath,
@@ -68,6 +69,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
   });
   await openDocument(file, { deferMount: true });
   documentSessions.delete(file.path);
+  writeDocumentColorPreference(file.path, previousUseDocumentColors);
   if (state.document?.path === file.path) {
     state.document.dirty = false;
     state.document.isNew = false;
@@ -81,6 +83,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
     removeDocumentTabPath(previousPath);
   }
   markDocumentTabOpened(file.path);
+  state.selectedWorkspacePath = workspacePath;
   upsertWorkspace(await loadWorkspace(workspacePath));
   await refreshRecents();
   await clearRecoveryDraftsForDocument(previousPath, previousName);
@@ -251,4 +254,3 @@ export function hasOpenWorkspaceNamed(name: string, exceptPath: string | null = 
   const normalized = name.trim().toLowerCase();
   return state.workspaces.some((workspace) => workspace.path !== exceptPath && workspace.manifest.name.trim().toLowerCase() === normalized);
 }
-

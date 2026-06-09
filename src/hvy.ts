@@ -48,6 +48,7 @@ type MetaTemplateKind = 'component' | 'section';
 type MetaTemplateClipboard =
   | { kind: 'component'; definition: Record<string, unknown> }
   | { kind: 'section'; definition: Record<string, unknown>; componentDefinitions: Record<string, unknown>[] };
+type DocumentAttachment = VisualDocument['attachments'][number];
 
 export interface MountedDocument {
   mount: HvyMount;
@@ -215,6 +216,35 @@ export async function mountHvyDocument(
       return finalMount.getDocument();
     },
   };
+}
+
+export function restoreRawHvyAttachmentBytes(
+  document: VisualDocument,
+  previousAttachments: DocumentAttachment[],
+): VisualDocument {
+  if (previousAttachments.length === 0 || document.attachments.length === 0) {
+    return document;
+  }
+  const previousById = new Map(previousAttachments.map((attachment) => [attachment.id, attachment]));
+  let restored = false;
+  const nextAttachments = document.attachments.map((attachment) => {
+    if (attachment.bytes.length > 0) {
+      return attachment;
+    }
+    const previous = previousById.get(attachment.id);
+    if (!previous || previous.bytes.length === 0) {
+      return attachment;
+    }
+    restored = true;
+    return {
+      ...attachment,
+      bytes: Uint8Array.from(previous.bytes),
+    };
+  });
+  if (restored) {
+    document.attachments = nextAttachments;
+  }
+  return document;
 }
 
 function withAttachmentDownload(root: HTMLElement, mount: HvyMount): HvyMount {
@@ -480,7 +510,7 @@ async function mountRawHvyDocument(
     rawSearchQuery = '';
     notifyDirty(textarea.value !== lastSavedText);
     try {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
     } catch {
       // Invalid raw drafts stay editable; Save will surface the parse error.
     }
@@ -657,13 +687,18 @@ async function mountRawHvyDocument(
     rawSearchQuery = '';
     notifyDirty(textarea.value !== lastSavedText);
     try {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
     } catch {
       // Invalid raw drafts stay editable; Save will surface the parse error.
     }
   });
   const parseDraft = () => {
+    return parseRawDraft();
+  };
+  const parseRawDraft = () => {
+    const previousAttachments = currentDocument.attachments;
     currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    restoreRawHvyAttachmentBytes(currentDocument, previousAttachments);
     return currentDocument;
   };
   const syncDraftFromDocument = () => {
@@ -690,7 +725,7 @@ async function mountRawHvyDocument(
       return currentDocument;
     },
     serializeDocumentBytes() {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
       return serializeDocumentBytes(currentDocument);
     },
     async serializeDocumentBytesAsync() {
@@ -698,11 +733,11 @@ async function mountRawHvyDocument(
     },
     async getPdfBlob() {
       const { getHvyPdfBlob } = await import('../../heavy-file-format/src/pdf-export/export');
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
       return getHvyPdfBlob(currentDocument);
     },
     markSaved() {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
       lastSavedText = serializeDocument(currentDocument);
       textarea.value = lastSavedText;
       notifyDirty(false);

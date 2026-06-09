@@ -4,7 +4,7 @@ import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedD
 import { state } from './state';
 import { pdfFileName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
-import { documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setDocumentDirty, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFileAiAccess, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setDocumentDirty, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFileAiAccess, workspaceFilterDocumentCache, writeDocumentColorPreference, writeHotReloadSessionSnapshot } from './main';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -135,6 +135,7 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
   const previousPath = state.document.path;
   const previousName = state.document.name;
   const previousMode = state.document.mode;
+  const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const document = getMountedDocument(state.document.mounted);
   const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
   if (!file) return;
@@ -156,6 +157,7 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
     mounted: null,
     recoveryBackupId: null,
   };
+  writeDocumentColorPreference(file.path, previousUseDocumentColors);
   updateCurrentDocumentSession(document);
   state.selectedFilePath = file.path;
   state.status = `Saved ${file.name}`;
@@ -887,4 +889,3 @@ export async function openRecoveryDialogOnBoot(): Promise<void> {
     state.recoveryBackups = [];
   }
 }
-
