@@ -8,6 +8,7 @@ const packagerModule = require('@electron/packager');
 const packager = packagerModule.packager || packagerModule.default || packagerModule;
 
 const appName = 'HVY Galaxy';
+const appDescription = 'HVY Galaxy document editor';
 const appIdentifier = 'com.heavyresume.hvy-galaxy';
 const hvyDocumentTypeIdentifier = 'com.heavyresume.hvy-document';
 const outDir = path.resolve('dist-electron');
@@ -39,7 +40,7 @@ const appPaths = await packager({
   darwinDarkModeSupport: true,
   win32metadata: {
     CompanyName: 'HVY',
-    FileDescription: appName,
+    FileDescription: appDescription,
     InternalName: appName,
     OriginalFilename: `${appName}.exe`,
     ProductName: appName,

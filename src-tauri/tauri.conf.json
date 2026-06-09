@@ -37,7 +37,7 @@
     ],
     "category": "Productivity",
     "shortDescription": "HVY Galaxy",
-    "longDescription": "Cross-platform desktop app for viewing and editing HVY files.",
+    "longDescription": "HVY Galaxy document editor.",
     "fileAssociations": [
       {
         "ext": ["hvy", "thvy", "phvy"],

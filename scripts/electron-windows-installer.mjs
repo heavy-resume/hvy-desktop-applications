@@ -6,8 +6,10 @@ const require = createRequire(import.meta.url);
 const { createWindowsInstaller } = require('electron-winstaller');
 
 const appName = 'HVY Galaxy';
+const appDescription = 'HVY Galaxy document editor.';
 const installerPackageId = 'HvyGalaxy';
-const appVersion = '0.1.0';
+const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const appVersion = packageJson.version;
 const args = parseArgs(process.argv.slice(2));
 const arch = args.arch || process.env.ELECTRON_ARCH || process.arch;
 const platform = args.platform || process.env.ELECTRON_PLATFORM || process.platform;
@@ -33,13 +35,13 @@ await createWindowsInstaller({
   owners: 'HVY',
   name: installerPackageId,
   title: appName,
-  description: 'Cross-platform desktop app for viewing and editing HVY files.',
+  description: appDescription,
   version: appVersion,
   exe: `${appName}.exe`,
   setupExe: `${appName}_${appVersion}_electron_${arch}-setup.exe`,
-  setupMsi: `${appName}_${appVersion}_electron_${arch}.msi`,
   setupIcon: path.resolve('src-tauri', 'icons', 'icon.ico'),
   noDelta: true,
+  noMsi: true,
   usePackageJson: false,
 });
 
