@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare const __APP_VERSION__: string;
+
 declare module 'virtual:hvy-built-in-plugins' {
   export const builtInPluginIds: string[];
   export const builtInPlugins: any[];
