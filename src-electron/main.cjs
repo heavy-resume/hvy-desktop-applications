@@ -904,8 +904,7 @@ async function saveDocumentAsDialog(suggestedName, bytes) {
   });
   if (result.canceled || !result.filePath) return null;
   if (!documentExtension(result.filePath)) throw new Error('Save As path must end in .hvy, .thvy, .phvy, or .md.');
-  writeBytes(result.filePath, bytes);
-  addRecentFile(result.filePath);
+  saveDocumentFile(result.filePath, bytes);
   return readDocumentMetadataAt(result.filePath);
 }
 
@@ -1050,7 +1049,7 @@ function saveDocumentToWorkspace(workspacePath, name, bytes) {
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return readDocumentMetadataAt(destination);
 }
 
 function copyDocumentToWorkspace(filePath, workspacePath) {

@@ -440,8 +440,7 @@ fn save_document_as_dialog(
     if document_extension(&path).is_none() {
         return Err(AppError::Message("Save As path must end in .hvy, .thvy, .phvy, or .md.".into()));
     }
-    write_file_atomically(&path, &bytes)?;
-    add_recent_file(&app, &path)?;
+    persist_document_file(&app, path.clone(), &bytes)?;
     Ok(Some(read_document_metadata_at(&path)?))
 }
 
@@ -465,8 +464,7 @@ fn save_document_as_dialog_raw(
     };
     document_extension(&path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
-    write_file_atomically(&path, bytes)?;
-    add_recent_file(&app, &path)?;
+    persist_document_file(&app, path.clone(), bytes)?;
     Ok(Some(read_document_metadata_at(&path)?))
 }
 
@@ -766,16 +764,38 @@ fn save_document_to_workspace(
     workspace_path: String,
     name: String,
     bytes: Vec<u8>,
-) -> AppResult<DocumentFile> {
+) -> AppResult<DocumentFileMetadata> {
+    save_document_to_workspace_bytes(&app, workspace_path, name, &bytes)
+}
+
+#[tauri::command]
+fn save_document_to_workspace_raw(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> AppResult<DocumentFileMetadata> {
+    let workspace_path = decode_ipc_header(request.headers(), "x-hvy-workspace-path")?;
+    let name = decode_ipc_header(request.headers(), "x-hvy-document-name")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw document bytes.".into()));
+    };
+    save_document_to_workspace_bytes(&app, workspace_path, name, bytes)
+}
+
+fn save_document_to_workspace_bytes(
+    app: &AppHandle,
+    workspace_path: String,
+    name: String,
+    bytes: &[u8],
+) -> AppResult<DocumentFileMetadata> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let file_name = document_file_name(&name)?;
     let destination = unique_copy_path(&workspace_path, std::ffi::OsStr::new(&file_name));
-    write_file_atomically(&destination, &bytes)?;
+    write_file_atomically(&destination, bytes)?;
     touch_workspace_manifest(&workspace_path)?;
-    add_recent_workspace(&app, &workspace_path)?;
-    add_recent_file(&app, &destination)?;
-    read_document_at(&destination)
+    add_recent_workspace(app, &workspace_path)?;
+    add_recent_file(app, &destination)?;
+    read_document_metadata_at(&destination)
 }
 
 #[tauri::command]

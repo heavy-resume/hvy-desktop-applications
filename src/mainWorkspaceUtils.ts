@@ -1,11 +1,11 @@
 import { listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DroppedWorkspaceFile, type Workspace } from './backend';
 import { state, workspacePathForFileInWorkspaces } from './state';
 import { getFileActionAvailability } from './fileActions';
-import { deserializeHvy, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
+import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
-import { backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, markDocumentTabOpened, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession, writeDocumentColorPreference } from './main';
+import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession } from './main';
 
 let lastFileMenuStateKey: string | null = null;
 
@@ -58,37 +58,27 @@ export function workspaceTransferBusyLabel(mode: NonNullable<typeof state.worksp
 
 export async function saveCurrentDocumentToWorkspace(workspacePath: string, name: string): Promise<void> {
   if (!state.document?.mounted) return;
+  const mounted = state.document.mounted;
+  const document = getMountedDocument(mounted);
   const previousPath = state.document.path;
   const previousName = state.document.name;
+  const previousMode = state.document.mode;
   const previousUseDocumentColors = readDocumentColorPreference(previousPath);
-  const bytes = await serializeMountedDocumentAsync(state.document.mounted);
+  const bytes = await serializeMountedDocumentAsync(mounted);
   const file = await saveDocumentToWorkspace({
     workspacePath,
     name: documentFileName(name, documentTypeForExtension(state.document.extension)) ?? name,
     bytes,
   });
-  await openDocument(file, { deferMount: true });
-  documentSessions.delete(file.path);
-  writeDocumentColorPreference(file.path, previousUseDocumentColors);
-  if (state.document?.path === file.path) {
-    state.document.dirty = false;
-    state.document.isNew = false;
-    state.document.recoveryBackupId = null;
-    const document = pendingMountDocument ?? state.document.mounted?.document;
-    if (document) {
-      updateCurrentDocumentSession(document);
-    }
-  }
-  if (previousPath !== file.path) {
-    removeDocumentTabPath(previousPath);
-  }
-  markDocumentTabOpened(file.path);
+  adoptSavedAsDocument(file, mounted, document, previousMode, previousPath, previousUseDocumentColors);
+  state.selectedFilePath = file.path;
   state.selectedWorkspacePath = workspacePath;
   upsertWorkspace(await loadWorkspace(workspacePath));
   await refreshRecents();
   await clearRecoveryDraftsForDocument(previousPath, previousName);
   await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;
+  rerender({ preserveMountedDocument: true });
 }
 
 export async function saveImportedDocumentToWorkspace(
@@ -104,7 +94,7 @@ export async function saveImportedDocumentToWorkspace(
   });
   documentSessions.delete(file.path);
   upsertWorkspace(await loadWorkspace(workspacePath));
-  await openDocument(file, { deferMount: true });
+  await openDocument({ ...file, bytes }, { deferMount: true });
   await refreshRecents();
   await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;

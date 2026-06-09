@@ -78,6 +78,7 @@ pub fn run() {
             restore_document_file,
             delete_document_file,
             save_document_to_workspace,
+            save_document_to_workspace_raw,
             copy_document_to_workspace,
             move_document_to_workspace,
             write_system_file_clipboard,

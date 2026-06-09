@@ -1,9 +1,9 @@
 import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
-import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type ImportSourceFile } from './backend';
+import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { getFileActionAvailability } from './fileActions';
-import { applyMountedRecoveryState, deserializeHvy, exportHvySourceMarkdown, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, deserializeHvy, exportHvySourceMarkdown, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state } from './state';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -380,6 +380,37 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     recoveryBackupId: openDocument.recoveryBackupId,
   });
   measurePerf('session:update:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
+}
+export function adoptSavedAsDocument(
+  file: DocumentFileMetadata,
+  mounted: MountedDocument,
+  document: VisualDocument,
+  mode: HvyMode,
+  previousPath: string,
+  previousUseDocumentColors: boolean,
+): void {
+  if (previousPath && previousPath !== file.path) {
+    documentSessions.delete(previousPath);
+    removeDocumentTabPath(previousPath);
+  }
+  markDocumentTabOpened(file.path);
+  state.document = {
+    path: file.path,
+    name: file.name,
+    extension: file.extension,
+    mode,
+    dirty: false,
+    readOnly: false,
+    hiddenFromAI: workspaceFileAiAccess(file.path).hiddenFromAI,
+    isNew: false,
+    metaOpen: false,
+    mounted,
+    recoveryBackupId: null,
+  };
+  writeDocumentColorPreference(file.path, previousUseDocumentColors);
+  markMountedDocumentSaved(mounted);
+  setDocumentDirty(false, { preserveStatus: true });
+  updateCurrentDocumentSession(document);
 }
 export function cacheWorkspaceFilterDocuments(workspacePath: string, documents: HvyDocumentSearchDocument[]): void {
   clearWorkspaceFilterDocumentCache(workspacePath);

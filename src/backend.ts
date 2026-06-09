@@ -757,7 +757,15 @@ export function deleteDocumentFile(path: string): Promise<Workspace | null> {
   return invokeDesktop('delete_document_file', { path });
 }
 
-export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFile> {
+export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFileMetadata> {
+  if (isTauriRuntime()) {
+    return invoke<DocumentFileMetadata>('save_document_to_workspace_raw', toUint8Array(request.bytes), {
+      headers: {
+        'x-hvy-workspace-path': encodeURIComponent(request.workspacePath),
+        'x-hvy-document-name': encodeURIComponent(request.name),
+      },
+    });
+  }
   return invokeDesktop('save_document_to_workspace', {
     workspacePath: request.workspacePath,
     name: request.name,
