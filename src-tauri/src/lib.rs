@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -24,6 +24,7 @@ const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const RECENT_STATE: &str = "recent.json";
 const ARCHIVED_WORKSPACES: &str = "archived-workspaces.json";
 const AI_SETTINGS: &str = "ai-settings.json";
+const APP_SETTINGS: &str = "app-settings.json";
 const MCP_SETTINGS: &str = "mcp-settings.json";
 const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
 const DEFAULT_MCP_PORT: u16 = 8794;
@@ -32,6 +33,9 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS: u32 = 40_000;
 const AI_MIN_CONTEXT_CHARS: u32 = 1_000;
 const AI_MAX_CONTEXT_CHARS: u32 = 750_000;
 const AI_CONTEXT_STEP_CHARS: u32 = 1_000;
+const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION: u32 = 1_080;
+const MIN_IMAGE_ATTACHMENT_DIMENSION: u32 = 1;
+const MAX_IMAGE_ATTACHMENT_DIMENSION: u32 = 16_384;
 const BACKUP_RETENTION_HOURS: i64 = 24 * 7;
 
 #[derive(Debug, Error)]

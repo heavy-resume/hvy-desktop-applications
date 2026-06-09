@@ -1,6 +1,6 @@
 {
   "name": "hvy-galaxy-desktop",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.2",
   "productName": "HVY Galaxy",
   "main": "src-electron/main.cjs",
   "private": true,

@@ -392,6 +392,16 @@
     }
 
     #[test]
+    fn normalizes_app_settings() {
+        let settings = normalize_app_settings(AppSettings {
+            image_attachment_max_dimensions: ImageAttachmentMaxDimensions { width: 0, height: 20_000 },
+        });
+
+        assert_eq!(settings.image_attachment_max_dimensions.width, DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION);
+        assert_eq!(settings.image_attachment_max_dimensions.height, MAX_IMAGE_ATTACHMENT_DIMENSION);
+    }
+
+    #[test]
     fn normalizes_mcp_settings() {
         let settings = normalize_mcp_settings(McpSettings {
             start_automatically: true,

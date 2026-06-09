@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const appName = 'HVY Galaxy';
+const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
 const args = parseArgs(process.argv.slice(2));
 const arch = args.arch || process.env.ELECTRON_ARCH || process.arch;
 const platform = args.platform || process.env.ELECTRON_PLATFORM || process.platform;
@@ -16,7 +17,7 @@ if (platform !== 'darwin') {
 
 const packageDir = path.resolve('dist-electron', `${appName}-darwin-${arch}`);
 const appPath = path.join(packageDir, `${appName}.app`);
-const dmgPath = path.resolve('dist-electron', `${appName}_0.1.0_electron_${arch}.dmg`);
+const dmgPath = path.resolve('dist-electron', `${appName}_${packageJson.version}_electron_${arch}.dmg`);
 
 if (!fs.existsSync(appPath)) {
   throw new Error(`${appPath} was not found. Run npm run build:electron first.`);

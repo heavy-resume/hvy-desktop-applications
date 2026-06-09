@@ -32,7 +32,7 @@ heading_styles:
 <!--hvy: {"id":"section-jvcjph","lock":false,"expanded":true,"highlight":false,"contained":false,"css":"margin-bottom: 2rem;"}-->
 #! Title Section
 
- <!--hvy:grid {}-->
+ <!--hvy:grid {"gridStackWidth":"never"}-->
   <!--hvy:grid:0 {}-->
 
    <!--hvy:image {"css":"height: 100px; margin: 0.5rem 0 0.5rem auto; display: block;","imageFile":"ufo-square-with-bg-250.png","imageAlt":"ufo-square-with-bg-250.png"}-->

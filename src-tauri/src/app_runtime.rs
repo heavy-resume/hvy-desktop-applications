@@ -20,8 +20,12 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_recent_state,
+            save_document_mode_preference,
+            save_document_color_preference,
             load_ai_settings,
+            load_app_settings,
             save_ai_settings,
+            save_app_settings,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             mcp::load_mcp_server_status,
@@ -51,9 +55,14 @@ pub fn run() {
             open_import_source_dialog,
             load_launch_document_paths,
             read_document_file,
+            read_document_file_metadata,
+            read_document_file_bytes,
             save_document_file,
+            save_document_file_raw,
             save_document_as_dialog,
+            save_document_as_dialog_raw,
             save_pdf_as_dialog,
+            save_binary_as_dialog,
             list_saved_templates,
             save_document_template,
             update_workspace_template_visibility,
@@ -160,9 +169,20 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .unwrap_or_default();
     let recent_files = build_recent_files_menu(app, &recent)?;
     let recent_workspaces = build_recent_workspaces_menu(app, &recent)?;
+    let close_document = app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?;
+    close_document.set_enabled(false)?;
+    let save = app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?;
+    save.set_enabled(false)?;
+    let save_as = app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?;
+    save_as.set_enabled(false)?;
+    let save_to_workspace = MenuItemBuilder::new("Save to Workspace...")
+        .id("save-to-workspace")
+        .enabled(false)
+        .build(app)?;
     #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
+        .item(&app_shortcut_menu_item(app, "Settings...", "app-settings", "CmdOrCtrl+,")?)
         .separator()
         .item(&PredefinedMenuItem::services(app, Some("Services"))?)
         .separator()
@@ -178,10 +198,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&recent_files)
         .separator();
     let file_builder = file_builder
-        .item(&disabled_app_shortcut_menu_item(app, "Close Document", "close-document", "CmdOrCtrl+W")?)
-        .item(&disabled_app_shortcut_menu_item(app, "Save", "save", "CmdOrCtrl+S")?)
-        .item(&disabled_app_shortcut_menu_item(app, "Save As...", "save-as", "CmdOrCtrl+Shift+S")?)
-        .item(&MenuItemBuilder::new("Save to Workspace...").id("save-to-workspace").enabled(false).build(app)?)
+        .item(&close_document)
+        .item(&save)
+        .item(&save_as)
+        .item(&save_to_workspace)
+        .separator()
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
@@ -192,7 +213,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&app_shortcut_menu_item(app, "Quit HVY Galaxy", "app-close-requested", "CmdOrCtrl+Q")?);
     let file = file_builder.build()?;
     let ai = SubmenuBuilder::with_id(app, "ai-menu", "AI")
-        .item(&app_shortcut_menu_item(app, "LLM Settings...", "ai-settings", "CmdOrCtrl+,")?)
+        .item(&MenuItemBuilder::new("LLM Settings...").id("ai-settings").build(app)?)
         .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
@@ -219,6 +240,32 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::select_all(app, Some("Select All"))?)
         .build()?;
+    let view = SubmenuBuilder::with_id(app, "view-menu", "View")
+        .item(&app_shortcut_menu_item(
+            app,
+            "Zoom Document In",
+            "zoom-document-in",
+            "CmdOrCtrl+=",
+        )?)
+        .item(&app_shortcut_menu_item(
+            app,
+            "Zoom Document Out",
+            "zoom-document-out",
+            "CmdOrCtrl+-",
+        )?)
+        .item(&app_shortcut_menu_item(
+            app,
+            "Reset Document Zoom",
+            "zoom-document-reset",
+            "CmdOrCtrl+0",
+        )?)
+        .separator()
+        .item(&app_shortcut_menu_item(app, "Zoom Workspace In", "zoom-app-in", "CmdOrCtrl+Shift+=")?)
+        .item(&app_shortcut_menu_item(app, "Zoom Workspace Out", "zoom-app-out", "CmdOrCtrl+Shift+-")?)
+        .item(&app_shortcut_menu_item(app, "Reset Workspace Zoom", "zoom-app-reset", "CmdOrCtrl+Shift+0")?)
+        .separator()
+        .item(&PredefinedMenuItem::fullscreen(app, Some("Toggle Full Screen"))?)
+        .build()?;
     let help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
             &MenuItemBuilder::new("HVY Galaxy Guide")
@@ -226,7 +273,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
                 .accelerator("F1")
                 .build(app)?,
         )
-        .item(&MenuItemBuilder::new("HVY Guide").id("open-hvy-guide").build(app)?);
+        .item(&MenuItemBuilder::new("HVY Guide").id("open-hvy-guide").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Debug Log...").id("debug-log").build(app)?);
     #[cfg(not(target_os = "macos"))]
     let help_builder = help_builder
         .separator()
@@ -236,7 +285,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let builder = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
-    builder.item(&file).item(&edit).item(&ai).item(&help).build()
+    builder.item(&file).item(&edit).item(&view).item(&ai).item(&help).build()
 }
 
 fn app_shortcut_menu_item(
@@ -246,20 +295,6 @@ fn app_shortcut_menu_item(
     accelerator: &str,
 ) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
     let builder = MenuItemBuilder::new(label).id(id);
-    #[cfg(target_os = "macos")]
-    let builder = builder.accelerator(accelerator);
-    #[cfg(not(target_os = "macos"))]
-    let _ = accelerator;
-    builder.build(app)
-}
-
-fn disabled_app_shortcut_menu_item(
-    app: &AppHandle,
-    label: &str,
-    id: &str,
-    accelerator: &str,
-) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
-    let builder = MenuItemBuilder::new(label).id(id).enabled(false);
     #[cfg(target_os = "macos")]
     let builder = builder.accelerator(accelerator);
     #[cfg(not(target_os = "macos"))]

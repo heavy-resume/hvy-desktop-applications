@@ -119,6 +119,10 @@ struct RecentState {
     workspaces: Vec<String>,
     #[serde(default)]
     files: Vec<String>,
+    #[serde(default)]
+    document_modes: HashMap<String, String>,
+    #[serde(default)]
+    document_color_uses: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -136,6 +140,20 @@ struct DocumentFile {
     name: String,
     extension: String,
     bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    locked: bool,
+    #[serde(default, rename = "hiddenFromAI", skip_serializing_if = "is_false")]
+    hidden_from_ai: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentFileMetadata {
+    path: String,
+    name: String,
+    extension: String,
     #[serde(default, skip_serializing_if = "is_false")]
     locked: bool,
     #[serde(default, rename = "hiddenFromAI", skip_serializing_if = "is_false")]
@@ -175,6 +193,13 @@ struct SaveDocumentTemplateRequest {
     name: String,
     extension: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DocumentWriteResult {
+    #[serde(default, rename = "debugTimings", skip_serializing_if = "Option::is_none")]
+    debug_timings: Option<HashMap<String, u128>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -240,6 +265,8 @@ struct DocumentBackup {
     name: String,
     extension: String,
     created_at: String,
+    #[serde(default, rename = "debugTimings", skip_serializing_if = "Option::is_none")]
+    debug_timings: Option<HashMap<String, u128>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -250,7 +277,10 @@ struct DocumentBackupSnapshot {
     name: String,
     extension: String,
     created_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bytes_path: Option<String>,
     #[serde(default)]
     recovery_state: Option<String>,
 }
@@ -338,6 +368,43 @@ impl Default for AiProviderConfig {
             provider: "openai".into(),
             base_url: "https://api.openai.com/v1".into(),
             api_key: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ImageAttachmentMaxDimensions {
+    #[serde(default = "default_image_attachment_max_dimension")]
+    width: u32,
+    #[serde(default = "default_image_attachment_max_dimension")]
+    height: u32,
+}
+
+impl Default for ImageAttachmentMaxDimensions {
+    fn default() -> Self {
+        Self {
+            width: default_image_attachment_max_dimension(),
+            height: default_image_attachment_max_dimension(),
+        }
+    }
+}
+
+fn default_image_attachment_max_dimension() -> u32 {
+    DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct AppSettings {
+    #[serde(default)]
+    image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
         }
     }
 }

@@ -1,8 +1,9 @@
-import type { DocumentExtension } from './backend';
+import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './backend';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
+import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -17,16 +18,25 @@ import type {
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
 type HvyEmbedMount = ReturnType<HvyEmbedModule['mountHvy']>;
+type ImageAttachmentMaxDimensions = NonNullable<Parameters<HvyEmbedModule['mountHvy']>[0]['imageAttachmentMaxDimensions']>;
 type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
 } & HvyRecoveryStateMount;
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
+export interface HvySerializationCostProfile {
+  totalProfileMs: number;
+  sectionCount: number;
+  blockCount: number;
+  componentTotals: Record<string, { count: number; durationMs: number; textLength: number }>;
+  slowestSections: Array<{ title: string; durationMs: number; textLength: number }>;
+  slowestBlocks: Array<{ component: string; id: string | null; durationMs: number; textLength: number }>;
+}
 type ImportTagFilterOptions = {
   excludeTags?: string;
 };
@@ -39,6 +49,7 @@ type MetaTemplateKind = 'component' | 'section';
 type MetaTemplateClipboard =
   | { kind: 'component'; definition: Record<string, unknown> }
   | { kind: 'section'; definition: Record<string, unknown>; componentDefinitions: Record<string, unknown>[] };
+type DocumentAttachment = VisualDocument['attachments'][number];
 
 export interface MountedDocument {
   mount: HvyMount;
@@ -51,6 +62,7 @@ export interface MountHvyDocumentOptions {
   searchSnapshot?: HvySearchSnapshotInput | null;
   hiddenFromAI?: boolean;
   maxContextChars?: number;
+  imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -82,8 +94,79 @@ export async function exportHvySourceMarkdown(document: VisualDocument): Promise
 }
 
 export async function serializeHvy(document: VisualDocument): Promise<Uint8Array> {
-  const { serializeDocumentBytes } = await loadHvyEmbed();
-  return serializeDocumentBytes(document);
+  const { serializeDocumentBytesAsync } = await loadHvyEmbed();
+  return serializeDocumentBytesAsync(document);
+}
+
+export async function profileHvySerializationCosts(document: VisualDocument): Promise<HvySerializationCostProfile> {
+  const { serializeBlockFragment, serializeSectionFragment } = await import('../../heavy-file-format/src/serialization');
+  const startedAt = performance.now();
+  const componentTotals: HvySerializationCostProfile['componentTotals'] = {};
+  const slowestSections: HvySerializationCostProfile['slowestSections'] = [];
+  const slowestBlocks: HvySerializationCostProfile['slowestBlocks'] = [];
+  let sectionCount = 0;
+  let blockCount = 0;
+  const recordSlowSection = (entry: HvySerializationCostProfile['slowestSections'][number]) => {
+    slowestSections.push(entry);
+    slowestSections.sort((left, right) => right.durationMs - left.durationMs);
+    slowestSections.length = Math.min(slowestSections.length, 12);
+  };
+  const recordSlowBlock = (entry: HvySerializationCostProfile['slowestBlocks'][number]) => {
+    slowestBlocks.push(entry);
+    slowestBlocks.sort((left, right) => right.durationMs - left.durationMs);
+    slowestBlocks.length = Math.min(slowestBlocks.length, 20);
+  };
+  const visitBlock = (block: unknown) => {
+    if (!isRecord(block)) return;
+    const started = performance.now();
+    const text = serializeBlockFragment(block as unknown as Parameters<typeof serializeBlockFragment>[0], document.meta);
+    const durationMs = roundProfileDuration(performance.now() - started);
+    const schema = isRecord(block.schema) ? block.schema : {};
+    const component = typeof schema.component === 'string' ? schema.component : 'unknown';
+    const id = typeof block.id === 'string' ? block.id : typeof schema.id === 'string' ? schema.id : null;
+    blockCount += 1;
+    const total = componentTotals[component] ?? { count: 0, durationMs: 0, textLength: 0 };
+    total.count += 1;
+    total.durationMs = roundProfileDuration(total.durationMs + durationMs);
+    total.textLength += text.length;
+    componentTotals[component] = total;
+    recordSlowBlock({ component, id, durationMs, textLength: text.length });
+    visitNestedBlocks(schema.containerBlocks);
+    visitNestedBlocks(schema.componentListBlocks);
+    if (Array.isArray(schema.gridItems)) {
+      schema.gridItems.forEach((item) => {
+        if (isRecord(item)) visitBlock(item.block);
+      });
+    }
+    if (isRecord(schema.expandableStubBlocks)) visitNestedBlocks(schema.expandableStubBlocks.children);
+    if (isRecord(schema.expandableContentBlocks)) visitNestedBlocks(schema.expandableContentBlocks.children);
+  };
+  const visitNestedBlocks = (blocks: unknown) => {
+    if (Array.isArray(blocks)) blocks.forEach(visitBlock);
+  };
+  const visitSection = (section: unknown) => {
+    if (!isRecord(section)) return;
+    const started = performance.now();
+    const text = serializeSectionFragment(section as unknown as Parameters<typeof serializeSectionFragment>[0], document.meta);
+    const durationMs = roundProfileDuration(performance.now() - started);
+    sectionCount += 1;
+    recordSlowSection({
+      title: typeof section.title === 'string' ? section.title : '',
+      durationMs,
+      textLength: text.length,
+    });
+    visitNestedBlocks(section.blocks);
+    if (Array.isArray(section.children)) section.children.forEach(visitSection);
+  };
+  document.sections.forEach(visitSection);
+  return {
+    totalProfileMs: roundProfileDuration(performance.now() - startedAt),
+    sectionCount,
+    blockCount,
+    componentTotals,
+    slowestSections,
+    slowestBlocks,
+  };
 }
 
 export async function getPhvyCompatibilityErrors(document: VisualDocument): Promise<string[]> {
@@ -120,6 +203,7 @@ export async function mountHvyDocument(
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
+    imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : chatSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,
@@ -127,13 +211,170 @@ export async function mountHvyDocument(
     onDocumentChange: options.onDocumentChange,
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
-  const finalMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  const interactiveMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
   return {
     mount: finalMount,
     get document() {
       return finalMount.getDocument();
     },
   };
+}
+
+export function restoreRawHvyAttachmentBytes(
+  document: VisualDocument,
+  previousAttachments: DocumentAttachment[],
+): VisualDocument {
+  if (previousAttachments.length === 0 || document.attachments.length === 0) {
+    return document;
+  }
+  const previousById = new Map(previousAttachments.map((attachment) => [attachment.id, attachment]));
+  let restored = false;
+  const nextAttachments = document.attachments.map((attachment) => {
+    if (attachment.bytes.length > 0) {
+      return attachment;
+    }
+    const previous = previousById.get(attachment.id);
+    if (!previous || previous.bytes.length === 0) {
+      return attachment;
+    }
+    restored = true;
+    return {
+      ...attachment,
+      bytes: Uint8Array.from(previous.bytes),
+    };
+  });
+  if (restored) {
+    document.attachments = nextAttachments;
+  }
+  return document;
+}
+
+function withAttachmentDownload(root: HTMLElement, mount: HvyMount): HvyMount {
+  const cleanup = new AbortController();
+  root.addEventListener('hvy:download-attachment', (event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const detail = event.detail as { filename?: unknown; bytes?: unknown };
+    if (typeof detail.filename !== 'string' || !(detail.bytes instanceof Uint8Array)) return;
+    event.preventDefault();
+    void saveBinaryAsDialog({ suggestedName: detail.filename, bytes: detail.bytes }).catch((error) => {
+      console.error('[hvy:download] Failed to save attachment.', error);
+    });
+  }, { signal: cleanup.signal });
+  const destroy = mount.destroy;
+  return {
+    ...mount,
+    destroy() {
+      cleanup.abort();
+      destroy.call(mount);
+    },
+  };
+}
+
+function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMount): HvyMount {
+  const cleanup = new AbortController();
+  const closeEmailPopover = () => {
+    root.querySelector('.hvy-email-link-popover')?.remove();
+    root.querySelector('.hvy-email-link-popover-backdrop')?.remove();
+  };
+  root.addEventListener('click', (event) => {
+    const target = event.target;
+    const actionButton = target instanceof Element
+      ? target.closest<HTMLButtonElement>('.hvy-email-link-popover button[data-email-link-action]')
+      : null;
+    if (actionButton && root.contains(actionButton)) {
+      event.preventDefault();
+      event.stopPropagation();
+      const action = actionButton.dataset.emailLinkAction;
+      const emailAddress = actionButton.dataset.emailAddress ?? '';
+      const url = actionButton.dataset.emailUrl ?? '';
+      closeEmailPopover();
+      if (action === 'copy') {
+        void navigator.clipboard.writeText(emailAddress);
+      }
+      if (action === 'open') {
+        void openExternalUrl(url);
+      }
+      return;
+    }
+    const emailPopover = root.querySelector('.hvy-email-link-popover');
+    if (emailPopover && target instanceof Element && !target.closest('.hvy-email-link-popover')) {
+      closeEmailPopover();
+    }
+    if (!(target instanceof Element) || !shouldOpenExternalLinkForClick(mode, event)) {
+      return;
+    }
+    const anchor = target.closest<HTMLAnchorElement>('a[href]');
+    if (!anchor || !root.contains(anchor)) {
+      return;
+    }
+    const mailtoLink = mailtoLinkFromHref(anchor.getAttribute('href'));
+    if (mailtoLink) {
+      event.preventDefault();
+      event.stopPropagation();
+      showEmailLinkPopover(root, mailtoLink, event);
+      return;
+    }
+    const url = externalHttpUrlFromHref(anchor.getAttribute('href'));
+    if (!url) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void openExternalUrl(url);
+  }, { capture: true, signal: cleanup.signal });
+  root.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    closeEmailPopover();
+  }, { signal: cleanup.signal });
+
+  return {
+    ...mount,
+    destroy() {
+      cleanup.abort();
+      closeEmailPopover();
+      mount.destroy();
+    },
+  };
+}
+
+function showEmailLinkPopover(root: HTMLElement, link: MailtoLink, event: MouseEvent): void {
+  root.querySelector('.hvy-email-link-popover')?.remove();
+  root.querySelector('.hvy-email-link-popover-backdrop')?.remove();
+
+  const backdrop = documentOwner().createElement('div');
+  backdrop.className = 'hvy-context-popover-backdrop hvy-email-link-popover-backdrop';
+  backdrop.setAttribute('aria-hidden', 'true');
+
+  const popover = documentOwner().createElement('section');
+  popover.className = 'hvy-context-popover hvy-email-link-popover';
+  popover.setAttribute('aria-label', 'Email link options');
+  popover.style.position = 'fixed';
+  popover.style.left = `${Math.max(8, event.clientX)}px`;
+  popover.style.top = `${Math.max(8, event.clientY)}px`;
+
+  const address = documentOwner().createElement('div');
+  address.className = 'hvy-email-link-popover-address';
+  address.textContent = link.emailAddress;
+  popover.append(
+    address,
+    createEmailLinkButton('Copy email address', 'copy', link),
+    createEmailLinkButton('Open email app', 'open', link),
+  );
+
+  root.append(backdrop, popover);
+  placeMetaTemplateMenu(popover);
+  popover.querySelector<HTMLButtonElement>('button')?.focus();
+}
+
+function createEmailLinkButton(label: string, action: string, link: MailtoLink): HTMLButtonElement {
+  const button = documentOwner().createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.dataset.emailLinkAction = action;
+  button.dataset.emailAddress = link.emailAddress;
+  button.dataset.emailUrl = link.url;
+  return button;
 }
 
 export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {
@@ -272,7 +513,7 @@ async function mountRawHvyDocument(
     rawSearchQuery = '';
     notifyDirty(textarea.value !== lastSavedText);
     try {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
     } catch {
       // Invalid raw drafts stay editable; Save will surface the parse error.
     }
@@ -449,13 +690,18 @@ async function mountRawHvyDocument(
     rawSearchQuery = '';
     notifyDirty(textarea.value !== lastSavedText);
     try {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
     } catch {
       // Invalid raw drafts stay editable; Save will surface the parse error.
     }
   });
   const parseDraft = () => {
+    return parseRawDraft();
+  };
+  const parseRawDraft = () => {
+    const previousAttachments = currentDocument.attachments;
     currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    restoreRawHvyAttachmentBytes(currentDocument, previousAttachments);
     return currentDocument;
   };
   const syncDraftFromDocument = () => {
@@ -482,16 +728,19 @@ async function mountRawHvyDocument(
       return currentDocument;
     },
     serializeDocumentBytes() {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
       return serializeDocumentBytes(currentDocument);
+    },
+    async serializeDocumentBytesAsync() {
+      return mount.serializeDocumentBytes();
     },
     async getPdfBlob() {
       const { getHvyPdfBlob } = await import('../../heavy-file-format/src/pdf-export/export');
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
       return getHvyPdfBlob(currentDocument);
     },
     markSaved() {
-      currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+      parseRawDraft();
       lastSavedText = serializeDocument(currentDocument);
       textarea.value = lastSavedText;
       notifyDirty(false);
@@ -1019,6 +1268,10 @@ export function serializeMountedDocument(mounted: MountedDocument): Uint8Array {
   return mounted.mount.serializeDocumentBytes();
 }
 
+export function serializeMountedDocumentAsync(mounted: MountedDocument): Promise<Uint8Array> {
+  return mounted.mount.serializeDocumentBytesAsync();
+}
+
 export function getMountedRecoveryState(mounted: MountedDocument): string | null {
   return mounted.mount.getRecoveryState?.() ?? null;
 }
@@ -1061,4 +1314,12 @@ export function openMountedDocumentMeta(mounted: MountedDocument): boolean {
 
 export function setMountedSearchSnapshot(mounted: MountedDocument, snapshot: HvySearchSnapshotInput | null): void {
   mounted.mount.setSearchSnapshot?.(snapshot);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object');
+}
+
+function roundProfileDuration(value: number): number {
+  return Math.round(value * 10) / 10;
 }

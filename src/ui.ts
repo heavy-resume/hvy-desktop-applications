@@ -1,6 +1,6 @@
 import { aiProviderDefaultModel, aiProviderPreset, aiProviderPresets } from './aiProviders';
-import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
-import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
+import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
@@ -64,6 +64,15 @@ export interface UiHandlers {
   clearWorkspaceFilter(): void;
   openAbout(): void;
   closeAbout(): void;
+  openDebugLog(): void;
+  closeDebugLog(): void;
+  refreshDebugLog(): void;
+  clearDebugLog(): void;
+  openAppSettings(): void;
+  saveAppSettings(settings: AppSettings): void;
+  cancelAppSettings(settings?: AppSettings): void;
+  discardAppSettingsChanges(): void;
+  keepEditingAppSettings(): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
   setDefaultAiProvider(settings: AiSettings): void;
@@ -87,8 +96,10 @@ export interface UiHandlers {
   copyMcpBearerToken(token: string): void;
   copyMcpSetupValue(value: string, label: string): void;
   openColorTheme(): void;
+  openDocumentColorTheme(): void;
   closeColorTheme(): void;
   updateColorThemeName(name: string): void;
+  setDocumentColorsEnabled(enabled: boolean): void;
   saveColorTheme(): void;
   exportColorTheme(): void;
   importColorTheme(): void;
@@ -158,10 +169,14 @@ export interface UiHandlers {
   setSaveTemplateScope(scope: TemplateScope): void;
   saveAsTemplate(name: string, scope: TemplateScope, extension: TemplateExtension): void;
   cancelSaveTemplate(): void;
-  openWorkspaceTemplateVisibility(workspacePath: string): void;
   saveWorkspaceTemplateVisibility(workspacePath: string, visibility: WorkspaceTemplateVisibility): void;
-  cancelWorkspaceTemplateVisibility(): void;
   createFile(): void;
+  zoomAppIn(): void;
+  zoomAppOut(): void;
+  resetAppZoom(): void;
+  zoomDocumentIn(): void;
+  zoomDocumentOut(): void;
+  resetDocumentZoom(): void;
 }
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -184,6 +199,9 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
+const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
+const MAX_IMAGE_ATTACHMENT_DIMENSION = 16_384;
 const importExcludeTagHelpers = {
   getTagState(target: HTMLElement): string[] {
     return parseTags(importExcludeTagsInput(target)?.value ?? '');
@@ -307,8 +325,10 @@ export function renderModals(state: AppState): void {
     ${renderSaveAsDialog(state)}
     ${renderExportPdfSavePrompt(state)}
     ${renderExportedPdfDialog(state)}
-    ${renderWorkspaceTemplateVisibilityDialog(state)}
     ${renderAboutDialog(state)}
+    ${renderDebugLogDialog(state)}
+    ${renderAppSettingsDialog(state)}
+    ${renderAppSettingsDiscardDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
@@ -419,6 +439,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.closeAbout();
           return;
         }
+        if (backdrop.querySelector('.debug-log-dialog')) {
+          handlers.closeDebugLog();
+          return;
+        }
         if (backdrop.querySelector('.workspace-manager-dialog')) {
           handlers.closeWorkspaceManager();
           return;
@@ -429,6 +453,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.color-theme-dialog')) {
           handlers.closeColorTheme();
+          return;
+        }
+        if (backdrop.querySelector('.app-settings-discard-dialog')) {
+          handlers.keepEditingAppSettings();
           return;
         }
         if (backdrop.querySelector('.ai-settings-discard-dialog')) {
@@ -442,6 +470,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         const mcpSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="mcp-settings"]');
         if (mcpSettingsForm) {
           handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
+          return;
+        }
+        const appSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
+        if (appSettingsForm) {
+          handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm)));
           return;
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
@@ -513,7 +546,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath);
     if (action === 'set-import-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setImportDocumentType(target.dataset.documentType);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
-    if (action === 'workspace-template-visibility' && target.dataset.workspacePath) handlers.openWorkspaceTemplateVisibility(target.dataset.workspacePath);
     if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
     if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
       handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
@@ -527,6 +559,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
+    if (action === 'app-settings') handlers.openAppSettings();
+    if (action === 'cancel-app-settings') {
+      const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
+      handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form)) : undefined);
+    }
+    if (action === 'discard-app-settings-changes') handlers.discardAppSettingsChanges();
+    if (action === 'keep-editing-app-settings') handlers.keepEditingAppSettings();
     if (action === 'ai-settings') handlers.openAiSettings();
     if (action === 'select-ai-provider' && target.dataset.providerId) {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
@@ -628,6 +667,26 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'theme-apply-palette') handlers.applyColorThemePalette(target.dataset.paletteId ?? null);
     if (action === 'theme-clear-palette') handlers.applyColorThemePalette(null);
     if (action === 'theme-reset-color' && target.dataset.colorName) handlers.resetColorTheme(target.dataset.colorName);
+    if (action === 'theme-preview-select-component' && target.dataset.themeComponent) {
+      const dialog = target.closest<HTMLElement>('.color-theme-dialog');
+      dialog?.querySelectorAll<HTMLElement>('.theme-component-picker-button').forEach((button) => {
+        button.classList.toggle('is-active', button === target);
+      });
+      dialog?.querySelectorAll<HTMLElement>('[data-theme-preview-component]').forEach((preview) => {
+        preview.classList.toggle('is-active', preview.dataset.themePreviewComponent === target.dataset.themeComponent);
+      });
+    }
+    if (action === 'theme-preview-set-state' && target.dataset.themeState) {
+      const preview = target.closest<HTMLElement>('[data-theme-preview-component]');
+      if (preview) {
+        preview.dataset.themePreviewState = target.dataset.themeState;
+        preview.querySelectorAll<HTMLElement>('.theme-preview-state-button').forEach((button) => {
+          button.classList.toggle('is-active', button === target);
+        });
+      }
+      applyThemeColorFilter(target);
+    }
+    if (action === 'theme-filter-to-colors') applyThemeColorFilter(target);
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
@@ -637,6 +696,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-file') handlers.openFile();
     if (action === 'set-mode' && isHvyMode(target.dataset.mode)) handlers.setMode(target.dataset.mode);
     if (action === 'open-document-meta') handlers.openDocumentMeta();
+    if (action === 'open-document-colors') handlers.openDocumentColorTheme();
     if (action === 'save') handlers.save();
     if (action === 'save-as') handlers.saveAs();
     if (action === 'set-save-as-kind' && isSaveAsKind(target.dataset.kind)) handlers.setSaveAsKind(target.dataset.kind);
@@ -676,10 +736,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'open-exported-pdf') handlers.openExportedPdf();
     if (action === 'reveal-exported-pdf') handlers.revealExportedPdf();
     if (action === 'close-exported-pdf-dialog') handlers.closeExportedPdfDialog();
+    if (action === 'close-debug-log') handlers.closeDebugLog();
+    if (action === 'refresh-debug-log') handlers.refreshDebugLog();
+    if (action === 'clear-debug-log') handlers.clearDebugLog();
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
     if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
     if (action === 'cancel-export-pdf-save-prompt') handlers.cancelExportPdfSavePrompt();
-    if (action === 'cancel-workspace-template-visibility') handlers.cancelWorkspaceTemplateVisibility();
     if (action === 'save-filter-file-visibility') {
       const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
       if (form) {
@@ -761,14 +823,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (field === 'theme-color-filter') {
       const dialog = target.closest<HTMLElement>('.color-theme-dialog');
-      const filter = target.value.trim().toLowerCase();
-      dialog?.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
-        row.hidden = filter.length > 0 && !(row.dataset.themeSearch ?? '').includes(filter);
-      });
+      if (dialog) applyThemeFilter(dialog, target.value);
       return;
     }
     if (field === 'theme-name') {
       handlers.updateColorThemeName(target.value);
+      return;
+    }
+    if (field === 'use-document-colors' && target instanceof HTMLInputElement) {
+      handlers.setDocumentColorsEnabled(target.checked);
       return;
     }
     if (field !== 'theme-color-picker' && field !== 'theme-color-value' && field !== 'theme-color-alpha') return;
@@ -941,9 +1004,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         isTemplateExtension(extension) ? extension : '.thvy'
       );
     }
-    if (form.dataset.form === 'workspace-template-visibility') {
+    if (form.dataset.form === 'app-settings') {
       const data = new FormData(form);
-      handlers.saveWorkspaceTemplateVisibility(String(data.get('workspacePath') ?? ''), readWorkspaceTemplateVisibilityForm(data));
+      handlers.saveAppSettings(readAppSettingsForm(data));
     }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
@@ -984,6 +1047,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.closeAbout();
       return;
     }
+    if (root.querySelector('.debug-log-dialog')) {
+      event.preventDefault();
+      handlers.closeDebugLog();
+      return;
+    }
     if (root.querySelector('.workspace-manager-dialog')) {
       event.preventDefault();
       handlers.closeWorkspaceManager();
@@ -997,6 +1065,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.color-theme-dialog')) {
       event.preventDefault();
       handlers.closeColorTheme();
+      return;
+    }
+    if (root.querySelector('.app-settings-discard-dialog')) {
+      event.preventDefault();
+      handlers.keepEditingAppSettings();
       return;
     }
     if (root.querySelector('.ai-settings-discard-dialog')) {
@@ -1014,6 +1087,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (mcpSettingsForm) {
       event.preventDefault();
       handlers.cancelMcpSettings(readMcpSettingsForm(new FormData(mcpSettingsForm)));
+      return;
+    }
+    const appSettingsForm = target?.closest<HTMLFormElement>('form[data-form="app-settings"]')
+      ?? root.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
+    if (appSettingsForm) {
+      event.preventDefault();
+      handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm)));
       return;
     }
     if (root.querySelector('.workspace-filter-dialog')) {
@@ -1129,7 +1209,7 @@ function sanitizeFolderlessNameInputValue(value: string): string {
 }
 
 function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, handlers: UiHandlers): boolean {
-  if (event.isComposing || event.altKey || event.defaultPrevented) return false;
+  if (event.isComposing || event.defaultPrevented) return false;
   if (event.key === 'Escape') {
     handlers.cancelTabStack();
   }
@@ -1138,6 +1218,38 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
   const key = event.key.toLowerCase();
   const meta = event.metaKey || event.ctrlKey;
   if (!meta) return false;
+
+  if (event.altKey) return false;
+  if (event.shiftKey && (key === '=' || key === '+')) {
+    event.preventDefault();
+    handlers.zoomAppIn();
+    return true;
+  }
+  if (event.shiftKey && (key === '-' || key === '_')) {
+    event.preventDefault();
+    handlers.zoomAppOut();
+    return true;
+  }
+  if (event.shiftKey && (key === '0' || key === ')')) {
+    event.preventDefault();
+    handlers.resetAppZoom();
+    return true;
+  }
+  if (!event.shiftKey && (key === '=' || key === '+')) {
+    event.preventDefault();
+    handlers.zoomDocumentIn();
+    return true;
+  }
+  if (!event.shiftKey && (key === '-' || key === '_')) {
+    event.preventDefault();
+    handlers.zoomDocumentOut();
+    return true;
+  }
+  if (!event.shiftKey && key === '0') {
+    event.preventDefault();
+    handlers.resetDocumentZoom();
+    return true;
+  }
 
   if (key === 'p') {
     event.preventDefault();
@@ -1216,7 +1328,7 @@ function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElement, hand
   }
   if (!event.shiftKey && key === ',') {
     event.preventDefault();
-    handlers.openAiSettings();
+    handlers.openAppSettings();
     return true;
   }
   return false;
@@ -1478,6 +1590,9 @@ function renderWorkspaceTransferDialog(state: AppState): string {
   const transfer = state.workspaceTransfer;
   if (!transfer) return '';
   const workspaces = state.workspaces.filter((workspace) => workspace.path !== transfer.excludedWorkspacePath);
+  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
+    ? state.selectedWorkspacePath
+    : workspaces[0]?.path ?? null;
   const title = transfer.mode === 'saveCurrent'
     ? 'Save to Workspace'
     : transfer.mode === 'copyFile'
@@ -1491,7 +1606,7 @@ function renderWorkspaceTransferDialog(state: AppState): string {
         <label>
           <span>Workspace</span>
           <select name="workspacePath" required>
-            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
           </select>
         </label>
         ${transfer.mode === 'saveCurrent' ? `
@@ -1519,6 +1634,9 @@ function renderSaveAsDialog(state: AppState): string {
   const workspaceDisabled = workspaces.length === 0;
   const workspaceActive = state.saveAsScope === 'workspace' && !workspaceDisabled;
   const anywhereActive = state.saveAsScope === 'anywhere' || workspaceDisabled;
+  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
+    ? state.selectedWorkspacePath
+    : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
   const name = displayDocumentName(state.document.name);
   return `
     <div class="modal-backdrop" role="presentation">
@@ -1534,7 +1652,7 @@ function renderSaveAsDialog(state: AppState): string {
           <label>
             <span>Workspace</span>
             <select name="workspacePath" required>
-              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}">${escapeHtml(workspace.manifest.name)}</option>`).join('')}
+              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
             </select>
           </label>
           <label>
@@ -1754,7 +1872,6 @@ function showWorkspaceContextMenu(
   void clipboard;
   menu.innerHTML = `
     <button type="button" data-menu-action="paste">Paste</button>
-    <button type="button" data-menu-action="template-visibility">Template Visibility</button>
   `;
   const cleanup = () => {
     menu.remove();
@@ -1773,7 +1890,6 @@ function showWorkspaceContextMenu(
     if (!button || button.disabled) return;
     cleanup();
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
-    if (button.dataset.menuAction === 'template-visibility') handlers.openWorkspaceTemplateVisibility(workspacePath);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -1842,6 +1958,7 @@ function renderToolbar(state: AppState): string {
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   const fileActions = getFileActionAvailability(state);
   const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
+  const documentColorsEnabled = getDocumentColorsEnabled(state);
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
@@ -1849,12 +1966,13 @@ function renderToolbar(state: AppState): string {
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
-      ${fileActions.saveToWorkspace ? '<button type="button" data-action="save-to-workspace">Save to Workspace</button>' : ''}
-      <button type="button" data-action="save" ${fileActions.save ? '' : 'disabled'}>Save</button>
-      <button type="button" data-action="save-as" ${fileActions.saveAs ? '' : 'disabled'}>Save As...</button>
+      <label class="document-color-toggle">
+        <input type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${document.readOnly ? 'disabled' : ''}>
+        <span>Use document colors</span>
+      </label>
+      <button type="button" data-action="open-document-colors" ${document.readOnly || !documentColorsEnabled ? 'disabled' : ''}>Document Colors...</button>
       <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
       ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
-      <button type="button" data-action="close-document">Close</button>
     </div>`;
 }
 
@@ -2038,7 +2156,6 @@ function renderWorkspace(
           <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
-          <button type="button" role="menuitem" data-action="workspace-template-visibility" data-workspace-path="${escapeAttr(workspace.path)}">Template Visibility</button>
         </div>
       </div>
       ${visibleFiles.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>`}
@@ -2682,41 +2799,6 @@ function renderExportedPdfDialog(state: AppState): string {
     </div>`;
 }
 
-function renderWorkspaceTemplateVisibilityDialog(state: AppState): string {
-  const workspace = state.workspaceTemplateVisibilityPath
-    ? state.workspaces.find((candidate) => candidate.path === state.workspaceTemplateVisibilityPath) ?? null
-    : null;
-  if (!workspace) return '';
-  const visibility = workspaceTemplateVisibility(workspace);
-  return `
-    <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="workspace-template-visibility">
-        <h2>Template Visibility</h2>
-        <input type="hidden" name="workspacePath" value="${escapeAttr(workspace.path)}">
-        ${visibility.archivedFiles ? '<input type="hidden" name="archivedFiles" value="on">' : ''}
-        <div class="field-group">
-          <span>${escapeHtml(workspace.manifest.name)}</span>
-          <label class="checkbox-row">
-            <input type="checkbox" name="hvyDocuments" ${visibility.hvyDocuments ? 'checked' : ''}>
-            <span>HVY documents</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" name="thvyTemplates" ${visibility.thvyTemplates ? 'checked' : ''}>
-            <span>THVY templates</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''}>
-            <span>PHVY templates</span>
-          </label>
-        </div>
-        <div class="dialog-actions">
-          <button type="button" data-action="cancel-workspace-template-visibility">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
-        </div>
-      </form>
-    </div>`;
-}
-
 function renderTemplateOption(template: ReturnType<typeof mergeSavedTemplates>[number]): string {
   const name = isBlankBundledTemplate(template) ? 'None' : template.name;
   const label = template.scope === 'bundled' ? name : `${name} (${template.scope})`;
@@ -2744,6 +2826,123 @@ function renderAboutDialog(state: AppState): string {
         </div>
         <div class="dialog-actions about-actions">
           <button type="button" data-action="close-about">OK</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderDebugLogDialog(state: AppState): string {
+  if (!state.debugLogDialogOpen) {
+    return '';
+  }
+  const entries = state.debugLogEntries;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog debug-log-dialog" role="dialog" aria-modal="true" aria-labelledby="debugLogTitle">
+        <div class="debug-log-header">
+          <div>
+            <h2 id="debugLogTitle">Debug Log</h2>
+            <p class="dialog-note">Snapshot of recent load, close, LLM prompt, and performance events. Refresh to update.</p>
+          </div>
+          <div class="debug-log-actions">
+            <button type="button" data-action="refresh-debug-log">Refresh</button>
+            <button type="button" data-action="clear-debug-log">Clear</button>
+          </div>
+        </div>
+        <div class="debug-log-list">
+          ${entries.length
+            ? entries.map(renderDebugLogEntry).join('')
+            : '<p class="debug-log-empty">No debug entries yet.</p>'}
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="close-debug-log">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string {
+  const details = entry.details ? JSON.stringify(entry.details, null, 2) : '';
+  const duration = typeof entry.details?.durationMs === 'number'
+    ? `${entry.details.durationMs.toFixed(1)} ms`
+    : typeof entry.durationMs === 'number'
+    ? `${entry.durationMs.toFixed(1)} ms`
+    : '';
+  return `
+    <article class="debug-log-entry" data-kind="${escapeAttr(entry.kind)}">
+      <div class="debug-log-entry-summary">
+        <span class="debug-log-kind">${escapeHtml(entry.kind)}</span>
+        <strong>${escapeHtml(entry.label)}</strong>
+        ${duration ? `<span class="debug-log-duration">${escapeHtml(duration)}</span>` : ''}
+        <time datetime="${escapeAttr(entry.startedAt)}">${escapeHtml(formatDebugLogTime(entry.startedAt))}</time>
+      </div>
+      ${details ? `<pre>${escapeHtml(details)}</pre>` : ''}
+    </article>`;
+}
+
+function formatDebugLogTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function renderAppSettingsDialog(state: AppState): string {
+  if (!state.appSettingsDialogOpen) {
+    return '';
+  }
+  const settings = state.appSettingsDraft ?? state.appSettings;
+  const imageAttachmentMaxDimensions = normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions);
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="app-settings">
+        <h2>Settings</h2>
+        <p class="dialog-note">Configure application defaults used when a document does not set its own value.</p>
+        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <fieldset class="ai-action-config">
+          <legend>Attached image defaults</legend>
+          <label>
+            <span>Reduce width</span>
+            <input
+              name="imageAttachmentMaxWidth"
+              type="number"
+              min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
+              max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
+              step="1"
+              value="${escapeAttr(String(imageAttachmentMaxDimensions.width))}"
+            >
+          </label>
+          <label>
+            <span>Reduce height</span>
+            <input
+              name="imageAttachmentMaxHeight"
+              type="number"
+              min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
+              max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
+              step="1"
+              value="${escapeAttr(String(imageAttachmentMaxDimensions.height))}"
+            >
+          </label>
+        </fieldset>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-app-settings">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function renderAppSettingsDiscardDialog(state: AppState): string {
+  if (!state.appSettingsDiscardDialogOpen) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog app-settings-discard-dialog" role="dialog" aria-modal="true" aria-labelledby="appSettingsDiscardTitle">
+        <h2 id="appSettingsDiscardTitle">Discard Settings Changes?</h2>
+        <p class="dialog-note">You have unsaved settings changes.</p>
+        <div class="dialog-actions">
+          <button type="button" class="danger-button" data-action="discard-app-settings-changes">Discard Changes</button>
+          <button type="button" data-action="keep-editing-app-settings">Keep Editing</button>
         </div>
       </section>
     </div>`;
@@ -2999,41 +3198,55 @@ function renderColorThemeDialog(state: AppState): string {
   if (!state.colorThemeDialogOpen) {
     return '';
   }
-  const colors = state.colorTheme.colors;
+  const documentMode = state.colorThemeDialogMode === 'document';
+  const documentTheme = getDocumentTheme(state);
+  const colors = documentMode ? documentTheme.colors : state.colorTheme.colors;
   const selectedPaletteId = getMatchedPaletteId(colors);
   const selectedCustomThemeId = getMatchedSavedThemeId(colors, state.colorTheme.savedThemes);
-  const themeName = state.colorTheme.themeName || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state) || 'Untitled Theme';
+  const themeName = documentMode
+    ? documentTheme.name || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state, colors) || 'Untitled Theme'
+    : state.colorTheme.themeName || selectedThemeName(selectedPaletteId, selectedCustomThemeId, state, colors) || 'Untitled Theme';
+  const activeThemeName = selectedThemeName(selectedPaletteId, selectedCustomThemeId, state, colors) || themeName;
+  const title = documentMode ? 'Document Colors' : 'Colors';
   return `
     <div class="modal-backdrop" role="presentation">
-      <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle">
-        <h2 id="colorThemeTitle">Colors</h2>
-        <p class="dialog-note">Global HVY colors apply across documents on this device.</p>
-        <div class="theme-file-panel">
-          <label class="theme-name-field">
-            <span>Theme Name</span>
-            <input data-field="theme-name" value="${escapeAttr(themeName)}" placeholder="Untitled Theme" spellcheck="false">
-          </label>
-          <div class="theme-file-actions">
-            <button type="button" class="secondary-action" data-action="theme-save">Save Theme</button>
-            <button type="button" class="secondary-action" data-action="theme-export">Export</button>
-            <button type="button" class="secondary-action" data-action="theme-import">Import</button>
-          </div>
-        </div>
-        <div class="theme-palette-grid" aria-label="Theme palettes">
-          ${renderThemeCards(state, selectedPaletteId, selectedCustomThemeId)}
-        </div>
+      <section class="dialog wide-dialog color-theme-dialog" role="dialog" aria-modal="true" aria-labelledby="colorThemeTitle" style="${escapeAttr(renderThemeVariableStyle(colors))}">
+        <h2 id="colorThemeTitle">${escapeHtml(title)}</h2>
+        ${renderThemeSwitcher(state, selectedPaletteId, selectedCustomThemeId, activeThemeName, colors, true)}
+        ${renderThemePreviewPanel(true)}
         <div class="theme-filter-shell">
-          <span>Filter</span>
-          <input type="search" placeholder="Color name or variable" data-field="theme-color-filter">
+          <span>Filter Colors</span>
+          <input type="search" placeholder="Type a role, component, or click a preview" data-field="theme-color-filter">
         </div>
         <div class="theme-color-list">
-          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]))).join('')}
-        </div>
-        <div class="dialog-actions">
-          <button type="button" data-action="cancel-color-theme">Done</button>
+          ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]), true)).join('')}
         </div>
       </section>
     </div>`;
+}
+
+function renderThemeVariableStyle(colors: Record<string, string>): string {
+  return Object.entries(colors)
+    .filter(([name, value]) => isCssVariableName(name) && value.trim())
+    .map(([name, value]) => `${name}: ${value.trim()};`)
+    .join(' ');
+}
+
+function getDocumentColorsEnabled(state: AppState): boolean {
+  return Boolean(state.document?.path && state.recent.documentColorUses?.[state.document.path] === true);
+}
+
+function getDocumentTheme(state: AppState): { name: string; colors: Record<string, string> } {
+  const theme = state.document?.mounted?.document.meta.theme;
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return { name: '', colors: {} };
+  const record = theme as { name?: unknown; colors?: unknown };
+  const colors = record.colors && typeof record.colors === 'object' && !Array.isArray(record.colors)
+    ? Object.fromEntries(Object.entries(record.colors).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+    : {};
+  return {
+    name: typeof record.name === 'string' ? record.name : '',
+    colors,
+  };
 }
 
 interface ThemeCard {
@@ -3046,7 +3259,23 @@ interface ThemeCard {
   lastUsedAt: number;
 }
 
-function renderThemeCards(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null): string {
+function renderThemeSwitcher(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null, activeThemeName: string, colors: Record<string, string>, enabled: boolean): string {
+  return `
+    <details class="theme-switcher"${enabled ? '' : ' aria-disabled="true"'}>
+      <summary>
+        <span class="theme-switcher-copy">
+          <span>Switch to theme ...</span>
+          <strong>${escapeHtml(activeThemeName)}</strong>
+        </span>
+        <span class="theme-switcher-chevron" aria-hidden="true">v</span>
+      </summary>
+      <div class="theme-palette-grid" aria-label="Theme palettes">
+        ${renderThemeCards(state, selectedPaletteId, selectedCustomThemeId, colors, enabled)}
+      </div>
+    </details>`;
+}
+
+function renderThemeCards(state: AppState, selectedPaletteId: string | null, selectedCustomThemeId: string | null, colors: Record<string, string>, enabled = true): string {
   const cards: ThemeCard[] = [
     {
       id: 'default',
@@ -3054,7 +3283,7 @@ function renderThemeCards(state: AppState, selectedPaletteId: string | null, sel
       description: 'Use the built-in HVY colors.',
       colors: {},
       builtIn: true,
-      selected: selectedCustomThemeId === null && selectedPaletteId === null && Object.keys(state.colorTheme.colors).length === 0,
+      selected: selectedCustomThemeId === null && selectedPaletteId === null && Object.keys(colors).length === 0,
       lastUsedAt: state.colorTheme.themeUses.default ?? 0,
     },
     ...HVY_PALETTES.map((palette) => ({
@@ -3078,11 +3307,11 @@ function renderThemeCards(state: AppState, selectedPaletteId: string | null, sel
   ];
   return cards
     .sort((left, right) => (right.lastUsedAt - left.lastUsedAt) || left.name.localeCompare(right.name))
-    .map(renderThemeCard)
+    .map((theme) => renderThemeCard(theme, enabled))
     .join('');
 }
 
-function renderThemeCard(theme: ThemeCard): string {
+function renderThemeCard(theme: ThemeCard, enabled = true): string {
   const preview = [
     theme.colors['--hvy-bg'] ?? '#f5f9ff',
     theme.colors['--hvy-accent-1'] ?? '#4a8fab',
@@ -3098,19 +3327,192 @@ function renderThemeCard(theme: ThemeCard): string {
         <span>${escapeHtml(theme.description)}</span>
       </div>
       <div class="theme-palette-actions">
-        <button type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}">${theme.selected ? 'Using' : 'Use'}</button>
-        ${theme.builtIn ? '' : `<button type="button" class="ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}">Delete</button>`}
+        <button type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>${theme.selected ? 'Using' : 'Use'}</button>
+        ${theme.builtIn ? '' : `<button type="button" class="ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>Delete</button>`}
       </div>
     </article>`;
 }
 
-function selectedThemeName(paletteId: string | null, customThemeId: string | null, state: AppState): string | null {
+function selectedThemeName(paletteId: string | null, customThemeId: string | null, state: AppState, colors = state.colorTheme.colors): string | null {
   if (customThemeId) return state.colorTheme.savedThemes.find((theme) => theme.id === customThemeId)?.name ?? null;
   if (paletteId) return HVY_PALETTES.find((palette) => palette.id === paletteId)?.name ?? null;
-  return Object.keys(state.colorTheme.colors).length === 0 ? 'Default' : null;
+  return Object.keys(colors).length === 0 ? 'Default' : null;
 }
 
-function renderThemeColorRow(name: string, value: string, displayValue: string): string {
+interface ThemePreviewItem {
+  id: string;
+  label: string;
+  detail: string;
+  className: string;
+  variables: string[];
+  states: Array<{ id: string; label: string; variables: string[] }>;
+  html: string;
+}
+
+function renderThemePreviewPanel(enabled: boolean): string {
+  const items: ThemePreviewItem[] = [
+    {
+      id: 'surface',
+      label: 'Surface',
+      detail: 'Page, panel, container, and focused target colors',
+      className: 'theme-preview-surface-card',
+      variables: ['--hvy-bg', '--hvy-bg-alt', '--hvy-surface', '--hvy-surface-alt', '--hvy-surface-tint', '--hvy-border', '--hvy-text', '--hvy-text-alt', '--hvy-focus-ring', '--hvy-focus-glow'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-bg', '--hvy-bg-alt', '--hvy-surface', '--hvy-border', '--hvy-text'] },
+        { id: 'target', label: 'Target', variables: ['--hvy-surface-tint', '--hvy-focus-ring', '--hvy-focus-glow'] },
+      ],
+      html: `<div class="theme-demo-surface">
+        <div class="theme-demo-page">
+          <div class="theme-demo-container">
+            <strong>Container</strong>
+            <span>Collapsed preview text</span>
+          </div>
+          <button type="button" class="theme-demo-target theme-demo-ai-target" data-theme-demo-state="target" data-action="theme-filter-to-colors" data-theme-filter="--hvy-surface-tint --hvy-focus-ring --hvy-focus-glow" ${enabled ? '' : 'disabled'}>AI target</button>
+        </div>
+      </div>`,
+    },
+    {
+      id: 'text',
+      label: 'Text',
+      detail: 'Primary text, muted text, links, fill-ins, and highlights',
+      className: 'theme-preview-text-card',
+      variables: ['--hvy-text', '--hvy-text-alt', '--hvy-text-muted', '--hvy-link-color', '--hvy-link-hover-color', '--hvy-highlight-1', '--hvy-highlight-2', '--hvy-focus-ring'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-text', '--hvy-text-alt', '--hvy-text-muted', '--hvy-link-color'] },
+        { id: 'search', label: 'Search', variables: ['--hvy-highlight-1', '--hvy-highlight-2'] },
+        { id: 'fill-in', label: 'Fill-in', variables: ['--hvy-text-muted', '--hvy-focus-ring'] },
+      ],
+      html: `<div class="theme-demo-text">
+        <p data-theme-demo-state="rest">Paragraph with <span>alternate text</span> and an <a href="#" tabindex="-1">inline link</a>.</p>
+        <div class="theme-demo-highlight" data-theme-demo-state="search"><span>Filtered match</span><b>active result</b></div>
+        <div class="theme-demo-fill-in" data-theme-demo-state="fill-in">The answer is <span>[____]</span>.</div>
+      </div>`,
+    },
+    {
+      id: 'controls',
+      label: 'Controls',
+      detail: 'Button, input, and ghost component controls',
+      className: 'theme-preview-button-card',
+      variables: ['--hvy-button-bg', '--hvy-button-text', '--hvy-button-hover-bg', '--hvy-button-hover-text', '--hvy-border-input', '--hvy-ghost-border', '--hvy-focus', '--hvy-shadow-md'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-button-bg', '--hvy-button-text', '--hvy-border-input'] },
+        { id: 'hover', label: 'Hover', variables: ['--hvy-button-hover-bg', '--hvy-button-hover-text', '--hvy-focus', '--hvy-shadow-md'] },
+        { id: 'ghost', label: 'Ghost', variables: ['--hvy-surface-alt', '--hvy-ghost-border', '--hvy-text-muted'] },
+      ],
+      html: `<div class="theme-demo-controls">
+        <button type="button" class="theme-demo-button" data-theme-demo-state="rest" ${enabled ? '' : 'disabled'}>Generate</button>
+        <button type="button" class="theme-demo-button theme-demo-button-hover" data-theme-demo-state="hover" ${enabled ? '' : 'disabled'}>Generate</button>
+        <div class="theme-demo-ghost-input" data-theme-demo-state="ghost">Add component</div>
+      </div>`,
+    },
+    {
+      id: 'xref',
+      label: 'Xref Card',
+      detail: 'Reference cards in rest, hover, and invalid states',
+      className: 'theme-preview-xref-card',
+      variables: ['--hvy-xref-card-bg', '--hvy-xref-card-hover-bg', '--hvy-border', '--hvy-border-alt', '--hvy-focus', '--hvy-text', '--hvy-text-alt', '--hvy-text-muted', '--hvy-shadow', '--hvy-shadow-md'],
+      states: [
+        { id: 'rest', label: 'Rest', variables: ['--hvy-xref-card-bg', '--hvy-border', '--hvy-text', '--hvy-text-alt', '--hvy-shadow'] },
+        { id: 'hover', label: 'Hover', variables: ['--hvy-xref-card-hover-bg', '--hvy-focus', '--hvy-shadow-md'] },
+        { id: 'invalid', label: 'Invalid', variables: ['--hvy-border-alt', '--hvy-text-muted'] },
+      ],
+      html: `<div class="theme-demo-xref-stack">
+        <div class="theme-demo-xref" data-theme-demo-state="rest"><strong>TypeScript</strong><span>Primary language</span></div>
+        <div class="theme-demo-xref theme-demo-xref-hover" data-theme-demo-state="hover"><strong>TypeScript</strong><span>Primary language</span></div>
+        <div class="theme-demo-xref theme-demo-xref-invalid" data-theme-demo-state="invalid"><strong>Missing target</strong><span>Invalid reference</span></div>
+      </div>`,
+    },
+    {
+      id: 'table',
+      label: 'Table',
+      detail: 'Header and alternating row colors',
+      className: 'theme-preview-table-card',
+      variables: ['--hvy-table-header', '--hvy-table-row-bg-1', '--hvy-table-row-bg-2', '--hvy-border-input', '--hvy-text'],
+      states: [
+        { id: 'header', label: 'Header', variables: ['--hvy-table-header', '--hvy-text', '--hvy-border-input'] },
+        { id: 'row-1', label: 'Row 1', variables: ['--hvy-table-row-bg-1', '--hvy-text', '--hvy-border-input'] },
+        { id: 'row-2', label: 'Row 2', variables: ['--hvy-table-row-bg-2', '--hvy-text', '--hvy-border-input'] },
+      ],
+      html: `<table class="theme-demo-table">
+        <thead><tr><th>Name</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td>Ada</td><td>Engineer</td></tr>
+          <tr><td>Grace</td><td>Compiler</td></tr>
+        </tbody>
+      </table>`,
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      detail: 'Warnings, errors, and success feedback',
+      className: 'theme-preview-status-card',
+      variables: ['--hvy-warning-bg', '--hvy-warning-border', '--hvy-warning-text', '--hvy-danger', '--hvy-success', '--hvy-success-bg', '--hvy-success-border'],
+      states: [
+        { id: 'warning', label: 'Warning', variables: ['--hvy-warning-bg', '--hvy-warning-border', '--hvy-warning-text'] },
+        { id: 'error', label: 'Error', variables: ['--hvy-danger', '--hvy-surface', '--hvy-border'] },
+        { id: 'success', label: 'Success', variables: ['--hvy-success', '--hvy-success-bg', '--hvy-success-border'] },
+      ],
+      html: `<div class="theme-demo-diagnostics">
+        <span class="theme-demo-warning" data-theme-demo-state="warning">Warning</span>
+        <span class="theme-demo-error" data-theme-demo-state="error">Error</span>
+        <span class="theme-demo-success" data-theme-demo-state="success">Saved</span>
+      </div>`,
+    },
+    {
+      id: 'code',
+      label: 'Code',
+      detail: 'Code block and syntax colors',
+      className: 'theme-preview-code-card',
+      variables: ['--hvy-code-bg', '--hvy-code-text', '--hvy-code-muted', '--hvy-code-string', '--hvy-code-builtin', '--hvy-code-keyword', '--hvy-code-function', '--hvy-code-number', '--hvy-border-input'],
+      states: [
+        { id: 'block', label: 'Block', variables: ['--hvy-code-bg', '--hvy-code-text', '--hvy-code-muted', '--hvy-border-input'] },
+        { id: 'syntax', label: 'Syntax', variables: ['--hvy-code-string', '--hvy-code-builtin', '--hvy-code-keyword', '--hvy-code-function', '--hvy-code-number'] },
+      ],
+      html: `<pre class="theme-demo-code" data-theme-demo-state="block"><code><i>// theme</i>
+<span>const</span> value = <b>"HVY"</b>;</code></pre>
+      <pre class="theme-demo-code" data-theme-demo-state="syntax"><code><span>const</span> value = <b>"HVY"</b>;</code></pre>`,
+    },
+  ];
+  return `
+    <div class="theme-component-preview-picker" aria-label="Theme component preview picker">
+      ${items.map((item, index) => `<button type="button" class="theme-component-picker-button${index === 0 ? ' is-active' : ''}" data-action="theme-preview-select-component" data-theme-component="${escapeAttr(item.id)}" ${enabled ? '' : 'disabled'}>${escapeHtml(item.label)}</button>`).join('')}
+    </div>
+    <div class="theme-preview-grid" aria-label="Theme component preview">
+      ${items.map((item, index) => renderThemePreviewCard(item, index, enabled)).join('')}
+    </div>`;
+}
+
+function renderThemePreviewCard(item: ThemePreviewItem, index: number, enabled: boolean): string {
+  const stateButtons = item.states.map((previewState, stateIndex) => `<button
+    type="button"
+    class="theme-preview-state-button${stateIndex === 0 ? ' is-active' : ''}"
+    data-action="theme-preview-set-state"
+    data-theme-state="${escapeAttr(previewState.id)}"
+    data-theme-filter="${escapeAttr(previewState.variables.join(' '))}"
+    ${enabled ? '' : 'disabled'}
+  >${escapeHtml(previewState.label)}</button>`).join('');
+  return `<article
+    class="theme-preview-card ${escapeAttr(item.className)}${index === 0 ? ' is-active' : ''}"
+    data-theme-preview-component="${escapeAttr(item.id)}"
+    data-theme-preview-state="${escapeAttr(item.states[0]?.id ?? 'rest')}"
+  >
+    <span class="theme-preview-card-copy">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${escapeHtml(item.detail)}</span>
+    </span>
+    <span class="theme-preview-state-row">${stateButtons}</span>
+    ${item.html}
+    <button
+      type="button"
+      class="theme-preview-all"
+      data-action="theme-filter-to-colors"
+      data-theme-filter="${escapeAttr(item.variables.join(' '))}"
+      ${enabled ? '' : 'disabled'}
+    >All ${escapeHtml(item.label)} colors</button>
+  </article>`;
+}
+
+function renderThemeColorRow(name: string, value: string, displayValue: string, enabled = true): string {
   const label = getThemeColorLabel(name);
   const search = `${name} ${label} ${value} ${displayValue}`;
   const overridden = value.trim().length > 0;
@@ -3129,6 +3531,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string):
         data-color-name="${escapeAttr(name)}"
         value="${escapeAttr(pickerValue)}"
         aria-label="${escapeAttr(`${label} color picker`)}"
+        ${enabled ? '' : 'disabled'}
       >
       <input
         class="theme-color-value"
@@ -3138,6 +3541,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string):
         placeholder="CSS color"
         aria-label="${escapeAttr(valueLabel)}"
         spellcheck="false"
+        ${enabled ? '' : 'disabled'}
       >
       <label class="theme-alpha-control" title="Alpha">
         <span>A</span>
@@ -3150,12 +3554,13 @@ function renderThemeColorRow(name: string, value: string, displayValue: string):
           data-color-name="${escapeAttr(name)}"
           value="${escapeAttr(String(alphaValue))}"
           aria-label="${escapeAttr(`${label} alpha`)}"
+          ${enabled ? '' : 'disabled'}
         >
         <output>${escapeHtml(String(Math.round(alphaValue * 100)))}</output>
       </label>
       <span class="theme-color-swatch" style="${displayValue ? `background: ${escapeAttr(displayValue)};` : ''}" aria-hidden="true"></span>
       ${overridden
-        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default">Reset</button></span>`
+        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
         : '<span class="theme-color-action theme-color-default muted">Default</span>'}
     </div>`;
 }
@@ -3185,6 +3590,30 @@ function syncThemeOverrideAction(row: HTMLElement | null | undefined, name: stri
   if (!overridden && resetGroup) {
     resetGroup.outerHTML = '<span class="theme-color-action theme-color-default muted">Default</span>';
   }
+}
+
+function applyThemeColorFilter(target: HTMLElement): void {
+  const dialog = target.closest<HTMLElement>('.color-theme-dialog');
+  const input = dialog?.querySelector<HTMLInputElement>('[data-field="theme-color-filter"]');
+  if (!dialog || !input) return;
+  input.value = target.dataset.themeFilter ?? '';
+  applyThemeFilter(dialog, input.value);
+  input.focus();
+}
+
+function applyThemeFilter(dialog: HTMLElement, value: string): void {
+  const tokens = themeFilterTokens(value);
+  dialog.querySelectorAll<HTMLElement>('.theme-color-row').forEach((row) => {
+    row.hidden = tokens.length > 0 && !tokens.some((token) => (row.dataset.themeSearch ?? '').includes(token));
+  });
+}
+
+function themeFilterTokens(value: string): string[] {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 function getResolvedThemeColor(name: string, overrideValue: string | undefined): string {
@@ -3380,6 +3809,29 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
     </fieldset>`;
 }
 
+function readAppSettingsForm(data: FormData): AppSettings {
+  return {
+    ...parseAppSettings(String(data.get('settingsJson') ?? '')),
+    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions({
+      width: data.get('imageAttachmentMaxWidth'),
+      height: data.get('imageAttachmentMaxHeight'),
+    }),
+  };
+}
+
+function parseAppSettings(value: string): AppSettings {
+  try {
+    const parsed = JSON.parse(value) as Partial<AppSettings>;
+    return {
+      imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
+    };
+  } catch {
+    return {
+      imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(null),
+    };
+  }
+}
+
 function readAiSettingsForm(data: FormData): AiSettings {
   const selectedProviderId = String(data.get('selectedProviderId') ?? data.get('activeProviderId') ?? '').trim() || 'openai';
   const parsed = parseAiSettings(String(data.get('settingsJson') ?? ''));
@@ -3528,6 +3980,22 @@ function normalizeAiMaxContextChars(value: unknown): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeImageAttachmentMaxDimensions(value: unknown): ImageAttachmentMaxDimensions {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as { width?: unknown; height?: unknown }
+    : {};
+  return {
+    width: normalizeImageAttachmentDimension(record.width),
+    height: normalizeImageAttachmentDimension(record.height),
+  };
+}
+
+function normalizeImageAttachmentDimension(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
+  return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
 }
 
 function syncAiMaxContextCharsOutput(input: HTMLInputElement): void {

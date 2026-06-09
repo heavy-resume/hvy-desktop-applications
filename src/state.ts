@@ -1,5 +1,6 @@
-import { defaultAiSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
+import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
@@ -32,6 +33,7 @@ export interface AppState {
   selectedWorkspacePath: string | null;
   selectedFilePath: string | null;
   recent: RecentState;
+  appSettings: AppSettings;
   aiSettings: AiSettings;
   mcpSettings: McpSettings;
   mcpServerStatus: McpServerStatus;
@@ -70,7 +72,10 @@ export interface AppState {
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
   exportedPdfPath: string | null;
-  workspaceTemplateVisibilityPath: string | null;
+  appSettingsDialogOpen: boolean;
+  appSettingsDraft: AppSettings | null;
+  appSettingsDialogInitialJson: string | null;
+  appSettingsDiscardDialogOpen: boolean;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -81,7 +86,10 @@ export interface AppState {
   mcpSettingsDialogInitialJson: string | null;
   mcpSettingsDiscardDialogOpen: boolean;
   colorThemeDialogOpen: boolean;
+  colorThemeDialogMode: 'global' | 'document';
   aboutDialogOpen: boolean;
+  debugLogDialogOpen: boolean;
+  debugLogEntries: DebugLogEntry[];
   recoveryDialogOpen: boolean;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
@@ -99,6 +107,8 @@ export interface AppState {
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
   workspaceFileViews: Record<string, WorkspaceFileView>;
+  appZoom: number;
+  documentZoom: number;
 }
 
 export type WorkspaceFileView = 'documents' | 'templates';
@@ -142,6 +152,7 @@ export const state: AppState = {
   selectedWorkspacePath: null,
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
+  appSettings: defaultAppSettings(),
   aiSettings: defaultAiSettings(),
   mcpSettings: defaultMcpSettings(),
   mcpServerStatus: defaultMcpServerStatus(),
@@ -180,7 +191,10 @@ export const state: AppState = {
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   exportedPdfPath: null,
-  workspaceTemplateVisibilityPath: null,
+  appSettingsDialogOpen: false,
+  appSettingsDraft: null,
+  appSettingsDialogInitialJson: null,
+  appSettingsDiscardDialogOpen: false,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
@@ -191,7 +205,10 @@ export const state: AppState = {
   mcpSettingsDialogInitialJson: null,
   mcpSettingsDiscardDialogOpen: false,
   colorThemeDialogOpen: false,
+  colorThemeDialogMode: 'global',
   aboutDialogOpen: false,
+  debugLogDialogOpen: false,
+  debugLogEntries: [],
   recoveryDialogOpen: false,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
@@ -219,6 +236,8 @@ export const state: AppState = {
   },
   workspaceFilters: {},
   workspaceFileViews: {},
+  appZoom: 1,
+  documentZoom: 1,
 };
 
 export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {

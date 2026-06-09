@@ -1,9 +1,11 @@
+import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
 const args = new Set(process.argv.slice(2));
 const buildTauri = args.has('--tauri') || (!args.has('--tauri') && !args.has('--electron'));
 const buildElectron = args.has('--electron') || (!args.has('--tauri') && !args.has('--electron'));
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const hostBuilds = {
   darwin: {
@@ -12,8 +14,11 @@ const hostBuilds = {
       output: ['src-tauri/target/universal-apple-darwin/release/bundle/dmg'],
     },
     electron: {
-      script: 'build:electron:dmg',
-      output: ['dist-electron'],
+      scripts: ['build:electron:dmg:arm64', 'build:electron:dmg:x64'],
+      output: [
+        `dist-electron/HVY Galaxy_${packageJson.version}_electron_arm64.dmg`,
+        `dist-electron/HVY Galaxy_${packageJson.version}_electron_x64.dmg`,
+      ],
     },
   },
   win32: {
@@ -41,9 +46,15 @@ if (buildElectron) {
 }
 
 function runBuild(label, build) {
-  return runScript(build.script).then(() => {
+  return runScripts(build.scripts || [build.script]).then(() => {
     printOutputLocations(label, build.output);
   });
+}
+
+async function runScripts(scripts) {
+  for (const script of scripts) {
+    await runScript(script);
+  }
 }
 
 function runScript(script) {

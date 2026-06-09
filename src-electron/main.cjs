@@ -11,12 +11,16 @@ const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
 const RECENT_STATE = 'recent.json';
 const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
+const APP_SETTINGS = 'app-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
 const RECENT_LIMIT = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
 const AI_MIN_CONTEXT_CHARS = 1000;
 const AI_MAX_CONTEXT_CHARS = 750000;
 const AI_CONTEXT_STEP_CHARS = 1000;
+const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
+const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
+const MAX_IMAGE_ATTACHMENT_DIMENSION = 16384;
 const BACKUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DOCUMENT_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.md']);
 const IMPORT_SOURCE_EXTENSIONS = new Set(['.hvy', '.thvy', '.phvy', '.txt', '.md', '.pdf', '.docx']);
@@ -125,8 +129,15 @@ function bindWindowShortcuts(window) {
 
 function shortcutCommand(input) {
   if (!input.control && !input.meta) return null;
-  if (input.alt || input.isAutoRepeat) return null;
+  if (input.isAutoRepeat) return null;
   const key = String(input.key ?? '').toLowerCase();
+  if (input.alt) return null;
+  if ((key === '=' || key === '+') && input.shift) return 'zoom-app-in';
+  if ((key === '-' || key === '_') && input.shift) return 'zoom-app-out';
+  if ((key === '0' || key === ')') && input.shift) return 'zoom-app-reset';
+  if ((key === '=' || key === '+') && !input.shift) return 'zoom-document-in';
+  if ((key === '-' || key === '_') && !input.shift) return 'zoom-document-out';
+  if (key === '0' && !input.shift) return 'zoom-document-reset';
   if (key === 's' && !input.shift) return fileMenuState.save ? 'save' : null;
   if (key === 's' && input.shift) return fileMenuState.saveAs ? 'save-as' : null;
   if (key === 'w' && !input.shift) return fileMenuState.closeDocument ? 'close-document' : null;
@@ -135,7 +146,7 @@ function shortcutCommand(input) {
   if (key === 'o' && input.shift) return 'open-file';
   if (key === 'f' && !input.shift) return 'find';
   if (key === 'x' && input.shift) return 'strikethrough';
-  if (key === ',' && !input.shift) return 'ai-settings';
+  if (key === ',' && !input.shift) return 'app-settings';
   return null;
 }
 
@@ -154,6 +165,7 @@ function buildMenu() {
       label: APP_NAME,
       submenu: [
         menuItem(`About ${APP_NAME}`, 'about'),
+        menuItem('Settings...', 'app-settings', 'CmdOrCtrl+,'),
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },
@@ -166,6 +178,7 @@ function buildMenu() {
         menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),
         menuItem('Open Workspace', 'open-workspace', 'CmdOrCtrl+O'),
         menuItem('Manage Workspaces...', 'manage-workspaces'),
+        ...(process.platform === 'darwin' ? [] : [menuItem('Settings...', 'app-settings', 'CmdOrCtrl+,')]),
         menuItem('Open File', 'open-file', 'CmdOrCtrl+Shift+O'),
         recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
@@ -174,6 +187,7 @@ function buildMenu() {
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
+        { type: 'separator' },
         menuItem('Export PDF...', 'export-pdf'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
@@ -209,9 +223,13 @@ function buildMenu() {
         { role: 'reload' },
         { role: 'toggleDevTools' },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        menuItem('Zoom Document In', 'zoom-document-in', 'CmdOrCtrl+='),
+        menuItem('Zoom Document Out', 'zoom-document-out', 'CmdOrCtrl+-'),
+        menuItem('Reset Document Zoom', 'zoom-document-reset', 'CmdOrCtrl+0'),
+        { type: 'separator' },
+        menuItem('Zoom Workspace In', 'zoom-app-in', 'CmdOrCtrl+Shift+='),
+        menuItem('Zoom Workspace Out', 'zoom-app-out', 'CmdOrCtrl+Shift+-'),
+        menuItem('Reset Workspace Zoom', 'zoom-app-reset', 'CmdOrCtrl+Shift+0'),
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],
@@ -219,7 +237,7 @@ function buildMenu() {
     {
       label: 'AI',
       submenu: [
-        menuItem('LLM Settings...', 'ai-settings', 'CmdOrCtrl+,'),
+        menuItem('LLM Settings...', 'ai-settings'),
         menuItem('MCP Settings...', 'mcp-settings'),
       ],
     },
@@ -228,6 +246,8 @@ function buildMenu() {
       submenu: [
         menuItem('HVY Galaxy Guide', 'open-guide', 'F1'),
         menuItem('HVY Guide', 'open-hvy-guide'),
+        { type: 'separator' },
+        menuItem('Debug Log...', 'debug-log'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem(`About ${APP_NAME}`, 'about')]),
       ],
     },
@@ -399,7 +419,11 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
 async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-    case 'load_ai_settings': return readJson(dataPath(AI_SETTINGS), defaultAiSettings());
+    case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
+    case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
+    case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
+    case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
+    case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return readJson(dataPath(MCP_SETTINGS), defaultMcpSettings());
     case 'save_mcp_settings': return writeJson(dataPath(MCP_SETTINGS), normalizeMcpSettings(args.settings));
@@ -436,9 +460,12 @@ async function handleCommand(command, args) {
     case 'open_import_source_dialog': return openImportSourceDialog();
     case 'load_launch_document_paths': return loadLaunchDocumentPaths();
     case 'read_document_file': return readDocumentFile(args.path);
+    case 'read_document_file_metadata': return readDocumentFileMetadata(args.path);
+    case 'read_document_file_bytes': return readDocumentBytesAt(args.path);
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
+    case 'save_binary_as_dialog': return saveBinaryAsDialog(args.suggestedName, args.bytes);
     case 'list_saved_templates': return listSavedTemplates(args.workspacePath);
     case 'save_document_template': return saveDocumentTemplate(args.request);
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
@@ -813,10 +840,23 @@ function readDocumentFile(filePath) {
   return file;
 }
 
-function saveDocumentFile(filePath, bytes) {
-  writeBytes(filePath, bytes);
+function readDocumentFileMetadata(filePath) {
+  const metadata = readDocumentMetadataAt(filePath);
   addRecentFile(filePath);
-  return null;
+  return metadata;
+}
+
+function saveDocumentFile(filePath, bytes) {
+  const startedAt = performance.now();
+  const timings = {};
+  const writeStartedAt = performance.now();
+  writeBytes(filePath, bytes);
+  timings.writeBytesMs = Math.round((performance.now() - writeStartedAt) * 10) / 10;
+  const recentStartedAt = performance.now();
+  addRecentFile(filePath);
+  timings.addRecentMs = Math.round((performance.now() - recentStartedAt) * 10) / 10;
+  timings.totalMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  return { debugTimings: timings };
 }
 
 async function saveDocumentAsDialog(suggestedName, bytes) {
@@ -832,7 +872,7 @@ async function saveDocumentAsDialog(suggestedName, bytes) {
   if (!documentExtension(result.filePath)) throw new Error('Save As path must end in .hvy, .thvy, .phvy, or .md.');
   writeBytes(result.filePath, bytes);
   addRecentFile(result.filePath);
-  return readDocumentAt(result.filePath);
+  return readDocumentMetadataAt(result.filePath);
 }
 
 function listSavedTemplates(workspacePath) {
@@ -867,6 +907,15 @@ async function savePdfAsDialog(suggestedName, bytes) {
   }
   writeBytes(selected, bytes);
   return selected;
+}
+
+async function saveBinaryAsDialog(suggestedName, bytes) {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: suggestedName,
+  });
+  if (result.canceled || !result.filePath) return null;
+  writeBytes(result.filePath, bytes);
+  return result.filePath;
 }
 
 async function openColorThemeDialog() {
@@ -1080,17 +1129,31 @@ function xmlUnescape(value) {
 }
 
 function createDocumentBackup(request) {
+  const startedAt = performance.now();
+  const timings = {};
   if (!documentExtension(request.name)) throw new Error('Recovery draft document name must end in .hvy, .thvy, .phvy, or .md.');
   fs.mkdirSync(backupsDir(), { recursive: true });
+  const pruneStartedAt = performance.now();
   pruneDocumentBackups();
+  timings.pruneMs = Math.round((performance.now() - pruneStartedAt) * 10) / 10;
+  const idStartedAt = performance.now();
   const createdAt = new Date().toISOString();
   const id = crypto.createHash('sha256')
     .update(`${request.documentPath}|${request.name}|${createdAt}`)
     .digest('hex')
     .slice(0, 24);
-  const snapshot = { ...request, id, createdAt };
-  writeJson(path.join(backupsDir(), `${id}.json`), snapshot);
-  return { id, documentPath: request.documentPath, name: request.name, extension: request.extension, createdAt };
+  timings.idMs = Math.round((performance.now() - idStartedAt) * 10) / 10;
+  const bytesPath = documentBackupBytesPath(id);
+  const snapshot = { ...request, id, createdAt, bytesPath: path.basename(bytesPath) };
+  delete snapshot.bytes;
+  const writeBytesStartedAt = performance.now();
+  fs.writeFileSync(bytesPath, Buffer.from(request.bytes || []));
+  timings.writeBytesMs = Math.round((performance.now() - writeBytesStartedAt) * 10) / 10;
+  const writeMetadataStartedAt = performance.now();
+  writeJson(documentBackupPath(id), snapshot);
+  timings.writeMetadataMs = Math.round((performance.now() - writeMetadataStartedAt) * 10) / 10;
+  timings.totalMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  return { id, documentPath: request.documentPath, name: request.name, extension: request.extension, createdAt, debugTimings: timings };
 }
 
 function listDocumentBackups() {
@@ -1120,21 +1183,25 @@ function listDocumentBackups() {
 
 function restoreDocumentBackup(id) {
   pruneDocumentBackups();
-  const snapshot = readJson(path.join(backupsDir(), `${id}.json`), null);
+  const snapshot = readJson(documentBackupPath(id), null);
   if (!snapshot) throw new Error('Recovery draft was not found.');
   return {
     path: snapshot.documentPath,
     name: snapshot.name,
     extension: snapshot.extension,
-    bytes: snapshot.bytes,
+    bytes: readDocumentBackupBytes(snapshot),
     recoveryState: snapshot.recoveryState ?? null,
   };
 }
 
 function discardDocumentBackup(id) {
-  const backupPath = path.join(backupsDir(), `${id}.json`);
+  const backupPath = documentBackupPath(id);
   if (fs.existsSync(backupPath)) {
     fs.unlinkSync(backupPath);
+  }
+  const bytesPath = documentBackupBytesPath(id);
+  if (fs.existsSync(bytesPath)) {
+    fs.unlinkSync(bytesPath);
   }
   return null;
 }
@@ -1145,7 +1212,11 @@ function documentBackupMatchesSavedFile(snapshot) {
   const createdAt = Date.parse(snapshot.createdAt);
   if (Number.isFinite(createdAt) && savedAt >= createdAt) return true;
   const savedBytes = fs.readFileSync(snapshot.documentPath);
-  return Buffer.compare(savedBytes, Buffer.from(snapshot.bytes || [])) === 0;
+  try {
+    return Buffer.compare(savedBytes, readDocumentBackupBytes(snapshot)) === 0;
+  } catch {
+    return false;
+  }
 }
 
 function documentBackupKey(snapshot) {
@@ -1164,11 +1235,30 @@ function pruneDocumentBackups() {
     if (!Number.isFinite(createdAt) || createdAt < cutoff) {
       try {
         fs.unlinkSync(backupPath);
+        const id = path.basename(entry, '.json');
+        const bytesPath = documentBackupBytesPath(id);
+        if (fs.existsSync(bytesPath)) fs.unlinkSync(bytesPath);
       } catch {
         // Best effort cleanup; stale recovery drafts should not block recovery.
       }
     }
   }
+}
+
+function documentBackupPath(id) {
+  return path.join(backupsDir(), `${id}.json`);
+}
+
+function documentBackupBytesPath(id) {
+  return path.join(backupsDir(), `${id}.bytes`);
+}
+
+function readDocumentBackupBytes(snapshot) {
+  if (Array.isArray(snapshot.bytes)) return Buffer.from(snapshot.bytes);
+  if (snapshot.bytesPath) {
+    return fs.readFileSync(path.join(backupsDir(), path.basename(snapshot.bytesPath)));
+  }
+  return Buffer.alloc(0);
 }
 
 function clearDocumentRecoveryDrafts(request) {
@@ -1182,6 +1272,9 @@ function clearDocumentRecoveryDrafts(request) {
     if (snapshot && documentBackupKey(snapshot) === key) {
       try {
         fs.unlinkSync(draftPath);
+        const id = path.basename(entry, '.json');
+        const bytesPath = documentBackupBytesPath(id);
+        if (fs.existsSync(bytesPath)) fs.unlinkSync(bytesPath);
       } catch {
         // Best effort cleanup.
       }
@@ -1285,6 +1378,13 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
 }
 
 function readDocumentAt(filePath) {
+  return {
+    ...readDocumentMetadataAt(filePath),
+    bytes: readDocumentBytesAt(filePath),
+  };
+}
+
+function readDocumentMetadataAt(filePath) {
   const extension = documentExtension(filePath);
   if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be opened.');
   const access = documentFileAiAccess(filePath);
@@ -1292,10 +1392,15 @@ function readDocumentAt(filePath) {
     path: filePath,
     name: path.basename(filePath),
     extension,
-    bytes: Array.from(fs.readFileSync(filePath)),
     locked: access.locked,
     hiddenFromAI: access.hiddenFromAI,
   };
+}
+
+function readDocumentBytesAt(filePath) {
+  const extension = documentExtension(filePath);
+  if (!extension) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be opened.');
+  return fs.readFileSync(filePath);
 }
 
 function documentFileAiAccess(filePath) {
@@ -1557,10 +1662,26 @@ function addRecentFile(entryPath) {
   refreshMenu();
 }
 
+function saveDocumentModePreference(entryPath, mode) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  recent.documentModes = { ...(recent.documentModes || {}), [path.resolve(entryPath)]: mode };
+  writeJson(dataPath(RECENT_STATE), recent);
+  return recent;
+}
+
+function saveDocumentColorPreference(entryPath, useDocumentColors) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  recent.documentColorUses = { ...(recent.documentColorUses || {}), [path.resolve(entryPath)]: Boolean(useDocumentColors) };
+  writeJson(dataPath(RECENT_STATE), recent);
+  return recent;
+}
+
 function removeRecentFile(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const normalized = path.resolve(entryPath);
   recent.files = (recent.files || []).filter((entry) => path.resolve(entry) !== normalized);
+  if (recent.documentModes) delete recent.documentModes[normalized];
+  if (recent.documentColorUses) delete recent.documentColorUses[normalized];
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }
@@ -1591,6 +1712,23 @@ function defaultAiSettings() {
   };
 }
 
+function defaultAppSettings() {
+  return {
+    imageAttachmentMaxDimensions: {
+      width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
+      height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
+    },
+  };
+}
+
+function normalizeAppSettings(settings) {
+  return {
+    ...defaultAppSettings(),
+    ...(settings || {}),
+    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
+  };
+}
+
 function normalizeAiSettings(settings) {
   return {
     ...defaultAiSettings(),
@@ -1604,6 +1742,20 @@ function normalizeAiMaxContextChars(value) {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeImageAttachmentMaxDimensions(value) {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    width: normalizeImageAttachmentDimension(record.width),
+    height: normalizeImageAttachmentDimension(record.height),
+  };
+}
+
+function normalizeImageAttachmentDimension(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
+  return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
 }
 
 function defaultMcpSettings() {
