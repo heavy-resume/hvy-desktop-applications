@@ -41,6 +41,12 @@ const builtInDefinitions = [
     exportName: 'graphPlugin',
     modulePath: 'src/plugins/graph.ts',
   },
+  {
+    id: 'hvy.qr-code',
+    key: 'qrCode',
+    exportName: 'qrCodePlugin',
+    modulePath: 'src/plugins/qr-code/qr-code.ts',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
