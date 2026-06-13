@@ -9,6 +9,32 @@ const BUILT_IN_PLUGINS_RESOLVED_ID = `\0${BUILT_IN_PLUGINS_ID}`;
 const BRYTHON_MINIMAL_VFS_ID = 'virtual:hvy-brython-minimal-vfs';
 const BRYTHON_MINIMAL_VFS_RESOLVED_ID = `\0${BRYTHON_MINIMAL_VFS_ID}`;
 const HVY_REFERENCE_ROOT = resolve('../heavy-file-format');
+const BRYTHON_MINIMAL_VFS_MODULES = [
+  'browser',
+  'builtins',
+  'sys',
+  're',
+  'python_re',
+  'enum',
+  'types',
+  '_collections_abc',
+  'functools',
+  'abc',
+  '_py_abc',
+  'collections',
+  '_collections',
+  '_weakref',
+  'copy',
+  'heapq',
+  'itertools',
+  'keyword',
+  'operator',
+  '_operator',
+  'reprlib',
+  '_thread',
+  'time',
+  'traceback',
+] as const;
 
 const builtInDefinitions = [
   {
@@ -98,11 +124,10 @@ function createBrythonMinimalVfsPlugin(): Plugin {
         throw new Error('Unable to extract Brython VFS metadata.');
       }
       const vfs = Function(`return ${stdlibSource.slice(start + marker.length, end).trim().replace(/;$/, '')}`)() as Record<string, unknown>;
-      const minimalVfs = {
-        $timestamp: vfs.$timestamp,
-        browser: vfs.browser,
-        sys: vfs.sys,
-      };
+      const minimalVfs = Object.fromEntries([
+        ['$timestamp', vfs.$timestamp],
+        ...BRYTHON_MINIMAL_VFS_MODULES.map((moduleName) => [moduleName, vfs[moduleName]]),
+      ]);
       const source = [
         '__BRYTHON__.use_VFS = true;',
         `__BRYTHON__.update_VFS(${JSON.stringify(minimalVfs)});`,
