@@ -3,7 +3,7 @@ import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/sear
 import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { getFileActionAvailability } from './fileActions';
-import { applyMountedRecoveryState, deserializeHvy, exportHvySourceMarkdown, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state } from './state';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -63,7 +63,7 @@ export interface HotReloadSessionSnapshot {
   tabPaths: string[];
   documents: HotReloadDocumentSnapshot[];
 }
-type PreparedImportSource = ImportSourceFile & { text: string };
+type PreparedImportSource = ImportSourceFile & { text: string; sourceDocument?: VisualDocument };
 export const documentSessions = new Map<string, DocumentSession>();
 export const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 let openedDocumentTabOrder: string[] = [];
@@ -133,7 +133,8 @@ export async function importSourceFrom(pastedSourceText: string): Promise<Prepar
   const document = await deserializeHvy(new Uint8Array(source.bytes), source.extension);
   return {
     ...source,
-    text: await exportHvySourceMarkdown(document),
+    text: '',
+    sourceDocument: document,
   };
 }
 export function isHvyDocumentExtension(extension: ImportSourceFile['extension']): extension is DocumentExtension {

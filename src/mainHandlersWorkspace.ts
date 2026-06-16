@@ -320,6 +320,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const plan = await buildMountedImportPlan(state.document.mounted, {
       sourceName: source.name,
       sourceText: source.text,
+      sourceDocument: source.sourceDocument,
       instructions,
       newSectionsOnly,
       excludeTags,
@@ -335,6 +336,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const result = await importTextIntoMountedDocument(state.document.mounted, {
       sourceName: source.name,
       sourceText: source.text,
+      sourceDocument: source.sourceDocument,
       instructions,
       steps: plan.steps,
       newSectionsOnly,
@@ -413,6 +415,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         const plan = await buildMountedImportPlan(importTarget.mounted, {
           sourceName: source.name,
           sourceText: source.text,
+          sourceDocument: source.sourceDocument,
           instructions,
           newSectionsOnly,
           excludeTags,
@@ -429,6 +432,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         const result = await importTextIntoMountedDocument(importTarget.mounted, {
           sourceName: source.name,
           sourceText: source.text,
+          sourceDocument: source.sourceDocument,
           instructions,
           steps: plan.steps,
           newSectionsOnly,
