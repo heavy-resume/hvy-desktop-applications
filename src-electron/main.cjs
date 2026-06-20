@@ -238,6 +238,7 @@ function buildMenu() {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        menuItem('Copy Document as Rich Text', 'copy-document-rich-text'),
         { type: 'separator' },
         menuItem('Bold', 'bold', 'CmdOrCtrl+B'),
         menuItem('Italic', 'italic', 'CmdOrCtrl+I'),

@@ -164,6 +164,25 @@ export async function profileHvySerializationCosts(document: VisualDocument): Pr
   };
 }
 
+export async function copyMountedDocumentAsRichText(mounted: MountedDocument): Promise<void> {
+  const { buildDocumentRichTextCopyPayload } = await loadHvyEmbed();
+  const payload = buildDocumentRichTextCopyPayload(mounted.document);
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined' && payload.html) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([payload.html], { type: 'text/html' }),
+          'text/plain': new Blob([payload.plainText], { type: 'text/plain' }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Fall through to plain text copy.
+    }
+  }
+  await navigator.clipboard.writeText(payload.plainText);
+}
+
 export async function getPhvyCompatibilityErrors(document: VisualDocument): Promise<string[]> {
   const { serializeDocument } = await loadHvyEmbed();
   const { deserializeDocumentWithDiagnostics } = await import('../../heavy-file-format/src/serialization');

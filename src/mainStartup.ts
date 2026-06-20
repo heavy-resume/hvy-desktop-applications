@@ -2,7 +2,7 @@ import { installAiChatClient } from './aiClient';
 import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onMenuEvent, onOpenDocumentPath, readDocumentFile, startMcpServer, type DocumentFile } from './backend';
 import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
 import { measureDebug } from './debugLog';
-import { deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
+import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
 import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspace, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, upsertWorkspace, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
@@ -51,6 +51,7 @@ export async function boot(): Promise<void> {
       if (event === 'italic') performRichTextAction('italic');
       if (event === 'underline') performRichTextAction('underline');
       if (event === 'strikethrough') performRichTextAction('strikethrough');
+      if (event === 'copy-document-rich-text') void copyCurrentDocumentAsRichText();
       if (event === 'undo') performUndo();
       if (event === 'redo') performRedo();
       if (event === 'open-guide') void openGuide();
@@ -104,6 +105,18 @@ export async function boot(): Promise<void> {
   } catch (error) {
     showStartupError(error);
   }
+}
+
+export async function copyCurrentDocumentAsRichText(): Promise<void> {
+  const mounted = state.document?.mounted;
+  if (!mounted) return;
+  try {
+    await copyMountedDocumentAsRichText(mounted);
+    state.status = 'Copied document as rich text';
+  } catch (error) {
+    state.status = `Could not copy document as rich text: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  rerender({ preserveMountedDocument: true });
 }
 
 export function bindFindShortcut(): void {
