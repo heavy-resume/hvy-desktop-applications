@@ -872,6 +872,18 @@ fn write_system_file_clipboard(request: SystemFileClipboardRequest) -> AppResult
 }
 
 #[tauri::command]
+fn read_system_clipboard_text() -> AppResult<String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Err(AppError::Message("System clipboard text read is currently supported on macOS only.".into()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        run_apple_script("the clipboard as text")
+    }
+}
+
+#[tauri::command]
 fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<AddFilesResult> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;

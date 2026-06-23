@@ -238,6 +238,7 @@ function buildMenu() {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        menuItem('Paste as Plain Text', 'paste-plain-text', 'CmdOrCtrl+Shift+V'),
         menuItem('Copy Document as Rich Text', 'copy-document-rich-text'),
         { type: 'separator' },
         menuItem('Bold', 'bold', 'CmdOrCtrl+B'),
@@ -519,6 +520,7 @@ async function handleCommand(command, args) {
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath);
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath);
     case 'write_system_file_clipboard': return writeSystemFileClipboard(args.request);
+    case 'read_system_clipboard_text': return clipboard.readText();
     case 'paste_system_files_to_workspace': return pasteSystemFilesToWorkspace(args.workspacePath);
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();

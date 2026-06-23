@@ -82,6 +82,7 @@ pub fn run() {
             copy_document_to_workspace,
             move_document_to_workspace,
             write_system_file_clipboard,
+            read_system_clipboard_text,
             paste_system_files_to_workspace,
             create_document_backup,
             list_document_backups,
@@ -229,6 +230,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&PredefinedMenuItem::cut(app, Some("Cut"))?)
         .item(&PredefinedMenuItem::copy(app, Some("Copy"))?)
         .item(&PredefinedMenuItem::paste(app, Some("Paste"))?)
+        .item(&app_shortcut_menu_item(app, "Paste as Plain Text", "paste-plain-text", "CmdOrCtrl+Shift+V")?)
         .item(&MenuItemBuilder::new("Copy Document as Rich Text").id("copy-document-rich-text").build(app)?)
         .separator()
         .item(&app_shortcut_menu_item(app, "Bold", "bold", "CmdOrCtrl+B")?)

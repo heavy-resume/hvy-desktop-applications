@@ -718,6 +718,10 @@ export function updateFileMenuState(state: FileMenuState): Promise<void> {
   return invokeDesktop('update_file_menu_state', { state });
 }
 
+export function readSystemClipboardText(): Promise<string> {
+  return invokeDesktop('read_system_clipboard_text');
+}
+
 export function createDocumentFile(request: CreateDocumentRequest): Promise<DocumentFile> {
   return invokeDesktop('create_document_file', {
     workspacePath: request.workspacePath,
