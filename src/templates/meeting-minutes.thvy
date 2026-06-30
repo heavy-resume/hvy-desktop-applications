@@ -1,0 +1,140 @@
+---
+hvy_version: 0.1
+title: Meeting Minutes
+reader_max_width: 56rem
+ai-context: >-
+  This is a meeting minutes template. Add timestamped notes to the entries list
+  as reusable minute-entry components. Keep meeting notes concise and source-backed.
+section_defaults:
+  css: "margin: 0.5rem 0;"
+theme:
+  colors:
+    --hvy-bg: "#f7f8fb"
+    --hvy-bg-alt: "#edf1f5"
+    --hvy-surface: "#ffffff"
+    --hvy-surface-alt: "#f8fafc"
+    --hvy-surface-tint: "#e8eef5"
+    --hvy-text: "#18212b"
+    --hvy-text-alt: "#45515f"
+    --hvy-text-muted: "#687789"
+    --hvy-accent-1: "#2f6f73"
+    --hvy-accent-1-alt: "#24575a"
+    --hvy-accent-1-text: "#ffffff"
+    --hvy-accent-2: "#6d5d9b"
+    --hvy-accent-2-alt: "#55487c"
+    --hvy-button-bg: "#2f6f73"
+    --hvy-button-text: "#ffffff"
+    --hvy-link-color: "#255f63"
+    --hvy-highlight-1: "rgba(47, 111, 115, 0.14)"
+    --hvy-highlight-2: "rgba(109, 93, 155, 0.16)"
+    --hvy-border: "#ccd6e0"
+    --hvy-border-alt: "#b9c6d2"
+    --hvy-border-input: "#bac7d4"
+    --hvy-border-translucent: "rgba(204, 214, 224, 0.9)"
+    --hvy-ghost-border: "rgba(104, 119, 137, 0.38)"
+    --hvy-xref-card-bg: "#f3f6f9"
+    --hvy-xref-card-hover-bg: "#eaf4f5"
+    --hvy-table-header: "#e8eef5"
+    --hvy-table-row-bg-1: "#ffffff"
+    --hvy-table-row-bg-2: "#f8fafc"
+    --hvy-icon-muted: "rgba(24, 33, 43, 0.34)"
+    --hvy-shadow: "rgba(24, 33, 43, 0.08)"
+    --hvy-shadow-md: "rgba(24, 33, 43, 0.12)"
+    --hvy-shadow-lg: "rgba(24, 33, 43, 0.16)"
+    --hvy-overlay: "rgba(24, 33, 43, 0.42)"
+    --hvy-danger: "#9b3d3d"
+    --hvy-warning: "#ad7800"
+    --hvy-warning-bg: "#fff5df"
+    --hvy-warning-border: "#e5c276"
+    --hvy-warning-text: "#8a5f00"
+    --hvy-success: "#23643f"
+    --hvy-success-bg: "#e8f8ef"
+    --hvy-success-border: "#94d1ab"
+component_defs:
+  - name: minute-entry
+    baseType: container
+    tags: meeting-minute
+    description: Timestamped meeting note
+    schema:
+      css: "margin: 0.5rem 0; padding: 0.65rem 0.8rem; border: 1px solid var(--hvy-border); background: var(--hvy-surface);"
+      containerExpanded: true
+      containerBlocks: []
+---
+
+<!--hvy: {"id":"meeting-minutes","lock":false,"expanded":true,"highlight":false}-->
+#! Meeting Minutes
+
+ <!--hvy:text {"id":"meeting-minutes-heading","css":"margin: 0 0 0.5rem;"}-->
+  # Meeting Minutes
+
+ <!--hvy:text {"id":"meeting-context","css":"margin: 0 0 0.75rem; color: var(--hvy-text-alt);"}-->
+  Add notes as the meeting happens. Each entry is stamped with the current client time.
+
+ <!--hvy:plugin {"id":"add-minute-entry","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitLabel":"Add minute","showSubmit":true,"submitScript":"add_entry"}}-->
+  fields:
+    - label: Note
+      type: textarea
+      rows: 4
+      required: true
+  scripts:
+    add_entry: |-
+      note = str(doc.form.get_value("Note") or "").strip()
+      if note == "":
+          doc.form.set_error("Note", "Write a note before adding a minute.")
+          return
+
+      def note_to_markdown(value):
+          lines = str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+          output = []
+          for index in range(0, len(lines)):
+              line = lines[index].rstrip()
+              if line == "":
+                  output.append("")
+              elif index < len(lines) - 1 and lines[index + 1].strip() != "":
+                  output.append(line + "  ")
+              else:
+                  output.append(line)
+          return "\n".join(output).strip()
+
+      entries = None
+      for candidate in doc.tool.get_components("component-list"):
+          if candidate.id == "minute-entries":
+              entries = candidate
+              break
+      if entries is None:
+          raise RuntimeError("Minute entries list was not found.")
+
+      sort_time = doc.time.now_unix_ms()
+      display_time = doc.time.now_local()
+      entry = entries.append_child(
+          "minute-entry",
+          {
+              "id": "minute-entry-" + str(sort_time),
+              "sortKeys": {"Time": sort_time},
+              "tags": "meeting-minute"
+          },
+          "",
+          "component-list"
+      )
+      entry.append_child(
+          "text",
+          {
+              "tags": "minute-entry-time",
+              "css": "margin: 0 0 0.25rem; color: var(--hvy-text-muted);"
+          },
+          "**" + display_time + "**",
+          "container"
+      )
+      entry.append_child(
+          "text",
+          {
+              "tags": "minute-entry-note",
+              "css": "margin: 0;"
+          },
+          note_to_markdown(note),
+          "container"
+      )
+      doc.form.clear_error("Note")
+      doc.form.set_value("Note", "")
+
+ <!--hvy:component-list {"id":"minute-entries","componentListComponent":"minute-entry","componentListItemLabel":"minute","componentListDefaultSortKey":"Time","componentListDefaultSortDirection":"asc"}-->

@@ -33,6 +33,18 @@ describe('creationTemplate', () => {
     expect(template).toContain('css: "margin: 0.5rem 0;"');
   });
 
+  it('uses the bundled meeting minutes template for new THVY documents', () => {
+    state.savedTemplates = [];
+    state.workspaces = [];
+
+    const template = creationTemplate(null, 'thvy', 'meeting-minutes.thvy', 'Weekly Sync');
+
+    expect(template).toContain('title: "Weekly Sync"');
+    expect(template).toContain('component_defs:');
+    expect(template).toContain('name: minute-entry');
+    expect(template).toContain('id":"minute-entries"');
+  });
+
   it('keeps plain HVY new documents minimal when no template is selected', () => {
     const template = creationTemplate(null, 'hvy', 'blank', 'Notes');
 
