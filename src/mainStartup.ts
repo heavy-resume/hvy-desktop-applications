@@ -1,7 +1,7 @@
 import { installAiChatClient } from './aiClient';
 import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
-import { measureDebug } from './debugLog';
+import { configureDebugLog, measureDebug } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
 import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspace, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, upsertWorkspace, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
@@ -27,6 +27,7 @@ export async function boot(): Promise<void> {
     await refreshRecents();
     await refreshArchivedWorkspaces();
     state.appSettings = await loadAppSettings();
+    configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
     state.mcpServerStatus = await loadMcpServerStatus();
@@ -37,7 +38,7 @@ export async function boot(): Promise<void> {
     }
     state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme();
-    installAiChatClient(state.aiSettings);
+    installAiChatClient(state.aiSettings, state.appSettings);
     await onAppCloseRequest(() => {
       void handleAppCloseRequest();
     });

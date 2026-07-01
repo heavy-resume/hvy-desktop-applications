@@ -320,6 +320,8 @@ export interface ImageAttachmentMaxDimensions {
 
 export interface AppSettings {
   imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
+  debugSemanticSearch: boolean;
+  debugLogMaxBytes: number;
 }
 
 export function isTauriRuntime(): boolean {
@@ -488,6 +490,8 @@ export function defaultAiSettings(): AiSettings {
 export function defaultAppSettings(): AppSettings {
   return {
     imageAttachmentMaxDimensions: { width: 1080, height: 1080 },
+    debugSemanticSearch: false,
+    debugLogMaxBytes: 10 * 1024 * 1024,
   };
 }
 

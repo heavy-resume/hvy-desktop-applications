@@ -408,14 +408,24 @@ fn default_image_attachment_max_dimension() -> u32 {
 struct AppSettings {
     #[serde(default)]
     image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
+    #[serde(default)]
+    debug_semantic_search: bool,
+    #[serde(default = "default_debug_log_max_bytes")]
+    debug_log_max_bytes: u64,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
+            debug_semantic_search: false,
+            debug_log_max_bytes: default_debug_log_max_bytes(),
         }
     }
+}
+
+fn default_debug_log_max_bytes() -> u64 {
+    10 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -327,6 +327,8 @@ fn read_app_settings(path: &Path) -> AppResult<AppSettings> {
 fn normalize_app_settings(settings: AppSettings) -> AppSettings {
     AppSettings {
         image_attachment_max_dimensions: normalize_image_attachment_max_dimensions(settings.image_attachment_max_dimensions),
+        debug_semantic_search: settings.debug_semantic_search,
+        debug_log_max_bytes: normalize_debug_log_max_bytes(settings.debug_log_max_bytes),
     }
 }
 
@@ -373,6 +375,13 @@ fn normalize_image_attachment_dimension(value: u32) -> u32 {
         return default_image_attachment_max_dimension();
     }
     value.clamp(MIN_IMAGE_ATTACHMENT_DIMENSION, MAX_IMAGE_ATTACHMENT_DIMENSION)
+}
+
+fn normalize_debug_log_max_bytes(value: u64) -> u64 {
+    if value == 0 {
+        return default_debug_log_max_bytes();
+    }
+    value.max(1024)
 }
 
 fn normalize_ai_provider(provider_config: AiProviderConfig) -> AppResult<AiProviderConfig> {

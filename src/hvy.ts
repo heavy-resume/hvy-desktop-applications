@@ -2,6 +2,8 @@ import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './b
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
+import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
+import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import type {
@@ -12,6 +14,7 @@ import type {
 import type {
   HvyDocumentSearchRequest,
   HvyDocumentSearchResponse,
+  HvySemanticFilterProvider,
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
 
@@ -68,6 +71,7 @@ export interface MountHvyDocumentOptions {
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
 let editorClipboardPayload: HvyEditorClipboardPayload | null = null;
 let metaTemplateClipboard: MetaTemplateClipboard | null = null;
+let referenceSemanticFilterConfigured = false;
 
 const editorClipboardHost: HvyEditorClipboardHost = {
   read() {
@@ -78,9 +82,23 @@ const editorClipboardHost: HvyEditorClipboardHost = {
   },
 };
 
+const desktopSemanticFilterProvider: HvySemanticFilterProvider = (request) => {
+  setHostChatClient(window.HVY_CHAT_CLIENT ?? null);
+  return chatSemanticFilterProvider(request);
+};
+
 function loadHvyEmbed(): Promise<HvyEmbedModule> {
+  ensureReferenceSemanticFilterProvider();
   hvyEmbedModule ??= import('../../heavy-file-format/src/embed-full');
   return hvyEmbedModule;
+}
+
+function ensureReferenceSemanticFilterProvider(): void {
+  if (referenceSemanticFilterConfigured) return;
+  referenceSemanticFilterConfigured = true;
+  setReferenceAppConfig({
+    semanticFilterProvider: desktopSemanticFilterProvider,
+  });
 }
 
 export async function deserializeHvy(bytes: Uint8Array, extension: DocumentExtension): Promise<VisualDocument> {
@@ -218,14 +236,14 @@ export async function mountHvyDocument(
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
-    semanticFilterProvider: options.hiddenFromAI ? null : chatSemanticFilterProvider,
+    semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
-  const interactiveMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  const interactiveMount = withViewerCarouselInteractions(root, mounted);
   const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
   return {
     mount: finalMount,
@@ -394,7 +412,7 @@ function createEmailLinkButton(label: string, action: string, link: MailtoLink):
 export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {
   const { searchDocuments } = await loadHvyEmbed();
   return searchDocuments({
-    semanticFilterProvider: chatSemanticFilterProvider,
+    semanticFilterProvider: desktopSemanticFilterProvider,
     ...request,
   });
 }
@@ -404,7 +422,7 @@ export async function createHvyDocumentFilterSnapshot(
 ): Promise<Awaited<ReturnType<HvyEmbedModule['createDocumentFilterSnapshot']>>> {
   const { createDocumentFilterSnapshot } = await loadHvyEmbed();
   return createDocumentFilterSnapshot({
-    semanticFilterProvider: chatSemanticFilterProvider,
+    semanticFilterProvider: desktopSemanticFilterProvider,
     ...request,
   });
 }

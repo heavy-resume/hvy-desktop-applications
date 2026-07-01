@@ -405,7 +405,15 @@ export function canonicalAiSettings(settings: typeof state.aiSettings): typeof s
 export function canonicalAppSettings(settings: AppSettings): AppSettings {
   return {
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
+    debugSemanticSearch: settings.debugSemanticSearch === true,
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(settings.debugLogMaxBytes),
   };
+}
+
+export function normalizeDebugLogMaxBytes(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 10 * 1024 * 1024;
+  return Math.max(1024, Math.round(parsed));
 }
 
 export function normalizeAiMaxContextChars(value: unknown): number {

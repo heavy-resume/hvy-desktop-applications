@@ -1797,6 +1797,8 @@ function defaultAppSettings() {
       width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
       height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
     },
+    debugSemanticSearch: false,
+    debugLogMaxBytes: 10 * 1024 * 1024,
   };
 }
 
@@ -1805,7 +1807,15 @@ function normalizeAppSettings(settings) {
     ...defaultAppSettings(),
     ...(settings || {}),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
+    debugSemanticSearch: settings?.debugSemanticSearch === true,
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(settings?.debugLogMaxBytes),
   };
+}
+
+function normalizeDebugLogMaxBytes(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 10 * 1024 * 1024;
+  return Math.max(1024, Math.round(parsed));
 }
 
 function normalizeAiSettings(settings) {

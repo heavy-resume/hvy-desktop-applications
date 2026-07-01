@@ -1,5 +1,7 @@
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
+import { getSemanticResponseDebug } from './aiClient';
 import { readDocumentFile, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { logDebugEvent } from './debugLog';
 import { loadWorkspace } from './mainWorkspaceUtils';
 import { createHvyDocumentFilterSnapshot, deserializeHvy, setMountedSearchSnapshot, type VisualDocument } from './hvy';
 import { state, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
@@ -16,6 +18,7 @@ export async function submitWorkspaceFilter(): Promise<void> {
     return;
   }
   const workspacePath = state.workspaceFilter.workspacePath;
+  const targetDirectory = normalizeFolderScope(state.workspaceFilter.targetDirectory);
   const query = state.workspaceFilter.queryDraft.trim();
   state.workspaceFilter.submittedQuery = query;
   state.workspaceFilter.error = null;
@@ -43,17 +46,24 @@ export async function submitWorkspaceFilter(): Promise<void> {
     if (!workspace) {
       throw new Error('Open a workspace before filtering.');
     }
-    const documents = await buildWorkspaceFilterDocuments(workspace);
+    const documents = await buildWorkspaceFilterDocuments(workspace, targetDirectory);
     const snapshots = await createWorkspaceFilterSnapshots(documents, {
       query,
       mode: state.workspaceFilter.mode,
       filterMode: state.workspaceFilter.filterMode,
       signal: abortController.signal,
     });
+    if (state.workspaceFilter.mode === 'semantic' && !workspaceFilterSnapshotsHaveMatches(snapshots)) {
+      state.workspaceFilter.error = 'No semantic matches. Try a more specific prompt.';
+      state.workspaceFilter.status = null;
+      state.status = 'Ready';
+      return;
+    }
     const config: WorkspaceFilterConfig = {
       query,
       mode: state.workspaceFilter.mode,
       filterMode: state.workspaceFilter.filterMode,
+      targetDirectory,
       snapshots,
     };
     state.workspaceFilters[workspacePath] = config;
@@ -113,8 +123,14 @@ export async function createWorkspaceFilterSnapshotForDocument(
   if (workspaceFileAiAccess(path).hiddenFromAI) {
     return null;
   }
-  const filter = workspacePath ? state.workspaceFilters[workspacePath] : null;
+  if (!workspacePath) {
+    return null;
+  }
+  const filter = state.workspaceFilters[workspacePath];
   if (!filter || !filter.query.trim()) {
+    return null;
+  }
+  if (!fileMatchesWorkspaceFilterScope(path, workspacePath, filter)) {
     return null;
   }
   return findWorkspaceFilterSnapshot(filter, path);
@@ -148,6 +164,21 @@ export function normalizeWorkspaceRelativePath(path: string, workspacePath: stri
     : normalizedPath;
 }
 
+export function normalizeFolderScope(targetDirectory: string | null | undefined): string {
+  return normalizeFilePath(targetDirectory ?? '').replace(/^\/+|\/+$/g, '');
+}
+
+export function fileMatchesWorkspaceFilterScope(
+  path: string,
+  workspacePath: string,
+  filter: Pick<WorkspaceFilterConfig, 'targetDirectory'> | { targetDirectory?: string },
+): boolean {
+  const scope = normalizeFolderScope(filter.targetDirectory);
+  if (!scope) return true;
+  const relativePath = normalizeWorkspaceRelativePath(path, workspacePath);
+  return relativePath.startsWith(`${scope}/`);
+}
+
 export async function createWorkspaceFilterSnapshots(
   documents: HvyDocumentSearchDocument[],
   filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
@@ -158,32 +189,106 @@ export async function createWorkspaceFilterSnapshots(
     state.workspaceFilter.status = label;
     state.status = label;
     scheduleWorkspaceFilterProgressRender();
-    const snapshot = await createHvyDocumentFilterSnapshot({
-      document: entry.document,
-      query: filter.query,
-      mode: filter.mode,
-      view: 'viewer',
-      filterMode: filter.filterMode,
-      traceRunId: `workspace-filter:${Date.now().toString(36)}`,
-      signal: filter.signal,
-      onSemanticProgress: filter.mode === 'semantic'
-        ? (progress) => {
-          state.workspaceFilter.error = null;
-          state.workspaceFilter.status = `Semantic windows ${progress.completedWindows}/${progress.totalWindows}; ${progress.matchedCandidates} matches in ${entry.documentTitle ?? displayDocumentName(entry.documentId)}`;
-          state.status = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
-          scheduleWorkspaceFilterProgressRender();
-        }
-        : undefined,
-    });
+    const snapshot = await createWorkspaceFilterSnapshotForSearchDocument(entry, filter, index, documents.length);
     snapshots[entry.documentId] = snapshot;
   }
   return snapshots;
 }
 
-export async function buildWorkspaceFilterDocuments(workspace: Awaited<ReturnType<typeof loadWorkspace>>): Promise<HvyDocumentSearchDocument[]> {
+function workspaceFilterSnapshotsHaveMatches(snapshots: WorkspaceFilterConfig['snapshots']): boolean {
+  return Object.values(snapshots).some((snapshot) => snapshot.results.length > 0);
+}
+
+async function createWorkspaceFilterSnapshotForSearchDocument(
+  entry: HvyDocumentSearchDocument,
+  filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
+  index: number,
+  total: number,
+) {
+  const traceRunId = `workspace-filter:${Date.now().toString(36)}`;
+  try {
+    return await createHvyDocumentFilterSnapshot({
+      document: entry.document,
+      query: filter.query,
+      mode: filter.mode,
+      view: 'viewer',
+      filterMode: filter.filterMode,
+      traceRunId,
+      signal: filter.signal,
+      onSemanticProgress: filter.mode === 'semantic'
+        ? (progress) => {
+          state.workspaceFilter.error = null;
+          state.workspaceFilter.status = `Semantic windows ${progress.completedWindows}/${progress.totalWindows}; ${progress.matchedCandidates} matches in ${entry.documentTitle ?? displayDocumentName(entry.documentId)}`;
+          if (progress.completedWindows === progress.totalWindows) {
+            logDebugEvent('llm', 'workspace-filter:semantic-progress', {
+              traceRunId,
+              documentId: entry.documentId,
+              documentTitle: entry.documentTitle,
+              documentIndex: index + 1,
+              documentCount: total,
+              query: filter.query,
+              ...progress,
+            });
+          }
+          scheduleWorkspaceFilterProgressRender();
+        }
+        : undefined,
+    });
+  } catch (error) {
+    if (filter.mode === 'semantic' && isInvalidSemanticCandidateIdError(error)) {
+      logDebugEvent('llm', 'workspace-filter:semantic-invalid-candidate-ids', {
+        traceRunId,
+        documentId: entry.documentId,
+        documentTitle: entry.documentTitle,
+        documentIndex: index + 1,
+        documentCount: total,
+        query: filter.query,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (filter.mode === 'semantic') {
+      const responseDebug = getSemanticResponseDebug(traceRunId);
+      logDebugEvent('llm', 'workspace-filter:semantic-error', {
+        task: 'semanticFilter',
+        traceRunId,
+        documentId: entry.documentId,
+        documentTitle: entry.documentTitle,
+        documentIndex: index + 1,
+        documentCount: total,
+        query: filter.query,
+        error: error instanceof Error ? error.message : String(error),
+        ...(responseDebug
+          ? {
+              provider: responseDebug.provider,
+              model: responseDebug.model,
+              ok: responseDebug.ok,
+              status: responseDebug.status,
+              durationMs: responseDebug.durationMs,
+              ...(responseDebug.body ? { body: responseDebug.body } : {}),
+              ...(typeof responseDebug.output === 'string' ? { output: responseDebug.output } : {}),
+              ...(responseDebug.payload !== undefined ? { payload: responseDebug.payload } : {}),
+            }
+          : { responseDebug: 'missing' }),
+      });
+    }
+    throw error;
+  }
+}
+
+function isInvalidSemanticCandidateIdError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message === 'Semantic filtering response did not include any valid candidate IDs.';
+}
+
+export async function buildWorkspaceFilterDocuments(
+  workspace: Awaited<ReturnType<typeof loadWorkspace>>,
+  targetDirectory = '',
+): Promise<HvyDocumentSearchDocument[]> {
   const documents: HvyDocumentSearchDocument[] = [];
+  const scope = normalizeFolderScope(targetDirectory);
   for (const file of flattenWorkspaceFiles(workspace.files)) {
     if (file.hiddenFromAI) continue;
+    if (scope && !workspaceFilterFileRelativePath(file, workspace.path).startsWith(`${scope}/`)) continue;
     const session = documentSessions.get(file.path);
     const openDocument = state.document?.path === file.path ? state.document : null;
     const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
@@ -207,6 +312,10 @@ export async function buildWorkspaceFilterDocuments(workspace: Awaited<ReturnTyp
     }
   }
   return documents;
+}
+
+function workspaceFilterFileRelativePath(file: WorkspaceFileNode, workspacePath: string): string {
+  return normalizeFolderScope(file.relativePath ?? normalizeWorkspaceRelativePath(file.path, workspacePath));
 }
 
 export function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
@@ -268,4 +377,3 @@ export function workspaceNameForPath(path: string): string {
 export function displayDocumentName(name: string): string {
   return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
-

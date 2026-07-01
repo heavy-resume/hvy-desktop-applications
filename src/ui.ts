@@ -56,7 +56,7 @@ export interface UiHandlers {
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
-  openWorkspaceFilter(workspacePath: string): void;
+  openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
@@ -71,6 +71,7 @@ export interface UiHandlers {
   closeDebugLog(): void;
   refreshDebugLog(): void;
   clearDebugLog(): void;
+  saveDebugLogSettings(settings: AppSettings): void;
   openAppSettings(): void;
   saveAppSettings(settings: AppSettings): void;
   cancelAppSettings(settings?: AppSettings): void;
@@ -206,6 +207,8 @@ const AI_CONTEXT_STEP_CHARS = 1_000;
 const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
 const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
 const MAX_IMAGE_ATTACHMENT_DIMENSION = 16_384;
+const DEFAULT_DEBUG_LOG_MAX_BYTES = 10 * 1024 * 1024;
+const MIN_DEBUG_LOG_MAX_BYTES = 1024;
 const importExcludeTagHelpers = {
   getTagState(target: HTMLElement): string[] {
     return parseTags(importExcludeTagsInput(target)?.value ?? '');
@@ -559,7 +562,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'set-import-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setImportDocumentType(target.dataset.documentType);
     if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
-    if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
+    if (action === 'open-workspace-filter' && target.dataset.workspacePath) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.openWorkspaceFilter(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    }
     if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
       handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
     }
@@ -914,6 +921,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
+    const debugLogSettings = target.closest<HTMLElement>('[data-settings="debug-log"]');
+    if (debugLogSettings && (target instanceof HTMLInputElement) && (target.name === 'debugSemanticSearch' || target.name === 'debugLogMaxMegabytes')) {
+      handlers.saveDebugLogSettings(readDebugLogSettingsControls(debugLogSettings, state.appSettings));
+      return;
+    }
     if (target instanceof HTMLInputElement && target.name === 'newSectionsOnly') {
       handlers.setImportNewSectionsOnly(target.checked);
       return;
@@ -1568,9 +1580,11 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   }
   const scopedWorkspace = filter.workspacePath ? workspaces.find((workspace) => workspace.path === filter.workspacePath) ?? null : null;
   const workspaceName = scopedWorkspace?.manifest.name ?? 'workspace';
+  const filterTargetName = filter.targetDirectory ? workspaceFilterFolderName(filter.targetDirectory) : workspaceName;
   const activeFilter = filter.workspacePath ? activeFilters[filter.workspacePath] : null;
   const applied = Boolean(
     activeFilter
+      && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(filter.targetDirectory)
       && activeFilter.query.trim() === filter.queryDraft.trim()
       && activeFilter.mode === filter.mode
       && activeFilter.filterMode === filter.filterMode
@@ -1580,7 +1594,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   const submitLabel = stopSemanticFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
   const visibility = workspaceTemplateVisibility(scopedWorkspace);
   const status = filter.isLoading
-    ? filter.status ?? (isSemantic ? `Analyzing ${workspaceName}...` : `Filtering ${workspaceName}...`)
+    ? filter.status ?? (isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
     : filter.error
     ? filter.error
     : '';
@@ -1591,7 +1605,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
         <div class="search-tabbar">
           <div class="workspace-filter-title">
             ${funnelIcon()}
-            <span>Filter ${escapeHtml(workspaceName)}</span>
+            <span>Filter ${escapeHtml(filterTargetName)}</span>
           </div>
           <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
@@ -1630,6 +1644,11 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
         </div>
       </form>
     </section>`;
+}
+
+function workspaceFilterFolderName(targetDirectory: string): string {
+  const parts = normalizeTreeRelativePath(targetDirectory).split('/').filter(Boolean);
+  return parts.at(-1) ?? 'folder';
 }
 
 function renderRenameFileDialog(state: AppState): string {
@@ -2095,6 +2114,7 @@ function showWorkspaceContextMenu(
     <button type="button" data-menu-action="add-files">Add Files</button>
     <button type="button" data-menu-action="import">Import</button>
     <button type="button" data-menu-action="paste">Paste</button>
+    ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -2117,6 +2137,7 @@ function showWorkspaceContextMenu(
     if (button.dataset.menuAction === 'add-files') handlers.addFilesToWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'filter') handlers.openWorkspaceFilter(workspacePath, targetDirectory);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -2356,6 +2377,7 @@ function renderWorkspace(
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
+  const rootFilterActive = filter !== undefined && normalizeTreeRelativePath(filter.targetDirectory) === '';
   const matchedDocumentIds = filter
     ? new Set(Object.entries(filter.snapshots).flatMap(([documentId, snapshot]) => snapshot.results.length > 0 ? [documentId] : []))
     : null;
@@ -2372,7 +2394,7 @@ function renderWorkspace(
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
-      <button type="button" class="workspace-filter-trigger${filter ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
+      <button type="button" class="workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
       <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
         <button type="button" class="${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
         <button type="button" class="${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
@@ -2386,7 +2408,7 @@ function renderWorkspace(
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
         </div>
       </div>
-      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path)).join('')}</ul>
+      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, filter ?? null)).join('')}</ul>
     </details>`;
 }
 
@@ -2495,13 +2517,19 @@ function renderNode(
   matchedDocumentIds: Set<string> | null,
   workspaceClipboard: WorkspaceClipboardState | null,
   workspacePath: string,
+  activeFilter: AppState['workspaceFilters'][string] | null = null,
 ): string {
   if (node.kind === 'folder') {
-    const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds);
+    const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds, activeFilter);
     const name = workspaceNodeName(node);
     const relativePath = workspaceNodeRelativePath(node);
     const children = Array.isArray(node.children) ? node.children : [];
-    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>`;
+    const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
+    const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
+    const folderFilterTrigger = folderOwnsActiveFilter
+      ? `<button type="button" class="workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
+      : '';
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${folderFilterTrigger}`;
     if (children.length === 0) {
       return `
         <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
@@ -2516,12 +2544,12 @@ function renderNode(
           <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
             ${folderLabel}
           </summary>
-          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter)).join('')}</ul>
         </details>
       </li>`;
   }
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
-  const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
+  const noFilterMatch = matchedDocumentIds !== null && nodeMatchesFilterScope(node, activeFilter) && !matchedDocumentIds.has(node.path);
   const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
   const archived = node.archived === true;
   const locked = node.locked === true;
@@ -2541,15 +2569,48 @@ function renderNode(
     </li>`;
 }
 
-function sortNodesForFilter(nodes: WorkspaceTreeNode[], matchedDocumentIds: Set<string> | null): WorkspaceTreeNode[] {
+function sortNodesForFilter(
+  nodes: WorkspaceTreeNode[],
+  matchedDocumentIds: Set<string> | null,
+  activeFilter: AppState['workspaceFilters'][string] | null = null,
+): WorkspaceTreeNode[] {
   if (!matchedDocumentIds) return nodes;
-  return [...nodes].sort((left, right) => Number(nodeHasFilterMatch(right, matchedDocumentIds)) - Number(nodeHasFilterMatch(left, matchedDocumentIds)));
+  return [...nodes].sort((left, right) => Number(nodeHasFilterMatch(right, matchedDocumentIds, activeFilter)) - Number(nodeHasFilterMatch(left, matchedDocumentIds, activeFilter)));
 }
 
-function nodeHasFilterMatch(node: WorkspaceTreeNode, matchedDocumentIds: Set<string> | null): boolean {
+function nodeHasFilterMatch(
+  node: WorkspaceTreeNode,
+  matchedDocumentIds: Set<string> | null,
+  activeFilter: AppState['workspaceFilters'][string] | null = null,
+): boolean {
   if (!matchedDocumentIds) return true;
+  if (!nodeTouchesFilterScope(node, activeFilter)) return true;
   if (node.kind === 'file') return matchedDocumentIds.has(node.path);
-  return node.children.some((child) => nodeHasFilterMatch(child, matchedDocumentIds));
+  return node.children.some((child) => nodeHasFilterMatch(child, matchedDocumentIds, activeFilter));
+}
+
+function nodeMatchesFilterScope(
+  node: WorkspaceTreeNode,
+  activeFilter: AppState['workspaceFilters'][string] | null,
+): boolean {
+  const scope = normalizeTreeRelativePath(activeFilter?.targetDirectory ?? '');
+  if (!scope) return true;
+  return normalizeTreeRelativePath(workspaceNodeRelativePath(node)).startsWith(`${scope}/`);
+}
+
+function nodeTouchesFilterScope(
+  node: WorkspaceTreeNode,
+  activeFilter: AppState['workspaceFilters'][string] | null,
+): boolean {
+  const scope = normalizeTreeRelativePath(activeFilter?.targetDirectory ?? '');
+  if (!scope) return true;
+  const relativePath = normalizeTreeRelativePath(workspaceNodeRelativePath(node));
+  if (node.kind === 'file') return relativePath.startsWith(`${scope}/`);
+  return relativePath === scope || relativePath.startsWith(`${scope}/`) || scope.startsWith(`${relativePath}/`);
+}
+
+function normalizeTreeRelativePath(path: string | null | undefined): string {
+  return (path ?? '').replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
 }
 
 function displayDocumentName(name: string): string {
@@ -3100,6 +3161,16 @@ function renderDebugLogDialog(state: AppState): string {
             <button type="button" data-action="clear-debug-log">Clear</button>
           </div>
         </div>
+        <div class="debug-log-settings" data-settings="debug-log">
+          <label class="inline-checkbox">
+            <input name="debugSemanticSearch" type="checkbox" ${state.appSettings.debugSemanticSearch ? 'checked' : ''}>
+            <span>Debug semantic search</span>
+          </label>
+          <label>
+            <span>Maximum log size (MB)</span>
+            <input name="debugLogMaxMegabytes" type="number" min="1" step="1" required value="${escapeAttr(String(debugLogMaxMegabytes(state.appSettings.debugLogMaxBytes)))}">
+          </label>
+        </div>
         <div class="debug-log-list">
           ${entries.length
             ? entries.map(renderDebugLogEntry).join('')
@@ -3113,7 +3184,7 @@ function renderDebugLogDialog(state: AppState): string {
 }
 
 function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string {
-  const details = entry.details ? JSON.stringify(entry.details, null, 2) : '';
+  const details = formatDebugLogEntryDetails(entry);
   const duration = typeof entry.details?.durationMs === 'number'
     ? `${entry.details.durationMs.toFixed(1)} ms`
     : typeof entry.durationMs === 'number'
@@ -3127,8 +3198,87 @@ function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string
         ${duration ? `<span class="debug-log-duration">${escapeHtml(duration)}</span>` : ''}
         <time datetime="${escapeAttr(entry.startedAt)}">${escapeHtml(formatDebugLogTime(entry.startedAt))}</time>
       </div>
+      ${renderSemanticDebugLogDetails(entry)}
       ${details ? `<pre>${escapeHtml(details)}</pre>` : ''}
     </article>`;
+}
+
+function formatDebugLogEntryDetails(entry: AppState['debugLogEntries'][number]): string {
+  if (!entry.details) return '';
+  if (entry.kind === 'llm' && entry.details.task === 'semanticFilter') {
+    const { body: _body, output: _output, payload: _payload, ...summary } = entry.details;
+    return JSON.stringify(summary, null, 2);
+  }
+  return JSON.stringify(entry.details, null, 2);
+}
+
+function renderSemanticDebugLogDetails(entry: AppState['debugLogEntries'][number]): string {
+  if (entry.kind !== 'llm') return '';
+  if (entry.label === 'llm:request' && entry.details?.task === 'semanticFilter') {
+    return renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details.body));
+  }
+  if (entry.label === 'llm:response' && entry.details?.task === 'semanticFilter') {
+    return [
+      renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details?.body)),
+      renderDebugLogExpandable('Semantic response', formatSemanticResponse(entry.details?.output)),
+    ].join('');
+  }
+  if (entry.label === 'workspace-filter:semantic-error' && entry.details?.task === 'semanticFilter') {
+    return [
+      renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details?.body)),
+      renderDebugLogExpandable('Semantic response', formatSemanticResponse(entry.details?.output)),
+    ].join('');
+  }
+  if (entry.label === 'llm:semantic-filter-output') {
+    return renderDebugLogExpandable('Semantic response', formatSemanticResponse(entry.details?.output));
+  }
+  return '';
+}
+
+function renderDebugLogExpandable(label: string, value: string): string {
+  if (!value.trim()) return '';
+  return `<details class="debug-log-details"><summary>${escapeHtml(label)}</summary><pre>${escapeHtml(value)}</pre></details>`;
+}
+
+function formatSemanticRequestPrompt(body: unknown): string {
+  const messages = isRecord(body) && Array.isArray(body.messages) ? body.messages : [];
+  const formattedMessages = messages
+    .filter(isRecord)
+    .map((message, index) => {
+      const role = String(message.role ?? `message ${index + 1}`);
+      const content = String(message.content ?? '');
+      const normalizedContent = content.startsWith('Context:\n') ? content.slice('Context:\n'.length) : content;
+      const label = content.startsWith('Context:\n') ? 'context' : role;
+      return `--- ${label} ---\n${normalizedContent.trim()}`;
+    })
+    .filter((message) => message.trim().length > 0);
+  return formattedMessages.length ? formattedMessages.join('\n\n') : formatDebugLogValue(body);
+}
+
+function formatSemanticResponse(output: unknown): string {
+  if (output === null || output === undefined) {
+    return '';
+  }
+  if (typeof output !== 'string') {
+    return formatDebugLogValue(output);
+  }
+  const source = output;
+  try {
+    return JSON.stringify(JSON.parse(source), null, 2);
+  } catch {
+    return source;
+  }
+}
+
+function formatDebugLogValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  const json = JSON.stringify(value, null, 2);
+  return typeof json === 'string' ? json : String(value);
 }
 
 function formatDebugLogTime(value: string): string {
@@ -3171,6 +3321,23 @@ function renderAppSettingsDialog(state: AppState): string {
               max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
               step="1"
               value="${escapeAttr(String(imageAttachmentMaxDimensions.height))}"
+            >
+          </label>
+        </fieldset>
+        <fieldset class="ai-action-config">
+          <legend>Debug log</legend>
+          <label class="inline-checkbox">
+            <input name="debugSemanticSearch" type="checkbox" ${settings.debugSemanticSearch ? 'checked' : ''}>
+            <span>Debug semantic search</span>
+          </label>
+          <label>
+            <span>Maximum log size (MB)</span>
+            <input
+              name="debugLogMaxMegabytes"
+              type="number"
+              min="1"
+              step="1"
+              value="${escapeAttr(String(debugLogMaxMegabytes(settings.debugLogMaxBytes)))}"
             >
           </label>
         </fieldset>
@@ -4067,6 +4234,18 @@ function readAppSettingsForm(data: FormData): AppSettings {
       width: data.get('imageAttachmentMaxWidth'),
       height: data.get('imageAttachmentMaxHeight'),
     }),
+    debugSemanticSearch: data.get('debugSemanticSearch') === 'on',
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(Number(data.get('debugLogMaxMegabytes')) * 1024 * 1024),
+  };
+}
+
+function readDebugLogSettingsControls(root: HTMLElement, current: AppSettings): AppSettings {
+  const debugSemanticSearch = root.querySelector<HTMLInputElement>('input[name="debugSemanticSearch"]');
+  const debugLogMaxMegabytes = root.querySelector<HTMLInputElement>('input[name="debugLogMaxMegabytes"]');
+  return {
+    ...current,
+    debugSemanticSearch: debugSemanticSearch?.checked === true,
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(Number(debugLogMaxMegabytes?.value) * 1024 * 1024),
   };
 }
 
@@ -4075,10 +4254,14 @@ function parseAppSettings(value: string): AppSettings {
     const parsed = JSON.parse(value) as Partial<AppSettings>;
     return {
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
+      debugSemanticSearch: parsed.debugSemanticSearch === true,
+      debugLogMaxBytes: normalizeDebugLogMaxBytes(parsed.debugLogMaxBytes),
     };
   } catch {
     return {
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(null),
+      debugSemanticSearch: false,
+      debugLogMaxBytes: DEFAULT_DEBUG_LOG_MAX_BYTES,
     };
   }
 }
@@ -4247,6 +4430,20 @@ function normalizeImageAttachmentDimension(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
   return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
+}
+
+function normalizeDebugLogMaxBytes(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DEBUG_LOG_MAX_BYTES;
+  return Math.max(MIN_DEBUG_LOG_MAX_BYTES, Math.round(parsed));
+}
+
+function debugLogMaxMegabytes(bytes: number): number {
+  return Math.max(1, Math.round(normalizeDebugLogMaxBytes(bytes) / 1024 / 1024));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function syncAiMaxContextCharsOutput(input: HTMLInputElement): void {

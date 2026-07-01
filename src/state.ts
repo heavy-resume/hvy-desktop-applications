@@ -121,12 +121,14 @@ export interface WorkspaceFilterConfig {
   query: string;
   mode: HvyDocumentSearchMode;
   filterMode: SearchFilterMode;
+  targetDirectory: string;
   snapshots: Record<string, HvySearchSnapshot>;
 }
 
 export interface WorkspaceFilterState {
   open: boolean;
   workspacePath: string | null;
+  targetDirectory: string;
   queryDraft: string;
   submittedQuery: string;
   mode: HvyDocumentSearchMode;
@@ -235,6 +237,7 @@ export const state: AppState = {
   workspaceFilter: {
     open: false,
     workspacePath: null,
+    targetDirectory: '',
     queryDraft: '',
     submittedQuery: '',
     mode: 'keyword',

@@ -530,17 +530,20 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     await finishAddingFilesToWorkspace(result, 'Added dropped files to workspace');
     await refreshRecents();
   }),
-  openWorkspaceFilter: (workspacePath) => {
+  openWorkspaceFilter: (workspacePath, targetDirectory = '') => {
     closeUiBeforeWorkspaceFilter();
     const activeFilter = state.workspaceFilters[workspacePath];
+    const normalizedTargetDirectory = targetDirectory.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+    const activeFilterMatchesTarget = (activeFilter?.targetDirectory ?? '') === normalizedTargetDirectory;
     state.workspaceFilter.workspacePath = workspacePath;
+    state.workspaceFilter.targetDirectory = normalizedTargetDirectory;
     state.workspaceFilter.open = true;
     state.workspaceFilter.error = null;
     state.workspaceFilter.status = null;
-    state.workspaceFilter.queryDraft = activeFilter?.query ?? '';
-    state.workspaceFilter.submittedQuery = activeFilter?.query ?? '';
-    state.workspaceFilter.mode = activeFilter?.mode ?? 'keyword';
-    state.workspaceFilter.filterMode = activeFilter?.filterMode ?? 'deprioritize';
+    state.workspaceFilter.queryDraft = activeFilterMatchesTarget ? activeFilter?.query ?? '' : '';
+    state.workspaceFilter.submittedQuery = activeFilterMatchesTarget ? activeFilter?.query ?? '' : '';
+    state.workspaceFilter.mode = activeFilterMatchesTarget ? activeFilter?.mode ?? 'keyword' : 'keyword';
+    state.workspaceFilter.filterMode = activeFilterMatchesTarget ? activeFilter?.filterMode ?? 'deprioritize' : 'deprioritize';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {

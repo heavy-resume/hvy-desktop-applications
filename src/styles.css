@@ -433,7 +433,7 @@ button:disabled {
 .tree-folder-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   color: var(--hvy-text-alt, #394744);
   cursor: pointer;
@@ -981,6 +981,13 @@ button:disabled {
   top: -0.25rem;
   right: var(--workspace-tool-offset);
   padding: 0;
+}
+
+.folder-filter-trigger {
+  position: static;
+  width: 1.55rem;
+  height: 1.55rem;
+  justify-self: end;
 }
 
 .workspace-filter-trigger.is-active {
@@ -2138,6 +2145,29 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.debug-log-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  align-items: end;
+  gap: 10px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 7px;
+  background: var(--hvy-surface-alt, #edf1ed);
+  padding: 9px;
+}
+
+.debug-log-settings label {
+  display: grid;
+  gap: 4px;
+}
+
+.debug-log-settings .inline-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+}
+
 .debug-log-list {
   display: grid;
   gap: 8px;
@@ -2192,6 +2222,19 @@ button:disabled {
   border-radius: 999px;
   padding: 2px 7px;
   text-transform: uppercase;
+}
+
+.debug-log-details {
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--hvy-surface-alt, #edf1ed) 55%, var(--hvy-surface, #fbfaf7));
+}
+
+.debug-log-details summary {
+  cursor: pointer;
+  color: var(--hvy-text, #152223);
+  font-weight: 700;
+  padding: 7px 8px;
 }
 
 .debug-log-entry pre {

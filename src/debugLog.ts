@@ -10,9 +10,19 @@ export interface DebugLogEntry {
 }
 
 const MAX_DEBUG_LOG_ENTRIES = 500;
+const DEFAULT_DEBUG_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
 let nextDebugLogId = 1;
 const debugLogEntries: DebugLogEntry[] = [];
+let maxDebugLogBytes = DEFAULT_DEBUG_LOG_MAX_BYTES;
+
+export function configureDebugLog(options: { maxBytes?: number }): void {
+  if (typeof options.maxBytes === 'number' && Number.isFinite(options.maxBytes) && options.maxBytes > 0) {
+    maxDebugLogBytes = Math.max(1024, Math.round(options.maxBytes));
+    pruneDebugLogEntries();
+    emitDebugLogChanged();
+  }
+}
 
 export function logDebugEvent(kind: DebugLogKind, label: string, details?: Record<string, unknown>): DebugLogEntry {
   const entry: DebugLogEntry = {
@@ -75,10 +85,21 @@ export function clearDebugLogEntries(): void {
 
 function pushDebugLogEntry(entry: DebugLogEntry): void {
   debugLogEntries.push(entry);
+  pruneDebugLogEntries();
+  emitDebugLogChanged();
+}
+
+function pruneDebugLogEntries(): void {
   while (debugLogEntries.length > MAX_DEBUG_LOG_ENTRIES) {
     debugLogEntries.shift();
   }
-  emitDebugLogChanged();
+  while (debugLogEntries.length > 1 && debugLogByteSize() > maxDebugLogBytes) {
+    debugLogEntries.shift();
+  }
+}
+
+function debugLogByteSize(): number {
+  return new TextEncoder().encode(JSON.stringify(debugLogEntries)).length;
 }
 
 function emitDebugLogChanged(): void {
