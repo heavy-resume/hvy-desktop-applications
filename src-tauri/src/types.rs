@@ -436,6 +436,8 @@ struct AiSettings {
     actions: AiActionSettings,
     #[serde(default = "default_ai_max_context_chars")]
     max_context_chars: u32,
+    #[serde(default = "default_max_concurrent_semantic_filters", alias = "workspaceFilterFileConcurrency")]
+    max_concurrent_semantic_filters: u32,
 }
 
 impl Default for AiSettings {
@@ -446,12 +448,17 @@ impl Default for AiSettings {
             providers: vec![provider],
             actions: AiActionSettings::default(),
             max_context_chars: default_ai_max_context_chars(),
+            max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
         }
     }
 }
 
 fn default_ai_max_context_chars() -> u32 {
     DEFAULT_AI_MAX_CONTEXT_CHARS
+}
+
+fn default_max_concurrent_semantic_filters() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Deserialize)]

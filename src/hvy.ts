@@ -82,7 +82,7 @@ const editorClipboardHost: HvyEditorClipboardHost = {
   },
 };
 
-const desktopSemanticFilterProvider: HvySemanticFilterProvider = (request) => {
+export const desktopSemanticFilterProvider: HvySemanticFilterProvider = (request) => {
   setHostChatClient(window.HVY_CHAT_CLIENT ?? null);
   return chatSemanticFilterProvider(request);
 };

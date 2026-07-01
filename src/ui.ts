@@ -204,6 +204,9 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const DEFAULT_MAX_CONCURRENT_SEMANTIC_FILTERS = 3;
+const MIN_MAX_CONCURRENT_SEMANTIC_FILTERS = 1;
+const MAX_MAX_CONCURRENT_SEMANTIC_FILTERS = 16;
 const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
 const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
 const MAX_IMAGE_ATTACHMENT_DIMENSION = 16_384;
@@ -1584,10 +1587,10 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   const activeFilter = filter.workspacePath ? activeFilters[filter.workspacePath] : null;
   const applied = Boolean(
     activeFilter
-      && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(filter.targetDirectory)
-      && activeFilter.query.trim() === filter.queryDraft.trim()
-      && activeFilter.mode === filter.mode
-      && activeFilter.filterMode === filter.filterMode
+    && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(filter.targetDirectory)
+    && activeFilter.query.trim() === filter.queryDraft.trim()
+    && activeFilter.mode === filter.mode
+    && activeFilter.filterMode === filter.filterMode
   );
   const isSemantic = filter.mode === 'semantic';
   const stopSemanticFilter = filter.isLoading && isSemantic;
@@ -1596,8 +1599,8 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   const status = filter.isLoading
     ? filter.status ?? (isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
     : filter.error
-    ? filter.error
-    : '';
+      ? filter.error
+      : '';
   return `
     <section class="workspace-filter-overlay" aria-label="Workspace filter">
       <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
@@ -1615,9 +1618,9 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           <label>
             <span>Filter document</span>
             ${isSemantic
-              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
-              : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
-            }
+      ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
+      : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
+    }
           </label>
         </div>
         ${status ? `<div class="search-status${filter.error ? ' is-error' : ''}" role="status">${escapeHtml(status)}</div>` : ''}
@@ -1726,8 +1729,8 @@ function renderWorkspaceTransferDialog(state: AppState): string {
   const title = transfer.mode === 'saveCurrent'
     ? 'Save to Workspace'
     : transfer.mode === 'copyFile'
-    ? 'Copy to Workspace'
-    : 'Move to Workspace';
+      ? 'Copy to Workspace'
+      : 'Move to Workspace';
   const submitLabel = transfer.mode === 'moveFile' ? 'Move' : transfer.mode === 'copyFile' ? 'Copy' : 'Save';
   return `
     <div class="modal-backdrop" role="presentation">
@@ -1797,9 +1800,9 @@ function renderWorkspaceDestinationFolder(
   const selected = workspacePath === selectedWorkspacePath && relativePath === selectedRelativePath;
   const children = Array.isArray(node.children)
     ? node.children.map((child) => {
-        if (child.kind !== 'folder') return '';
-        return renderWorkspaceDestinationFolder(child, workspacePath, selectedWorkspacePath, selectedRelativePath);
-      }).join('')
+      if (child.kind !== 'folder') return '';
+      return renderWorkspaceDestinationFolder(child, workspacePath, selectedWorkspacePath, selectedRelativePath);
+    }).join('')
     : '';
   return `
     <div class="workspace-destination-folder">
@@ -1902,8 +1905,8 @@ function renderSaveAsDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" data-action="cancel-save-as">Cancel</button>
           ${workspaceActive
-            ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
-            : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
+      ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
+      : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
         </div>
       </form>
     </div>`;
@@ -2991,8 +2994,8 @@ function renderAnywhereImportSourceControls(source: AppState['importSource'], so
   const sourceNote = source
     ? 'Using selected file unless pasted text is provided.'
     : sourceText.trim().length > 0
-    ? `${Math.min(sourceText.trim().length, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
-    : 'Choose a file or paste at least 50 characters.';
+      ? `${Math.min(sourceText.trim().length, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
+      : 'Choose a file or paste at least 50 characters.';
   return `
     <div class="source-picker-row">
       <button type="button" data-action="choose-import-source">Choose file</button>
@@ -3072,8 +3075,8 @@ function updateImportSubmit(form: HTMLFormElement): void {
         ? `Pasted text needs ${MIN_PASTED_IMPORT_CHARS} characters to replace the selected file.`
         : 'Using selected file unless pasted text is provided.'
       : pastedLength > 0
-      ? `${Math.min(pastedLength, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
-      : `Choose a file or paste at least ${MIN_PASTED_IMPORT_CHARS} characters.`;
+        ? `${Math.min(pastedLength, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
+        : `Choose a file or paste at least ${MIN_PASTED_IMPORT_CHARS} characters.`;
     note.dataset.state = !hasValidSource && pastedLength > 0 ? 'error' : 'neutral';
   }
 }
@@ -3173,8 +3176,8 @@ function renderDebugLogDialog(state: AppState): string {
         </div>
         <div class="debug-log-list">
           ${entries.length
-            ? entries.map(renderDebugLogEntry).join('')
-            : '<p class="debug-log-empty">No debug entries yet.</p>'}
+      ? entries.map(renderDebugLogEntry).join('')
+      : '<p class="debug-log-empty">No debug entries yet.</p>'}
         </div>
         <div class="dialog-actions">
           <button type="button" data-action="close-debug-log">Done</button>
@@ -3188,8 +3191,8 @@ function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string
   const duration = typeof entry.details?.durationMs === 'number'
     ? `${entry.details.durationMs.toFixed(1)} ms`
     : typeof entry.durationMs === 'number'
-    ? `${entry.durationMs.toFixed(1)} ms`
-    : '';
+      ? `${entry.durationMs.toFixed(1)} ms`
+      : '';
   return `
     <article class="debug-log-entry" data-kind="${escapeAttr(entry.kind)}">
       <div class="debug-log-entry-summary">
@@ -3375,6 +3378,7 @@ function renderAiSettingsDialog(state: AppState): string {
   const providerConfig = aiProviderConfig(settings, selectedProviderId);
   const provider = aiProviderPreset(selectedProviderId);
   const maxContextChars = normalizeAiMaxContextChars(settings.maxContextChars);
+  const maxConcurrentSemanticFilters = normalizeMaxConcurrentSemanticFilters(settings.maxConcurrentSemanticFilters);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
@@ -3429,6 +3433,17 @@ function renderAiSettingsDialog(state: AppState): string {
             value="${escapeAttr(String(maxContextChars))}"
           >
           <output data-role="max-context-chars-output">${escapeHtml(formatAiMaxContextChars(maxContextChars))}</output>
+        </label>
+        <label>
+          <span>Max concurrent semantic filters</span>
+          <input
+            name="maxConcurrentSemanticFilters"
+            type="number"
+            min="${MIN_MAX_CONCURRENT_SEMANTIC_FILTERS}"
+            max="${MAX_MAX_CONCURRENT_SEMANTIC_FILTERS}"
+            step="1"
+            value="${escapeAttr(String(maxConcurrentSemanticFilters))}"
+          >
         </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
@@ -3503,11 +3518,11 @@ function renderMcpSettingsDialog(state: AppState): string {
             </div>
             <div class="mcp-install-list">
               ${state.mcpClientInstallStatus.map((client) => {
-                const installDisabled = state.busy || !client.configExists || !client.executableExists;
-                const removeDisabled = state.busy || !client.configExists || !client.installed;
-                const restoreDisabled = state.busy || !client.latestBackupPath;
-                const actionLabel = client.installed ? `Refresh ${client.label}` : `Install for ${client.label}`;
-                return `
+    const installDisabled = state.busy || !client.configExists || !client.executableExists;
+    const removeDisabled = state.busy || !client.configExists || !client.installed;
+    const restoreDisabled = state.busy || !client.latestBackupPath;
+    const actionLabel = client.installed ? `Refresh ${client.label}` : `Install for ${client.label}`;
+    return `
                   <article class="mcp-install-card${client.installed ? ' is-installed' : ''}">
                     <div>
                       <strong>${escapeHtml(client.label)}</strong>
@@ -3521,7 +3536,7 @@ function renderMcpSettingsDialog(state: AppState): string {
                       <button type="button" class="ghost" data-action="restore-mcp-client-backup" data-target="${escapeAttr(client.target)}" ${restoreDisabled ? 'disabled' : ''}>Restore Latest</button>
                     </div>
                   </article>`;
-              }).join('')}
+  }).join('')}
             </div>
           </section>
           <section class="mcp-config-panel" data-transport-panel="http" hidden>
@@ -3978,8 +3993,8 @@ function renderThemeColorRow(name: string, value: string, displayValue: string, 
       </label>
       <span class="theme-color-swatch" style="${displayValue ? `background: ${escapeAttr(displayValue)};` : ''}" aria-hidden="true"></span>
       ${overridden
-        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
-        : '<span class="theme-color-action theme-color-default muted">Default</span>'}
+      ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
+      : '<span class="theme-color-action theme-color-default muted">Default</span>'}
     </div>`;
 }
 
@@ -4049,10 +4064,9 @@ function renderRecoveryDialog(state: AppState): string {
       <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
         <h2 id="recoveryTitle">Recover Unsaved Edits</h2>
         <p class="dialog-note">Recoverable edits are kept for seven days and refreshed while a document has edits.</p>
-        ${
-          backups.length === 0
-            ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
-            : `<div class="recovery-list">
+        ${backups.length === 0
+      ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
+      : `<div class="recovery-list">
                 ${backups.map((backup) => `
                   <article class="recovery-item">
                     <div>
@@ -4067,7 +4081,7 @@ function renderRecoveryDialog(state: AppState): string {
                   </article>
                 `).join('')}
               </div>`
-        }
+    }
         <div class="dialog-actions">
           <button type="button" data-action="cancel-recovery">Close</button>
         </div>
@@ -4288,6 +4302,7 @@ function readAiSettingsForm(data: FormData): AiSettings {
     providers,
     actions: readActionSettings(data, activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(data.get('maxConcurrentSemanticFilters')),
   };
 }
 
@@ -4340,6 +4355,9 @@ function normalizeAiSettingsForForm(settings: AiSettings): AiSettings {
     ...settings,
     activeProviderId,
     maxContextChars: normalizeAiMaxContextChars(settings.maxContextChars),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(
+      settings.maxConcurrentSemanticFilters ?? (settings as Partial<AiSettings> & { workspaceFilterFileConcurrency?: number }).workspaceFilterFileConcurrency
+    ),
     actions: {
       chat: normalizeAiActionConfigForForm(settings.actions.chat, activeProviderId, 'chat'),
       edit: normalizeAiActionConfigForForm(settings.actions.edit, activeProviderId, 'edit'),
@@ -4414,6 +4432,12 @@ function normalizeAiMaxContextChars(value: unknown): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeMaxConcurrentSemanticFilters(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_CONCURRENT_SEMANTIC_FILTERS;
+  return Math.min(MAX_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.max(MIN_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.round(parsed)));
 }
 
 function normalizeImageAttachmentMaxDimensions(value: unknown): ImageAttachmentMaxDimensions {

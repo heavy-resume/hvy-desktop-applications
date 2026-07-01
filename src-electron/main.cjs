@@ -1788,6 +1788,7 @@ function defaultAiSettings() {
       compaction: { providerId: 'openai', model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
     },
     maxContextChars: DEFAULT_AI_MAX_CONTEXT_CHARS,
+    maxConcurrentSemanticFilters: 3,
   };
 }
 
@@ -1823,6 +1824,7 @@ function normalizeAiSettings(settings) {
     ...defaultAiSettings(),
     ...(settings || {}),
     maxContextChars: normalizeAiMaxContextChars(settings?.maxContextChars),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(settings?.maxConcurrentSemanticFilters ?? settings?.workspaceFilterFileConcurrency),
   };
 }
 
@@ -1831,6 +1833,12 @@ function normalizeAiMaxContextChars(value) {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeMaxConcurrentSemanticFilters(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 3;
+  return Math.min(16, Math.max(1, Math.round(parsed)));
 }
 
 function normalizeImageAttachmentMaxDimensions(value) {

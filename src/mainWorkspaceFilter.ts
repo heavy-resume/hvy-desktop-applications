@@ -1,11 +1,11 @@
-import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
+import type { HvyDocumentSearchDocument, HvySemanticFilterProvider } from '../../heavy-file-format/src/search/types';
 import { getSemanticResponseDebug } from './aiClient';
 import { readDocumentFile, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { logDebugEvent } from './debugLog';
 import { loadWorkspace } from './mainWorkspaceUtils';
-import { createHvyDocumentFilterSnapshot, deserializeHvy, setMountedSearchSnapshot, type VisualDocument } from './hvy';
+import { createHvyDocumentFilterSnapshot, deserializeHvy, desktopSemanticFilterProvider, setMountedSearchSnapshot, type VisualDocument } from './hvy';
 import { state, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
-import { applyAppColorTheme, cacheWorkspaceFilterDocuments, cancelWorkspaceFilterProgressRender, clearWorkspaceFilterDocumentCache, documentSessions, mountCurrentDocument, pendingMountDocument, preserveCurrentDocumentSession, rerender, scheduleWorkspaceFilterProgressRender } from './main';
+import { applyAppColorTheme, cacheWorkspaceFilterDocuments, cancelWorkspaceFilterProgressRender, clearWorkspaceFilterDocumentCache, documentSessions, mountCurrentDocument, normalizeMaxConcurrentSemanticFilters, pendingMountDocument, preserveCurrentDocumentSession, rerender, scheduleWorkspaceFilterProgressRender } from './main';
 
 let workspaceFilterAbortController: AbortController | null = null;
 
@@ -184,15 +184,89 @@ export async function createWorkspaceFilterSnapshots(
   filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
 ): Promise<WorkspaceFilterConfig['snapshots']> {
   const snapshots: WorkspaceFilterConfig['snapshots'] = {};
-  for (const [index, entry] of documents.entries()) {
-    const label = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
-    state.workspaceFilter.status = label;
-    state.status = label;
-    scheduleWorkspaceFilterProgressRender();
-    const snapshot = await createWorkspaceFilterSnapshotForSearchDocument(entry, filter, index, documents.length);
-    snapshots[entry.documentId] = snapshot;
-  }
+  const maxConcurrentSemanticFilters = normalizeMaxConcurrentSemanticFilters(state.aiSettings.maxConcurrentSemanticFilters);
+  const semanticFilterProvider = filter.mode === 'semantic'
+    ? createLimitedSemanticFilterProvider(desktopSemanticFilterProvider, maxConcurrentSemanticFilters)
+    : undefined;
+  const workerCount = filter.mode === 'semantic'
+    ? Math.min(maxConcurrentSemanticFilters, Math.max(1, documents.length))
+    : 1;
+  let nextDocumentIndex = 0;
+  let completedDocuments = 0;
+  let firstError: unknown = null;
+
+  const runWorker = async (): Promise<void> => {
+    while (!filter.signal?.aborted && !firstError) {
+      const index = nextDocumentIndex;
+      nextDocumentIndex += 1;
+      const entry = documents[index];
+      if (!entry) return;
+      const name = entry.documentTitle ?? displayDocumentName(entry.documentId);
+      const label = `Filtering ${name} (${index + 1}/${documents.length})`;
+      state.workspaceFilter.status = label;
+      state.status = label;
+      scheduleWorkspaceFilterProgressRender();
+      try {
+        const snapshot = await createWorkspaceFilterSnapshotForSearchDocument(entry, filter, index, documents.length, semanticFilterProvider);
+        snapshots[entry.documentId] = snapshot;
+        completedDocuments += 1;
+        state.workspaceFilter.status = `Filtered ${completedDocuments}/${documents.length} files`;
+        state.status = state.workspaceFilter.status;
+        scheduleWorkspaceFilterProgressRender();
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  if (firstError) throw firstError;
   return snapshots;
+}
+
+function createLimitedSemanticFilterProvider(
+  provider: HvySemanticFilterProvider,
+  maxConcurrentRequests: number,
+): HvySemanticFilterProvider {
+  let activeRequests = 0;
+  const queue: Array<() => void> = [];
+
+  const release = (): void => {
+    activeRequests -= 1;
+    queue.shift()?.();
+  };
+
+  const acquire = async (signal?: AbortSignal): Promise<void> => {
+    throwIfAborted(signal);
+    if (activeRequests < maxConcurrentRequests) {
+      activeRequests += 1;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const resume = (): void => {
+        signal?.removeEventListener('abort', abort);
+        activeRequests += 1;
+        resolve();
+      };
+      const abort = (): void => {
+        const index = queue.indexOf(resume);
+        if (index >= 0) queue.splice(index, 1);
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      queue.push(resume);
+    });
+    throwIfAborted(signal);
+  };
+
+  return async (request) => {
+    await acquire(request.signal);
+    try {
+      return await provider(request);
+    } finally {
+      release();
+    }
+  };
 }
 
 function workspaceFilterSnapshotsHaveMatches(snapshots: WorkspaceFilterConfig['snapshots']): boolean {
@@ -204,6 +278,7 @@ async function createWorkspaceFilterSnapshotForSearchDocument(
   filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
   index: number,
   total: number,
+  semanticFilterProvider?: HvySemanticFilterProvider,
 ) {
   const traceRunId = `workspace-filter:${Date.now().toString(36)}`;
   try {
@@ -215,6 +290,7 @@ async function createWorkspaceFilterSnapshotForSearchDocument(
       filterMode: filter.filterMode,
       traceRunId,
       signal: filter.signal,
+      ...(semanticFilterProvider ? { semanticFilterProvider } : {}),
       onSemanticProgress: filter.mode === 'semantic'
         ? (progress) => {
           state.workspaceFilter.error = null;
@@ -368,6 +444,12 @@ export function syncOpenDocumentWorkspaceAccess(path: string, access: { locked?:
 
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
 }
 
 export function workspaceNameForPath(path: string): string {

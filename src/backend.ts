@@ -311,6 +311,7 @@ export interface AiSettings {
   providers: AiProviderConfig[];
   actions: AiActionSettings;
   maxContextChars: number;
+  maxConcurrentSemanticFilters: number;
 }
 
 export interface ImageAttachmentMaxDimensions {
@@ -484,6 +485,7 @@ export function defaultAiSettings(): AiSettings {
     providers: [provider],
     actions: defaultAiActionSettings(),
     maxContextChars: 40_000,
+    maxConcurrentSemanticFilters: 3,
   };
 }
 

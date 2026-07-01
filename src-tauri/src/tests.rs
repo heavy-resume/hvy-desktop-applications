@@ -377,6 +377,7 @@
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
             max_context_chars: 0,
+            max_concurrent_semantic_filters: 0,
         })
         .unwrap();
 
@@ -389,6 +390,7 @@
         assert_eq!(settings.actions.edit.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.model, "semantic");
+        assert_eq!(settings.max_concurrent_semantic_filters, 3);
     }
 
     #[test]
