@@ -109,6 +109,26 @@
         "cwd": "${workspaceFolder}"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Set Version",
+      "type": "shell",
+      "command": "npm run version:set -- ${input:hvyGalaxyVersion}",
+      "windows": {
+        "command": "npm.cmd run version:set -- ${input:hvyGalaxyVersion}"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "hvyGalaxyVersion",
+      "type": "promptString",
+      "description": "HVY Galaxy version",
+      "default": "0.1.0-alpha.3"
     }
   ]
 }
