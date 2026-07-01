@@ -49,6 +49,7 @@ pub fn run() {
             rename_workspace,
             archive_workspace,
             unarchive_workspace,
+            create_workspace_folder,
             add_files_to_workspace,
             add_dropped_files_to_workspace,
             open_file_dialog,

@@ -77,6 +77,15 @@ struct DroppedWorkspaceFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct WorkspaceFolderRequest {
+    workspace_path: String,
+    #[serde(default)]
+    parent_directory: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceOpenCandidate {
     path: String,
     has_manifest: bool,

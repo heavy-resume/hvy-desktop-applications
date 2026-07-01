@@ -196,11 +196,19 @@ export interface WorkspaceDocumentRequest {
   workspacePath: string;
   name: string;
   bytes: number[] | Uint8Array;
+  targetDirectory?: string;
 }
 
 export interface WorkspaceDocumentMoveRequest {
   path: string;
   workspacePath: string;
+  targetDirectory?: string;
+}
+
+export interface WorkspaceFolderRequest {
+  workspacePath: string;
+  parentDirectory?: string;
+  name: string;
 }
 
 export interface SystemFileClipboardRequest {
@@ -625,12 +633,16 @@ export function unarchiveWorkspace(path: string): Promise<Workspace> {
   return invokeDesktop('unarchive_workspace', { path });
 }
 
-export function addFilesToWorkspace(workspacePath: string): Promise<AddFilesResult | null> {
-  return invokeDesktop('add_files_to_workspace', { workspacePath });
+export function createWorkspaceFolder(request: WorkspaceFolderRequest): Promise<Workspace> {
+  return invokeDesktop('create_workspace_folder', { request });
 }
 
-export function addDroppedFilesToWorkspace(workspacePath: string, files: DroppedWorkspaceFile[]): Promise<AddFilesResult> {
-  return invokeDesktop('add_dropped_files_to_workspace', { workspacePath, files });
+export function addFilesToWorkspace(workspacePath: string, targetDirectory = ''): Promise<AddFilesResult | null> {
+  return invokeDesktop('add_files_to_workspace', { workspacePath, targetDirectory });
+}
+
+export function addDroppedFilesToWorkspace(workspacePath: string, files: DroppedWorkspaceFile[], targetDirectory = ''): Promise<AddFilesResult> {
+  return invokeDesktop('add_dropped_files_to_workspace', { workspacePath, files, targetDirectory });
 }
 
 export function openFileDialog(): Promise<DocumentFile | null> {
@@ -767,12 +779,14 @@ export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Prom
       headers: {
         'x-hvy-workspace-path': encodeURIComponent(request.workspacePath),
         'x-hvy-document-name': encodeURIComponent(request.name),
+        'x-hvy-target-directory': encodeURIComponent(request.targetDirectory ?? ''),
       },
     });
   }
   return invokeDesktop('save_document_to_workspace', {
     workspacePath: request.workspacePath,
     name: request.name,
+    targetDirectory: request.targetDirectory ?? '',
     bytes: request.bytes,
   });
 }
@@ -785,11 +799,11 @@ export function saveBinaryAsDialog(request: SaveBinaryAsRequest): Promise<string
 }
 
 export function copyDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
-  return invokeDesktop('copy_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
+  return invokeDesktop('copy_document_to_workspace', { path: request.path, workspacePath: request.workspacePath, targetDirectory: request.targetDirectory ?? '' });
 }
 
 export function moveDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
-  return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath });
+  return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath, targetDirectory: request.targetDirectory ?? '' });
 }
 
 export function writeSystemFileClipboard(request: SystemFileClipboardRequest): Promise<void> {
@@ -799,8 +813,8 @@ export function writeSystemFileClipboard(request: SystemFileClipboardRequest): P
   return invokeDesktop('write_system_file_clipboard', { request });
 }
 
-export function pasteSystemFilesToWorkspace(workspacePath: string): Promise<AddFilesResult> {
-  return invokeDesktop('paste_system_files_to_workspace', { workspacePath });
+export function pasteSystemFilesToWorkspace(workspacePath: string, targetDirectory = ''): Promise<AddFilesResult> {
+  return invokeDesktop('paste_system_files_to_workspace', { workspacePath, targetDirectory });
 }
 
 export async function createDocumentBackup(request: DocumentBackupRequest): Promise<DocumentBackup | null> {

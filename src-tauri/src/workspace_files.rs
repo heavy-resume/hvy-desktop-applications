@@ -116,6 +116,40 @@ fn touch_workspace_manifest(path: &Path) -> AppResult<()> {
     write_json_atomically(&manifest_path, &manifest)
 }
 
+fn workspace_target_directory(workspace_path: &Path, target_directory: &str) -> AppResult<PathBuf> {
+    let relative = target_directory.trim();
+    let directory = if relative.is_empty() {
+        workspace_path.to_path_buf()
+    } else {
+        let relative_path = PathBuf::from(relative);
+        if relative_path.is_absolute() || relative_path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+            return Err(AppError::Message("Folder path must stay inside the workspace.".into()));
+        }
+        workspace_path.join(relative_path)
+    };
+    fs::create_dir_all(&directory)?;
+    Ok(directory)
+}
+
+fn normalized_folder_name(name: &str) -> AppResult<String> {
+    let trimmed = name.trim();
+    let path = Path::new(trimmed);
+    if trimmed.is_empty() {
+        return Err(AppError::Message("Folder name is required.".into()));
+    }
+    if trimmed.contains('/')
+        || trimmed.contains('\\')
+        || path.components().count() != 1
+        || path.file_name().and_then(|name| name.to_str()) != Some(trimmed)
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.starts_with('.')
+    {
+        return Err(AppError::Message("Folder name is not valid.".into()));
+    }
+    Ok(trimmed.to_string())
+}
+
 fn update_workspace_file_ai_access_at(
     workspace_path: &Path,
     document_path: &Path,
@@ -198,14 +232,12 @@ fn scan_directory(root: &Path, directory: &Path, manifest: &WorkspaceManifest, i
         }
         if path.is_dir() {
             let children = scan_directory(root, &path, manifest, include_templates)?;
-            if !children.is_empty() {
-                folders.push(WorkspaceTreeNode::Folder {
-                    name,
-                    path: path_to_string(&path),
-                    relative_path: relative_path(root, &path),
-                    children,
-                });
-            }
+            folders.push(WorkspaceTreeNode::Folder {
+                name,
+                path: path_to_string(&path),
+                relative_path: relative_path(root, &path),
+                children,
+            });
         } else if let Some(extension) = document_extension(&path) {
             let relative_path = relative_path(root, &path);
             files.push(WorkspaceTreeNode::File {

@@ -36,6 +36,7 @@ export function openWorkspaceTransfer(
   fileName: string,
   sourcePath: string | null,
   excludedWorkspacePath: string | null,
+  targetDirectory = '',
 ): void {
   const availableWorkspaces = state.workspaces.filter((workspace) => workspace.path !== excludedWorkspacePath);
   if (availableWorkspaces.length === 0) return;
@@ -45,6 +46,7 @@ export function openWorkspaceTransfer(
     fileName,
     nameDraft: displayDocumentName(fileName),
     excludedWorkspacePath,
+    targetDirectory,
   };
   state.status = 'Ready';
   rerender({ preserveMountedDocument: true });
@@ -56,7 +58,7 @@ export function workspaceTransferBusyLabel(mode: NonNullable<typeof state.worksp
   return 'Moving file';
 }
 
-export async function saveCurrentDocumentToWorkspace(workspacePath: string, name: string): Promise<void> {
+export async function saveCurrentDocumentToWorkspace(workspacePath: string, name: string, targetDirectory = ''): Promise<void> {
   if (!state.document?.mounted) return;
   const mounted = state.document.mounted;
   const document = getMountedDocument(mounted);
@@ -68,6 +70,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
   const file = await saveDocumentToWorkspace({
     workspacePath,
     name: documentFileName(name, documentTypeForExtension(state.document.extension)) ?? name,
+    targetDirectory,
     bytes,
   });
   adoptSavedAsDocument(file, mounted, document, previousMode, previousPath, previousUseDocumentColors);
@@ -85,11 +88,13 @@ export async function saveImportedDocumentToWorkspace(
   workspacePath: string,
   fileName: string,
   document: VisualDocument,
+  targetDirectory = '',
 ): Promise<void> {
   const bytes = Array.from(await serializeHvy(document));
   const file = await saveDocumentToWorkspace({
     workspacePath,
     name: fileName,
+    targetDirectory,
     bytes,
   });
   documentSessions.delete(file.path);
@@ -124,12 +129,12 @@ export async function createTemporaryImportMount(
   };
 }
 
-export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string): Promise<void> {
+export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string, targetDirectory = ''): Promise<void> {
   const sourceWorkspacePath = workspacePathForFile(path);
   const currentDocument = state.document?.path === path ? state.document : null;
   const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
   const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
-  const file = await moveDocumentToWorkspace({ path, workspacePath });
+  const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
   documentSessions.delete(path);
   renameDocumentTabPath(path, file.path);
   if (state.selectedFilePath === path) {

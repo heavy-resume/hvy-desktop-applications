@@ -3,10 +3,20 @@
 declare const __APP_VERSION__: string;
 
 declare module 'virtual:hvy-built-in-plugins' {
+  import type { HvyPlugin } from '../../heavy-file-format/src/plugins/types';
+
   export const builtInPluginIds: string[];
-  export const builtInPlugins: any[];
-  export const builtInPluginMap: Record<string, any>;
-  export const builtInPluginById: Record<string, any>;
+  export const builtInPlugins: HvyPlugin[];
+  export const builtInPluginMap: Readonly<{
+    dbTable?: HvyPlugin;
+    form?: HvyPlugin;
+    progressBar?: HvyPlugin;
+    scripting?: HvyPlugin;
+    graph?: HvyPlugin;
+    qrCode?: HvyPlugin;
+    video?: HvyPlugin;
+  }>;
+  export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }
 
 declare module 'virtual:hvy-brython-minimal-vfs' {

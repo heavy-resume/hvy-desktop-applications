@@ -52,11 +52,15 @@ export interface AppState {
   workspaceInitializationName: string | null;
   workspaceManagerOpen: boolean;
   openWorkspaceActionsPath: string | null;
+  newFolderWorkspacePath: string | null;
+  newFolderParentDirectory: string;
   workspaceExpanded: Record<string, boolean>;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
+  newDocumentDirectory: string;
   newDocumentType: DocumentCreationType;
   importWorkspacePath: string | null;
+  importDirectory: string;
   importDocumentType: DocumentCreationType;
   importIntoCurrentDialogOpen: boolean;
   importSourceTab: 'workspace' | 'anywhere';
@@ -138,6 +142,7 @@ export interface WorkspaceTransferState {
   fileName: string;
   nameDraft: string;
   excludedWorkspacePath: string | null;
+  targetDirectory: string;
 }
 
 export interface WorkspaceClipboardState {
@@ -171,11 +176,15 @@ export const state: AppState = {
   workspaceInitializationName: null,
   workspaceManagerOpen: false,
   openWorkspaceActionsPath: null,
+  newFolderWorkspacePath: null,
+  newFolderParentDirectory: '',
   workspaceExpanded: {},
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,
+  newDocumentDirectory: '',
   newDocumentType: 'hvy',
   importWorkspacePath: null,
+  importDirectory: '',
   importDocumentType: 'hvy',
   importIntoCurrentDialogOpen: false,
   importSourceTab: 'workspace',

@@ -210,7 +210,22 @@ fn unarchive_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
 }
 
 #[tauri::command]
-fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<Option<AddFilesResult>> {
+fn create_workspace_folder(app: AppHandle, request: WorkspaceFolderRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let parent = workspace_target_directory(&workspace_path, &request.parent_directory)?;
+    let folder_path = parent.join(normalized_folder_name(&request.name)?);
+    if folder_path.exists() {
+        return Err(AppError::Message("A folder already exists at that path.".into()));
+    }
+    fs::create_dir(&folder_path)?;
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directory: String) -> AppResult<Option<AddFilesResult>> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let Some(paths) = rfd::FileDialog::new()
@@ -236,7 +251,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<O
         let destination_root = if template_extension(&source).is_some() {
             workspace_templates_dir(&workspace_path)?
         } else {
-            workspace_path.clone()
+            workspace_target_directory(&workspace_path, &target_directory)?
         };
         let destination = unique_copy_path(&destination_root, file_name);
         fs::copy(&source, &destination)?;
@@ -264,6 +279,7 @@ fn add_dropped_files_to_workspace(
     app: AppHandle,
     workspace_path: String,
     files: Vec<DroppedWorkspaceFile>,
+    target_directory: String,
 ) -> AppResult<AddFilesResult> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
@@ -280,7 +296,7 @@ fn add_dropped_files_to_workspace(
         let destination_root = if is_template {
             workspace_templates_dir(&workspace_path)?
         } else {
-            workspace_path.clone()
+            workspace_target_directory(&workspace_path, &target_directory)?
         };
         let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file.name));
         fs::write(&destination, file.bytes)?;
@@ -763,9 +779,10 @@ fn save_document_to_workspace(
     app: AppHandle,
     workspace_path: String,
     name: String,
+    target_directory: String,
     bytes: Vec<u8>,
 ) -> AppResult<DocumentFileMetadata> {
-    save_document_to_workspace_bytes(&app, workspace_path, name, &bytes)
+    save_document_to_workspace_bytes(&app, workspace_path, name, target_directory, &bytes)
 }
 
 #[tauri::command]
@@ -775,22 +792,24 @@ fn save_document_to_workspace_raw(
 ) -> AppResult<DocumentFileMetadata> {
     let workspace_path = decode_ipc_header(request.headers(), "x-hvy-workspace-path")?;
     let name = decode_ipc_header(request.headers(), "x-hvy-document-name")?;
+    let target_directory = decode_ipc_header(request.headers(), "x-hvy-target-directory").unwrap_or_default();
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(AppError::Message("Expected raw document bytes.".into()));
     };
-    save_document_to_workspace_bytes(&app, workspace_path, name, bytes)
+    save_document_to_workspace_bytes(&app, workspace_path, name, target_directory, bytes)
 }
 
 fn save_document_to_workspace_bytes(
     app: &AppHandle,
     workspace_path: String,
     name: String,
+    target_directory: String,
     bytes: &[u8],
 ) -> AppResult<DocumentFileMetadata> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let file_name = document_file_name(&name)?;
-    let destination = unique_copy_path(&workspace_path, std::ffi::OsStr::new(&file_name));
+    let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, std::ffi::OsStr::new(&file_name));
     write_file_atomically(&destination, bytes)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(app, &workspace_path)?;
@@ -799,7 +818,7 @@ fn save_document_to_workspace_bytes(
 }
 
 #[tauri::command]
-fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: String) -> AppResult<DocumentFile> {
+fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: String, target_directory: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     document_extension(&path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be copied.".into()))?;
@@ -811,7 +830,7 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = unique_copy_path(&workspace_path, file_name);
+    let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, file_name);
     fs::copy(&path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
@@ -820,7 +839,7 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
 }
 
 #[tauri::command]
-fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: String) -> AppResult<DocumentFile> {
+fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: String, target_directory: String) -> AppResult<DocumentFile> {
     let path = PathBuf::from(path);
     document_extension(&path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be moved.".into()))?;
@@ -833,7 +852,8 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let source_workspace = workspace_root_for_document(source_parent);
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
-    if fs::canonicalize(source_parent)? == fs::canonicalize(&workspace_path)? {
+    let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    if fs::canonicalize(source_parent)? == fs::canonicalize(&target_root)? {
         touch_workspace_manifest(&workspace_path)?;
         add_recent_workspace(&app, &workspace_path)?;
         add_recent_file(&app, &path)?;
@@ -842,10 +862,14 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = unique_copy_path(&workspace_path, file_name);
+    let destination = unique_copy_path(&target_root, file_name);
     fs::rename(&path, &destination)?;
     if let Some(source_workspace) = source_workspace {
-        touch_workspace_manifest(&source_workspace)?;
+        if fs::canonicalize(&source_workspace)? == fs::canonicalize(&workspace_path)? {
+            rename_workspace_file_manifest_entries(&source_workspace, &path, &destination)?;
+        } else {
+            touch_workspace_manifest(&source_workspace)?;
+        }
     }
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
@@ -884,7 +908,7 @@ fn read_system_clipboard_text() -> AppResult<String> {
 }
 
 #[tauri::command]
-fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String) -> AppResult<AddFilesResult> {
+fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, target_directory: String) -> AppResult<AddFilesResult> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     if !cfg!(target_os = "macos") {
@@ -908,7 +932,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String) -> Ap
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-        let destination = unique_copy_path(&workspace_path, file_name);
+        let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, file_name);
         fs::copy(&source, &destination)?;
         add_recent_file(&app, &destination)?;
         copied_paths.push(destination.to_string_lossy().to_string());

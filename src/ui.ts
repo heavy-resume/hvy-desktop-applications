@@ -34,11 +34,14 @@ export interface UiHandlers {
   cancelWorkspaceInitialization(): void;
   setNewWorkspaceLocation(location: 'managed' | 'choose'): void;
   cancelNewWorkspace(): void;
-  newDocumentInWorkspace(workspacePath: string): void;
+  openNewFolder(workspacePath: string, parentDirectory?: string): void;
+  createWorkspaceFolder(workspacePath: string, parentDirectory: string, name: string): void;
+  cancelNewFolder(): void;
+  newDocumentInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setNewDocumentType(type: DocumentCreationType): void;
-  createDocumentInWorkspace(name: string, templateId: string): void;
+  createDocumentInWorkspace(name: string, templateId: string, targetDirectory?: string): void;
   cancelNewDocument(): void;
-  openImportInWorkspace(workspacePath: string): void;
+  openImportInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setImportDocumentType(type: DocumentCreationType): void;
   openImportIntoCurrent(): void;
   setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
@@ -48,11 +51,11 @@ export interface UiHandlers {
   setImportNewSectionsOnly(newSectionsOnly: boolean): void;
   selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
-  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean): void;
+  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean, targetDirectory?: string): void;
   importIntoCurrent(instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean, outputMode: 'current' | 'workspace', outputName: string): void;
   cancelImport(): void;
-  addFilesToWorkspace(workspacePath: string): void;
-  addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
+  addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
+  addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
   openWorkspaceFilter(workspacePath: string): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
@@ -140,13 +143,14 @@ export interface UiHandlers {
   cancelDeleteFile(): void;
   copyWorkspaceFile(path: string, currentName: string): void;
   cutWorkspaceFile(path: string, currentName: string): void;
-  pasteWorkspaceClipboard(workspacePath: string): void;
+  pasteWorkspaceClipboard(workspacePath: string, targetDirectory?: string): void;
   copyFileToWorkspace(path: string, currentName: string): void;
   moveFileToWorkspace(path: string, currentName: string): void;
+  moveWorkspaceFileToFolder(path: string, workspacePath: string, targetDirectory?: string): void;
   submitRenameFile(name: string): void;
   cancelRenameFile(): void;
   saveCurrentToWorkspace(): void;
-  submitWorkspaceTransfer(workspacePath: string, name: string): void;
+  submitWorkspaceTransfer(workspacePath: string, name: string, targetDirectory?: string): void;
   cancelWorkspaceTransfer(): void;
   setMode(mode: HvyMode): void;
   openDocumentMeta(): void;
@@ -154,7 +158,7 @@ export interface UiHandlers {
   saveAs(): void;
   setSaveAsKind(kind: AppState['saveAsKind']): void;
   setSaveAsScope(scope: 'workspace' | 'anywhere'): void;
-  saveAsToWorkspace(workspacePath: string, name: string): void;
+  saveAsToWorkspace(workspacePath: string, name: string, targetDirectory?: string): void;
   saveAsAnywhere(): void;
   cancelSaveAs(): void;
   closeDocument(): void;
@@ -319,6 +323,7 @@ export function renderModals(state: AppState): void {
     ${renderNewWorkspaceDialog(state)}
     ${renderWorkspaceInitializationDialog(state)}
     ${renderWorkspaceManagerDialog(state)}
+    ${renderNewFolderDialog(state)}
     ${renderNewDocumentDialog(state)}
     ${renderImportDialog(state)}
     ${renderImportProgressDialog(state)}
@@ -375,7 +380,7 @@ function ensureAppFrame(): void {
           <div id="hvyMount" class="document-host"></div>
         </div>
       </section>
-      <div id="modalRoot" data-app-modal-root="true"></div>
+    <div id="modalRoot" data-app-modal-root="true"></div>
     </main>`;
   applyWorkspaceSidebarWidth(appRoot);
 }
@@ -497,6 +502,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.cancelRenameFile();
           return;
         }
+        if (backdrop.querySelector('form[data-form="new-folder"]')) {
+          handlers.cancelNewFolder();
+          return;
+        }
         if (backdrop.querySelector('.delete-file-dialog')) {
           handlers.cancelDeleteFile();
           return;
@@ -535,17 +544,21 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.stopPropagation();
       handlers.toggleWorkspaceActions(target.dataset.workspacePath);
     }
+    if (action === 'new-folder-in-workspace' || action === 'new-document-in-workspace') {
+      event.stopPropagation();
+    }
     if (action === 'set-new-workspace-location' && isNewWorkspaceLocation(target.dataset.location)) {
       handlers.setNewWorkspaceLocation(target.dataset.location);
     }
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'confirm-workspace-initialization') handlers.confirmWorkspaceInitialization();
     if (action === 'cancel-workspace-initialization') handlers.cancelWorkspaceInitialization();
-    if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
+    if (action === 'new-folder-in-workspace' && target.dataset.workspacePath) handlers.openNewFolder(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'set-new-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setNewDocumentType(target.dataset.documentType);
-    if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath);
+    if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'set-import-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setImportDocumentType(target.dataset.documentType);
-    if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
+    if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
     if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
       handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
@@ -557,6 +570,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'delete-file') handlers.deleteFile();
     if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
+    if (action === 'cancel-new-folder') handlers.cancelNewFolder();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
@@ -753,25 +767,43 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
   root.addEventListener('dragover', (event) => {
-    const workspaceRoot = workspaceRootFromEvent(event);
-    if (!workspaceRoot || !hasDraggedFiles(event)) return;
+    const dropTarget = workspaceDropTargetFromEvent(event);
+    if (!dropTarget || (!hasDraggedFiles(event) && !hasDraggedWorkspaceFile(event))) return;
     event.preventDefault();
-    event.dataTransfer!.dropEffect = 'copy';
-    workspaceRoot.classList.add('is-drag-over');
+    event.dataTransfer!.dropEffect = hasDraggedWorkspaceFile(event) ? 'move' : 'copy';
+    dropTarget.element.classList.add('is-drag-over');
   }, { signal });
   root.addEventListener('dragleave', (event) => {
-    const workspaceRoot = workspaceRootFromEvent(event);
+    const dropTarget = workspaceDropTargetFromEvent(event);
     const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
-    if (!workspaceRoot || (relatedTarget && workspaceRoot.contains(relatedTarget))) return;
-    workspaceRoot.classList.remove('is-drag-over');
+    if (!dropTarget || (relatedTarget && dropTarget.element.contains(relatedTarget))) return;
+    dropTarget.element.classList.remove('is-drag-over');
   }, { signal });
   root.addEventListener('drop', (event) => {
-    const workspaceRoot = workspaceRootFromEvent(event);
-    const workspacePath = workspaceRoot?.dataset.workspacePath;
-    if (!workspaceRoot || !workspacePath || !event.dataTransfer?.files.length) return;
+    const dropTarget = workspaceDropTargetFromEvent(event);
+    const workspacePath = dropTarget?.workspacePath;
+    if (!dropTarget || !workspacePath || !event.dataTransfer) return;
     event.preventDefault();
-    workspaceRoot.classList.remove('is-drag-over');
-    handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files));
+    dropTarget.element.classList.remove('is-drag-over');
+    const draggedPath = event.dataTransfer.getData('application/x-hvy-workspace-file');
+    if (draggedPath) {
+      handlers.moveWorkspaceFileToFolder(draggedPath, workspacePath, dropTarget.targetDirectory);
+      return;
+    }
+    if (event.dataTransfer.files.length) {
+      handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files), dropTarget.targetDirectory);
+    }
+  }, { signal });
+  root.addEventListener('dragstart', (event) => {
+    const fileButton = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.tree-file') : null;
+    const path = fileButton?.dataset.path;
+    if (!fileButton || !path || !event.dataTransfer) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-hvy-workspace-file', path);
+    event.dataTransfer.setData('text/plain', path);
+  }, { signal });
+  root.addEventListener('dragend', () => {
+    root.querySelectorAll('.is-drag-over').forEach((element) => element.classList.remove('is-drag-over'));
   }, { signal });
   root.addEventListener('beforeinput', (event) => {
     const target = event.target instanceof HTMLInputElement ? event.target : null;
@@ -906,7 +938,19 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.preventDefault();
       const locked = fileButton.dataset.locked === 'true';
       const hiddenFromAI = fileButton.getAttribute('data-hidden-from-ai') === 'true';
-      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 1);
+      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
+      return;
+    }
+    const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
+    if (folderSummary?.dataset.workspacePath) {
+      event.preventDefault();
+      showWorkspaceContextMenu(
+        event,
+        folderSummary.dataset.workspacePath,
+        state.workspaceClipboard,
+        handlers,
+        folderSummary.dataset.targetDirectory ?? '',
+      );
       return;
     }
     const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
@@ -915,12 +959,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       : null;
     if (!workspaceSummary || !workspacePath) return;
     event.preventDefault();
-    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers);
+    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '');
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
-    if (!target?.closest('.tree-file, .tree summary')) return;
+    if (!target?.closest('.tree-file, .tree summary, .tree-folder-row')) return;
     event.preventDefault();
   }, { signal });
   root.addEventListener('click', (event) => {
@@ -956,7 +1000,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const data = new FormData(form);
       handlers.createDocumentInWorkspace(
         String(data.get('documentName') ?? ''),
-        String(data.get('templateId') ?? '')
+        String(data.get('templateId') ?? ''),
+        String(data.get('targetDirectory') ?? '')
+      );
+    }
+    if (form.dataset.form === 'new-folder') {
+      const data = new FormData(form);
+      handlers.createWorkspaceFolder(
+        String(data.get('workspacePath') ?? ''),
+        String(data.get('parentDirectory') ?? ''),
+        String(data.get('folderName') ?? '')
       );
     }
     if (form.dataset.form === 'import-document') {
@@ -968,7 +1021,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         String(data.get('instructions') ?? ''),
         String(data.get('importSourceText') ?? ''),
         String(data.get('excludeTags') ?? ''),
-        data.get('newSectionsOnly') === 'on'
+        data.get('newSectionsOnly') === 'on',
+        String(data.get('targetDirectory') ?? '')
       );
     }
     if (form.dataset.form === 'import-current') {
@@ -1025,14 +1079,23 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (form.dataset.form === 'workspace-transfer') {
       const data = new FormData(form);
-      handlers.submitWorkspaceTransfer(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+      const destination = form.querySelector<HTMLInputElement>('input[name="workspaceDestination"]:checked');
+      handlers.submitWorkspaceTransfer(
+        destination?.dataset.workspacePath ?? '',
+        String(data.get('fileName') ?? ''),
+        destination?.dataset.targetDirectory ?? ''
+      );
     }
     if (form.dataset.form === 'save-as-document') {
       const data = new FormData(form);
       if (String(data.get('scope') ?? 'workspace') === 'anywhere') {
         handlers.saveAsAnywhere();
       } else {
-        handlers.saveAsToWorkspace(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+        handlers.saveAsToWorkspace(
+          String(data.get('workspacePath') ?? ''),
+          String(data.get('fileName') ?? ''),
+          String(data.get('targetDirectory') ?? '')
+        );
       }
     }
   }, { signal });
@@ -1104,6 +1167,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('form[data-form="rename-file"]')) {
       event.preventDefault();
       handlers.cancelRenameFile();
+      return;
+    }
+    if (root.querySelector('form[data-form="new-folder"]')) {
+      event.preventDefault();
+      handlers.cancelNewFolder();
       return;
     }
     if (root.querySelector('.delete-file-dialog')) {
@@ -1471,12 +1539,27 @@ function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { 
   return null;
 }
 
-function workspaceRootFromEvent(event: Event): HTMLElement | null {
-  return event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root') : null;
+function workspaceDropTargetFromEvent(event: Event): { element: HTMLElement; workspacePath: string; targetDirectory: string } | null {
+  if (!(event.target instanceof HTMLElement)) return null;
+  const folderSummary = event.target.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
+  if (folderSummary?.dataset.workspacePath) {
+    return {
+      element: folderSummary,
+      workspacePath: folderSummary.dataset.workspacePath,
+      targetDirectory: folderSummary.dataset.targetDirectory ?? '',
+    };
+  }
+  const workspaceRoot = event.target.closest<HTMLElement>('.workspace-root');
+  const workspacePath = workspaceRoot?.dataset.workspacePath;
+  return workspaceRoot && workspacePath ? { element: workspaceRoot, workspacePath, targetDirectory: '' } : null;
 }
 
 function hasDraggedFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+function hasDraggedWorkspaceFile(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('application/x-hvy-workspace-file');
 }
 
 function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
@@ -1586,13 +1669,41 @@ function renderDeleteFileDialog(state: AppState): string {
     </div>`;
 }
 
+function renderNewFolderDialog(state: AppState): string {
+  if (!state.newFolderWorkspacePath) return '';
+  const workspace = state.workspaces.find((candidate) => candidate.path === state.newFolderWorkspacePath) ?? null;
+  const parentLabel = state.newFolderParentDirectory || 'Workspace root';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="new-folder">
+        <h2>New Folder</h2>
+        <input name="workspacePath" type="hidden" value="${escapeAttr(state.newFolderWorkspacePath)}">
+        <input name="parentDirectory" type="hidden" value="${escapeAttr(state.newFolderParentDirectory)}">
+        <p class="dialog-note">${escapeHtml(workspace?.manifest.name ?? 'Workspace')} / ${escapeHtml(parentLabel)}</p>
+        <label>
+          <span>Name</span>
+          <input name="folderName" type="text" autocomplete="off" required>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-new-folder">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+        </div>
+      </form>
+    </div>`;
+}
+
 function renderWorkspaceTransferDialog(state: AppState): string {
   const transfer = state.workspaceTransfer;
   if (!transfer) return '';
   const workspaces = state.workspaces.filter((workspace) => workspace.path !== transfer.excludedWorkspacePath);
-  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
-    ? state.selectedWorkspacePath
+  const sourceWorkspacePath = transfer.sourcePath
+    ? workspacePathForFileInWorkspaces(state.workspaces, transfer.sourcePath)
+    : null;
+  const preferredWorkspacePath = sourceWorkspacePath ?? state.selectedWorkspacePath;
+  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === preferredWorkspacePath)
+    ? preferredWorkspacePath
     : workspaces[0]?.path ?? null;
+  const selectedTargetDirectory = selectedWorkspacePath === sourceWorkspacePath ? transfer.targetDirectory : '';
   const title = transfer.mode === 'saveCurrent'
     ? 'Save to Workspace'
     : transfer.mode === 'copyFile'
@@ -1601,14 +1712,9 @@ function renderWorkspaceTransferDialog(state: AppState): string {
   const submitLabel = transfer.mode === 'moveFile' ? 'Move' : transfer.mode === 'copyFile' ? 'Copy' : 'Save';
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="workspace-transfer">
+      <form class="dialog workspace-transfer-dialog" data-form="workspace-transfer">
         <h2>${escapeHtml(title)}</h2>
-        <label>
-          <span>Workspace</span>
-          <select name="workspacePath" required>
-            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
-          </select>
-        </label>
+        ${renderWorkspaceDestinationTree(workspaces, selectedWorkspacePath, selectedTargetDirectory)}
         ${transfer.mode === 'saveCurrent' ? `
           <label>
             <span>Name</span>
@@ -1624,6 +1730,116 @@ function renderWorkspaceTransferDialog(state: AppState): string {
     </div>`;
 }
 
+function renderWorkspaceDestinationTree(workspaces: Workspace[], selectedWorkspacePath: string | null, selectedRelativePath: string): string {
+  if (workspaces.length === 0) {
+    return '<input name="workspaceDestination" type="hidden" value="">';
+  }
+  return `
+    <div class="workspace-destination-field">
+      <span>Destination</span>
+      <div class="workspace-destination-tree" role="radiogroup" aria-label="Destination">
+        ${workspaces.map((workspace) => renderWorkspaceDestination(workspace, selectedWorkspacePath, selectedRelativePath)).join('')}
+      </div>
+    </div>`;
+}
+
+function renderWorkspaceDestination(workspace: Workspace, selectedWorkspacePath: string | null, selectedRelativePath: string): string {
+  const selectedRoot = workspace.path === selectedWorkspacePath && selectedRelativePath === '';
+  const folders = workspace.files.map((node) => {
+    if (node.kind !== 'folder') return '';
+    return renderWorkspaceDestinationFolder(node, workspace.path, selectedWorkspacePath, selectedRelativePath);
+  }).join('');
+  return `
+    <div class="workspace-destination-workspace">
+      <label class="workspace-destination-option is-root">
+        <input
+          type="radio"
+          name="workspaceDestination"
+          value="${escapeAttr(workspace.path)}"
+          data-workspace-path="${escapeAttr(workspace.path)}"
+          data-target-directory=""
+          ${selectedRoot ? 'checked' : ''}
+          required
+        >
+        <span>${escapeHtml(workspace.manifest.name)}</span>
+      </label>
+      ${folders ? `<div class="workspace-destination-children">${folders}</div>` : ''}
+    </div>`;
+}
+
+function renderWorkspaceDestinationFolder(
+  node: Extract<WorkspaceTreeNode, { kind: 'folder' }>,
+  workspacePath: string,
+  selectedWorkspacePath: string | null,
+  selectedRelativePath: string,
+): string {
+  const relativePath = workspaceNodeRelativePath(node);
+  if (relativePath === 'templates' || relativePath.startsWith('templates/')) return '';
+  const selected = workspacePath === selectedWorkspacePath && relativePath === selectedRelativePath;
+  const children = Array.isArray(node.children)
+    ? node.children.map((child) => {
+        if (child.kind !== 'folder') return '';
+        return renderWorkspaceDestinationFolder(child, workspacePath, selectedWorkspacePath, selectedRelativePath);
+      }).join('')
+    : '';
+  return `
+    <div class="workspace-destination-folder">
+      <label class="workspace-destination-option">
+        <input
+          type="radio"
+          name="workspaceDestination"
+          value="${escapeAttr(`${workspacePath}::${relativePath}`)}"
+          data-workspace-path="${escapeAttr(workspacePath)}"
+          data-target-directory="${escapeAttr(relativePath)}"
+          ${selected ? 'checked' : ''}
+          required
+        >
+        <span>${escapeHtml(workspaceNodeName(node))}</span>
+      </label>
+      ${children ? `<div class="workspace-destination-children">${children}</div>` : ''}
+    </div>`;
+}
+
+function renderWorkspaceFolderSelect(workspace: Workspace, selectedRelativePath: string): string {
+  const folders = workspaceFolderOptions(workspace.files);
+  if (folders.length === 0) {
+    return '<input name="targetDirectory" type="hidden" value="">';
+  }
+  return `
+    <label>
+      <span>Folder</span>
+      <select name="targetDirectory">
+        <option value="">Workspace root</option>
+        ${folders.map((folder) => `<option value="${escapeAttr(folder.relativePath)}" ${folder.relativePath === selectedRelativePath ? 'selected' : ''}>${escapeHtml(folder.label)}</option>`).join('')}
+      </select>
+    </label>`;
+}
+
+function workspaceFolderOptions(nodes: WorkspaceTreeNode[], prefix = ''): Array<{ relativePath: string; label: string }> {
+  const options: Array<{ relativePath: string; label: string }> = [];
+  for (const node of nodes) {
+    if (node.kind !== 'folder') continue;
+    const relativePath = workspaceNodeRelativePath(node);
+    if (relativePath === 'templates' || relativePath.startsWith('templates/')) continue;
+    const name = workspaceNodeName(node);
+    const label = prefix ? `${prefix} / ${name}` : name;
+    options.push({ relativePath, label });
+    options.push(...workspaceFolderOptions(node.children, label));
+  }
+  return options;
+}
+
+function workspaceNodeRelativePath(node: WorkspaceTreeNode): string {
+  if (typeof node.relativePath === 'string') return node.relativePath;
+  const snakeCaseNode = node as WorkspaceTreeNode & { relative_path?: unknown };
+  return typeof snakeCaseNode.relative_path === 'string' ? snakeCaseNode.relative_path : '';
+}
+
+function workspaceNodeName(node: WorkspaceTreeNode): string {
+  if (typeof node.name === 'string') return node.name;
+  return '';
+}
+
 function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
   const templateDisabled = state.document.extension === '.md';
@@ -1637,6 +1853,7 @@ function renderSaveAsDialog(state: AppState): string {
   const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
     ? state.selectedWorkspacePath
     : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
+  const selectedWorkspace = workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null;
   const name = displayDocumentName(state.document.name);
   return `
     <div class="modal-backdrop" role="presentation">
@@ -1655,6 +1872,7 @@ function renderSaveAsDialog(state: AppState): string {
               ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
             </select>
           </label>
+          ${selectedWorkspace ? renderWorkspaceFolderSelect(selectedWorkspace, '') : ''}
           <label>
             <span>Name</span>
             <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
@@ -1863,6 +2081,7 @@ function showWorkspaceContextMenu(
   workspacePath: string,
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
+  targetDirectory = '',
 ): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
@@ -1871,6 +2090,10 @@ function showWorkspaceContextMenu(
   menu.style.top = `${event.clientY}px`;
   void clipboard;
   menu.innerHTML = `
+    <button type="button" data-menu-action="new-folder">New Folder</button>
+    <button type="button" data-menu-action="new-document">New Document</button>
+    <button type="button" data-menu-action="add-files">Add Files</button>
+    <button type="button" data-menu-action="import">Import</button>
     <button type="button" data-menu-action="paste">Paste</button>
   `;
   const cleanup = () => {
@@ -1889,7 +2112,11 @@ function showWorkspaceContextMenu(
     const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
     if (!button || button.disabled) return;
     cleanup();
-    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
+    if (button.dataset.menuAction === 'new-folder') handlers.openNewFolder(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'add-files') handlers.addFilesToWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -2153,12 +2380,13 @@ function renderWorkspace(
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
-          <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
+          <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
+          <button type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
         </div>
       </div>
-      ${visibleFiles.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>`}
+      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path)).join('')}</ul>
     </details>`;
 }
 
@@ -2175,11 +2403,17 @@ function filterNodesByWorkspaceFileView(
 ): WorkspaceTreeNode[] {
   const visibleNodes: WorkspaceTreeNode[] = [];
   for (const node of nodes) {
-    const relativePath = typeof node.relativePath === 'string' ? node.relativePath : '';
+    const relativePath = workspaceNodeRelativePath(node);
     const inTemplateFolder = relativePath === 'templates' || relativePath.startsWith('templates/');
     if (node.kind === 'folder') {
+      if (view === 'templates' && !inTemplateFolder) {
+        const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
+        if (children.length > 0) visibleNodes.push({ ...node, children });
+        continue;
+      }
+      if (view === 'documents' && inTemplateFolder) continue;
       const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
-      if (children.length > 0) visibleNodes.push({ ...node, children });
+      visibleNodes.push({ ...node, children });
       continue;
     }
     if (view === 'templates' && !inTemplateFolder) continue;
@@ -2229,7 +2463,7 @@ function filterNodesByArchivedVisibility(nodes: WorkspaceTreeNode[], showArchive
   for (const node of nodes) {
     if (node.kind === 'folder') {
       const children = filterNodesByArchivedVisibility(node.children, showArchived);
-      if (children.length > 0) visibleNodes.push({ ...node, children });
+      visibleNodes.push({ ...node, children });
       continue;
     }
     if (node.archived && !showArchived) continue;
@@ -2243,7 +2477,7 @@ function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visibility:
   for (const node of nodes) {
     if (node.kind === 'folder') {
       const children = filterNodesByTemplateVisibility(node.children, visibility);
-      if (children.length > 0) visibleNodes.push({ ...node, children });
+      visibleNodes.push({ ...node, children });
       continue;
     }
     if (node.extension === '.hvy' && !visibility.hvyDocuments) continue;
@@ -2260,14 +2494,29 @@ function renderNode(
   selectedFilePath: string | null,
   matchedDocumentIds: Set<string> | null,
   workspaceClipboard: WorkspaceClipboardState | null,
+  workspacePath: string,
 ): string {
   if (node.kind === 'folder') {
     const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds);
+    const name = workspaceNodeName(node);
+    const relativePath = workspaceNodeRelativePath(node);
+    const children = Array.isArray(node.children) ? node.children : [];
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>`;
+    if (children.length === 0) {
+      return `
+        <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
+          <div class="tree-folder-row" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+            ${folderLabel}
+          </div>
+        </li>`;
+    }
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details open>
-          <summary>${escapeHtml(node.name)}</summary>
-          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>
+          <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+            ${folderLabel}
+          </summary>
+          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath)).join('')}</ul>
         </details>
       </li>`;
   }
@@ -2282,7 +2531,7 @@ function renderNode(
     : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
@@ -2453,6 +2702,7 @@ function renderNewDocumentDialog(state: AppState): string {
       <form class="dialog" data-form="new-document">
         <h2>New Document</h2>
         ${renderDocumentTypeControl('new', state.newDocumentType, visibility)}
+        ${workspace ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
         <label>
           <span>Name</span>
           <input name="documentName" type="text" autocomplete="off" autofocus required>
@@ -2497,6 +2747,7 @@ function renderImportDialog(state: AppState): string {
         ${importCurrent ? '<p class="dialog-note">Uses the current file as an import template, and saves the result to the output file.</p>' : ''}
         ${importCurrent ? '' : `
           ${renderDocumentTypeControl('import', state.importDocumentType, visibility)}
+          ${workspace ? renderWorkspaceFolderSelect(workspace, state.importDirectory) : ''}
           <label>
             <span>Name</span>
             <input name="documentName" type="text" autocomplete="off" autofocus required>

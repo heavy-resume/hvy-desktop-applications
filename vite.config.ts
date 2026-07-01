@@ -46,6 +46,12 @@ const builtInDefinitions = [
     exportName: 'qrCodePlugin',
     modulePath: 'src/plugins/qr-code/qr-code.ts',
   },
+  {
+    id: 'hvy.video',
+    key: 'video',
+    exportName: 'videoPlugin',
+    modulePath: 'src/plugins/video/video.ts',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
