@@ -1775,12 +1775,14 @@ button:disabled {
 
 .danger-button {
   border-color: var(--hvy-danger, #8c291d);
-  color: var(--hvy-danger, #8c291d);
+  background: var(--hvy-danger, #8c291d);
+  color: var(--hvy-button-text, #ffffff);
 }
 
 .danger-button:hover,
 .danger-button:focus-visible {
-  background: color-mix(in srgb, var(--hvy-danger, #8c291d) 12%, var(--hvy-surface, #ffffff));
+  background: color-mix(in srgb, var(--hvy-danger, #8c291d) 86%, var(--hvy-surface, #ffffff) 14%);
+  color: var(--hvy-button-hover-text, var(--hvy-button-text, #ffffff));
 }
 
 .dialog h2 {
