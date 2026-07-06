@@ -1,6 +1,6 @@
 {
   "name": "hvy-galaxy-desktop",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "productName": "HVY Galaxy",
   "main": "src-electron/main.cjs",
   "private": true,
@@ -24,6 +24,7 @@
     "build:windows": "node scripts/tauri-cli.mjs build --bundles nsis",
     "build:universal": "tauri build --target universal-apple-darwin --bundles app",
     "build:universal:dmg": "tauri build --target universal-apple-darwin --bundles dmg",
+    "version:set": "node scripts/set-version.mjs",
     "preview": "vite preview",
     "tauri": "node scripts/tauri-cli.mjs",
     "smoke:frontend": "node scripts/smoke-frontend.mjs",

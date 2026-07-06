@@ -77,6 +77,15 @@ struct DroppedWorkspaceFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct WorkspaceFolderRequest {
+    workspace_path: String,
+    #[serde(default)]
+    parent_directory: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceOpenCandidate {
     path: String,
     has_manifest: bool,
@@ -399,14 +408,24 @@ fn default_image_attachment_max_dimension() -> u32 {
 struct AppSettings {
     #[serde(default)]
     image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
+    #[serde(default)]
+    debug_semantic_search: bool,
+    #[serde(default = "default_debug_log_max_bytes")]
+    debug_log_max_bytes: u64,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
+            debug_semantic_search: false,
+            debug_log_max_bytes: default_debug_log_max_bytes(),
         }
     }
+}
+
+fn default_debug_log_max_bytes() -> u64 {
+    10 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -417,6 +436,8 @@ struct AiSettings {
     actions: AiActionSettings,
     #[serde(default = "default_ai_max_context_chars")]
     max_context_chars: u32,
+    #[serde(default = "default_max_concurrent_semantic_filters", alias = "workspaceFilterFileConcurrency")]
+    max_concurrent_semantic_filters: u32,
 }
 
 impl Default for AiSettings {
@@ -427,12 +448,17 @@ impl Default for AiSettings {
             providers: vec![provider],
             actions: AiActionSettings::default(),
             max_context_chars: default_ai_max_context_chars(),
+            max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
         }
     }
 }
 
 fn default_ai_max_context_chars() -> u32 {
     DEFAULT_AI_MAX_CONTEXT_CHARS
+}
+
+fn default_max_concurrent_semantic_filters() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Deserialize)]

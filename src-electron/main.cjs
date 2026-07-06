@@ -238,6 +238,8 @@ function buildMenu() {
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        menuItem('Paste as Plain Text', 'paste-plain-text', 'CmdOrCtrl+Shift+V'),
+        menuItem('Copy Document as Rich Text', 'copy-document-rich-text'),
         { type: 'separator' },
         menuItem('Bold', 'bold', 'CmdOrCtrl+B'),
         menuItem('Italic', 'italic', 'CmdOrCtrl+I'),
@@ -488,8 +490,9 @@ async function handleCommand(command, args) {
     case 'rename_workspace': return renameWorkspace(args.path, args.name);
     case 'archive_workspace': return archiveWorkspace(args.path);
     case 'unarchive_workspace': return unarchiveWorkspace(args.path);
-    case 'add_files_to_workspace': return addFilesToWorkspace(args.workspacePath);
-    case 'add_dropped_files_to_workspace': return addDroppedFilesToWorkspace(args.workspacePath, args.files);
+    case 'create_workspace_folder': return createWorkspaceFolder(args.request);
+    case 'add_files_to_workspace': return addFilesToWorkspace(args.workspacePath, args.targetDirectory || '');
+    case 'add_dropped_files_to_workspace': return addDroppedFilesToWorkspace(args.workspacePath, args.files, args.targetDirectory || '');
     case 'open_file_dialog': return openFileDialog();
     case 'open_import_source_dialog': return openImportSourceDialog();
     case 'load_launch_document_paths': return loadLaunchDocumentPaths();
@@ -514,11 +517,12 @@ async function handleCommand(command, args) {
     case 'archive_document_file': return archiveDocumentFile(args.path);
     case 'restore_document_file': return restoreDocumentFile(args.path);
     case 'delete_document_file': return deleteDocumentFile(args.path);
-    case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes);
-    case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath);
-    case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath);
+    case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
+    case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
+    case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'write_system_file_clipboard': return writeSystemFileClipboard(args.request);
-    case 'paste_system_files_to_workspace': return pasteSystemFilesToWorkspace(args.workspacePath);
+    case 'read_system_clipboard_text': return clipboard.readText();
+    case 'paste_system_files_to_workspace': return pasteSystemFilesToWorkspace(args.workspacePath, args.targetDirectory || '');
     case 'create_document_backup': return createDocumentBackup(args.request);
     case 'list_document_backups': return listDocumentBackups();
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
@@ -727,7 +731,7 @@ function loadArchivedWorkspaces() {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-async function addFilesToWorkspace(workspacePath) {
+async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
@@ -743,7 +747,7 @@ async function addFilesToWorkspace(workspacePath) {
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
-    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
+    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspaceTargetDirectory(workspacePath, targetDirectory);
     const destination = uniqueCopyPath(destinationRoot, path.basename(source));
     fs.copyFileSync(source, destination);
     if (isTemplate) {
@@ -762,14 +766,14 @@ async function addFilesToWorkspace(workspacePath) {
   };
 }
 
-function addDroppedFilesToWorkspace(workspacePath, files) {
+function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   const copiedPaths = [];
   const copiedTemplatePaths = [];
   for (const file of files || []) {
     if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
-    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
+    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspaceTargetDirectory(workspacePath, targetDirectory);
     const destination = uniqueCopyPath(destinationRoot, file.name);
     writeBytes(destination, file.bytes);
     if (isTemplate) {
@@ -904,8 +908,7 @@ async function saveDocumentAsDialog(suggestedName, bytes) {
   });
   if (result.canceled || !result.filePath) return null;
   if (!documentExtension(result.filePath)) throw new Error('Save As path must end in .hvy, .thvy, .phvy, or .md.');
-  writeBytes(result.filePath, bytes);
-  addRecentFile(result.filePath);
+  saveDocumentFile(result.filePath, bytes);
   return readDocumentMetadataAt(result.filePath);
 }
 
@@ -1042,21 +1045,21 @@ function deleteDocumentFile(filePath) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
-function saveDocumentToWorkspace(workspacePath, name, bytes) {
+function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   const fileName = ensureDocumentFileName(name);
-  const destination = uniqueCopyPath(workspacePath, fileName);
+  const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), fileName);
   writeBytes(destination, bytes);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return readDocumentMetadataAt(destination);
 }
 
-function copyDocumentToWorkspace(filePath, workspacePath) {
+function copyDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be copied.');
-  const destination = uniqueCopyPath(workspacePath, path.basename(filePath));
+  const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), path.basename(filePath));
   fs.copyFileSync(filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
@@ -1064,19 +1067,26 @@ function copyDocumentToWorkspace(filePath, workspacePath) {
   return readDocumentAt(destination);
 }
 
-function moveDocumentToWorkspace(filePath, workspacePath) {
+function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be moved.');
   const sourceWorkspacePath = workspaceRootForDocument(path.dirname(filePath));
-  if (path.resolve(path.dirname(filePath)) === path.resolve(workspacePath)) {
+  const targetRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  if (path.resolve(path.dirname(filePath)) === path.resolve(targetRoot)) {
     touchWorkspaceManifest(workspacePath);
     addRecentWorkspace(workspacePath);
     addRecentFile(filePath);
     return readDocumentAt(filePath);
   }
-  const destination = uniqueCopyPath(workspacePath, path.basename(filePath));
+  const destination = uniqueCopyPath(targetRoot, path.basename(filePath));
   fs.renameSync(filePath, destination);
-  if (sourceWorkspacePath) touchWorkspaceManifest(sourceWorkspacePath);
+  if (sourceWorkspacePath) {
+    if (path.resolve(sourceWorkspacePath) === path.resolve(workspacePath)) {
+      renameWorkspaceFileManifestEntries(sourceWorkspacePath, filePath, destination);
+    } else {
+      touchWorkspaceManifest(sourceWorkspacePath);
+    }
+  }
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
@@ -1095,7 +1105,7 @@ async function writeSystemFileClipboard(request) {
   clipboard.writeText(files.join('\n'));
 }
 
-async function pasteSystemFilesToWorkspace(workspacePath) {
+async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (process.platform !== 'darwin') {
     throw new Error('System file paste is currently supported on macOS only.');
@@ -1106,7 +1116,7 @@ async function pasteSystemFilesToWorkspace(workspacePath) {
   for (const source of sourcePaths) {
     if (!documentExtension(source)) continue;
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
-    const destination = uniqueCopyPath(workspacePath, path.basename(source));
+    const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), path.basename(source));
     fs.copyFileSync(source, destination);
     copiedPaths.push(destination);
     addRecentFile(destination);
@@ -1371,6 +1381,41 @@ function touchWorkspaceManifest(workspacePath) {
   if (!manifest) return;
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
+}
+
+function workspaceTargetDirectory(workspacePath, targetDirectory = '') {
+  const workspaceRoot = path.resolve(workspacePath);
+  const relative = String(targetDirectory || '').trim();
+  const destination = relative ? path.resolve(workspaceRoot, relative) : workspaceRoot;
+  if (destination !== workspaceRoot && !destination.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('Folder path must stay inside the workspace.');
+  }
+  fs.mkdirSync(destination, { recursive: true });
+  return destination;
+}
+
+function normalizedFolderName(name) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) throw new Error('Folder name is required.');
+  if (trimmed.includes('/') || trimmed.includes('\\') || trimmed === '.' || trimmed === '..' || trimmed.startsWith('.')) {
+    throw new Error('Folder name is not valid.');
+  }
+  return trimmed;
+}
+
+function createWorkspaceFolder(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const parent = workspaceTargetDirectory(workspacePath, request?.parentDirectory || '');
+  const folderPath = path.join(parent, normalizedFolderName(request?.name));
+  const workspaceRoot = path.resolve(workspacePath);
+  const resolved = path.resolve(folderPath);
+  if (!resolved.startsWith(workspaceRoot + path.sep)) throw new Error('Folder path must stay inside the workspace.');
+  if (fs.existsSync(folderPath)) throw new Error('A folder already exists at that path.');
+  fs.mkdirSync(folderPath, { recursive: false });
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  return loadWorkspaceFromPath(workspacePath);
 }
 
 function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates = false) {
@@ -1743,6 +1788,7 @@ function defaultAiSettings() {
       compaction: { providerId: 'openai', model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
     },
     maxContextChars: DEFAULT_AI_MAX_CONTEXT_CHARS,
+    maxConcurrentSemanticFilters: 3,
   };
 }
 
@@ -1752,6 +1798,8 @@ function defaultAppSettings() {
       width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
       height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
     },
+    debugSemanticSearch: false,
+    debugLogMaxBytes: 10 * 1024 * 1024,
   };
 }
 
@@ -1760,7 +1808,15 @@ function normalizeAppSettings(settings) {
     ...defaultAppSettings(),
     ...(settings || {}),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
+    debugSemanticSearch: settings?.debugSemanticSearch === true,
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(settings?.debugLogMaxBytes),
   };
+}
+
+function normalizeDebugLogMaxBytes(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 10 * 1024 * 1024;
+  return Math.max(1024, Math.round(parsed));
 }
 
 function normalizeAiSettings(settings) {
@@ -1768,6 +1824,7 @@ function normalizeAiSettings(settings) {
     ...defaultAiSettings(),
     ...(settings || {}),
     maxContextChars: normalizeAiMaxContextChars(settings?.maxContextChars),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(settings?.maxConcurrentSemanticFilters ?? settings?.workspaceFilterFileConcurrency),
   };
 }
 
@@ -1776,6 +1833,12 @@ function normalizeAiMaxContextChars(value) {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+function normalizeMaxConcurrentSemanticFilters(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 3;
+  return Math.min(16, Math.max(1, Math.round(parsed)));
 }
 
 function normalizeImageAttachmentMaxDimensions(value) {

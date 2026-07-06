@@ -390,6 +390,7 @@ export function canonicalAiSettings(settings: typeof state.aiSettings): typeof s
     activeProviderId: settings.activeProviderId,
     providers: [...settings.providers].sort((left, right) => left.provider.localeCompare(right.provider)),
     maxContextChars: normalizeAiMaxContextChars(settings.maxContextChars),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(settings.maxConcurrentSemanticFilters),
     actions: {
       chat: settings.actions.chat,
       edit: settings.actions.edit,
@@ -405,7 +406,15 @@ export function canonicalAiSettings(settings: typeof state.aiSettings): typeof s
 export function canonicalAppSettings(settings: AppSettings): AppSettings {
   return {
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
+    debugSemanticSearch: settings.debugSemanticSearch === true,
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(settings.debugLogMaxBytes),
   };
+}
+
+export function normalizeDebugLogMaxBytes(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 10 * 1024 * 1024;
+  return Math.max(1024, Math.round(parsed));
 }
 
 export function normalizeAiMaxContextChars(value: unknown): number {
@@ -413,6 +422,12 @@ export function normalizeAiMaxContextChars(value: unknown): number {
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
   const stepped = Math.round(parsed / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
+}
+
+export function normalizeMaxConcurrentSemanticFilters(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 3;
+  return Math.min(16, Math.max(1, Math.round(parsed)));
 }
 
 export function normalizeImageAttachmentMaxDimensions(value: unknown): { width: number; height: number } {

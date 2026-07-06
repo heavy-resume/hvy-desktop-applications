@@ -1,9 +1,9 @@
 import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
-import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type ImportSourceFile } from './backend';
+import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { getFileActionAvailability } from './fileActions';
-import { applyMountedRecoveryState, deserializeHvy, exportHvySourceMarkdown, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { state } from './state';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -15,7 +15,7 @@ import { documentStorageKey, normalizeAiMaxContextChars, normalizeDocumentMode, 
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
 export { backupDocumentKey, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, upsertWorkspace, sortWorkspaces, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed } from './mainWorkspaceUtils';
-export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder } from './mainUtilities';
+export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder } from './mainUtilities';
 import { render, renderAllAroundDocument as renderUiAroundDocument, renderModals, type UiHandlers } from './ui';
 export let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
@@ -63,7 +63,7 @@ export interface HotReloadSessionSnapshot {
   tabPaths: string[];
   documents: HotReloadDocumentSnapshot[];
 }
-type PreparedImportSource = ImportSourceFile & { text: string };
+type PreparedImportSource = ImportSourceFile & { text: string; sourceDocument?: VisualDocument };
 export const documentSessions = new Map<string, DocumentSession>();
 export const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 let openedDocumentTabOrder: string[] = [];
@@ -133,7 +133,8 @@ export async function importSourceFrom(pastedSourceText: string): Promise<Prepar
   const document = await deserializeHvy(new Uint8Array(source.bytes), source.extension);
   return {
     ...source,
-    text: await exportHvySourceMarkdown(document),
+    text: '',
+    sourceDocument: document,
   };
 }
 export function isHvyDocumentExtension(extension: ImportSourceFile['extension']): extension is DocumentExtension {
@@ -380,6 +381,37 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     recoveryBackupId: openDocument.recoveryBackupId,
   });
   measurePerf('session:update:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
+}
+export function adoptSavedAsDocument(
+  file: DocumentFileMetadata,
+  mounted: MountedDocument,
+  document: VisualDocument,
+  mode: HvyMode,
+  previousPath: string,
+  previousUseDocumentColors: boolean,
+): void {
+  if (previousPath && previousPath !== file.path) {
+    documentSessions.delete(previousPath);
+    removeDocumentTabPath(previousPath);
+  }
+  markDocumentTabOpened(file.path);
+  state.document = {
+    path: file.path,
+    name: file.name,
+    extension: file.extension,
+    mode,
+    dirty: false,
+    readOnly: false,
+    hiddenFromAI: workspaceFileAiAccess(file.path).hiddenFromAI,
+    isNew: false,
+    metaOpen: false,
+    mounted,
+    recoveryBackupId: null,
+  };
+  writeDocumentColorPreference(file.path, previousUseDocumentColors);
+  markMountedDocumentSaved(mounted);
+  setDocumentDirty(false, { preserveStatus: true });
+  updateCurrentDocumentSession(document);
 }
 export function cacheWorkspaceFilterDocuments(workspacePath: string, documents: HvyDocumentSearchDocument[]): void {
   clearWorkspaceFilterDocumentCache(workspacePath);

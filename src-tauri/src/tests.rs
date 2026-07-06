@@ -377,6 +377,7 @@
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
             max_context_chars: 0,
+            max_concurrent_semantic_filters: 0,
         })
         .unwrap();
 
@@ -389,16 +390,21 @@
         assert_eq!(settings.actions.edit.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.provider_id, "openai-compatible");
         assert_eq!(settings.actions.semantic_filter.model, "semantic");
+        assert_eq!(settings.max_concurrent_semantic_filters, 3);
     }
 
     #[test]
     fn normalizes_app_settings() {
         let settings = normalize_app_settings(AppSettings {
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions { width: 0, height: 20_000 },
+            debug_semantic_search: true,
+            debug_log_max_bytes: 0,
         });
 
         assert_eq!(settings.image_attachment_max_dimensions.width, DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION);
         assert_eq!(settings.image_attachment_max_dimensions.height, MAX_IMAGE_ATTACHMENT_DIMENSION);
+        assert!(settings.debug_semantic_search);
+        assert_eq!(settings.debug_log_max_bytes, default_debug_log_max_bytes());
     }
 
     #[test]

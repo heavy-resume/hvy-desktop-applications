@@ -4,7 +4,7 @@ import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedD
 import { state } from './state';
 import { pdfFileName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
-import { documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setDocumentDirty, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFileAiAccess, workspaceFilterDocumentCache, writeDocumentColorPreference, writeHotReloadSessionSnapshot } from './main';
+import { adoptSavedAsDocument, documentSessions, getTabStackIndex, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -139,40 +139,14 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
   const document = getMountedDocument(state.document.mounted);
   const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
   if (!file) return;
-  if (previousPath && previousPath !== file.path) {
-    documentSessions.delete(previousPath);
-    removeDocumentTabPath(previousPath);
-  }
-  markDocumentTabOpened(file.path);
-  state.document = {
-    path: file.path,
-    name: file.name,
-    extension: file.extension,
-    mode: previousMode,
-    dirty: false,
-    readOnly: false,
-    hiddenFromAI: workspaceFileAiAccess(file.path).hiddenFromAI,
-    isNew: false,
-    metaOpen: false,
-    mounted: null,
-    recoveryBackupId: null,
-  };
-  writeDocumentColorPreference(file.path, previousUseDocumentColors);
-  updateCurrentDocumentSession(document);
+  adoptSavedAsDocument(file, state.document.mounted, document, previousMode, previousPath, previousUseDocumentColors);
   state.selectedFilePath = file.path;
   state.status = `Saved ${file.name}`;
   await refreshOpenWorkspaceForFile(file.path);
   await refreshRecents();
   await clearRecoveryDraftsForDocument(previousPath, previousName);
   await clearRecoveryDraftsForDocument(file.path, file.name);
-  rerender();
-  await mountCurrentDocument(document);
-  if (state.document?.mounted) {
-    markMountedDocumentSaved(state.document.mounted);
-    setDocumentDirty(false, { preserveStatus: true });
-    state.status = `Saved ${file.name}`;
-    updateCurrentDocumentSession(document);
-  }
+  rerender({ preserveMountedDocument: true });
 }
 
 export async function selectDocumentTab(path: string): Promise<void> {

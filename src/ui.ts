@@ -34,11 +34,14 @@ export interface UiHandlers {
   cancelWorkspaceInitialization(): void;
   setNewWorkspaceLocation(location: 'managed' | 'choose'): void;
   cancelNewWorkspace(): void;
-  newDocumentInWorkspace(workspacePath: string): void;
+  openNewFolder(workspacePath: string, parentDirectory?: string): void;
+  createWorkspaceFolder(workspacePath: string, parentDirectory: string, name: string): void;
+  cancelNewFolder(): void;
+  newDocumentInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setNewDocumentType(type: DocumentCreationType): void;
-  createDocumentInWorkspace(name: string, templateId: string): void;
+  createDocumentInWorkspace(name: string, templateId: string, targetDirectory?: string): void;
   cancelNewDocument(): void;
-  openImportInWorkspace(workspacePath: string): void;
+  openImportInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setImportDocumentType(type: DocumentCreationType): void;
   openImportIntoCurrent(): void;
   setImportSourceTab(tab: 'workspace' | 'anywhere'): void;
@@ -48,12 +51,12 @@ export interface UiHandlers {
   setImportNewSectionsOnly(newSectionsOnly: boolean): void;
   selectImportWorkspaceSource(path: string): void;
   chooseImportSource(): void;
-  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean): void;
+  createImportedDocument(name: string, templateId: string, instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean, targetDirectory?: string): void;
   importIntoCurrent(instructions: string, pastedSourceText: string, excludeTags: string, newSectionsOnly: boolean, outputMode: 'current' | 'workspace', outputName: string): void;
   cancelImport(): void;
-  addFilesToWorkspace(workspacePath: string): void;
-  addDroppedFilesToWorkspace(workspacePath: string, files: File[]): void;
-  openWorkspaceFilter(workspacePath: string): void;
+  addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
+  addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
+  openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
@@ -68,6 +71,7 @@ export interface UiHandlers {
   closeDebugLog(): void;
   refreshDebugLog(): void;
   clearDebugLog(): void;
+  saveDebugLogSettings(settings: AppSettings): void;
   openAppSettings(): void;
   saveAppSettings(settings: AppSettings): void;
   cancelAppSettings(settings?: AppSettings): void;
@@ -140,13 +144,14 @@ export interface UiHandlers {
   cancelDeleteFile(): void;
   copyWorkspaceFile(path: string, currentName: string): void;
   cutWorkspaceFile(path: string, currentName: string): void;
-  pasteWorkspaceClipboard(workspacePath: string): void;
+  pasteWorkspaceClipboard(workspacePath: string, targetDirectory?: string): void;
   copyFileToWorkspace(path: string, currentName: string): void;
   moveFileToWorkspace(path: string, currentName: string): void;
+  moveWorkspaceFileToFolder(path: string, workspacePath: string, targetDirectory?: string): void;
   submitRenameFile(name: string): void;
   cancelRenameFile(): void;
   saveCurrentToWorkspace(): void;
-  submitWorkspaceTransfer(workspacePath: string, name: string): void;
+  submitWorkspaceTransfer(workspacePath: string, name: string, targetDirectory?: string): void;
   cancelWorkspaceTransfer(): void;
   setMode(mode: HvyMode): void;
   openDocumentMeta(): void;
@@ -154,7 +159,7 @@ export interface UiHandlers {
   saveAs(): void;
   setSaveAsKind(kind: AppState['saveAsKind']): void;
   setSaveAsScope(scope: 'workspace' | 'anywhere'): void;
-  saveAsToWorkspace(workspacePath: string, name: string): void;
+  saveAsToWorkspace(workspacePath: string, name: string, targetDirectory?: string): void;
   saveAsAnywhere(): void;
   cancelSaveAs(): void;
   closeDocument(): void;
@@ -199,9 +204,14 @@ const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
 const AI_MAX_CONTEXT_CHARS = 750_000;
 const AI_CONTEXT_STEP_CHARS = 1_000;
+const DEFAULT_MAX_CONCURRENT_SEMANTIC_FILTERS = 3;
+const MIN_MAX_CONCURRENT_SEMANTIC_FILTERS = 1;
+const MAX_MAX_CONCURRENT_SEMANTIC_FILTERS = 16;
 const DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION = 1080;
 const MIN_IMAGE_ATTACHMENT_DIMENSION = 1;
 const MAX_IMAGE_ATTACHMENT_DIMENSION = 16_384;
+const DEFAULT_DEBUG_LOG_MAX_BYTES = 10 * 1024 * 1024;
+const MIN_DEBUG_LOG_MAX_BYTES = 1024;
 const importExcludeTagHelpers = {
   getTagState(target: HTMLElement): string[] {
     return parseTags(importExcludeTagsInput(target)?.value ?? '');
@@ -319,6 +329,7 @@ export function renderModals(state: AppState): void {
     ${renderNewWorkspaceDialog(state)}
     ${renderWorkspaceInitializationDialog(state)}
     ${renderWorkspaceManagerDialog(state)}
+    ${renderNewFolderDialog(state)}
     ${renderNewDocumentDialog(state)}
     ${renderImportDialog(state)}
     ${renderImportProgressDialog(state)}
@@ -375,7 +386,7 @@ function ensureAppFrame(): void {
           <div id="hvyMount" class="document-host"></div>
         </div>
       </section>
-      <div id="modalRoot" data-app-modal-root="true"></div>
+    <div id="modalRoot" data-app-modal-root="true"></div>
     </main>`;
   applyWorkspaceSidebarWidth(appRoot);
 }
@@ -497,6 +508,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.cancelRenameFile();
           return;
         }
+        if (backdrop.querySelector('form[data-form="new-folder"]')) {
+          handlers.cancelNewFolder();
+          return;
+        }
         if (backdrop.querySelector('.delete-file-dialog')) {
           handlers.cancelDeleteFile();
           return;
@@ -535,18 +550,26 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.stopPropagation();
       handlers.toggleWorkspaceActions(target.dataset.workspacePath);
     }
+    if (action === 'new-folder-in-workspace' || action === 'new-document-in-workspace') {
+      event.stopPropagation();
+    }
     if (action === 'set-new-workspace-location' && isNewWorkspaceLocation(target.dataset.location)) {
       handlers.setNewWorkspaceLocation(target.dataset.location);
     }
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
     if (action === 'confirm-workspace-initialization') handlers.confirmWorkspaceInitialization();
     if (action === 'cancel-workspace-initialization') handlers.cancelWorkspaceInitialization();
-    if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath);
+    if (action === 'new-folder-in-workspace' && target.dataset.workspacePath) handlers.openNewFolder(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'set-new-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setNewDocumentType(target.dataset.documentType);
-    if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath);
+    if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'set-import-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setImportDocumentType(target.dataset.documentType);
-    if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath);
-    if (action === 'open-workspace-filter' && target.dataset.workspacePath) handlers.openWorkspaceFilter(target.dataset.workspacePath);
+    if (action === 'add-files-to-workspace' && target.dataset.workspacePath) handlers.addFilesToWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    if (action === 'open-workspace-filter' && target.dataset.workspacePath) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.openWorkspaceFilter(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    }
     if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
       handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
     }
@@ -557,6 +580,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'delete-file') handlers.deleteFile();
     if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
+    if (action === 'cancel-new-folder') handlers.cancelNewFolder();
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
@@ -753,25 +777,43 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
   root.addEventListener('dragover', (event) => {
-    const workspaceRoot = workspaceRootFromEvent(event);
-    if (!workspaceRoot || !hasDraggedFiles(event)) return;
+    const dropTarget = workspaceDropTargetFromEvent(event);
+    if (!dropTarget || (!hasDraggedFiles(event) && !hasDraggedWorkspaceFile(event))) return;
     event.preventDefault();
-    event.dataTransfer!.dropEffect = 'copy';
-    workspaceRoot.classList.add('is-drag-over');
+    event.dataTransfer!.dropEffect = hasDraggedWorkspaceFile(event) ? 'move' : 'copy';
+    dropTarget.element.classList.add('is-drag-over');
   }, { signal });
   root.addEventListener('dragleave', (event) => {
-    const workspaceRoot = workspaceRootFromEvent(event);
+    const dropTarget = workspaceDropTargetFromEvent(event);
     const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
-    if (!workspaceRoot || (relatedTarget && workspaceRoot.contains(relatedTarget))) return;
-    workspaceRoot.classList.remove('is-drag-over');
+    if (!dropTarget || (relatedTarget && dropTarget.element.contains(relatedTarget))) return;
+    dropTarget.element.classList.remove('is-drag-over');
   }, { signal });
   root.addEventListener('drop', (event) => {
-    const workspaceRoot = workspaceRootFromEvent(event);
-    const workspacePath = workspaceRoot?.dataset.workspacePath;
-    if (!workspaceRoot || !workspacePath || !event.dataTransfer?.files.length) return;
+    const dropTarget = workspaceDropTargetFromEvent(event);
+    const workspacePath = dropTarget?.workspacePath;
+    if (!dropTarget || !workspacePath || !event.dataTransfer) return;
     event.preventDefault();
-    workspaceRoot.classList.remove('is-drag-over');
-    handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files));
+    dropTarget.element.classList.remove('is-drag-over');
+    const draggedPath = event.dataTransfer.getData('application/x-hvy-workspace-file');
+    if (draggedPath) {
+      handlers.moveWorkspaceFileToFolder(draggedPath, workspacePath, dropTarget.targetDirectory);
+      return;
+    }
+    if (event.dataTransfer.files.length) {
+      handlers.addDroppedFilesToWorkspace(workspacePath, Array.from(event.dataTransfer.files), dropTarget.targetDirectory);
+    }
+  }, { signal });
+  root.addEventListener('dragstart', (event) => {
+    const fileButton = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.tree-file') : null;
+    const path = fileButton?.dataset.path;
+    if (!fileButton || !path || !event.dataTransfer) return;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-hvy-workspace-file', path);
+    event.dataTransfer.setData('text/plain', path);
+  }, { signal });
+  root.addEventListener('dragend', () => {
+    root.querySelectorAll('.is-drag-over').forEach((element) => element.classList.remove('is-drag-over'));
   }, { signal });
   root.addEventListener('beforeinput', (event) => {
     const target = event.target instanceof HTMLInputElement ? event.target : null;
@@ -882,6 +924,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
+    const debugLogSettings = target.closest<HTMLElement>('[data-settings="debug-log"]');
+    if (debugLogSettings && (target instanceof HTMLInputElement) && (target.name === 'debugSemanticSearch' || target.name === 'debugLogMaxMegabytes')) {
+      handlers.saveDebugLogSettings(readDebugLogSettingsControls(debugLogSettings, state.appSettings));
+      return;
+    }
     if (target instanceof HTMLInputElement && target.name === 'newSectionsOnly') {
       handlers.setImportNewSectionsOnly(target.checked);
       return;
@@ -906,7 +953,19 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.preventDefault();
       const locked = fileButton.dataset.locked === 'true';
       const hiddenFromAI = fileButton.getAttribute('data-hidden-from-ai') === 'true';
-      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 1);
+      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
+      return;
+    }
+    const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
+    if (folderSummary?.dataset.workspacePath) {
+      event.preventDefault();
+      showWorkspaceContextMenu(
+        event,
+        folderSummary.dataset.workspacePath,
+        state.workspaceClipboard,
+        handlers,
+        folderSummary.dataset.targetDirectory ?? '',
+      );
       return;
     }
     const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
@@ -915,12 +974,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       : null;
     if (!workspaceSummary || !workspacePath) return;
     event.preventDefault();
-    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers);
+    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '');
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
     const target = event.target instanceof HTMLElement ? event.target : null;
-    if (!target?.closest('.tree-file, .tree summary')) return;
+    if (!target?.closest('.tree-file, .tree summary, .tree-folder-row')) return;
     event.preventDefault();
   }, { signal });
   root.addEventListener('click', (event) => {
@@ -956,7 +1015,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const data = new FormData(form);
       handlers.createDocumentInWorkspace(
         String(data.get('documentName') ?? ''),
-        String(data.get('templateId') ?? '')
+        String(data.get('templateId') ?? ''),
+        String(data.get('targetDirectory') ?? '')
+      );
+    }
+    if (form.dataset.form === 'new-folder') {
+      const data = new FormData(form);
+      handlers.createWorkspaceFolder(
+        String(data.get('workspacePath') ?? ''),
+        String(data.get('parentDirectory') ?? ''),
+        String(data.get('folderName') ?? '')
       );
     }
     if (form.dataset.form === 'import-document') {
@@ -968,7 +1036,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         String(data.get('instructions') ?? ''),
         String(data.get('importSourceText') ?? ''),
         String(data.get('excludeTags') ?? ''),
-        data.get('newSectionsOnly') === 'on'
+        data.get('newSectionsOnly') === 'on',
+        String(data.get('targetDirectory') ?? '')
       );
     }
     if (form.dataset.form === 'import-current') {
@@ -1025,14 +1094,23 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (form.dataset.form === 'workspace-transfer') {
       const data = new FormData(form);
-      handlers.submitWorkspaceTransfer(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+      const destination = form.querySelector<HTMLInputElement>('input[name="workspaceDestination"]:checked');
+      handlers.submitWorkspaceTransfer(
+        destination?.dataset.workspacePath ?? '',
+        String(data.get('fileName') ?? ''),
+        destination?.dataset.targetDirectory ?? ''
+      );
     }
     if (form.dataset.form === 'save-as-document') {
       const data = new FormData(form);
       if (String(data.get('scope') ?? 'workspace') === 'anywhere') {
         handlers.saveAsAnywhere();
       } else {
-        handlers.saveAsToWorkspace(String(data.get('workspacePath') ?? ''), String(data.get('fileName') ?? ''));
+        handlers.saveAsToWorkspace(
+          String(data.get('workspacePath') ?? ''),
+          String(data.get('fileName') ?? ''),
+          String(data.get('targetDirectory') ?? '')
+        );
       }
     }
   }, { signal });
@@ -1104,6 +1182,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('form[data-form="rename-file"]')) {
       event.preventDefault();
       handlers.cancelRenameFile();
+      return;
+    }
+    if (root.querySelector('form[data-form="new-folder"]')) {
+      event.preventDefault();
+      handlers.cancelNewFolder();
       return;
     }
     if (root.querySelector('.delete-file-dialog')) {
@@ -1471,12 +1554,27 @@ function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { 
   return null;
 }
 
-function workspaceRootFromEvent(event: Event): HTMLElement | null {
-  return event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root') : null;
+function workspaceDropTargetFromEvent(event: Event): { element: HTMLElement; workspacePath: string; targetDirectory: string } | null {
+  if (!(event.target instanceof HTMLElement)) return null;
+  const folderSummary = event.target.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
+  if (folderSummary?.dataset.workspacePath) {
+    return {
+      element: folderSummary,
+      workspacePath: folderSummary.dataset.workspacePath,
+      targetDirectory: folderSummary.dataset.targetDirectory ?? '',
+    };
+  }
+  const workspaceRoot = event.target.closest<HTMLElement>('.workspace-root');
+  const workspacePath = workspaceRoot?.dataset.workspacePath;
+  return workspaceRoot && workspacePath ? { element: workspaceRoot, workspacePath, targetDirectory: '' } : null;
 }
 
 function hasDraggedFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+function hasDraggedWorkspaceFile(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes('application/x-hvy-workspace-file');
 }
 
 function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
@@ -1485,22 +1583,24 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   }
   const scopedWorkspace = filter.workspacePath ? workspaces.find((workspace) => workspace.path === filter.workspacePath) ?? null : null;
   const workspaceName = scopedWorkspace?.manifest.name ?? 'workspace';
+  const filterTargetName = filter.targetDirectory ? workspaceFilterFolderName(filter.targetDirectory) : workspaceName;
   const activeFilter = filter.workspacePath ? activeFilters[filter.workspacePath] : null;
   const applied = Boolean(
     activeFilter
-      && activeFilter.query.trim() === filter.queryDraft.trim()
-      && activeFilter.mode === filter.mode
-      && activeFilter.filterMode === filter.filterMode
+    && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(filter.targetDirectory)
+    && activeFilter.query.trim() === filter.queryDraft.trim()
+    && activeFilter.mode === filter.mode
+    && activeFilter.filterMode === filter.filterMode
   );
   const isSemantic = filter.mode === 'semantic';
   const stopSemanticFilter = filter.isLoading && isSemantic;
   const submitLabel = stopSemanticFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
   const visibility = workspaceTemplateVisibility(scopedWorkspace);
   const status = filter.isLoading
-    ? filter.status ?? (isSemantic ? `Analyzing ${workspaceName}...` : `Filtering ${workspaceName}...`)
+    ? filter.status ?? (isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
     : filter.error
-    ? filter.error
-    : '';
+      ? filter.error
+      : '';
   return `
     <section class="workspace-filter-overlay" aria-label="Workspace filter">
       <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
@@ -1508,7 +1608,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
         <div class="search-tabbar">
           <div class="workspace-filter-title">
             ${funnelIcon()}
-            <span>Filter ${escapeHtml(workspaceName)}</span>
+            <span>Filter ${escapeHtml(filterTargetName)}</span>
           </div>
           <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
@@ -1518,9 +1618,9 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           <label>
             <span>Filter document</span>
             ${isSemantic
-              ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
-              : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
-            }
+      ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
+      : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
+    }
           </label>
         </div>
         ${status ? `<div class="search-status${filter.error ? ' is-error' : ''}" role="status">${escapeHtml(status)}</div>` : ''}
@@ -1547,6 +1647,11 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
         </div>
       </form>
     </section>`;
+}
+
+function workspaceFilterFolderName(targetDirectory: string): string {
+  const parts = normalizeTreeRelativePath(targetDirectory).split('/').filter(Boolean);
+  return parts.at(-1) ?? 'folder';
 }
 
 function renderRenameFileDialog(state: AppState): string {
@@ -1586,29 +1691,52 @@ function renderDeleteFileDialog(state: AppState): string {
     </div>`;
 }
 
+function renderNewFolderDialog(state: AppState): string {
+  if (!state.newFolderWorkspacePath) return '';
+  const workspace = state.workspaces.find((candidate) => candidate.path === state.newFolderWorkspacePath) ?? null;
+  const parentLabel = state.newFolderParentDirectory || 'Workspace root';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="new-folder">
+        <h2>New Folder</h2>
+        <input name="workspacePath" type="hidden" value="${escapeAttr(state.newFolderWorkspacePath)}">
+        <input name="parentDirectory" type="hidden" value="${escapeAttr(state.newFolderParentDirectory)}">
+        <p class="dialog-note">${escapeHtml(workspace?.manifest.name ?? 'Workspace')} / ${escapeHtml(parentLabel)}</p>
+        <label>
+          <span>Name</span>
+          <input name="folderName" type="text" autocomplete="off" required>
+        </label>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-new-folder">Cancel</button>
+          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+        </div>
+      </form>
+    </div>`;
+}
+
 function renderWorkspaceTransferDialog(state: AppState): string {
   const transfer = state.workspaceTransfer;
   if (!transfer) return '';
   const workspaces = state.workspaces.filter((workspace) => workspace.path !== transfer.excludedWorkspacePath);
-  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
-    ? state.selectedWorkspacePath
+  const sourceWorkspacePath = transfer.sourcePath
+    ? workspacePathForFileInWorkspaces(state.workspaces, transfer.sourcePath)
+    : null;
+  const preferredWorkspacePath = sourceWorkspacePath ?? state.selectedWorkspacePath;
+  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === preferredWorkspacePath)
+    ? preferredWorkspacePath
     : workspaces[0]?.path ?? null;
+  const selectedTargetDirectory = selectedWorkspacePath === sourceWorkspacePath ? transfer.targetDirectory : '';
   const title = transfer.mode === 'saveCurrent'
     ? 'Save to Workspace'
     : transfer.mode === 'copyFile'
-    ? 'Copy to Workspace'
-    : 'Move to Workspace';
+      ? 'Copy to Workspace'
+      : 'Move to Workspace';
   const submitLabel = transfer.mode === 'moveFile' ? 'Move' : transfer.mode === 'copyFile' ? 'Copy' : 'Save';
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="workspace-transfer">
+      <form class="dialog workspace-transfer-dialog" data-form="workspace-transfer">
         <h2>${escapeHtml(title)}</h2>
-        <label>
-          <span>Workspace</span>
-          <select name="workspacePath" required>
-            ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
-          </select>
-        </label>
+        ${renderWorkspaceDestinationTree(workspaces, selectedWorkspacePath, selectedTargetDirectory)}
         ${transfer.mode === 'saveCurrent' ? `
           <label>
             <span>Name</span>
@@ -1624,6 +1752,116 @@ function renderWorkspaceTransferDialog(state: AppState): string {
     </div>`;
 }
 
+function renderWorkspaceDestinationTree(workspaces: Workspace[], selectedWorkspacePath: string | null, selectedRelativePath: string): string {
+  if (workspaces.length === 0) {
+    return '<input name="workspaceDestination" type="hidden" value="">';
+  }
+  return `
+    <div class="workspace-destination-field">
+      <span>Destination</span>
+      <div class="workspace-destination-tree" role="radiogroup" aria-label="Destination">
+        ${workspaces.map((workspace) => renderWorkspaceDestination(workspace, selectedWorkspacePath, selectedRelativePath)).join('')}
+      </div>
+    </div>`;
+}
+
+function renderWorkspaceDestination(workspace: Workspace, selectedWorkspacePath: string | null, selectedRelativePath: string): string {
+  const selectedRoot = workspace.path === selectedWorkspacePath && selectedRelativePath === '';
+  const folders = workspace.files.map((node) => {
+    if (node.kind !== 'folder') return '';
+    return renderWorkspaceDestinationFolder(node, workspace.path, selectedWorkspacePath, selectedRelativePath);
+  }).join('');
+  return `
+    <div class="workspace-destination-workspace">
+      <label class="workspace-destination-option is-root">
+        <input
+          type="radio"
+          name="workspaceDestination"
+          value="${escapeAttr(workspace.path)}"
+          data-workspace-path="${escapeAttr(workspace.path)}"
+          data-target-directory=""
+          ${selectedRoot ? 'checked' : ''}
+          required
+        >
+        <span>${escapeHtml(workspace.manifest.name)}</span>
+      </label>
+      ${folders ? `<div class="workspace-destination-children">${folders}</div>` : ''}
+    </div>`;
+}
+
+function renderWorkspaceDestinationFolder(
+  node: Extract<WorkspaceTreeNode, { kind: 'folder' }>,
+  workspacePath: string,
+  selectedWorkspacePath: string | null,
+  selectedRelativePath: string,
+): string {
+  const relativePath = workspaceNodeRelativePath(node);
+  if (relativePath === 'templates' || relativePath.startsWith('templates/')) return '';
+  const selected = workspacePath === selectedWorkspacePath && relativePath === selectedRelativePath;
+  const children = Array.isArray(node.children)
+    ? node.children.map((child) => {
+      if (child.kind !== 'folder') return '';
+      return renderWorkspaceDestinationFolder(child, workspacePath, selectedWorkspacePath, selectedRelativePath);
+    }).join('')
+    : '';
+  return `
+    <div class="workspace-destination-folder">
+      <label class="workspace-destination-option">
+        <input
+          type="radio"
+          name="workspaceDestination"
+          value="${escapeAttr(`${workspacePath}::${relativePath}`)}"
+          data-workspace-path="${escapeAttr(workspacePath)}"
+          data-target-directory="${escapeAttr(relativePath)}"
+          ${selected ? 'checked' : ''}
+          required
+        >
+        <span>${escapeHtml(workspaceNodeName(node))}</span>
+      </label>
+      ${children ? `<div class="workspace-destination-children">${children}</div>` : ''}
+    </div>`;
+}
+
+function renderWorkspaceFolderSelect(workspace: Workspace, selectedRelativePath: string): string {
+  const folders = workspaceFolderOptions(workspace.files);
+  if (folders.length === 0) {
+    return '<input name="targetDirectory" type="hidden" value="">';
+  }
+  return `
+    <label>
+      <span>Folder</span>
+      <select name="targetDirectory">
+        <option value="">Workspace root</option>
+        ${folders.map((folder) => `<option value="${escapeAttr(folder.relativePath)}" ${folder.relativePath === selectedRelativePath ? 'selected' : ''}>${escapeHtml(folder.label)}</option>`).join('')}
+      </select>
+    </label>`;
+}
+
+function workspaceFolderOptions(nodes: WorkspaceTreeNode[], prefix = ''): Array<{ relativePath: string; label: string }> {
+  const options: Array<{ relativePath: string; label: string }> = [];
+  for (const node of nodes) {
+    if (node.kind !== 'folder') continue;
+    const relativePath = workspaceNodeRelativePath(node);
+    if (relativePath === 'templates' || relativePath.startsWith('templates/')) continue;
+    const name = workspaceNodeName(node);
+    const label = prefix ? `${prefix} / ${name}` : name;
+    options.push({ relativePath, label });
+    options.push(...workspaceFolderOptions(node.children, label));
+  }
+  return options;
+}
+
+function workspaceNodeRelativePath(node: WorkspaceTreeNode): string {
+  if (typeof node.relativePath === 'string') return node.relativePath;
+  const snakeCaseNode = node as WorkspaceTreeNode & { relative_path?: unknown };
+  return typeof snakeCaseNode.relative_path === 'string' ? snakeCaseNode.relative_path : '';
+}
+
+function workspaceNodeName(node: WorkspaceTreeNode): string {
+  if (typeof node.name === 'string') return node.name;
+  return '';
+}
+
 function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
   const templateDisabled = state.document.extension === '.md';
@@ -1637,6 +1875,7 @@ function renderSaveAsDialog(state: AppState): string {
   const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
     ? state.selectedWorkspacePath
     : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
+  const selectedWorkspace = workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null;
   const name = displayDocumentName(state.document.name);
   return `
     <div class="modal-backdrop" role="presentation">
@@ -1655,6 +1894,7 @@ function renderSaveAsDialog(state: AppState): string {
               ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
             </select>
           </label>
+          ${selectedWorkspace ? renderWorkspaceFolderSelect(selectedWorkspace, '') : ''}
           <label>
             <span>Name</span>
             <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
@@ -1665,8 +1905,8 @@ function renderSaveAsDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" data-action="cancel-save-as">Cancel</button>
           ${workspaceActive
-            ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
-            : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
+      ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
+      : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
         </div>
       </form>
     </div>`;
@@ -1863,6 +2103,7 @@ function showWorkspaceContextMenu(
   workspacePath: string,
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
+  targetDirectory = '',
 ): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
@@ -1871,7 +2112,12 @@ function showWorkspaceContextMenu(
   menu.style.top = `${event.clientY}px`;
   void clipboard;
   menu.innerHTML = `
+    <button type="button" data-menu-action="new-folder">New Folder</button>
+    <button type="button" data-menu-action="new-document">New Document</button>
+    <button type="button" data-menu-action="add-files">Add Files</button>
+    <button type="button" data-menu-action="import">Import</button>
     <button type="button" data-menu-action="paste">Paste</button>
+    ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -1889,7 +2135,12 @@ function showWorkspaceContextMenu(
     const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
     if (!button || button.disabled) return;
     cleanup();
-    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
+    if (button.dataset.menuAction === 'new-folder') handlers.openNewFolder(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'add-files') handlers.addFilesToWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'filter') handlers.openWorkspaceFilter(workspacePath, targetDirectory);
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -2129,6 +2380,7 @@ function renderWorkspace(
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
+  const rootFilterActive = filter !== undefined && normalizeTreeRelativePath(filter.targetDirectory) === '';
   const matchedDocumentIds = filter
     ? new Set(Object.entries(filter.snapshots).flatMap(([documentId, snapshot]) => snapshot.results.length > 0 ? [documentId] : []))
     : null;
@@ -2145,7 +2397,7 @@ function renderWorkspace(
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
       </summary>
-      <button type="button" class="workspace-filter-trigger${filter ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
+      <button type="button" class="workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
       <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
         <button type="button" class="${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
         <button type="button" class="${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
@@ -2153,12 +2405,13 @@ function renderWorkspace(
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
         <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
-          <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New</button>
+          <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
+          <button type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
         </div>
       </div>
-      ${visibleFiles.length === 0 ? '' : `<ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>`}
+      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, filter ?? null)).join('')}</ul>
     </details>`;
 }
 
@@ -2175,11 +2428,17 @@ function filterNodesByWorkspaceFileView(
 ): WorkspaceTreeNode[] {
   const visibleNodes: WorkspaceTreeNode[] = [];
   for (const node of nodes) {
-    const relativePath = typeof node.relativePath === 'string' ? node.relativePath : '';
+    const relativePath = workspaceNodeRelativePath(node);
     const inTemplateFolder = relativePath === 'templates' || relativePath.startsWith('templates/');
     if (node.kind === 'folder') {
+      if (view === 'templates' && !inTemplateFolder) {
+        const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
+        if (children.length > 0) visibleNodes.push({ ...node, children });
+        continue;
+      }
+      if (view === 'documents' && inTemplateFolder) continue;
       const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
-      if (children.length > 0) visibleNodes.push({ ...node, children });
+      visibleNodes.push({ ...node, children });
       continue;
     }
     if (view === 'templates' && !inTemplateFolder) continue;
@@ -2229,7 +2488,7 @@ function filterNodesByArchivedVisibility(nodes: WorkspaceTreeNode[], showArchive
   for (const node of nodes) {
     if (node.kind === 'folder') {
       const children = filterNodesByArchivedVisibility(node.children, showArchived);
-      if (children.length > 0) visibleNodes.push({ ...node, children });
+      visibleNodes.push({ ...node, children });
       continue;
     }
     if (node.archived && !showArchived) continue;
@@ -2243,7 +2502,7 @@ function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visibility:
   for (const node of nodes) {
     if (node.kind === 'folder') {
       const children = filterNodesByTemplateVisibility(node.children, visibility);
-      if (children.length > 0) visibleNodes.push({ ...node, children });
+      visibleNodes.push({ ...node, children });
       continue;
     }
     if (node.extension === '.hvy' && !visibility.hvyDocuments) continue;
@@ -2260,19 +2519,40 @@ function renderNode(
   selectedFilePath: string | null,
   matchedDocumentIds: Set<string> | null,
   workspaceClipboard: WorkspaceClipboardState | null,
+  workspacePath: string,
+  activeFilter: AppState['workspaceFilters'][string] | null = null,
 ): string {
   if (node.kind === 'folder') {
-    const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds);
+    const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds, activeFilter);
+    const name = workspaceNodeName(node);
+    const relativePath = workspaceNodeRelativePath(node);
+    const children = Array.isArray(node.children) ? node.children : [];
+    const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
+    const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
+    const folderFilterTrigger = folderOwnsActiveFilter
+      ? `<button type="button" class="workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
+      : '';
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${folderFilterTrigger}`;
+    if (children.length === 0) {
+      return `
+        <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
+          <div class="tree-folder-row" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+            ${folderLabel}
+          </div>
+        </li>`;
+    }
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details open>
-          <summary>${escapeHtml(node.name)}</summary>
-          <ul class="tree">${sortNodesForFilter(node.children, matchedDocumentIds).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard)).join('')}</ul>
+          <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+            ${folderLabel}
+          </summary>
+          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter)).join('')}</ul>
         </details>
       </li>`;
   }
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
-  const noFilterMatch = matchedDocumentIds !== null && !matchedDocumentIds.has(node.path);
+  const noFilterMatch = matchedDocumentIds !== null && nodeMatchesFilterScope(node, activeFilter) && !matchedDocumentIds.has(node.path);
   const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
   const archived = node.archived === true;
   const locked = node.locked === true;
@@ -2282,7 +2562,7 @@ function renderNode(
     : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
@@ -2292,15 +2572,48 @@ function renderNode(
     </li>`;
 }
 
-function sortNodesForFilter(nodes: WorkspaceTreeNode[], matchedDocumentIds: Set<string> | null): WorkspaceTreeNode[] {
+function sortNodesForFilter(
+  nodes: WorkspaceTreeNode[],
+  matchedDocumentIds: Set<string> | null,
+  activeFilter: AppState['workspaceFilters'][string] | null = null,
+): WorkspaceTreeNode[] {
   if (!matchedDocumentIds) return nodes;
-  return [...nodes].sort((left, right) => Number(nodeHasFilterMatch(right, matchedDocumentIds)) - Number(nodeHasFilterMatch(left, matchedDocumentIds)));
+  return [...nodes].sort((left, right) => Number(nodeHasFilterMatch(right, matchedDocumentIds, activeFilter)) - Number(nodeHasFilterMatch(left, matchedDocumentIds, activeFilter)));
 }
 
-function nodeHasFilterMatch(node: WorkspaceTreeNode, matchedDocumentIds: Set<string> | null): boolean {
+function nodeHasFilterMatch(
+  node: WorkspaceTreeNode,
+  matchedDocumentIds: Set<string> | null,
+  activeFilter: AppState['workspaceFilters'][string] | null = null,
+): boolean {
   if (!matchedDocumentIds) return true;
+  if (!nodeTouchesFilterScope(node, activeFilter)) return true;
   if (node.kind === 'file') return matchedDocumentIds.has(node.path);
-  return node.children.some((child) => nodeHasFilterMatch(child, matchedDocumentIds));
+  return node.children.some((child) => nodeHasFilterMatch(child, matchedDocumentIds, activeFilter));
+}
+
+function nodeMatchesFilterScope(
+  node: WorkspaceTreeNode,
+  activeFilter: AppState['workspaceFilters'][string] | null,
+): boolean {
+  const scope = normalizeTreeRelativePath(activeFilter?.targetDirectory ?? '');
+  if (!scope) return true;
+  return normalizeTreeRelativePath(workspaceNodeRelativePath(node)).startsWith(`${scope}/`);
+}
+
+function nodeTouchesFilterScope(
+  node: WorkspaceTreeNode,
+  activeFilter: AppState['workspaceFilters'][string] | null,
+): boolean {
+  const scope = normalizeTreeRelativePath(activeFilter?.targetDirectory ?? '');
+  if (!scope) return true;
+  const relativePath = normalizeTreeRelativePath(workspaceNodeRelativePath(node));
+  if (node.kind === 'file') return relativePath.startsWith(`${scope}/`);
+  return relativePath === scope || relativePath.startsWith(`${scope}/`) || scope.startsWith(`${relativePath}/`);
+}
+
+function normalizeTreeRelativePath(path: string | null | undefined): string {
+  return (path ?? '').replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
 }
 
 function displayDocumentName(name: string): string {
@@ -2453,6 +2766,7 @@ function renderNewDocumentDialog(state: AppState): string {
       <form class="dialog" data-form="new-document">
         <h2>New Document</h2>
         ${renderDocumentTypeControl('new', state.newDocumentType, visibility)}
+        ${workspace ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
         <label>
           <span>Name</span>
           <input name="documentName" type="text" autocomplete="off" autofocus required>
@@ -2497,6 +2811,7 @@ function renderImportDialog(state: AppState): string {
         ${importCurrent ? '<p class="dialog-note">Uses the current file as an import template, and saves the result to the output file.</p>' : ''}
         ${importCurrent ? '' : `
           ${renderDocumentTypeControl('import', state.importDocumentType, visibility)}
+          ${workspace ? renderWorkspaceFolderSelect(workspace, state.importDirectory) : ''}
           <label>
             <span>Name</span>
             <input name="documentName" type="text" autocomplete="off" autofocus required>
@@ -2679,8 +2994,8 @@ function renderAnywhereImportSourceControls(source: AppState['importSource'], so
   const sourceNote = source
     ? 'Using selected file unless pasted text is provided.'
     : sourceText.trim().length > 0
-    ? `${Math.min(sourceText.trim().length, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
-    : 'Choose a file or paste at least 50 characters.';
+      ? `${Math.min(sourceText.trim().length, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
+      : 'Choose a file or paste at least 50 characters.';
   return `
     <div class="source-picker-row">
       <button type="button" data-action="choose-import-source">Choose file</button>
@@ -2760,8 +3075,8 @@ function updateImportSubmit(form: HTMLFormElement): void {
         ? `Pasted text needs ${MIN_PASTED_IMPORT_CHARS} characters to replace the selected file.`
         : 'Using selected file unless pasted text is provided.'
       : pastedLength > 0
-      ? `${Math.min(pastedLength, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
-      : `Choose a file or paste at least ${MIN_PASTED_IMPORT_CHARS} characters.`;
+        ? `${Math.min(pastedLength, MIN_PASTED_IMPORT_CHARS)}/${MIN_PASTED_IMPORT_CHARS} characters.`
+        : `Choose a file or paste at least ${MIN_PASTED_IMPORT_CHARS} characters.`;
     note.dataset.state = !hasValidSource && pastedLength > 0 ? 'error' : 'neutral';
   }
 }
@@ -2849,10 +3164,20 @@ function renderDebugLogDialog(state: AppState): string {
             <button type="button" data-action="clear-debug-log">Clear</button>
           </div>
         </div>
+        <div class="debug-log-settings" data-settings="debug-log">
+          <label class="inline-checkbox">
+            <input name="debugSemanticSearch" type="checkbox" ${state.appSettings.debugSemanticSearch ? 'checked' : ''}>
+            <span>Debug semantic search</span>
+          </label>
+          <label>
+            <span>Maximum log size (MB)</span>
+            <input name="debugLogMaxMegabytes" type="number" min="1" step="1" required value="${escapeAttr(String(debugLogMaxMegabytes(state.appSettings.debugLogMaxBytes)))}">
+          </label>
+        </div>
         <div class="debug-log-list">
           ${entries.length
-            ? entries.map(renderDebugLogEntry).join('')
-            : '<p class="debug-log-empty">No debug entries yet.</p>'}
+      ? entries.map(renderDebugLogEntry).join('')
+      : '<p class="debug-log-empty">No debug entries yet.</p>'}
         </div>
         <div class="dialog-actions">
           <button type="button" data-action="close-debug-log">Done</button>
@@ -2862,12 +3187,12 @@ function renderDebugLogDialog(state: AppState): string {
 }
 
 function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string {
-  const details = entry.details ? JSON.stringify(entry.details, null, 2) : '';
+  const details = formatDebugLogEntryDetails(entry);
   const duration = typeof entry.details?.durationMs === 'number'
     ? `${entry.details.durationMs.toFixed(1)} ms`
     : typeof entry.durationMs === 'number'
-    ? `${entry.durationMs.toFixed(1)} ms`
-    : '';
+      ? `${entry.durationMs.toFixed(1)} ms`
+      : '';
   return `
     <article class="debug-log-entry" data-kind="${escapeAttr(entry.kind)}">
       <div class="debug-log-entry-summary">
@@ -2876,8 +3201,87 @@ function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string
         ${duration ? `<span class="debug-log-duration">${escapeHtml(duration)}</span>` : ''}
         <time datetime="${escapeAttr(entry.startedAt)}">${escapeHtml(formatDebugLogTime(entry.startedAt))}</time>
       </div>
+      ${renderSemanticDebugLogDetails(entry)}
       ${details ? `<pre>${escapeHtml(details)}</pre>` : ''}
     </article>`;
+}
+
+function formatDebugLogEntryDetails(entry: AppState['debugLogEntries'][number]): string {
+  if (!entry.details) return '';
+  if (entry.kind === 'llm' && entry.details.task === 'semanticFilter') {
+    const { body: _body, output: _output, payload: _payload, ...summary } = entry.details;
+    return JSON.stringify(summary, null, 2);
+  }
+  return JSON.stringify(entry.details, null, 2);
+}
+
+function renderSemanticDebugLogDetails(entry: AppState['debugLogEntries'][number]): string {
+  if (entry.kind !== 'llm') return '';
+  if (entry.label === 'llm:request' && entry.details?.task === 'semanticFilter') {
+    return renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details.body));
+  }
+  if (entry.label === 'llm:response' && entry.details?.task === 'semanticFilter') {
+    return [
+      renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details?.body)),
+      renderDebugLogExpandable('Semantic response', formatSemanticResponse(entry.details?.output)),
+    ].join('');
+  }
+  if (entry.label === 'workspace-filter:semantic-error' && entry.details?.task === 'semanticFilter') {
+    return [
+      renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details?.body)),
+      renderDebugLogExpandable('Semantic response', formatSemanticResponse(entry.details?.output)),
+    ].join('');
+  }
+  if (entry.label === 'llm:semantic-filter-output') {
+    return renderDebugLogExpandable('Semantic response', formatSemanticResponse(entry.details?.output));
+  }
+  return '';
+}
+
+function renderDebugLogExpandable(label: string, value: string): string {
+  if (!value.trim()) return '';
+  return `<details class="debug-log-details"><summary>${escapeHtml(label)}</summary><pre>${escapeHtml(value)}</pre></details>`;
+}
+
+function formatSemanticRequestPrompt(body: unknown): string {
+  const messages = isRecord(body) && Array.isArray(body.messages) ? body.messages : [];
+  const formattedMessages = messages
+    .filter(isRecord)
+    .map((message, index) => {
+      const role = String(message.role ?? `message ${index + 1}`);
+      const content = String(message.content ?? '');
+      const normalizedContent = content.startsWith('Context:\n') ? content.slice('Context:\n'.length) : content;
+      const label = content.startsWith('Context:\n') ? 'context' : role;
+      return `--- ${label} ---\n${normalizedContent.trim()}`;
+    })
+    .filter((message) => message.trim().length > 0);
+  return formattedMessages.length ? formattedMessages.join('\n\n') : formatDebugLogValue(body);
+}
+
+function formatSemanticResponse(output: unknown): string {
+  if (output === null || output === undefined) {
+    return '';
+  }
+  if (typeof output !== 'string') {
+    return formatDebugLogValue(output);
+  }
+  const source = output;
+  try {
+    return JSON.stringify(JSON.parse(source), null, 2);
+  } catch {
+    return source;
+  }
+}
+
+function formatDebugLogValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  const json = JSON.stringify(value, null, 2);
+  return typeof json === 'string' ? json : String(value);
 }
 
 function formatDebugLogTime(value: string): string {
@@ -2923,6 +3327,23 @@ function renderAppSettingsDialog(state: AppState): string {
             >
           </label>
         </fieldset>
+        <fieldset class="ai-action-config">
+          <legend>Debug log</legend>
+          <label class="inline-checkbox">
+            <input name="debugSemanticSearch" type="checkbox" ${settings.debugSemanticSearch ? 'checked' : ''}>
+            <span>Debug semantic search</span>
+          </label>
+          <label>
+            <span>Maximum log size (MB)</span>
+            <input
+              name="debugLogMaxMegabytes"
+              type="number"
+              min="1"
+              step="1"
+              value="${escapeAttr(String(debugLogMaxMegabytes(settings.debugLogMaxBytes)))}"
+            >
+          </label>
+        </fieldset>
         <div class="dialog-actions">
           <button type="button" data-action="cancel-app-settings">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
@@ -2957,6 +3378,7 @@ function renderAiSettingsDialog(state: AppState): string {
   const providerConfig = aiProviderConfig(settings, selectedProviderId);
   const provider = aiProviderPreset(selectedProviderId);
   const maxContextChars = normalizeAiMaxContextChars(settings.maxContextChars);
+  const maxConcurrentSemanticFilters = normalizeMaxConcurrentSemanticFilters(settings.maxConcurrentSemanticFilters);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog wide-dialog" data-form="ai-settings">
@@ -3011,6 +3433,17 @@ function renderAiSettingsDialog(state: AppState): string {
             value="${escapeAttr(String(maxContextChars))}"
           >
           <output data-role="max-context-chars-output">${escapeHtml(formatAiMaxContextChars(maxContextChars))}</output>
+        </label>
+        <label>
+          <span>Max concurrent semantic filters</span>
+          <input
+            name="maxConcurrentSemanticFilters"
+            type="number"
+            min="${MIN_MAX_CONCURRENT_SEMANTIC_FILTERS}"
+            max="${MAX_MAX_CONCURRENT_SEMANTIC_FILTERS}"
+            step="1"
+            value="${escapeAttr(String(maxConcurrentSemanticFilters))}"
+          >
         </label>
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
@@ -3085,11 +3518,11 @@ function renderMcpSettingsDialog(state: AppState): string {
             </div>
             <div class="mcp-install-list">
               ${state.mcpClientInstallStatus.map((client) => {
-                const installDisabled = state.busy || !client.configExists || !client.executableExists;
-                const removeDisabled = state.busy || !client.configExists || !client.installed;
-                const restoreDisabled = state.busy || !client.latestBackupPath;
-                const actionLabel = client.installed ? `Refresh ${client.label}` : `Install for ${client.label}`;
-                return `
+    const installDisabled = state.busy || !client.configExists || !client.executableExists;
+    const removeDisabled = state.busy || !client.configExists || !client.installed;
+    const restoreDisabled = state.busy || !client.latestBackupPath;
+    const actionLabel = client.installed ? `Refresh ${client.label}` : `Install for ${client.label}`;
+    return `
                   <article class="mcp-install-card${client.installed ? ' is-installed' : ''}">
                     <div>
                       <strong>${escapeHtml(client.label)}</strong>
@@ -3103,7 +3536,7 @@ function renderMcpSettingsDialog(state: AppState): string {
                       <button type="button" class="ghost" data-action="restore-mcp-client-backup" data-target="${escapeAttr(client.target)}" ${restoreDisabled ? 'disabled' : ''}>Restore Latest</button>
                     </div>
                   </article>`;
-              }).join('')}
+  }).join('')}
             </div>
           </section>
           <section class="mcp-config-panel" data-transport-panel="http" hidden>
@@ -3560,8 +3993,8 @@ function renderThemeColorRow(name: string, value: string, displayValue: string, 
       </label>
       <span class="theme-color-swatch" style="${displayValue ? `background: ${escapeAttr(displayValue)};` : ''}" aria-hidden="true"></span>
       ${overridden
-        ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
-        : '<span class="theme-color-action theme-color-default muted">Default</span>'}
+      ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
+      : '<span class="theme-color-action theme-color-default muted">Default</span>'}
     </div>`;
 }
 
@@ -3631,10 +4064,9 @@ function renderRecoveryDialog(state: AppState): string {
       <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
         <h2 id="recoveryTitle">Recover Unsaved Edits</h2>
         <p class="dialog-note">Recoverable edits are kept for seven days and refreshed while a document has edits.</p>
-        ${
-          backups.length === 0
-            ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
-            : `<div class="recovery-list">
+        ${backups.length === 0
+      ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
+      : `<div class="recovery-list">
                 ${backups.map((backup) => `
                   <article class="recovery-item">
                     <div>
@@ -3649,7 +4081,7 @@ function renderRecoveryDialog(state: AppState): string {
                   </article>
                 `).join('')}
               </div>`
-        }
+    }
         <div class="dialog-actions">
           <button type="button" data-action="cancel-recovery">Close</button>
         </div>
@@ -3816,6 +4248,18 @@ function readAppSettingsForm(data: FormData): AppSettings {
       width: data.get('imageAttachmentMaxWidth'),
       height: data.get('imageAttachmentMaxHeight'),
     }),
+    debugSemanticSearch: data.get('debugSemanticSearch') === 'on',
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(Number(data.get('debugLogMaxMegabytes')) * 1024 * 1024),
+  };
+}
+
+function readDebugLogSettingsControls(root: HTMLElement, current: AppSettings): AppSettings {
+  const debugSemanticSearch = root.querySelector<HTMLInputElement>('input[name="debugSemanticSearch"]');
+  const debugLogMaxMegabytes = root.querySelector<HTMLInputElement>('input[name="debugLogMaxMegabytes"]');
+  return {
+    ...current,
+    debugSemanticSearch: debugSemanticSearch?.checked === true,
+    debugLogMaxBytes: normalizeDebugLogMaxBytes(Number(debugLogMaxMegabytes?.value) * 1024 * 1024),
   };
 }
 
@@ -3824,10 +4268,14 @@ function parseAppSettings(value: string): AppSettings {
     const parsed = JSON.parse(value) as Partial<AppSettings>;
     return {
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
+      debugSemanticSearch: parsed.debugSemanticSearch === true,
+      debugLogMaxBytes: normalizeDebugLogMaxBytes(parsed.debugLogMaxBytes),
     };
   } catch {
     return {
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(null),
+      debugSemanticSearch: false,
+      debugLogMaxBytes: DEFAULT_DEBUG_LOG_MAX_BYTES,
     };
   }
 }
@@ -3854,6 +4302,7 @@ function readAiSettingsForm(data: FormData): AiSettings {
     providers,
     actions: readActionSettings(data, activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(data.get('maxConcurrentSemanticFilters')),
   };
 }
 
@@ -3906,6 +4355,9 @@ function normalizeAiSettingsForForm(settings: AiSettings): AiSettings {
     ...settings,
     activeProviderId,
     maxContextChars: normalizeAiMaxContextChars(settings.maxContextChars),
+    maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(
+      settings.maxConcurrentSemanticFilters ?? (settings as Partial<AiSettings> & { workspaceFilterFileConcurrency?: number }).workspaceFilterFileConcurrency
+    ),
     actions: {
       chat: normalizeAiActionConfigForForm(settings.actions.chat, activeProviderId, 'chat'),
       edit: normalizeAiActionConfigForForm(settings.actions.edit, activeProviderId, 'edit'),
@@ -3982,6 +4434,12 @@ function normalizeAiMaxContextChars(value: unknown): number {
   return Math.min(AI_MAX_CONTEXT_CHARS, Math.max(AI_MIN_CONTEXT_CHARS, stepped));
 }
 
+function normalizeMaxConcurrentSemanticFilters(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_CONCURRENT_SEMANTIC_FILTERS;
+  return Math.min(MAX_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.max(MIN_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.round(parsed)));
+}
+
 function normalizeImageAttachmentMaxDimensions(value: unknown): ImageAttachmentMaxDimensions {
   const record = value && typeof value === 'object' && !Array.isArray(value)
     ? value as { width?: unknown; height?: unknown }
@@ -3996,6 +4454,20 @@ function normalizeImageAttachmentDimension(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION;
   return Math.min(MAX_IMAGE_ATTACHMENT_DIMENSION, Math.max(MIN_IMAGE_ATTACHMENT_DIMENSION, Math.floor(parsed)));
+}
+
+function normalizeDebugLogMaxBytes(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DEBUG_LOG_MAX_BYTES;
+  return Math.max(MIN_DEBUG_LOG_MAX_BYTES, Math.round(parsed));
+}
+
+function debugLogMaxMegabytes(bytes: number): number {
+  return Math.max(1, Math.round(normalizeDebugLogMaxBytes(bytes) / 1024 / 1024));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function syncAiMaxContextCharsOutput(input: HTMLInputElement): void {

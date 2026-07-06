@@ -327,6 +327,8 @@ fn read_app_settings(path: &Path) -> AppResult<AppSettings> {
 fn normalize_app_settings(settings: AppSettings) -> AppSettings {
     AppSettings {
         image_attachment_max_dimensions: normalize_image_attachment_max_dimensions(settings.image_attachment_max_dimensions),
+        debug_semantic_search: settings.debug_semantic_search,
+        debug_log_max_bytes: normalize_debug_log_max_bytes(settings.debug_log_max_bytes),
     }
 }
 
@@ -350,6 +352,9 @@ fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
         providers,
         actions,
         max_context_chars: normalize_ai_max_context_chars(settings.max_context_chars),
+        max_concurrent_semantic_filters: normalize_max_concurrent_semantic_filters(
+            settings.max_concurrent_semantic_filters,
+        ),
     })
 }
 
@@ -359,6 +364,13 @@ fn normalize_ai_max_context_chars(value: u32) -> u32 {
     }
     let stepped = (value.saturating_add(AI_CONTEXT_STEP_CHARS / 2) / AI_CONTEXT_STEP_CHARS) * AI_CONTEXT_STEP_CHARS;
     stepped.clamp(AI_MIN_CONTEXT_CHARS, AI_MAX_CONTEXT_CHARS)
+}
+
+fn normalize_max_concurrent_semantic_filters(value: u32) -> u32 {
+    if value == 0 {
+        return default_max_concurrent_semantic_filters();
+    }
+    value.clamp(1, 16)
 }
 
 fn normalize_image_attachment_max_dimensions(value: ImageAttachmentMaxDimensions) -> ImageAttachmentMaxDimensions {
@@ -373,6 +385,13 @@ fn normalize_image_attachment_dimension(value: u32) -> u32 {
         return default_image_attachment_max_dimension();
     }
     value.clamp(MIN_IMAGE_ATTACHMENT_DIMENSION, MAX_IMAGE_ATTACHMENT_DIMENSION)
+}
+
+fn normalize_debug_log_max_bytes(value: u64) -> u64 {
+    if value == 0 {
+        return default_debug_log_max_bytes();
+    }
+    value.max(1024)
 }
 
 fn normalize_ai_provider(provider_config: AiProviderConfig) -> AppResult<AiProviderConfig> {
@@ -474,6 +493,7 @@ fn preset_ai_settings(settings: AiSettingsPresetFile) -> AiSettings {
             compaction: AiActionConfig::new(&provider_id, active_models.compaction.trim()),
         },
         max_context_chars: default_ai_max_context_chars(),
+        max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
     }
 }
 
@@ -490,6 +510,7 @@ fn legacy_ai_settings(settings: AiSettingsLegacy) -> AiSettings {
         providers: vec![provider],
         actions: same_model_ai_action_settings(&provider_id, &model),
         max_context_chars: default_ai_max_context_chars(),
+        max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
     }
 }
 

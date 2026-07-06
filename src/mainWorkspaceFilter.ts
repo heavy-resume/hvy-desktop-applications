@@ -1,9 +1,11 @@
-import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
+import type { HvyDocumentSearchDocument, HvySemanticFilterProvider } from '../../heavy-file-format/src/search/types';
+import { getSemanticResponseDebug } from './aiClient';
 import { readDocumentFile, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { logDebugEvent } from './debugLog';
 import { loadWorkspace } from './mainWorkspaceUtils';
-import { createHvyDocumentFilterSnapshot, deserializeHvy, setMountedSearchSnapshot, type VisualDocument } from './hvy';
+import { createHvyDocumentFilterSnapshot, deserializeHvy, desktopSemanticFilterProvider, setMountedSearchSnapshot, type VisualDocument } from './hvy';
 import { state, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
-import { applyAppColorTheme, cacheWorkspaceFilterDocuments, cancelWorkspaceFilterProgressRender, clearWorkspaceFilterDocumentCache, documentSessions, mountCurrentDocument, pendingMountDocument, preserveCurrentDocumentSession, rerender, scheduleWorkspaceFilterProgressRender } from './main';
+import { applyAppColorTheme, cacheWorkspaceFilterDocuments, cancelWorkspaceFilterProgressRender, clearWorkspaceFilterDocumentCache, documentSessions, mountCurrentDocument, normalizeMaxConcurrentSemanticFilters, pendingMountDocument, preserveCurrentDocumentSession, rerender, scheduleWorkspaceFilterProgressRender } from './main';
 
 let workspaceFilterAbortController: AbortController | null = null;
 
@@ -16,6 +18,7 @@ export async function submitWorkspaceFilter(): Promise<void> {
     return;
   }
   const workspacePath = state.workspaceFilter.workspacePath;
+  const targetDirectory = normalizeFolderScope(state.workspaceFilter.targetDirectory);
   const query = state.workspaceFilter.queryDraft.trim();
   state.workspaceFilter.submittedQuery = query;
   state.workspaceFilter.error = null;
@@ -43,17 +46,24 @@ export async function submitWorkspaceFilter(): Promise<void> {
     if (!workspace) {
       throw new Error('Open a workspace before filtering.');
     }
-    const documents = await buildWorkspaceFilterDocuments(workspace);
+    const documents = await buildWorkspaceFilterDocuments(workspace, targetDirectory);
     const snapshots = await createWorkspaceFilterSnapshots(documents, {
       query,
       mode: state.workspaceFilter.mode,
       filterMode: state.workspaceFilter.filterMode,
       signal: abortController.signal,
     });
+    if (state.workspaceFilter.mode === 'semantic' && !workspaceFilterSnapshotsHaveMatches(snapshots)) {
+      state.workspaceFilter.error = 'No semantic matches. Try a more specific prompt.';
+      state.workspaceFilter.status = null;
+      state.status = 'Ready';
+      return;
+    }
     const config: WorkspaceFilterConfig = {
       query,
       mode: state.workspaceFilter.mode,
       filterMode: state.workspaceFilter.filterMode,
+      targetDirectory,
       snapshots,
     };
     state.workspaceFilters[workspacePath] = config;
@@ -113,8 +123,14 @@ export async function createWorkspaceFilterSnapshotForDocument(
   if (workspaceFileAiAccess(path).hiddenFromAI) {
     return null;
   }
-  const filter = workspacePath ? state.workspaceFilters[workspacePath] : null;
+  if (!workspacePath) {
+    return null;
+  }
+  const filter = state.workspaceFilters[workspacePath];
   if (!filter || !filter.query.trim()) {
+    return null;
+  }
+  if (!fileMatchesWorkspaceFilterScope(path, workspacePath, filter)) {
     return null;
   }
   return findWorkspaceFilterSnapshot(filter, path);
@@ -148,42 +164,207 @@ export function normalizeWorkspaceRelativePath(path: string, workspacePath: stri
     : normalizedPath;
 }
 
+export function normalizeFolderScope(targetDirectory: string | null | undefined): string {
+  return normalizeFilePath(targetDirectory ?? '').replace(/^\/+|\/+$/g, '');
+}
+
+export function fileMatchesWorkspaceFilterScope(
+  path: string,
+  workspacePath: string,
+  filter: Pick<WorkspaceFilterConfig, 'targetDirectory'> | { targetDirectory?: string },
+): boolean {
+  const scope = normalizeFolderScope(filter.targetDirectory);
+  if (!scope) return true;
+  const relativePath = normalizeWorkspaceRelativePath(path, workspacePath);
+  return relativePath.startsWith(`${scope}/`);
+}
+
 export async function createWorkspaceFilterSnapshots(
   documents: HvyDocumentSearchDocument[],
   filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
 ): Promise<WorkspaceFilterConfig['snapshots']> {
   const snapshots: WorkspaceFilterConfig['snapshots'] = {};
-  for (const [index, entry] of documents.entries()) {
-    const label = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
-    state.workspaceFilter.status = label;
-    state.status = label;
-    scheduleWorkspaceFilterProgressRender();
-    const snapshot = await createHvyDocumentFilterSnapshot({
+  const maxConcurrentSemanticFilters = normalizeMaxConcurrentSemanticFilters(state.aiSettings.maxConcurrentSemanticFilters);
+  const semanticFilterProvider = filter.mode === 'semantic'
+    ? createLimitedSemanticFilterProvider(desktopSemanticFilterProvider, maxConcurrentSemanticFilters)
+    : undefined;
+  const workerCount = filter.mode === 'semantic'
+    ? Math.min(maxConcurrentSemanticFilters, Math.max(1, documents.length))
+    : 1;
+  let nextDocumentIndex = 0;
+  let completedDocuments = 0;
+  let firstError: unknown = null;
+
+  const runWorker = async (): Promise<void> => {
+    while (!filter.signal?.aborted && !firstError) {
+      const index = nextDocumentIndex;
+      nextDocumentIndex += 1;
+      const entry = documents[index];
+      if (!entry) return;
+      const name = entry.documentTitle ?? displayDocumentName(entry.documentId);
+      const label = `Filtering ${name} (${index + 1}/${documents.length})`;
+      state.workspaceFilter.status = label;
+      state.status = label;
+      scheduleWorkspaceFilterProgressRender();
+      try {
+        const snapshot = await createWorkspaceFilterSnapshotForSearchDocument(entry, filter, index, documents.length, semanticFilterProvider);
+        snapshots[entry.documentId] = snapshot;
+        completedDocuments += 1;
+        state.workspaceFilter.status = `Filtered ${completedDocuments}/${documents.length} files`;
+        state.status = state.workspaceFilter.status;
+        scheduleWorkspaceFilterProgressRender();
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  if (firstError) throw firstError;
+  return snapshots;
+}
+
+function createLimitedSemanticFilterProvider(
+  provider: HvySemanticFilterProvider,
+  maxConcurrentRequests: number,
+): HvySemanticFilterProvider {
+  let activeRequests = 0;
+  const queue: Array<() => void> = [];
+
+  const release = (): void => {
+    activeRequests -= 1;
+    queue.shift()?.();
+  };
+
+  const acquire = async (signal?: AbortSignal): Promise<void> => {
+    throwIfAborted(signal);
+    if (activeRequests < maxConcurrentRequests) {
+      activeRequests += 1;
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const resume = (): void => {
+        signal?.removeEventListener('abort', abort);
+        activeRequests += 1;
+        resolve();
+      };
+      const abort = (): void => {
+        const index = queue.indexOf(resume);
+        if (index >= 0) queue.splice(index, 1);
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      queue.push(resume);
+    });
+    throwIfAborted(signal);
+  };
+
+  return async (request) => {
+    await acquire(request.signal);
+    try {
+      return await provider(request);
+    } finally {
+      release();
+    }
+  };
+}
+
+function workspaceFilterSnapshotsHaveMatches(snapshots: WorkspaceFilterConfig['snapshots']): boolean {
+  return Object.values(snapshots).some((snapshot) => snapshot.results.length > 0);
+}
+
+async function createWorkspaceFilterSnapshotForSearchDocument(
+  entry: HvyDocumentSearchDocument,
+  filter: Pick<WorkspaceFilterConfig, 'query' | 'mode' | 'filterMode'> & { signal?: AbortSignal },
+  index: number,
+  total: number,
+  semanticFilterProvider?: HvySemanticFilterProvider,
+) {
+  const traceRunId = `workspace-filter:${Date.now().toString(36)}`;
+  try {
+    return await createHvyDocumentFilterSnapshot({
       document: entry.document,
       query: filter.query,
       mode: filter.mode,
       view: 'viewer',
       filterMode: filter.filterMode,
-      traceRunId: `workspace-filter:${Date.now().toString(36)}`,
+      traceRunId,
       signal: filter.signal,
+      ...(semanticFilterProvider ? { semanticFilterProvider } : {}),
       onSemanticProgress: filter.mode === 'semantic'
         ? (progress) => {
           state.workspaceFilter.error = null;
           state.workspaceFilter.status = `Semantic windows ${progress.completedWindows}/${progress.totalWindows}; ${progress.matchedCandidates} matches in ${entry.documentTitle ?? displayDocumentName(entry.documentId)}`;
-          state.status = `Filtering ${entry.documentTitle ?? displayDocumentName(entry.documentId)} (${index + 1}/${documents.length})`;
+          if (progress.completedWindows === progress.totalWindows) {
+            logDebugEvent('llm', 'workspace-filter:semantic-progress', {
+              traceRunId,
+              documentId: entry.documentId,
+              documentTitle: entry.documentTitle,
+              documentIndex: index + 1,
+              documentCount: total,
+              query: filter.query,
+              ...progress,
+            });
+          }
           scheduleWorkspaceFilterProgressRender();
         }
         : undefined,
     });
-    snapshots[entry.documentId] = snapshot;
+  } catch (error) {
+    if (filter.mode === 'semantic' && isInvalidSemanticCandidateIdError(error)) {
+      logDebugEvent('llm', 'workspace-filter:semantic-invalid-candidate-ids', {
+        traceRunId,
+        documentId: entry.documentId,
+        documentTitle: entry.documentTitle,
+        documentIndex: index + 1,
+        documentCount: total,
+        query: filter.query,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (filter.mode === 'semantic') {
+      const responseDebug = getSemanticResponseDebug(traceRunId);
+      logDebugEvent('llm', 'workspace-filter:semantic-error', {
+        task: 'semanticFilter',
+        traceRunId,
+        documentId: entry.documentId,
+        documentTitle: entry.documentTitle,
+        documentIndex: index + 1,
+        documentCount: total,
+        query: filter.query,
+        error: error instanceof Error ? error.message : String(error),
+        ...(responseDebug
+          ? {
+              provider: responseDebug.provider,
+              model: responseDebug.model,
+              ok: responseDebug.ok,
+              status: responseDebug.status,
+              durationMs: responseDebug.durationMs,
+              ...(responseDebug.body ? { body: responseDebug.body } : {}),
+              ...(typeof responseDebug.output === 'string' ? { output: responseDebug.output } : {}),
+              ...(responseDebug.payload !== undefined ? { payload: responseDebug.payload } : {}),
+            }
+          : { responseDebug: 'missing' }),
+      });
+    }
+    throw error;
   }
-  return snapshots;
 }
 
-export async function buildWorkspaceFilterDocuments(workspace: Awaited<ReturnType<typeof loadWorkspace>>): Promise<HvyDocumentSearchDocument[]> {
+function isInvalidSemanticCandidateIdError(error: unknown): boolean {
+  return error instanceof Error
+    && error.message === 'Semantic filtering response did not include any valid candidate IDs.';
+}
+
+export async function buildWorkspaceFilterDocuments(
+  workspace: Awaited<ReturnType<typeof loadWorkspace>>,
+  targetDirectory = '',
+): Promise<HvyDocumentSearchDocument[]> {
   const documents: HvyDocumentSearchDocument[] = [];
+  const scope = normalizeFolderScope(targetDirectory);
   for (const file of flattenWorkspaceFiles(workspace.files)) {
     if (file.hiddenFromAI) continue;
+    if (scope && !workspaceFilterFileRelativePath(file, workspace.path).startsWith(`${scope}/`)) continue;
     const session = documentSessions.get(file.path);
     const openDocument = state.document?.path === file.path ? state.document : null;
     const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
@@ -207,6 +388,10 @@ export async function buildWorkspaceFilterDocuments(workspace: Awaited<ReturnTyp
     }
   }
   return documents;
+}
+
+function workspaceFilterFileRelativePath(file: WorkspaceFileNode, workspacePath: string): string {
+  return normalizeFolderScope(file.relativePath ?? normalizeWorkspaceRelativePath(file.path, workspacePath));
 }
 
 export function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
@@ -261,6 +446,12 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException('The operation was aborted.', 'AbortError');
+  }
+}
+
 export function workspaceNameForPath(path: string): string {
   return state.workspaces.find((workspace) => workspace.path === path)?.manifest.name ?? 'workspace';
 }
@@ -268,4 +459,3 @@ export function workspaceNameForPath(path: string): string {
 export function displayDocumentName(name: string): string {
   return name.replace(/\.([tp]?hvy|md)$/i, '');
 }
-

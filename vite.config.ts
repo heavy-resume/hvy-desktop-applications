@@ -1,13 +1,12 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
+import { createBrythonMinimalVfsPlugin } from 'heavy-file-format-ref-impl/brython-minimal-vfs-plugin';
 
 const require = createRequire(import.meta.url);
 const packageJson = require('./package.json') as { version: string };
 const BUILT_IN_PLUGINS_ID = 'virtual:hvy-built-in-plugins';
 const BUILT_IN_PLUGINS_RESOLVED_ID = `\0${BUILT_IN_PLUGINS_ID}`;
-const BRYTHON_MINIMAL_VFS_ID = 'virtual:hvy-brython-minimal-vfs';
-const BRYTHON_MINIMAL_VFS_RESOLVED_ID = `\0${BRYTHON_MINIMAL_VFS_ID}`;
 const HVY_REFERENCE_ROOT = resolve('../heavy-file-format');
 
 const builtInDefinitions = [
@@ -41,6 +40,18 @@ const builtInDefinitions = [
     exportName: 'graphPlugin',
     modulePath: 'src/plugins/graph.ts',
   },
+  {
+    id: 'hvy.qr-code',
+    key: 'qrCode',
+    exportName: 'qrCodePlugin',
+    modulePath: 'src/plugins/qr-code/qr-code.ts',
+  },
+  {
+    id: 'hvy.video',
+    key: 'video',
+    exportName: 'videoPlugin',
+    modulePath: 'src/plugins/video/video.ts',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
@@ -69,39 +80,6 @@ function createHvyBuiltInPluginsPlugin(): Plugin {
         ...builtInDefinitions.map((definition, index) => `  ${JSON.stringify(definition.id)}: plugin${index},`),
         `});`,
       ].join('\n');
-    },
-  };
-}
-
-function createBrythonMinimalVfsPlugin(): Plugin {
-  return {
-    name: 'hvy-galaxy-brython-minimal-vfs',
-    resolveId(id) {
-      return id === BRYTHON_MINIMAL_VFS_ID ? BRYTHON_MINIMAL_VFS_RESOLVED_ID : null;
-    },
-    load(id) {
-      if (id !== BRYTHON_MINIMAL_VFS_RESOLVED_ID) {
-        return null;
-      }
-      const stdlibPath = require.resolve('brython/brython_stdlib.js');
-      const stdlibSource = require('node:fs').readFileSync(stdlibPath, 'utf8') as string;
-      const marker = 'var scripts = ';
-      const start = stdlibSource.indexOf(marker);
-      const end = stdlibSource.lastIndexOf('\n__BRYTHON__.update_VFS');
-      if (start < 0 || end < 0) {
-        throw new Error('Unable to extract Brython VFS metadata.');
-      }
-      const vfs = Function(`return ${stdlibSource.slice(start + marker.length, end).trim().replace(/;$/, '')}`)() as Record<string, unknown>;
-      const minimalVfs = {
-        $timestamp: vfs.$timestamp,
-        browser: vfs.browser,
-        sys: vfs.sys,
-      };
-      const source = [
-        '__BRYTHON__.use_VFS = true;',
-        `__BRYTHON__.update_VFS(${JSON.stringify(minimalVfs)});`,
-      ].join('\n');
-      return `export default ${JSON.stringify(source)};`;
     },
   };
 }

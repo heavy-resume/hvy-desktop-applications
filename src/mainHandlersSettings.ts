@@ -1,7 +1,7 @@
 import { installAiChatClient } from './aiClient';
 import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type McpClientInstallTarget } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
-import { clearDebugLogEntries, getDebugLogEntries } from './debugLog';
+import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { state } from './state';
 import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
@@ -67,6 +67,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {
     state.appSettings = await saveAppSettings(settings);
+    configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
+    installAiChatClient(state.aiSettings, state.appSettings);
     state.appSettingsDialogOpen = false;
     state.appSettingsDraft = null;
     state.appSettingsDialogInitialJson = null;
@@ -130,6 +132,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     clearDebugLogEntries();
     refreshDebugLogModal();
   },
+  saveDebugLogSettings: (settings) => void runBusy('Saving debug settings...', async () => {
+    state.appSettings = await saveAppSettings(settings);
+    configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
+    installAiChatClient(state.aiSettings, state.appSettings);
+    state.debugLogEntries = getDebugLogEntries();
+    state.status = 'Saved debug settings';
+  }, { preserveMountedDocument: true }),
   openAiSettings: () => {
     closeUiBeforeAiSettings();
     state.aiSettingsDraft = cloneAiSettings(state.aiSettings);
@@ -164,7 +173,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   saveAiSettings: (settings) => void runBusy('Saving AI settings...', async () => {
     state.aiSettings = await saveAiSettings(settings);
-    installAiChatClient(state.aiSettings);
+    installAiChatClient(state.aiSettings, state.appSettings);
     state.aiSettingsDialogOpen = false;
     state.aiSettingsDraft = null;
     state.aiSettingsDialogInitialJson = null;

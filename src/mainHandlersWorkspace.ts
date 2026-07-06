@@ -1,4 +1,4 @@
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, renameWorkspace, saveDocumentFile, unarchiveWorkspace } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, renameWorkspace, saveDocumentFile, unarchiveWorkspace } from './backend';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
 import { state } from './state';
@@ -6,11 +6,13 @@ import { pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submit
 import type { UiHandlers } from './ui';
 
 export function createWorkspaceHandlers(): Partial<UiHandlers> {
-  const newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace'] = (workspacePath) => {
+  const newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace'] = (workspacePath, targetDirectory = '') => {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = workspacePath;
+    state.newDocumentDirectory = targetDirectory;
     state.newDocumentType = 'hvy';
     state.importWorkspacePath = null;
+    state.importDirectory = '';
     state.importIntoCurrentDialogOpen = false;
     state.importSource = null;
     state.importSourceTextDraft = '';
@@ -25,6 +27,38 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   };
 
   return {
+  createWorkspaceFolder: (workspacePath, parentDirectory, name) => void runBusy('Creating folder...', async () => {
+    const trimmed = name.trim();
+    if (!workspacePath || !trimmed) {
+      state.newFolderWorkspacePath = workspacePath || null;
+      state.newFolderParentDirectory = parentDirectory;
+      state.status = 'Folder name is required';
+      return;
+    }
+    const workspace = await createWorkspaceFolder({ workspacePath, parentDirectory, name: trimmed });
+    state.newFolderWorkspacePath = null;
+    state.newFolderParentDirectory = '';
+    showWorkspaceDocumentsView(workspacePath);
+    upsertWorkspace(workspace);
+    state.selectedWorkspacePath = workspacePath;
+    state.status = `Created ${trimmed}`;
+  }),
+  openNewFolder: (workspacePath, parentDirectory = '') => {
+    state.openWorkspaceActionsPath = null;
+    state.newFolderWorkspacePath = workspacePath;
+    state.newFolderParentDirectory = parentDirectory;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>('input[name="folderName"]')?.focus();
+    });
+  },
+  cancelNewFolder: () => {
+    state.newFolderWorkspacePath = null;
+    state.newFolderParentDirectory = '';
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   newWorkspace: () => {
     state.openWorkspaceActionsPath = null;
     state.newWorkspaceDialogOpen = true;
@@ -172,8 +206,9 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.newDocumentType = type;
     rerender({ preserveMountedDocument: true });
   },
-  createDocumentInWorkspace: (name, templateId) => void runBusy('Creating document...', async () => {
+  createDocumentInWorkspace: (name, templateId, selectedTargetDirectory = state.newDocumentDirectory) => void runBusy('Creating document...', async () => {
     const workspacePath = state.newDocumentWorkspacePath;
+    const targetDirectory = selectedTargetDirectory;
     const fileName = documentFileName(name, state.newDocumentType);
     if (!workspacePath) return;
     if (!fileName) {
@@ -182,9 +217,10 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     }
     const template = creationTemplate(workspacePath, state.newDocumentType, templateId, documentTitle(fileName));
     state.newDocumentWorkspacePath = null;
+    state.newDocumentDirectory = '';
     const file = await createDocumentFile({
       workspacePath,
-      relativePath: fileName,
+      relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
       template,
     });
     showWorkspaceDocumentsView(workspacePath);
@@ -196,13 +232,16 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   }),
   cancelNewDocument: () => {
     state.newDocumentWorkspacePath = null;
+    state.newDocumentDirectory = '';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  openImportInWorkspace: (workspacePath) => {
+  openImportInWorkspace: (workspacePath, targetDirectory = '') => {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = null;
+    state.newDocumentDirectory = '';
     state.importWorkspacePath = workspacePath;
+    state.importDirectory = targetDirectory;
     state.importDocumentType = 'hvy';
     state.importIntoCurrentDialogOpen = false;
     state.importSourceTab = 'anywhere';
@@ -284,8 +323,9 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.importSourceTextDraft = '';
     state.status = `Selected ${source.name}`;
   }),
-  createImportedDocument: (name, templateId, instructions, pastedSourceText, excludeTags, newSectionsOnly) => void runBusy('Importing document...', async () => {
+  createImportedDocument: (name, templateId, instructions, pastedSourceText, excludeTags, newSectionsOnly, selectedTargetDirectory = state.importDirectory) => void runBusy('Importing document...', async () => {
     const workspacePath = state.importWorkspacePath;
+    const targetDirectory = selectedTargetDirectory;
     const source = await importSourceFrom(pastedSourceText);
     const fileName = documentFileName(name, state.importDocumentType);
     if (!workspacePath) return;
@@ -299,6 +339,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     }
     const template = creationTemplate(workspacePath, state.importDocumentType, templateId, documentTitle(fileName));
     state.importWorkspacePath = null;
+    state.importDirectory = '';
     state.importSource = null;
     state.importSourceTextDraft = '';
     state.importExcludeTags = '';
@@ -308,7 +349,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     try {
     const file = await createDocumentFile({
       workspacePath,
-      relativePath: fileName,
+      relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
       template,
     });
     upsertWorkspace(await loadWorkspace(workspacePath));
@@ -320,6 +361,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const plan = await buildMountedImportPlan(state.document.mounted, {
       sourceName: source.name,
       sourceText: source.text,
+      sourceDocument: source.sourceDocument,
       instructions,
       newSectionsOnly,
       excludeTags,
@@ -335,6 +377,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const result = await importTextIntoMountedDocument(state.document.mounted, {
       sourceName: source.name,
       sourceText: source.text,
+      sourceDocument: source.sourceDocument,
       instructions,
       steps: plan.steps,
       newSectionsOnly,
@@ -413,6 +456,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         const plan = await buildMountedImportPlan(importTarget.mounted, {
           sourceName: source.name,
           sourceText: source.text,
+          sourceDocument: source.sourceDocument,
           instructions,
           newSectionsOnly,
           excludeTags,
@@ -429,6 +473,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         const result = await importTextIntoMountedDocument(importTarget.mounted, {
           sourceName: source.name,
           sourceText: source.text,
+          sourceDocument: source.sourceDocument,
           instructions,
           steps: plan.steps,
           newSectionsOnly,
@@ -460,6 +505,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   }),
   cancelImport: () => {
     state.importWorkspacePath = null;
+    state.importDirectory = '';
     state.importIntoCurrentDialogOpen = false;
     state.importSourceTab = 'workspace';
     state.importOutputMode = 'current';
@@ -471,30 +517,33 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  addFilesToWorkspace: (workspacePath) => void runBusy('Adding files...', async () => {
+  addFilesToWorkspace: (workspacePath, targetDirectory = '') => void runBusy('Adding files...', async () => {
     state.openWorkspaceActionsPath = null;
-    const result = await addFilesToWorkspace(workspacePath);
+    const result = await addFilesToWorkspace(workspacePath, targetDirectory);
     if (!result) return;
     await finishAddingFilesToWorkspace(result, 'Added files to workspace');
     await refreshRecents();
   }),
-  addDroppedFilesToWorkspace: (workspacePath, files) => void runBusy('Adding files...', async () => {
+  addDroppedFilesToWorkspace: (workspacePath, files, targetDirectory = '') => void runBusy('Adding files...', async () => {
     const droppedFiles = await droppedWorkspaceFilesFrom(files);
-    const result = await addDroppedFilesToWorkspace(workspacePath, droppedFiles);
+    const result = await addDroppedFilesToWorkspace(workspacePath, droppedFiles, targetDirectory);
     await finishAddingFilesToWorkspace(result, 'Added dropped files to workspace');
     await refreshRecents();
   }),
-  openWorkspaceFilter: (workspacePath) => {
+  openWorkspaceFilter: (workspacePath, targetDirectory = '') => {
     closeUiBeforeWorkspaceFilter();
     const activeFilter = state.workspaceFilters[workspacePath];
+    const normalizedTargetDirectory = targetDirectory.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+    const activeFilterMatchesTarget = (activeFilter?.targetDirectory ?? '') === normalizedTargetDirectory;
     state.workspaceFilter.workspacePath = workspacePath;
+    state.workspaceFilter.targetDirectory = normalizedTargetDirectory;
     state.workspaceFilter.open = true;
     state.workspaceFilter.error = null;
     state.workspaceFilter.status = null;
-    state.workspaceFilter.queryDraft = activeFilter?.query ?? '';
-    state.workspaceFilter.submittedQuery = activeFilter?.query ?? '';
-    state.workspaceFilter.mode = activeFilter?.mode ?? 'keyword';
-    state.workspaceFilter.filterMode = activeFilter?.filterMode ?? 'deprioritize';
+    state.workspaceFilter.queryDraft = activeFilterMatchesTarget ? activeFilter?.query ?? '' : '';
+    state.workspaceFilter.submittedQuery = activeFilterMatchesTarget ? activeFilter?.query ?? '' : '';
+    state.workspaceFilter.mode = activeFilterMatchesTarget ? activeFilter?.mode ?? 'keyword' : 'keyword';
+    state.workspaceFilter.filterMode = activeFilterMatchesTarget ? activeFilter?.filterMode ?? 'deprioritize' : 'deprioritize';
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {

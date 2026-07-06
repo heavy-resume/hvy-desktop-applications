@@ -1,0 +1,36 @@
+---
+hvy_version: 0.1
+title: Untitled
+reader_max_width: 60rem
+section_defaults:
+  css: "margin: 0 0 0.5rem;"
+  contained: true
+heading_styles:
+  h1:
+    label: Heading 1
+    css: "margin: 2rem 0 0.5rem; font-size: 2rem; font-weight: 700; line-height: 1.15;"
+    afterContentMarginTop: 2rem
+  h2:
+    label: Heading 2
+    css: "margin: 1.5rem 0 0.5rem; font-weight: 700; line-height: 1.15;"
+    afterContentMarginTop: 1.5rem
+  h3:
+    label: Heading 3
+    css: "margin: 1rem 0 0.5rem; font-weight: 700; line-height: 1.15;"
+    afterContentMarginTop: 1rem
+  h4:
+    label: Heading 4
+    css: "margin: 0.5rem 0 0.5rem; font-weight: 700; line-height: 1.15;"
+    afterContentMarginTop: 0.5rem
+component_defaults:
+  text:
+    css: "margin: 0.5rem 0;"
+  grid:
+    css: "margin: 0.5rem 0;"
+  table:
+    css: "margin: 0.5rem 0;"
+  container:
+    css: "margin: 0.5rem 0;"
+  xref-card:
+    css: "margin: 0.5rem 0;"
+---

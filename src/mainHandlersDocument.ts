@@ -201,31 +201,36 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       rerender({ preserveMountedDocument: true });
     });
   },
-  pasteWorkspaceClipboard: (workspacePath) => {
+  pasteWorkspaceClipboard: (workspacePath, targetDirectory = '') => {
     const clipboard = state.workspaceClipboard;
     void runBusy(`${clipboard?.mode === 'cut' ? 'Moving' : 'Copying'} file...`, async () => {
       if (!clipboard) {
-        const result = await pasteSystemFilesToWorkspace(workspacePath);
+        const result = await pasteSystemFilesToWorkspace(workspacePath, targetDirectory);
         await finishAddingFilesToWorkspace(result, `Pasted ${result.copiedPaths.length} file${result.copiedPaths.length === 1 ? '' : 's'}`);
         return;
       }
       if (clipboard.mode === 'copy') {
-        const file = await copyDocumentToWorkspace({ path: clipboard.path, workspacePath });
+        const file = await copyDocumentToWorkspace({ path: clipboard.path, workspacePath, targetDirectory });
         upsertWorkspace(await loadWorkspace(workspacePath));
         state.selectedWorkspacePath = workspacePath;
         state.status = `Pasted ${file.name}`;
         await refreshRecents();
         return;
       }
-      await moveOpenWorkspaceFileToWorkspace(clipboard.path, workspacePath);
+      await moveOpenWorkspaceFileToWorkspace(clipboard.path, workspacePath, targetDirectory);
       state.workspaceClipboard = null;
     });
   },
   copyFileToWorkspace: (path, currentName) => {
-    openWorkspaceTransfer('copyFile', currentName, path, workspacePathForFile(path));
+    openWorkspaceTransfer('copyFile', currentName, path, null);
   },
   moveFileToWorkspace: (path, currentName) => {
-    openWorkspaceTransfer('moveFile', currentName, path, workspacePathForFile(path));
+    openWorkspaceTransfer('moveFile', currentName, path, null);
+  },
+  moveWorkspaceFileToFolder: (path, workspacePath, targetDirectory = '') => {
+    void runBusy('Moving file...', async () => {
+      await moveOpenWorkspaceFileToWorkspace(path, workspacePath, targetDirectory);
+    });
   },
   submitRenameFile: (name) => {
     const path = state.renameFilePath;
@@ -300,7 +305,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     if (!currentDocumentCanSaveToWorkspace()) return;
     openWorkspaceTransfer('saveCurrent', state.document!.name, null, currentDocumentWorkspacePath(state));
   },
-  submitWorkspaceTransfer: (workspacePath, name) => {
+  submitWorkspaceTransfer: (workspacePath, name, targetDirectory = '') => {
     if (!workspacePath || !state.workspaceTransfer) return;
     const transfer = state.workspaceTransfer;
     if (transfer.mode === 'saveCurrent' && !name.trim()) {
@@ -312,18 +317,18 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.workspaceTransfer = null;
     void runBusy(`${workspaceTransferBusyLabel(transfer.mode)}...`, async () => {
       if (transfer.mode === 'saveCurrent') {
-        await saveCurrentDocumentToWorkspace(workspacePath, transfer.nameDraft);
+        await saveCurrentDocumentToWorkspace(workspacePath, transfer.nameDraft, targetDirectory);
         return;
       }
       if (!transfer.sourcePath) return;
       if (transfer.mode === 'copyFile') {
-        const file = await copyDocumentToWorkspace({ path: transfer.sourcePath, workspacePath });
+        const file = await copyDocumentToWorkspace({ path: transfer.sourcePath, workspacePath, targetDirectory });
         upsertWorkspace(await loadWorkspace(workspacePath));
         state.status = `Copied to ${file.name}`;
         await refreshRecents();
         return;
       }
-      await moveOpenWorkspaceFileToWorkspace(transfer.sourcePath, workspacePath);
+      await moveOpenWorkspaceFileToWorkspace(transfer.sourcePath, workspacePath, targetDirectory);
     });
   },
   cancelWorkspaceTransfer: () => {
@@ -417,7 +422,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.saveAsScope = scope;
     rerender({ preserveMountedDocument: true });
   },
-  saveAsToWorkspace: (workspacePath, name) => {
+  saveAsToWorkspace: (workspacePath, name, targetDirectory = '') => {
     if (!workspacePath || !name.trim()) {
       state.status = 'Document name is required';
       rerender({ preserveMountedDocument: true });
@@ -425,7 +430,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     }
     state.saveAsDialogOpen = false;
     void runBusy('Saving as...', async () => {
-      await saveCurrentDocumentToWorkspace(workspacePath, name.trim());
+      await saveCurrentDocumentToWorkspace(workspacePath, name.trim(), targetDirectory);
     });
   },
   saveAsAnywhere: () => {

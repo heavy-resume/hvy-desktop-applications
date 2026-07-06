@@ -2,6 +2,8 @@ import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './b
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
+import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
+import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import type {
@@ -12,6 +14,7 @@ import type {
 import type {
   HvyDocumentSearchRequest,
   HvyDocumentSearchResponse,
+  HvySemanticFilterProvider,
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
 
@@ -68,6 +71,7 @@ export interface MountHvyDocumentOptions {
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
 let editorClipboardPayload: HvyEditorClipboardPayload | null = null;
 let metaTemplateClipboard: MetaTemplateClipboard | null = null;
+let referenceSemanticFilterConfigured = false;
 
 const editorClipboardHost: HvyEditorClipboardHost = {
   read() {
@@ -78,19 +82,28 @@ const editorClipboardHost: HvyEditorClipboardHost = {
   },
 };
 
+export const desktopSemanticFilterProvider: HvySemanticFilterProvider = (request) => {
+  setHostChatClient(window.HVY_CHAT_CLIENT ?? null);
+  return chatSemanticFilterProvider(request);
+};
+
 function loadHvyEmbed(): Promise<HvyEmbedModule> {
+  ensureReferenceSemanticFilterProvider();
   hvyEmbedModule ??= import('../../heavy-file-format/src/embed-full');
   return hvyEmbedModule;
+}
+
+function ensureReferenceSemanticFilterProvider(): void {
+  if (referenceSemanticFilterConfigured) return;
+  referenceSemanticFilterConfigured = true;
+  setReferenceAppConfig({
+    semanticFilterProvider: desktopSemanticFilterProvider,
+  });
 }
 
 export async function deserializeHvy(bytes: Uint8Array, extension: DocumentExtension): Promise<VisualDocument> {
   const { deserializeDocumentBytes } = await loadHvyEmbed();
   return deserializeDocumentBytes(bytes, extension);
-}
-
-export async function exportHvySourceMarkdown(document: VisualDocument): Promise<string> {
-  const { exportDocumentSourceMarkdown } = await import('../../heavy-file-format/src/document-source-markdown');
-  return exportDocumentSourceMarkdown(document);
 }
 
 export async function serializeHvy(document: VisualDocument): Promise<Uint8Array> {
@@ -169,6 +182,25 @@ export async function profileHvySerializationCosts(document: VisualDocument): Pr
   };
 }
 
+export async function copyMountedDocumentAsRichText(mounted: MountedDocument): Promise<void> {
+  const { buildDocumentRichTextCopyPayload } = await loadHvyEmbed();
+  const payload = buildDocumentRichTextCopyPayload(mounted.document);
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined' && payload.html) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([payload.html], { type: 'text/html' }),
+          'text/plain': new Blob([payload.plainText], { type: 'text/plain' }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Fall through to plain text copy.
+    }
+  }
+  await navigator.clipboard.writeText(payload.plainText);
+}
+
 export async function getPhvyCompatibilityErrors(document: VisualDocument): Promise<string[]> {
   const { serializeDocument } = await loadHvyEmbed();
   const { deserializeDocumentWithDiagnostics } = await import('../../heavy-file-format/src/serialization');
@@ -204,14 +236,14 @@ export async function mountHvyDocument(
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
-    semanticFilterProvider: options.hiddenFromAI ? null : chatSemanticFilterProvider,
+    semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
-  const interactiveMount = mode === 'viewer' ? withViewerCarouselInteractions(root, mounted) : mounted;
+  const interactiveMount = withViewerCarouselInteractions(root, mounted);
   const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
   return {
     mount: finalMount,
@@ -380,7 +412,7 @@ function createEmailLinkButton(label: string, action: string, link: MailtoLink):
 export async function searchHvyDocuments(request: HvyDocumentSearchRequest): Promise<HvyDocumentSearchResponse> {
   const { searchDocuments } = await loadHvyEmbed();
   return searchDocuments({
-    semanticFilterProvider: chatSemanticFilterProvider,
+    semanticFilterProvider: desktopSemanticFilterProvider,
     ...request,
   });
 }
@@ -390,7 +422,7 @@ export async function createHvyDocumentFilterSnapshot(
 ): Promise<Awaited<ReturnType<HvyEmbedModule['createDocumentFilterSnapshot']>>> {
   const { createDocumentFilterSnapshot } = await loadHvyEmbed();
   return createDocumentFilterSnapshot({
-    semanticFilterProvider: chatSemanticFilterProvider,
+    semanticFilterProvider: desktopSemanticFilterProvider,
     ...request,
   });
 }
