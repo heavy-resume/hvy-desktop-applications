@@ -68,7 +68,7 @@ component_defs:
   # Meeting Minutes
 
  <!--hvy:text {"id":"meeting-context","css":"margin: 0 0 0.75rem; color: var(--hvy-text-alt);"}-->
-  Add notes as the meeting happens. Each entry is stamped with the current client time.
+  Add notes as the meeting happens. Each entry is stamped with the current time.
 
  <!--hvy:plugin {"id":"add-minute-entry","plugin":"hvy.form","pluginConfig":{"version":"0.1","submitLabel":"Add minute","showSubmit":true,"submitScript":"add_entry"}}-->
   fields:
