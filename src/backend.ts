@@ -211,6 +211,11 @@ export interface WorkspaceFolderRequest {
   name: string;
 }
 
+export interface DeleteWorkspaceFolderRequest {
+  workspacePath: string;
+  targetDirectory: string;
+}
+
 export interface SystemFileClipboardRequest {
   paths: string[];
   operation: 'copy' | 'cut';
@@ -777,6 +782,10 @@ export function restoreDocumentFile(path: string): Promise<Workspace> {
 
 export function deleteDocumentFile(path: string): Promise<Workspace | null> {
   return invokeDesktop('delete_document_file', { path });
+}
+
+export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Promise<Workspace> {
+  return invokeDesktop('delete_workspace_folder', { request });
 }
 
 export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFileMetadata> {

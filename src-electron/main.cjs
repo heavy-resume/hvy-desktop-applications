@@ -517,6 +517,7 @@ async function handleCommand(command, args) {
     case 'archive_document_file': return archiveDocumentFile(args.path);
     case 'restore_document_file': return restoreDocumentFile(args.path);
     case 'delete_document_file': return deleteDocumentFile(args.path);
+    case 'delete_workspace_folder': return deleteWorkspaceFolder(args.request);
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
@@ -1043,6 +1044,51 @@ function deleteDocumentFile(filePath) {
   updateWorkspaceFileAiAccessAt(workspacePath, filePath, { locked: false, hiddenFromAI: false });
   removeRecentFile(filePath);
   return loadWorkspaceFromPath(workspacePath);
+}
+
+function deleteWorkspaceFolder(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const targetDirectory = String(request?.targetDirectory || '').trim();
+  if (!targetDirectory) throw new Error('Folder is required.');
+  const workspaceRoot = path.resolve(workspacePath);
+  const folderPath = path.resolve(workspaceRoot, targetDirectory);
+  if (folderPath === workspaceRoot || !folderPath.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('Folder path must stay inside the workspace.');
+  }
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) throw new Error('Workspace manifest was not found.');
+  const manifest = readJson(manifestPath, null);
+  const archivedFiles = new Set(manifest?.archivedFiles ?? []);
+  const deletedFiles = workspaceDocumentFilesInDirectory(workspacePath, folderPath);
+  const activeFile = deletedFiles.find((filePath) => !archivedFiles.has(relativeWorkspacePath(workspacePath, filePath)));
+  if (activeFile) throw new Error('Folder contains files that are not archived.');
+  fs.rmSync(folderPath, { recursive: true });
+  const deletedRelatives = new Set(deletedFiles.map((filePath) => relativeWorkspacePath(workspacePath, filePath)));
+  for (const key of ['archivedFiles', 'lockedFiles', 'hiddenFromAIFiles']) {
+    if (!Array.isArray(manifest[key])) continue;
+    manifest[key] = manifest[key].filter((entry) => !deletedRelatives.has(entry));
+    if (manifest[key].length === 0) delete manifest[key];
+  }
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+  deletedFiles.forEach(removeRecentFile);
+  addRecentWorkspace(workspacePath);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function workspaceDocumentFilesInDirectory(workspacePath, directory) {
+  if (!fs.existsSync(directory)) return [];
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...workspaceDocumentFilesInDirectory(workspacePath, entryPath));
+      continue;
+    }
+    if (documentExtension(entryPath)) files.push(entryPath);
+  }
+  return files;
 }
 
 function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '') {

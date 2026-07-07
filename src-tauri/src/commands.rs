@@ -775,6 +775,65 @@ fn delete_document_file(app: AppHandle, path: String) -> AppResult<Option<Worksp
 }
 
 #[tauri::command]
+fn delete_workspace_folder(app: AppHandle, request: DeleteWorkspaceFolderRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let target_directory = request.target_directory.trim();
+    if target_directory.is_empty() {
+        return Err(AppError::Message("Folder is required.".into()));
+    }
+    let relative_directory = PathBuf::from(target_directory);
+    if relative_directory.is_absolute() || relative_directory.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err(AppError::Message("Folder path must stay inside the workspace.".into()));
+    }
+    let folder_path = workspace_path.join(relative_directory);
+    let manifest_path = workspace_manifest_path(&workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let archived_files: HashSet<String> = manifest.archived_files.iter().cloned().collect();
+    let deleted_files = workspace_document_files_in_directory(&folder_path)?;
+    let active_file = deleted_files
+        .iter()
+        .map(|path| relative_path(&workspace_path, path))
+        .find(|relative| !archived_files.contains(relative));
+    if active_file.is_some() {
+        return Err(AppError::Message("Folder contains files that are not archived.".into()));
+    }
+    fs::remove_dir_all(&folder_path)?;
+    let deleted_relatives: HashSet<String> = deleted_files
+        .iter()
+        .map(|path| relative_path(&workspace_path, path))
+        .collect();
+    manifest.archived_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.locked_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.hidden_from_ai_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)?;
+    for path in deleted_files {
+        remove_recent_file(&app, &path)?;
+    }
+    add_recent_workspace(&app, &workspace_path)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+fn workspace_document_files_in_directory(directory: &Path) -> AppResult<Vec<PathBuf>> {
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(workspace_document_files_in_directory(&path)?);
+        } else if document_extension(&path).is_some() {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+#[tauri::command]
 fn save_document_to_workspace(
     app: AppHandle,
     workspace_path: String,

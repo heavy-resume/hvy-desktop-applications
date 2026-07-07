@@ -107,6 +107,10 @@ export interface AppState {
   renameFileCurrentName: string | null;
   deleteFilePath: string | null;
   deleteFileName: string | null;
+  deleteFolderWorkspacePath: string | null;
+  deleteFolderDirectory: string;
+  deleteFolderName: string | null;
+  deleteFolderArchivedFiles: string[];
   workspaceTransfer: WorkspaceTransferState | null;
   workspaceFilter: WorkspaceFilterState;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
@@ -233,6 +237,10 @@ export const state: AppState = {
   renameFileCurrentName: null,
   deleteFilePath: null,
   deleteFileName: null,
+  deleteFolderWorkspacePath: null,
+  deleteFolderDirectory: '',
+  deleteFolderName: null,
+  deleteFolderArchivedFiles: [],
   workspaceTransfer: null,
   workspaceFilter: {
     open: false,

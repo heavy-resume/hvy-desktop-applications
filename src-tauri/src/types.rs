@@ -86,6 +86,13 @@ struct WorkspaceFolderRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct DeleteWorkspaceFolderRequest {
+    workspace_path: String,
+    target_directory: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceOpenCandidate {
     path: String,
     has_manifest: bool,

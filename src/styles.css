@@ -630,6 +630,21 @@ button:disabled {
   background: transparent;
 }
 
+.delete-folder-file-list {
+  display: grid;
+  gap: 4px;
+  max-height: min(220px, 32vh);
+  overflow: auto;
+  border: 1px solid var(--hvy-border, #c9d3cf);
+  border-radius: 6px;
+  background: var(--hvy-surface-alt, #f5f6f2);
+  padding: 8px;
+  color: var(--hvy-text-muted, #4f5d58);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
 .workspace-filter-overlay {
   position: fixed;
   inset: 0;

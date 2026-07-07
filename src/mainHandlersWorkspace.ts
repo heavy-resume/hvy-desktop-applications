@@ -1,4 +1,4 @@
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, renameWorkspace, saveDocumentFile, unarchiveWorkspace } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, renameWorkspace, saveDocumentFile, unarchiveWorkspace } from './backend';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
 import { state } from './state';
@@ -56,6 +56,37 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   cancelNewFolder: () => {
     state.newFolderWorkspacePath = null;
     state.newFolderParentDirectory = '';
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  deleteWorkspaceFolder: (workspacePath, targetDirectory) => {
+    if (!workspacePath || !targetDirectory) return;
+    state.deleteFolderWorkspacePath = null;
+    state.deleteFolderDirectory = '';
+    state.deleteFolderName = null;
+    state.deleteFolderArchivedFiles = [];
+    void runBusy('Deleting folder...', async () => {
+      const workspace = await deleteWorkspaceFolder({ workspacePath, targetDirectory });
+      upsertWorkspace(await loadWorkspace(workspace.path));
+      clearWorkspaceFilterDocumentCache(workspace.path);
+      await refreshSavedTemplates(workspace.path);
+      await refreshRecents();
+      state.status = `Deleted ${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'folder'}`;
+    });
+  },
+  confirmDeleteWorkspaceFolder: (workspacePath, targetDirectory, folderName, archivedFiles) => {
+    state.deleteFolderWorkspacePath = workspacePath;
+    state.deleteFolderDirectory = targetDirectory;
+    state.deleteFolderName = folderName;
+    state.deleteFolderArchivedFiles = archivedFiles;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelDeleteWorkspaceFolder: () => {
+    state.deleteFolderWorkspacePath = null;
+    state.deleteFolderDirectory = '';
+    state.deleteFolderName = null;
+    state.deleteFolderArchivedFiles = [];
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },

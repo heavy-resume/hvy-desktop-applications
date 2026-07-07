@@ -56,6 +56,9 @@ export interface UiHandlers {
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
+  deleteWorkspaceFolder(workspacePath: string, targetDirectory: string): void;
+  confirmDeleteWorkspaceFolder(workspacePath: string, targetDirectory: string, folderName: string, archivedFiles: string[]): void;
+  cancelDeleteWorkspaceFolder(): void;
   openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
@@ -352,6 +355,7 @@ export function renderModals(state: AppState): void {
     ${renderAppCloseDialog(state)}
     ${renderRenameFileDialog(state)}
     ${renderDeleteFileDialog(state)}
+    ${renderDeleteFolderDialog(state)}
     ${renderWorkspaceTransferDialog(state)}
     ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}`;
   refreshRenderedFormState(appRoot, state);
@@ -516,6 +520,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.cancelDeleteFile();
           return;
         }
+        if (backdrop.querySelector('.delete-folder-dialog')) {
+          handlers.cancelDeleteWorkspaceFolder();
+          return;
+        }
         if (backdrop.querySelector('form[data-form="workspace-transfer"]')) {
           handlers.cancelWorkspaceTransfer();
           return;
@@ -579,6 +587,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
     if (action === 'delete-file') handlers.deleteFile();
     if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
+    if (action === 'delete-folder') handlers.deleteWorkspaceFolder(state.deleteFolderWorkspacePath ?? '', state.deleteFolderDirectory);
+    if (action === 'cancel-delete-folder') handlers.cancelDeleteWorkspaceFolder();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'cancel-new-folder') handlers.cancelNewFolder();
     if (action === 'about') handlers.openAbout();
@@ -965,6 +975,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         state.workspaceClipboard,
         handlers,
         folderSummary.dataset.targetDirectory ?? '',
+        workspaceFolderDeleteInfo(state, folderSummary.dataset.workspacePath, folderSummary.dataset.targetDirectory ?? '', folderSummary.dataset.folderName ?? ''),
       );
       return;
     }
@@ -1192,6 +1203,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.delete-file-dialog')) {
       event.preventDefault();
       handlers.cancelDeleteFile();
+      return;
+    }
+    if (root.querySelector('.delete-folder-dialog')) {
+      event.preventDefault();
+      handlers.cancelDeleteWorkspaceFolder();
       return;
     }
     if (root.querySelector('form[data-form="workspace-transfer"]')) {
@@ -1554,6 +1570,61 @@ function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { 
   return null;
 }
 
+interface WorkspaceFolderDeleteInfo {
+  folderName: string;
+  activeFileCount: number;
+  archivedFiles: string[];
+}
+
+function workspaceFolderDeleteInfo(state: AppState, workspacePath: string, targetDirectory: string, fallbackFolderName = ''): WorkspaceFolderDeleteInfo | null {
+  if (!targetDirectory) return null;
+  const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+  if (!workspace) {
+    return {
+      folderName: fallbackFolderName || targetDirectory.split('/').filter(Boolean).at(-1) || 'folder',
+      activeFileCount: 0,
+      archivedFiles: [],
+    };
+  }
+  const folder = findWorkspaceFolderNode(workspace.files, targetDirectory);
+  if (!folder) {
+    return {
+      folderName: fallbackFolderName || targetDirectory.split('/').filter(Boolean).at(-1) || 'folder',
+      activeFileCount: 0,
+      archivedFiles: [],
+    };
+  }
+  let activeFileCount = 0;
+  const archivedFiles: string[] = [];
+  const visit = (nodes: WorkspaceTreeNode[]) => {
+    for (const node of nodes) {
+      if (node.kind === 'folder') {
+        visit(node.children);
+        continue;
+      }
+      if (node.archived === true) archivedFiles.push(workspaceNodeRelativePath(node));
+      else activeFileCount += 1;
+    }
+  };
+  visit(folder.children);
+  return {
+    folderName: workspaceNodeName(folder),
+    activeFileCount,
+    archivedFiles: archivedFiles.sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+function findWorkspaceFolderNode(nodes: WorkspaceTreeNode[], targetDirectory: string): Extract<WorkspaceTreeNode, { kind: 'folder' }> | null {
+  const normalizedTarget = normalizeTreeRelativePath(targetDirectory);
+  for (const node of nodes) {
+    if (node.kind !== 'folder') continue;
+    if (normalizeTreeRelativePath(workspaceNodeRelativePath(node)) === normalizedTarget) return node;
+    const match = findWorkspaceFolderNode(node.children, targetDirectory);
+    if (match) return match;
+  }
+  return null;
+}
+
 function workspaceDropTargetFromEvent(event: Event): { element: HTMLElement; workspacePath: string; targetDirectory: string } | null {
   if (!(event.target instanceof HTMLElement)) return null;
   const folderSummary = event.target.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
@@ -1686,6 +1757,26 @@ function renderDeleteFileDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" data-action="cancel-delete-file">Cancel</button>
           <button type="button" class="danger-button" data-action="delete-file" ${state.busy ? 'disabled' : ''}>Delete</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderDeleteFolderDialog(state: AppState): string {
+  if (!state.deleteFolderWorkspacePath || !state.deleteFolderName || state.deleteFolderArchivedFiles.length === 0) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog delete-folder-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteFolderTitle">
+        <h2 id="deleteFolderTitle">Delete archived files?</h2>
+        <p class="dialog-note">${escapeHtml(state.deleteFolderName)} contains ${state.deleteFolderArchivedFiles.length} archived file${state.deleteFolderArchivedFiles.length === 1 ? '' : 's'} that will be removed from disk.</p>
+        <div class="delete-folder-file-list" role="list" aria-label="Archived files in folder">
+          ${state.deleteFolderArchivedFiles.map((file) => `<div role="listitem">${escapeHtml(file)}</div>`).join('')}
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-delete-folder">Cancel</button>
+          <button type="button" class="danger-button" data-action="delete-folder" ${state.busy ? 'disabled' : ''}>Delete</button>
         </div>
       </section>
     </div>`;
@@ -2104,6 +2195,7 @@ function showWorkspaceContextMenu(
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
   targetDirectory = '',
+  deleteInfo: WorkspaceFolderDeleteInfo | null = null,
 ): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
@@ -2111,6 +2203,10 @@ function showWorkspaceContextMenu(
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   void clipboard;
+  const deleteDisabled = deleteInfo === null || deleteInfo.activeFileCount > 0;
+  const deleteTitle = deleteDisabled && deleteInfo?.activeFileCount
+    ? `Folder contains ${deleteInfo.activeFileCount} active file${deleteInfo.activeFileCount === 1 ? '' : 's'}`
+    : 'Delete folder';
   menu.innerHTML = `
     <button type="button" data-menu-action="new-folder">New Folder</button>
     <button type="button" data-menu-action="new-document">New Document</button>
@@ -2118,6 +2214,7 @@ function showWorkspaceContextMenu(
     <button type="button" data-menu-action="import">Import</button>
     <button type="button" data-menu-action="paste">Paste</button>
     ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
+    ${targetDirectory ? `<button type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -2141,6 +2238,13 @@ function showWorkspaceContextMenu(
     if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'filter') handlers.openWorkspaceFilter(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'delete-folder') {
+      if (deleteInfo && deleteInfo.archivedFiles.length > 0) {
+        handlers.confirmDeleteWorkspaceFolder(workspacePath, targetDirectory, deleteInfo.folderName, deleteInfo.archivedFiles);
+      } else {
+        handlers.deleteWorkspaceFolder(workspacePath, targetDirectory);
+      }
+    }
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -2536,7 +2640,7 @@ function renderNode(
     if (children.length === 0) {
       return `
         <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-          <div class="tree-folder-row" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+          <div class="tree-folder-row" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}">
             ${folderLabel}
           </div>
         </li>`;
@@ -2544,7 +2648,7 @@ function renderNode(
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details open>
-          <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+          <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}">
             ${folderLabel}
           </summary>
           <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter)).join('')}</ul>
