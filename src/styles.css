@@ -452,9 +452,9 @@ button:disabled {
 .tree summary[data-workspace-folder-target="true"] {
   width: 100%;
   min-height: 24px;
-  border: 1px solid color-mix(in srgb, var(--hvy-accent-2, #7b8f86) 36%, transparent);
+  border: 1px solid var(--hvy-border, #c5cec8);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--hvy-accent-2, #7b8f86) 14%, var(--hvy-surface-alt, #e8ece7));
+  background: var(--hvy-surface-tint, var(--hvy-surface, #ffffff));
   color: var(--hvy-text, #152223);
   font-weight: 700;
   text-align: left;
