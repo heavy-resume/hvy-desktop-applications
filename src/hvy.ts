@@ -1,4 +1,5 @@
 import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './backend';
+import { createDesktopEmbeddingProvider } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
@@ -6,6 +7,7 @@ import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
 import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
+import { state } from './state';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -235,6 +237,8 @@ export async function mountHvyDocument(
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
+    chatContext: embeddingChatContextOptions(),
+    embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
@@ -250,6 +254,18 @@ export async function mountHvyDocument(
     get document() {
       return finalMount.getDocument();
     },
+  };
+}
+
+function embeddingChatContextOptions(): Parameters<HvyEmbedModule['mountHvy']>[0]['chatContext'] {
+  const embeddings = state.aiSettings.embeddings;
+  if (!embeddings?.enabled) return null;
+  return {
+    mode: 'embedding-retrieval',
+    embeddingModel: embeddings.model,
+    ...(embeddings.dimensions ? { embeddingDimensions: embeddings.dimensions } : {}),
+    embeddingBatchSize: embeddings.batchSize,
+    persistEmbeddingsToAttachments: true,
   };
 }
 

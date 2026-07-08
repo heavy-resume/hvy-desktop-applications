@@ -357,7 +357,7 @@ export function renderModals(state: AppState): void {
     ${renderDeleteFileDialog(state)}
     ${renderDeleteFolderDialog(state)}
     ${renderWorkspaceTransferDialog(state)}
-    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}`;
+    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters, state.aiSettings)}`;
   refreshRenderedFormState(appRoot, state);
   if (state.aiSettingsDialogOpen) {
     requestAnimationFrame(() => syncAiRangeFields(appRoot));
@@ -847,6 +847,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.updateWorkspaceFilterQuery(target.value);
       const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
       if (form) updateWorkspaceFilterSubmit(form);
+      return;
+    }
+    if (field === 'embeddings-enabled') {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      if (form) {
+        const data = new FormData(form);
+        const settings = readAiSettingsForm(data);
+        handlers.selectAiProvider(String(data.get('selectedProviderId') ?? settings.activeProviderId), settings);
+      }
       return;
     }
     if (field === 'import-source-text') {
@@ -1648,7 +1657,7 @@ function hasDraggedWorkspaceFile(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes('application/x-hvy-workspace-file');
 }
 
-function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
+function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters'], aiSettings: AiSettings): string {
   if (!filter.open) {
     return '';
   }
@@ -1664,18 +1673,19 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
     && activeFilter.filterMode === filter.filterMode
   );
   const isSemantic = filter.mode === 'semantic';
-  const stopSemanticFilter = filter.isLoading && isSemantic;
-  const submitLabel = stopSemanticFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
+  const isEmbedding = filter.mode === 'embedding';
+  const stopRunningFilter = filter.isLoading && (isSemantic || isEmbedding);
+  const submitLabel = stopRunningFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
   const visibility = workspaceTemplateVisibility(scopedWorkspace);
   const status = filter.isLoading
-    ? filter.status ?? (isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
+    ? filter.status ?? (isEmbedding ? `Indexing ${filterTargetName}...` : isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
     : filter.error
       ? filter.error
       : '';
   return `
     <section class="workspace-filter-overlay" aria-label="Workspace filter">
       <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
-      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" data-workspace-path="${escapeAttr(filter.workspacePath ?? '')}" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
+      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}${isEmbedding ? ' is-embedding-mode' : ''}" data-form="workspace-filter" data-workspace-path="${escapeAttr(filter.workspacePath ?? '')}" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
         <div class="search-tabbar">
           <div class="workspace-filter-title">
             ${funnelIcon()}
@@ -1688,7 +1698,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           <span class="search-input-icon" aria-hidden="true">${funnelIcon()}</span>
           <label>
             <span>Filter document</span>
-            ${isSemantic
+            ${isSemantic || isEmbedding
       ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
       : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
     }
@@ -1699,8 +1709,11 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           <div class="search-filter-box-head">
             ${funnelIcon()}
             <span>Filter Technique</span>
+            ${renderWorkspaceFilterModeButton('keyword', 'Keyword', filter)}
             ${renderWorkspaceFilterModeButton('semantic', 'Semantic', filter)}
+            ${renderWorkspaceFilterModeButton('embedding', 'Embeddings', filter, !aiSettings.embeddings.enabled)}
           </div>
+          <div class="search-filter-technique-note">${escapeHtml(workspaceFilterModeDescription(filter.mode))}</div>
           <div class="search-filter-mode-group" role="group" aria-label="Filter behavior">
             ${renderWorkspaceFilterBehaviorButton('deprioritize', 'Shade', filter)}
             ${renderWorkspaceFilterBehaviorButton('hide', 'Hide', filter)}
@@ -1712,7 +1725,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
             class="secondary${applied ? ' is-active' : ''}"
             data-role="workspace-filter-submit"
             aria-pressed="${applied ? 'true' : 'false'}"
-            ${!stopSemanticFilter && (filter.isLoading || filter.queryDraft.trim().length === 0) ? 'disabled' : ''}
+            ${!stopRunningFilter && (filter.isLoading || filter.queryDraft.trim().length === 0) ? 'disabled' : ''}
           >${submitLabel}</button>
           ${activeFilter ? `<button type="button" class="ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
         </div>
@@ -2049,16 +2062,24 @@ function renderSaveAsKindControl(activeKind: AppState['saveAsKind'], templateDis
     </div>`;
 }
 
-function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {
+function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState, disabled = false): string {
   const active = filter.mode === mode;
+  const icon = mode === 'keyword' ? gearIcon() : sparklesIcon();
   return `
     <button
       type="button"
       class="search-tab${active ? ' is-active' : ''}"
       data-action="set-workspace-filter-mode"
-      data-filter-mode="${escapeAttr(filter.mode === 'semantic' ? 'keyword' : mode)}"
+      data-filter-mode="${escapeAttr(mode)}"
       aria-pressed="${active ? 'true' : 'false'}"
-    >${sparklesIcon()}<span>${escapeHtml(label)}</span></button>`;
+      ${disabled ? 'disabled title="Enable embeddings in AI settings"' : ''}
+    >${icon}<span>${escapeHtml(label)}</span></button>`;
+}
+
+function workspaceFilterModeDescription(mode: HvyDocumentSearchMode): string {
+  if (mode === 'semantic') return 'Use AI to evaluate matches. Slower.';
+  if (mode === 'embedding') return 'Use embeddings to speed up semantic search. Faster, but may create false negatives.';
+  return 'Use keyword matching';
 }
 
 function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: string, filter: WorkspaceFilterState): string {
@@ -3549,6 +3570,7 @@ function renderAiSettingsDialog(state: AppState): string {
             value="${escapeAttr(String(maxConcurrentSemanticFilters))}"
           >
         </label>
+        ${renderEmbeddingSettingsField(settings)}
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
           ${renderActionConfigField('edit', 'Document and component edit', settings)}
@@ -4345,6 +4367,44 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
     </fieldset>`;
 }
 
+function renderEmbeddingSettingsField(settings: AiSettings): string {
+  const config = settings.embeddings;
+  const effectiveProviderId = config.providerId || settings.activeProviderId;
+  const provider = aiProviderPreset(effectiveProviderId);
+  const model = config.modelsByProvider?.[effectiveProviderId]?.trim() || config.model || 'text-embedding-ada-002';
+  const modelsByProvider = { ...(config.modelsByProvider ?? {}), [effectiveProviderId]: model };
+  const controls = config.enabled ? `
+      <label>
+        <span>Provider</span>
+        <select name="embeddingProviderId" data-field="ai-embedding-provider" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
+          ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === effectiveProviderId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        <span>Model</span>
+        <input name="embeddingModel" type="text" value="${escapeAttr(model)}" placeholder="${escapeAttr(provider.id === 'openai' ? 'text-embedding-ada-002' : provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
+      </label>
+      <label>
+        <span>Dimensions</span>
+        <input name="embeddingDimensions" type="number" min="1" step="1" value="${escapeAttr(config.dimensions ? String(config.dimensions) : '')}" placeholder="default">
+      </label>
+      <label>
+        <span>Batch size</span>
+        <input name="embeddingBatchSize" type="number" min="1" max="256" step="1" value="${escapeAttr(String(config.batchSize || 8))}">
+      </label>
+  ` : '';
+  return `
+    <fieldset class="ai-action-config ai-embedding-config">
+      <legend>Embeddings</legend>
+      <textarea name="embeddingModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
+      <label class="checkbox-row">
+        <input name="embeddingsEnabled" data-field="embeddings-enabled" type="checkbox" ${config.enabled ? 'checked' : ''}>
+        <span>Use embeddings</span>
+      </label>
+      ${controls}
+    </fieldset>`;
+}
+
 function readAppSettingsForm(data: FormData): AppSettings {
   return {
     ...parseAppSettings(String(data.get('settingsJson') ?? '')),
@@ -4405,8 +4465,25 @@ function readAiSettingsForm(data: FormData): AiSettings {
     activeProviderId,
     providers,
     actions: readActionSettings(data, activeProviderId),
+    embeddings: readEmbeddingSettings(data, parsed, activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
     maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(data.get('maxConcurrentSemanticFilters')),
+  };
+}
+
+function readEmbeddingSettings(data: FormData, parsed: AiSettings | null, fallbackProviderId: string): AiSettings['embeddings'] {
+  const providerId = String(data.get('embeddingProviderId') ?? parsed?.embeddings?.providerId ?? fallbackProviderId).trim() || fallbackProviderId;
+  const modelsByProvider = parseAiActionModelsByProvider(String(data.get('embeddingModelsByProvider') ?? ''));
+  const modelInput = String(data.get('embeddingModel') ?? '').trim();
+  const model = modelInput || modelsByProvider[providerId] || (providerId === 'openai' ? 'text-embedding-ada-002' : aiProviderPreset(providerId).modelPlaceholder);
+  modelsByProvider[providerId] = model;
+  return {
+    enabled: data.get('embeddingsEnabled') === 'on',
+    providerId,
+    model,
+    modelsByProvider,
+    dimensions: normalizeEmbeddingDimensions(data.get('embeddingDimensions')),
+    batchSize: normalizeEmbeddingBatchSize(data.get('embeddingBatchSize')),
   };
 }
 
@@ -4471,6 +4548,24 @@ function normalizeAiSettingsForForm(settings: AiSettings): AiSettings {
       semanticFilter: normalizeAiActionConfigForForm(settings.actions.semanticFilter, activeProviderId, 'semanticFilter'),
       compaction: normalizeAiActionConfigForForm(settings.actions.compaction, activeProviderId, 'compaction'),
     },
+    embeddings: normalizeEmbeddingSettingsForForm(settings.embeddings, activeProviderId),
+  };
+}
+
+function normalizeEmbeddingSettingsForForm(settings: AiSettings['embeddings'] | undefined, activeProviderId: string): AiSettings['embeddings'] {
+  const providerId = settings?.providerId?.trim() || 'openai' || activeProviderId;
+  const model = settings?.model?.trim() || settings?.modelsByProvider?.[providerId]?.trim() || 'text-embedding-ada-002';
+  return {
+    enabled: settings?.enabled === true,
+    providerId,
+    model,
+    modelsByProvider: {
+      ...(settings?.modelsByProvider ?? {}),
+      [providerId]: model,
+      openai: settings?.modelsByProvider?.openai?.trim() || 'text-embedding-ada-002',
+    },
+    dimensions: normalizeEmbeddingDimensions(settings?.dimensions),
+    batchSize: normalizeEmbeddingBatchSize(settings?.batchSize),
   };
 }
 
@@ -4542,6 +4637,18 @@ function normalizeMaxConcurrentSemanticFilters(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_CONCURRENT_SEMANTIC_FILTERS;
   return Math.min(MAX_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.max(MIN_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.round(parsed)));
+}
+
+function normalizeEmbeddingDimensions(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeEmbeddingBatchSize(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 8;
+  return Math.min(256, Math.max(1, Math.floor(parsed)));
 }
 
 function normalizeImageAttachmentMaxDimensions(value: unknown): ImageAttachmentMaxDimensions {
@@ -4621,7 +4728,7 @@ function isHvyMode(value: string | undefined): value is HvyMode {
 }
 
 function isWorkspaceFilterMode(value: string | undefined): value is HvyDocumentSearchMode {
-  return value === 'keyword' || value === 'semantic';
+  return value === 'keyword' || value === 'semantic' || value === 'embedding';
 }
 
 function isWorkspaceFilterBehavior(value: string | undefined): value is SearchFilterMode {

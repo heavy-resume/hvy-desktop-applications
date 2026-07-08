@@ -372,6 +372,40 @@ fn default_semantic_filter_action_config() -> AiActionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct AiEmbeddingSettings {
+    #[serde(default)]
+    enabled: bool,
+    provider_id: String,
+    model: String,
+    #[serde(default)]
+    models_by_provider: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    dimensions: Option<u32>,
+    #[serde(default = "default_embedding_batch_size")]
+    batch_size: u32,
+}
+
+impl Default for AiEmbeddingSettings {
+    fn default() -> Self {
+        let mut models_by_provider = std::collections::BTreeMap::new();
+        models_by_provider.insert("openai".into(), "text-embedding-ada-002".into());
+        Self {
+            enabled: false,
+            provider_id: "openai".into(),
+            model: "text-embedding-ada-002".into(),
+            models_by_provider,
+            dimensions: None,
+            batch_size: default_embedding_batch_size(),
+        }
+    }
+}
+
+fn default_embedding_batch_size() -> u32 {
+    8
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct AiProviderConfig {
     provider: String,
     base_url: String,
@@ -441,6 +475,8 @@ struct AiSettings {
     active_provider_id: String,
     providers: Vec<AiProviderConfig>,
     actions: AiActionSettings,
+    #[serde(default)]
+    embeddings: AiEmbeddingSettings,
     #[serde(default = "default_ai_max_context_chars")]
     max_context_chars: u32,
     #[serde(default = "default_max_concurrent_semantic_filters", alias = "workspaceFilterFileConcurrency")]
@@ -454,6 +490,7 @@ impl Default for AiSettings {
             active_provider_id: provider.provider.clone(),
             providers: vec![provider],
             actions: AiActionSettings::default(),
+            embeddings: AiEmbeddingSettings::default(),
             max_context_chars: default_ai_max_context_chars(),
             max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
         }

@@ -311,10 +311,20 @@ export interface AiActionConfig {
 
 export type AiActionSettings = Record<AiActionKey, AiActionConfig>;
 
+export interface AiEmbeddingSettings {
+  enabled: boolean;
+  providerId: string;
+  model: string;
+  modelsByProvider?: Record<string, string>;
+  dimensions?: number | null;
+  batchSize: number;
+}
+
 export interface AiSettings {
   activeProviderId: string;
   providers: AiProviderConfig[];
   actions: AiActionSettings;
+  embeddings: AiEmbeddingSettings;
   maxContextChars: number;
   maxConcurrentSemanticFilters: number;
 }
@@ -489,6 +499,7 @@ export function defaultAiSettings(): AiSettings {
     activeProviderId: provider.provider,
     providers: [provider],
     actions: defaultAiActionSettings(),
+    embeddings: defaultAiEmbeddingSettings(),
     maxContextChars: 40_000,
     maxConcurrentSemanticFilters: 3,
   };
@@ -593,6 +604,17 @@ export function defaultAiActionSettings(providerId = 'default'): AiActionSetting
   };
 }
 
+export function defaultAiEmbeddingSettings(providerId = 'openai'): AiEmbeddingSettings {
+  return {
+    enabled: false,
+    providerId,
+    model: 'text-embedding-ada-002',
+    modelsByProvider: { openai: 'text-embedding-ada-002' },
+    dimensions: null,
+    batchSize: 8,
+  };
+}
+
 export function loadDefaultGuide(): Promise<DocumentFile> {
   return invokeDesktop<DocumentFile>('load_default_guide').then(normalizeDocumentFileBytes);
 }
@@ -689,6 +711,24 @@ export function saveDocumentFile(request: SaveDocumentRequest): Promise<Document
     });
   }
   return invokeDesktop('save_document_file', { path: request.path, bytes: request.bytes });
+}
+
+export function readSidecarFileBytes(path: string): Promise<Uint8Array | null> {
+  return invokeDesktop<ArrayBuffer | Uint8Array | number[] | BufferJson | null>('read_embedding_sidecar_file_bytes', { path })
+    .then((bytes) => bytes ? normalizeDesktopBytes(bytes) : null);
+}
+
+export function writeSidecarFile(path: string, bytes: Uint8Array | number[]): Promise<void> {
+  if (isTauriRuntime()) {
+    return invoke<void>('write_embedding_sidecar_file_raw', toUint8Array(bytes), {
+      headers: { 'x-hvy-sidecar-path': encodeURIComponent(path) },
+    });
+  }
+  return invokeDesktop('write_embedding_sidecar_file', { path, bytes });
+}
+
+export function deleteSidecarFile(path: string): Promise<void> {
+  return invokeDesktop('delete_embedding_sidecar_file', { path });
 }
 
 export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFileMetadata | null> {

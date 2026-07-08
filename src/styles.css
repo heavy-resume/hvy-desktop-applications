@@ -827,6 +827,7 @@ button:disabled {
 .search-filter-box-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   color: var(--hvy-text, #17211f);
   font-size: 12px;
@@ -843,8 +844,15 @@ button:disabled {
   stroke-width: 2;
 }
 
-.search-filter-box-head .search-tab {
-  margin-left: auto;
+.search-filter-box-head > span {
+  margin-right: auto;
+}
+
+.search-filter-technique-note {
+  color: var(--hvy-text-muted, #60716b);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: right;
 }
 
 .search-filter-mode-group {

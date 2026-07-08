@@ -499,6 +499,9 @@ async function handleCommand(command, args) {
     case 'read_document_file': return readDocumentFile(args.path);
     case 'read_document_file_metadata': return readDocumentFileMetadata(args.path);
     case 'read_document_file_bytes': return readDocumentBytesAt(args.path);
+    case 'read_embedding_sidecar_file_bytes': return readEmbeddingSidecarFileBytes(args.path);
+    case 'write_embedding_sidecar_file': return writeEmbeddingSidecarFile(args.path, args.bytes);
+    case 'delete_embedding_sidecar_file': return deleteEmbeddingSidecarFile(args.path);
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
@@ -1528,6 +1531,37 @@ function readDocumentBytesAt(filePath) {
   return fs.readFileSync(filePath);
 }
 
+function embeddingSidecarSourcePath(sidecarPath) {
+  const resolved = path.resolve(sidecarPath);
+  if (!resolved.endsWith('.emb')) {
+    throw new Error('Embedding sidecar files must use the .emb extension.');
+  }
+  const source = resolved.slice(0, -'.emb'.length);
+  if (documentExtension(source) !== '.hvy') {
+    throw new Error('Embedding sidecars are only supported for .hvy documents.');
+  }
+  return source;
+}
+
+function readEmbeddingSidecarFileBytes(sidecarPath) {
+  embeddingSidecarSourcePath(sidecarPath);
+  if (!fs.existsSync(sidecarPath)) return null;
+  return fs.readFileSync(sidecarPath);
+}
+
+function writeEmbeddingSidecarFile(sidecarPath, bytes) {
+  const source = embeddingSidecarSourcePath(sidecarPath);
+  if (!fs.existsSync(source)) {
+    throw new Error('Embedding sidecar source document does not exist.');
+  }
+  fs.writeFileSync(sidecarPath, Buffer.from(normalizeBytes(bytes)));
+}
+
+function deleteEmbeddingSidecarFile(sidecarPath) {
+  embeddingSidecarSourcePath(sidecarPath);
+  if (fs.existsSync(sidecarPath)) fs.unlinkSync(sidecarPath);
+}
+
 function documentFileAiAccess(filePath) {
   const workspacePath = workspaceRootForDocument(path.dirname(filePath));
   if (!workspacePath) return { locked: false, hiddenFromAI: false };
@@ -1573,7 +1607,12 @@ function readThemeAt(filePath) {
 
 function writeBytes(filePath, bytes) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, Buffer.from(bytes));
+  fs.writeFileSync(filePath, Buffer.from(normalizeBytes(bytes)));
+}
+
+function normalizeBytes(bytes) {
+  if (bytes && bytes.type === 'Buffer' && Array.isArray(bytes.data)) return bytes.data;
+  return bytes;
 }
 
 function documentExtension(filePath) {
@@ -1833,8 +1872,20 @@ function defaultAiSettings() {
       semanticFilter: { providerId: 'openai', model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
       compaction: { providerId: 'openai', model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
     },
+    embeddings: defaultAiEmbeddingSettings(),
     maxContextChars: DEFAULT_AI_MAX_CONTEXT_CHARS,
     maxConcurrentSemanticFilters: 3,
+  };
+}
+
+function defaultAiEmbeddingSettings() {
+  return {
+    enabled: false,
+    providerId: 'openai',
+    model: 'text-embedding-ada-002',
+    modelsByProvider: { openai: 'text-embedding-ada-002' },
+    dimensions: null,
+    batchSize: 8,
   };
 }
 
@@ -1866,12 +1917,46 @@ function normalizeDebugLogMaxBytes(value) {
 }
 
 function normalizeAiSettings(settings) {
+  const defaults = defaultAiSettings();
   return {
-    ...defaultAiSettings(),
+    ...defaults,
     ...(settings || {}),
+    embeddings: normalizeAiEmbeddingSettings(settings?.embeddings, settings?.activeProviderId || defaults.activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(settings?.maxContextChars),
     maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(settings?.maxConcurrentSemanticFilters ?? settings?.workspaceFilterFileConcurrency),
   };
+}
+
+function normalizeAiEmbeddingSettings(value, activeProviderId = 'openai') {
+  const defaults = defaultAiEmbeddingSettings();
+  const settings = value && typeof value === 'object' ? value : {};
+  const providerId = String(settings.providerId || activeProviderId || defaults.providerId).trim() || defaults.providerId;
+  const model = String(settings.model || settings.modelsByProvider?.[providerId] || defaults.model).trim() || defaults.model;
+  const dimensions = normalizeEmbeddingDimensions(settings.dimensions);
+  return {
+    enabled: settings.enabled === true,
+    providerId,
+    model,
+    modelsByProvider: {
+      ...(settings.modelsByProvider || {}),
+      [providerId]: model,
+      openai: String(settings.modelsByProvider?.openai || defaults.modelsByProvider.openai),
+    },
+    dimensions,
+    batchSize: normalizeEmbeddingBatchSize(settings.batchSize),
+  };
+}
+
+function normalizeEmbeddingDimensions(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeEmbeddingBatchSize(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 8;
+  return Math.min(256, Math.max(1, Math.floor(parsed)));
 }
 
 function normalizeAiMaxContextChars(value) {

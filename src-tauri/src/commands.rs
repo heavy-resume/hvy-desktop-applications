@@ -410,6 +410,57 @@ fn read_document_file_bytes(path: String) -> AppResult<tauri::ipc::Response> {
 }
 
 #[tauri::command]
+fn read_embedding_sidecar_file_bytes(path: String) -> AppResult<Option<Vec<u8>>> {
+    let path = PathBuf::from(path);
+    embedding_sidecar_source_path(&path)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(fs::read(path)?))
+}
+
+#[tauri::command]
+fn write_embedding_sidecar_file(path: String, bytes: Vec<u8>) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    let source = embedding_sidecar_source_path(&path)?;
+    if !source.exists() {
+        return Err(AppError::Message("Embedding sidecar source document does not exist.".into()));
+    }
+    write_file_atomically(&path, &bytes)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn write_embedding_sidecar_file_raw(request: tauri::ipc::Request<'_>) -> AppResult<()> {
+    let path = decode_ipc_header(request.headers(), "x-hvy-sidecar-path")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw embedding sidecar bytes.".into()));
+    };
+    write_embedding_sidecar_file(path, bytes.to_vec())
+}
+
+#[tauri::command]
+fn delete_embedding_sidecar_file(path: String) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    embedding_sidecar_source_path(&path)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn embedding_sidecar_source_path(path: &Path) -> AppResult<PathBuf> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("emb") {
+        return Err(AppError::Message("Embedding sidecar files must use the .emb extension.".into()));
+    }
+    let source = PathBuf::from(path.to_string_lossy().trim_end_matches(".emb"));
+    if document_extension(&source).as_deref() != Some(".hvy") {
+        return Err(AppError::Message("Embedding sidecars are only supported for .hvy documents.".into()));
+    }
+    Ok(source)
+}
+
+#[tauri::command]
 fn save_document_file(app: AppHandle, path: String, bytes: Vec<u8>) -> AppResult<DocumentWriteResult> {
     persist_document_file(&app, PathBuf::from(path), &bytes)
 }

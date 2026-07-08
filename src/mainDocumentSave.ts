@@ -1,5 +1,6 @@
 import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup } from './backend';
 import { logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
+import { attachMatchingSidecarEmbeddingIndex, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
 import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, profileHvySerializationCosts, serializeHvy, serializeMountedDocumentAsync, type VisualDocument } from './hvy';
 import { state } from './state';
 import { pdfFileName } from './mainUtilities';
@@ -35,6 +36,9 @@ export async function saveCurrentDocument(): Promise<void> {
       return;
     }
     const document = mounted.document;
+    if (openDocument.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+      await attachMatchingSidecarEmbeddingIndex(openDocument.path, document, state.aiSettings);
+    }
     await logSerializationCostProfile('save', openDocument.path, null, document);
     const bytes = await measureDebugAsync('perf', 'save:serializeMountedDocument', { path: openDocument.path }, () => serializeMountedDocumentAsync(mounted));
     const writeStartedAt = performance.now();
@@ -54,6 +58,9 @@ export async function saveCurrentDocument(): Promise<void> {
       }
     }
     markMountedDocumentSaved(mounted);
+    if (openDocument.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+      await deleteSidecarIfSavedDocumentContainsMatchingIndex(openDocument.path, new Uint8Array(bytes), state.aiSettings);
+    }
     openDocument.dirty = false;
     openDocument.recoveryBackupId = null;
     state.status = `Saved ${openDocument.name}`;
