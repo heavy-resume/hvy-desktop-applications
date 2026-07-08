@@ -55,10 +55,14 @@ export async function submitWorkspaceFilter(): Promise<void> {
       }, state.aiSettings, {
         onProgress: (progress) => {
           state.workspaceFilter.error = null;
-          state.workspaceFilter.status = progress.currentFile
-            ? `Indexing ${progress.currentFile}; ${progress.completed} complete, ${progress.queued} queued`
-            : `Indexed ${progress.completed} files; ${progress.failed} failed`;
-          state.status = state.workspaceFilter.status;
+          state.workspaceFilter.status = progress.rebuiltChunks > 0
+            ? `Rebuilding embeddings: ${progress.rebuiltChunks} rebuilt, ${progress.reusedChunks} reused`
+            : progress.failed > 0
+            ? `Embedding search skipped ${progress.failed} failed files`
+            : null;
+          if (state.workspaceFilter.status) {
+            state.status = state.workspaceFilter.status;
+          }
           scheduleWorkspaceFilterProgressRender();
         },
       })

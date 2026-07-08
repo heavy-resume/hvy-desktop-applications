@@ -19,6 +19,7 @@ import type {
   HvySemanticFilterProvider,
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
+import type { HvyChatContextProvider } from '../../heavy-file-format/src/types';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
@@ -28,7 +29,7 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
@@ -63,11 +64,14 @@ export interface MountedDocument {
 
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
+  onEmbeddingIndexPrepared?: () => void | Promise<void>;
   storageKey?: string;
   searchSnapshot?: HvySearchSnapshotInput | null;
   hiddenFromAI?: boolean;
   maxContextChars?: number;
   imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
+  chatContextProvider?: HvyChatContextProvider | null;
+  initialChatState?: Parameters<HvyEmbedMount['setChatState']>[0];
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -237,8 +241,11 @@ export async function mountHvyDocument(
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
-    chatContext: embeddingChatContextOptions(),
+    initialChatState: options.initialChatState ?? null,
+    chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),
+    chatContextProvider: options.chatContextProvider ?? null,
     embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
+    crossDocumentLinks: true,
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
@@ -257,7 +264,7 @@ export async function mountHvyDocument(
   };
 }
 
-function embeddingChatContextOptions(): Parameters<HvyEmbedModule['mountHvy']>[0]['chatContext'] {
+function embeddingChatContextOptions(onEmbeddingIndexPrepared?: () => void | Promise<void>): Parameters<HvyEmbedModule['mountHvy']>[0]['chatContext'] {
   const embeddings = state.aiSettings.embeddings;
   if (!embeddings?.enabled) return null;
   return {
@@ -266,6 +273,7 @@ function embeddingChatContextOptions(): Parameters<HvyEmbedModule['mountHvy']>[0
     ...(embeddings.dimensions ? { embeddingDimensions: embeddings.dimensions } : {}),
     embeddingBatchSize: embeddings.batchSize,
     persistEmbeddingsToAttachments: true,
+    ...(onEmbeddingIndexPrepared ? { onEmbeddingIndexPrepared } : {}),
   };
 }
 
@@ -354,6 +362,15 @@ function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMou
     }
     const anchor = target.closest<HTMLAnchorElement>('a[href]');
     if (!anchor || !root.contains(anchor)) {
+      return;
+    }
+    if (anchor.dataset.hvyCrossDocument === 'true') {
+      event.preventDefault();
+      event.stopPropagation();
+      root.dispatchEvent(new CustomEvent('hvy:open-workspace-link', {
+        bubbles: true,
+        detail: { href: anchor.getAttribute('href') ?? '' },
+      }));
       return;
     }
     const mailtoLink = mailtoLinkFromHref(anchor.getAttribute('href'));
@@ -803,6 +820,12 @@ async function mountRawHvyDocument(
     redo() {
       textarea.focus();
       documentOwner().execCommand('redo');
+    },
+    getChatState() {
+      return {};
+    },
+    setChatState() {
+      return undefined;
     },
     async buildImportPlan(importOptions) {
       const { buildImportPlanForDocument } = await import('../../heavy-file-format/src/ai-document-import');

@@ -256,6 +256,7 @@ function logLlmResponse(
   payload?: unknown,
 ): void {
   const includeSemanticDebug = shouldDebugSemanticSearch(task, appSettings);
+  const includeOutputDebug = includeSemanticDebug || task === 'chat';
   logDebugEvent('llm', 'llm:response', {
     task,
     provider,
@@ -265,7 +266,7 @@ function logLlmResponse(
     durationMs,
     ...(traceRunId ? { traceRunId } : {}),
     ...(includeSemanticDebug ? { body } : {}),
-    ...(includeSemanticDebug && typeof output === 'string' ? { outputChars: output.length, output } : {}),
+    ...(includeOutputDebug && typeof output === 'string' ? { outputChars: output.length, output } : {}),
     ...(includeSemanticDebug && payload !== undefined ? { payload } : {}),
   });
   if (task === 'semanticFilter') {

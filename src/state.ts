@@ -3,11 +3,13 @@ import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
+import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 
 export interface OpenDocument {
   path: string;
   name: string;
   extension: DocumentExtension;
+  virtual?: 'workspaceChat';
   mode: HvyMode;
   dirty: boolean;
   readOnly: boolean;
@@ -113,6 +115,8 @@ export interface AppState {
   deleteFolderArchivedFiles: string[];
   workspaceTransfer: WorkspaceTransferState | null;
   workspaceFilter: WorkspaceFilterState;
+  workspaceChat: WorkspaceChatState;
+  workspaceEmbeddingPreviews: Record<string, WorkspaceEmbeddingPreviewState>;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
   workspaceFileViews: Record<string, WorkspaceFileView>;
   appZoom: number;
@@ -139,6 +143,45 @@ export interface WorkspaceFilterState {
   filterMode: SearchFilterMode;
   isLoading: boolean;
   status: string | null;
+  error: string | null;
+}
+
+export interface WorkspaceChatSource {
+  id: string;
+  label: string;
+  detail: string;
+  path: string;
+  href: string;
+  score: number;
+  excerpt: string;
+}
+
+export interface WorkspaceChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  error?: boolean;
+}
+
+export interface WorkspaceChatState {
+  open: boolean;
+  workspacePath: string | null;
+  targetDirectory: string;
+  scopeLabel: string;
+  status: string | null;
+  error: string | null;
+  dirty: boolean;
+  closePromptOpen: boolean;
+  isSending: boolean;
+  draft: string;
+  progress: WorkspaceEmbeddingIndexProgress | null;
+  messages: WorkspaceChatMessage[];
+}
+
+export interface WorkspaceEmbeddingPreviewState {
+  enabled: boolean;
+  loading: boolean;
+  sidecars: Record<string, boolean>;
   error: string | null;
 }
 
@@ -254,6 +297,21 @@ export const state: AppState = {
     status: null,
     error: null,
   },
+  workspaceChat: {
+    open: false,
+    workspacePath: null,
+    targetDirectory: '',
+    scopeLabel: '',
+    status: null,
+    error: null,
+    dirty: false,
+    closePromptOpen: false,
+    isSending: false,
+    draft: '',
+    progress: null,
+    messages: [],
+  },
+  workspaceEmbeddingPreviews: {},
   workspaceFilters: {},
   workspaceFileViews: {},
   appZoom: 1,

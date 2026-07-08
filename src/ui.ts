@@ -17,7 +17,9 @@ import {
   renderTagEditor,
   serializeTags,
 } from '../../heavy-file-format/src/editor/tag-editor';
+import { markdownToReaderHtml, normalizeMarkdownLists } from '../../heavy-file-format/src/markdown';
 import { deserializeDocumentBytes } from '../../heavy-file-format/src/serialization';
+import { isWorkspacePathTarget } from '../../heavy-file-format/src/workspace-links';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
@@ -60,6 +62,16 @@ export interface UiHandlers {
   confirmDeleteWorkspaceFolder(workspacePath: string, targetDirectory: string, folderName: string, archivedFiles: string[]): void;
   cancelDeleteWorkspaceFolder(): void;
   openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;
+  openWorkspaceChat(workspacePath: string, targetDirectory?: string): void;
+  toggleWorkspaceEmbeddingPreview(workspacePath: string): void;
+  closeWorkspaceChat(): void;
+  saveWorkspaceChat(): void;
+  discardWorkspaceChat(): void;
+  cancelCloseWorkspaceChat(): void;
+  cancelWorkspaceChatIndexing(): void;
+  openWorkspaceLink(href: string): void;
+  updateWorkspaceChatDraft(value: string): void;
+  submitWorkspaceChat(): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
@@ -194,6 +206,10 @@ if (!app) {
 }
 
 const appRoot = app;
+type WorkspaceChatScrollState = {
+  scrollTop: number;
+  stickToLatest: boolean;
+} | null;
 let bindController: AbortController | null = null;
 let uiBound = false;
 let renderedRenameFilePath: string | null = null;
@@ -313,18 +329,89 @@ export function renderLeftPanel(state: AppState): void {
 }
 
 export function renderDocumentControls(state: AppState): void {
+  const workspaceChatActive = state.document?.virtual === 'workspaceChat';
+  const workspaceChatScroll = captureWorkspaceChatScroll();
   documentControlsRoot().innerHTML = `
     ${renderDocumentTabs(state)}
     <header class="document-toolbar">
       ${renderToolbar(state)}
     </header>
     <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
-  documentModeControlsRoot().innerHTML = state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
+  documentModeControlsRoot().innerHTML = state.document && !workspaceChatActive ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
   const mount = hvyMountRoot();
-  mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document));
-  if (!state.document || !state.document.mounted) {
+  mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document && !workspaceChatActive));
+  mount.classList.toggle('is-workspace-chat-document', workspaceChatActive);
+  if (workspaceChatActive) {
+    mount.innerHTML = renderWorkspaceChatDocument(state);
+    bindWorkspaceChatScrollControls(mount);
+    restoreWorkspaceChatScroll(workspaceChatScroll);
+  } else if (!state.document || !state.document.mounted) {
     mount.innerHTML = renderEmptyState(state);
   }
+}
+
+function captureWorkspaceChatScroll(): WorkspaceChatScrollState {
+  const scroller = appRoot.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+  if (!scroller) return null;
+  const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  return {
+    scrollTop: scroller.scrollTop,
+    stickToLatest: distanceFromBottom <= 48,
+  };
+}
+
+function restoreWorkspaceChatScroll(captured: WorkspaceChatScrollState): void {
+  if (!captured) {
+    scrollWorkspaceChatToLatest();
+    return;
+  }
+  const restore = (): void => {
+    const scroller = appRoot.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+    if (!scroller) return;
+    if (captured.stickToLatest) {
+      scroller.scrollTop = scroller.scrollHeight;
+    } else {
+      scroller.scrollTop = Math.min(captured.scrollTop, scroller.scrollHeight);
+    }
+    updateWorkspaceChatScrollButton(scroller);
+  };
+  restore();
+  requestAnimationFrame(() => {
+    restore();
+    requestAnimationFrame(restore);
+  });
+}
+
+function bindWorkspaceChatScrollControls(root: ParentNode): void {
+  const scroller = root.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+  const button = root.querySelector<HTMLButtonElement>('[data-action="workspace-chat-scroll-bottom"]');
+  if (!scroller || !button) return;
+  scroller.addEventListener('scroll', () => updateWorkspaceChatScrollButton(scroller));
+  button.addEventListener('click', () => {
+    scroller.scrollTo({
+      top: scroller.scrollHeight,
+      behavior: 'smooth',
+    });
+  });
+  updateWorkspaceChatScrollButton(scroller);
+}
+
+function scrollWorkspaceChatToLatest(): void {
+  const scroller = appRoot.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+  if (!scroller) return;
+  scroller.scrollTop = scroller.scrollHeight;
+  updateWorkspaceChatScrollButton(scroller);
+  requestAnimationFrame(() => {
+    scroller.scrollTop = scroller.scrollHeight;
+    updateWorkspaceChatScrollButton(scroller);
+  });
+}
+
+function updateWorkspaceChatScrollButton(scroller: HTMLDivElement): void {
+  const button = appRoot.querySelector<HTMLButtonElement>('[data-action="workspace-chat-scroll-bottom"]');
+  if (!button) return;
+  const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  button.hidden = distanceFromBottom <= 32;
 }
 
 export function renderModals(state: AppState): void {
@@ -341,6 +428,7 @@ export function renderModals(state: AppState): void {
     ${renderExportedPdfDialog(state)}
     ${renderAboutDialog(state)}
     ${renderDebugLogDialog(state)}
+    ${renderWorkspaceChatClosePrompt(state)}
     ${renderAppSettingsDialog(state)}
     ${renderAppSettingsDiscardDialog(state)}
     ${renderAiSettingsDialog(state)}
@@ -357,7 +445,7 @@ export function renderModals(state: AppState): void {
     ${renderDeleteFileDialog(state)}
     ${renderDeleteFolderDialog(state)}
     ${renderWorkspaceTransferDialog(state)}
-    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters, state.aiSettings)}`;
+    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters, state.aiSettings, state.workspaceEmbeddingPreviews)}`;
   refreshRenderedFormState(appRoot, state);
   if (state.aiSettingsDialogOpen) {
     requestAnimationFrame(() => syncAiRangeFields(appRoot));
@@ -446,9 +534,22 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const clickedDismissBackdrop = dismissBackdropFromTarget(event.target);
     const dismissBackdropClick = Boolean(clickedDismissBackdrop && clickedDismissBackdrop === dismissBackdropPointerStart);
     dismissBackdropPointerStart = null;
-    const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
+    const eventTarget = event.target instanceof Element ? event.target : null;
+    const workspaceLink = eventTarget?.closest<HTMLAnchorElement>('a[href]');
+    const workspaceHref = workspaceLink?.getAttribute('href') ?? '';
+    if (
+      workspaceLink
+      && workspaceLink.closest('[data-workspace-chat-document="true"]')
+      && (workspaceLink.dataset.hvyCrossDocument === 'true' || isWorkspacePathTarget(workspaceHref))
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.openWorkspaceLink(workspaceHref);
+      return;
+    }
+    const target = eventTarget?.closest<HTMLElement>('[data-action]') ?? null;
     if (!target) {
-      const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
+      const backdrop = eventTarget instanceof HTMLElement ? eventTarget.closest<HTMLElement>('.modal-backdrop') : null;
       if (backdrop && backdrop === event.target && dismissBackdropClick) {
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
@@ -538,12 +639,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           return;
         }
       }
-      if (!(event.target as HTMLElement).closest('.workspace-actions-menu')) {
+      if (!eventTarget?.closest('.workspace-actions-menu')) {
         handlers.closeWorkspaceActions();
       }
       return;
     }
-    if (target.closest('#hvyMount')) return;
+    if (target.closest('#hvyMount') && !target.closest('[data-workspace-chat-document="true"]')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'close-workspace-filter' && clickedDismissBackdrop && !dismissBackdropClick) return;
@@ -578,10 +679,23 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.stopPropagation();
       handlers.openWorkspaceFilter(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     }
+    if (action === 'open-workspace-chat' && target.dataset.workspacePath) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.openWorkspaceChat(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    }
+    if (action === 'toggle-workspace-embedding-preview' && target.dataset.workspacePath) {
+      handlers.toggleWorkspaceEmbeddingPreview(target.dataset.workspacePath);
+    }
     if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
       handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
     }
     if (action === 'close-workspace-filter') handlers.closeWorkspaceFilter();
+    if (action === 'close-workspace-chat') handlers.closeWorkspaceChat();
+    if (action === 'save-workspace-chat') handlers.saveWorkspaceChat();
+    if (action === 'discard-workspace-chat') handlers.discardWorkspaceChat();
+    if (action === 'cancel-close-workspace-chat') handlers.cancelCloseWorkspaceChat();
+    if (action === 'cancel-workspace-chat-indexing') handlers.cancelWorkspaceChatIndexing();
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
@@ -776,12 +890,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
     if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
     if (action === 'cancel-export-pdf-save-prompt') handlers.cancelExportPdfSavePrompt();
-    if (action === 'save-filter-file-visibility') {
-      const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
-      if (form) {
-        handlers.saveWorkspaceTemplateVisibility(String(form.dataset.workspacePath ?? ''), readWorkspaceTemplateVisibilityForm(new FormData(form)));
-      }
-    }
     if (action === 'set-save-template-scope' && isTemplateScope(target.dataset.scope)) handlers.setSaveTemplateScope(target.dataset.scope);
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
@@ -921,6 +1029,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     handlers.updateColorTheme(name, nextValue);
   }, { signal });
   root.addEventListener('keydown', (event) => {
+    const chatTarget = event.target instanceof HTMLTextAreaElement ? event.target : null;
+    if (
+      chatTarget?.dataset.field === 'workspace-chat-draft' &&
+      event.key === 'Enter' &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+      chatTarget.closest('form')?.requestSubmit();
+      return;
+    }
     const target = event.target instanceof HTMLInputElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
     if (handleTagEditorKeydown(event, target, importExcludeTagHelpers)) {
@@ -950,6 +1068,17 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (target instanceof HTMLInputElement && target.name === 'newSectionsOnly') {
       handlers.setImportNewSectionsOnly(target.checked);
+      return;
+    }
+    if (
+      target instanceof HTMLInputElement
+      && target.type === 'checkbox'
+      && ['hvyDocuments', 'thvyTemplates', 'phvyTemplates', 'archivedFiles'].includes(target.name)
+    ) {
+      const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
+      if (form) {
+        handlers.saveWorkspaceTemplateVisibility(String(form.dataset.workspacePath ?? ''), readWorkspaceTemplateVisibilityForm(new FormData(form)));
+      }
       return;
     }
     if (target instanceof HTMLSelectElement && target.dataset.field === 'import-workspace-source') {
@@ -1017,7 +1146,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
     if (!form) return;
-    if (form.closest('#hvyMount')) return;
+    if (form.closest('#hvyMount') && form.dataset.form !== 'workspace-chat') return;
     event.preventDefault();
     if (form.dataset.form === 'new-workspace') {
       const data = new FormData(form);
@@ -1108,6 +1237,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (form.dataset.form === 'workspace-filter') {
       handlers.submitWorkspaceFilter();
     }
+    if (form.dataset.form === 'workspace-chat') {
+      handlers.submitWorkspaceChat();
+    }
     if (form.dataset.form === 'rename-file') {
       const data = new FormData(form);
       handlers.submitRenameFile(String(data.get('fileName') ?? ''));
@@ -1133,6 +1265,23 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         );
       }
     }
+  }, { signal });
+  root.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLTextAreaElement)) return;
+    if (target.dataset.field === 'workspace-chat-draft') {
+      handlers.updateWorkspaceChatDraft(target.value);
+      const form = target.closest<HTMLFormElement>('form[data-form="workspace-chat"]');
+      const submit = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submit) {
+        submit.disabled = target.value.trim().length === 0;
+      }
+    }
+  }, { signal });
+  root.addEventListener('hvy:open-workspace-link', (event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const href = typeof event.detail?.href === 'string' ? event.detail.href : '';
+    if (href) handlers.openWorkspaceLink(href);
   }, { signal });
   document.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && handleWorkspaceClipboardShortcut(event, state, handlers)) {
@@ -1657,7 +1806,13 @@ function hasDraggedWorkspaceFile(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes('application/x-hvy-workspace-file');
 }
 
-function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters'], aiSettings: AiSettings): string {
+function renderWorkspaceFilterDialog(
+  filter: WorkspaceFilterState,
+  workspaces: Workspace[],
+  activeFilters: AppState['workspaceFilters'],
+  aiSettings: AiSettings,
+  embeddingPreviews: AppState['workspaceEmbeddingPreviews'],
+): string {
   if (!filter.open) {
     return '';
   }
@@ -1678,7 +1833,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
   const submitLabel = stopRunningFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
   const visibility = workspaceTemplateVisibility(scopedWorkspace);
   const status = filter.isLoading
-    ? filter.status ?? (isEmbedding ? `Indexing ${filterTargetName}...` : isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
+    ? filter.status ?? (isEmbedding ? '' : isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
     : filter.error
       ? filter.error
       : '';
@@ -1693,7 +1848,7 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           </div>
           <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
-        ${renderWorkspaceFilterVisibilityControls(visibility, filter.isLoading)}
+        ${renderWorkspaceFilterVisibilityControls(visibility, filter.isLoading, filter.workspacePath ?? '', filter.workspacePath ? embeddingPreviews[filter.workspacePath] ?? null : null)}
         <div class="search-input-row">
           <span class="search-input-icon" aria-hidden="true">${funnelIcon()}</span>
           <label>
@@ -1730,6 +1885,101 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           ${activeFilter ? `<button type="button" class="ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
         </div>
       </form>
+    </section>`;
+}
+
+function renderWorkspaceChatDocument(state: AppState): string {
+  const chat = state.workspaceChat;
+  if (!chat.open) return '';
+  const embeddingsEnabled = state.aiSettings.embeddings.enabled;
+  const canSend = embeddingsEnabled && !state.busy && (chat.isSending || chat.draft.trim().length > 0);
+  return `
+    <section class="workspace-chat-document" data-workspace-chat-document="true" aria-label="${escapeAttr(chat.targetDirectory ? 'Chat folder' : 'Chat workspace')}">
+      ${
+        embeddingsEnabled
+          ? `<form class="workspace-chat-native" data-form="workspace-chat">
+              <div class="workspace-chat-thread-shell">
+                <div class="workspace-chat-thread" data-workspace-chat-scroll-container="true" role="log" aria-live="polite">
+                  ${chat.messages.length === 0
+                    ? `<div class="workspace-chat-empty">
+                        <strong>${escapeHtml(chat.targetDirectory ? 'Ask this folder' : 'Ask this workspace')}</strong>
+                        <p>Questions use embeddings from HVY files in this scope.</p>
+                      </div>`
+                    : chat.messages.map(renderWorkspaceChatMessage).join('')}
+                </div>
+                <button type="button" class="workspace-chat-scroll-bottom" data-action="workspace-chat-scroll-bottom" hidden>Latest ↓</button>
+              </div>
+              ${renderWorkspaceChatStatus(chat)}
+              <label class="workspace-chat-composer">
+                <span>Question</span>
+                <textarea data-field="workspace-chat-draft" rows="4" placeholder="${escapeAttr(chat.targetDirectory ? 'Ask about this folder...' : 'Ask about this workspace...')}" ${chat.isSending ? 'disabled' : ''}>${escapeHtml(chat.draft)}</textarea>
+              </label>
+              <div class="workspace-chat-actions">
+                ${chat.isSending ? '<span>Working...</span>' : ''}
+                <button type="submit" class="secondary" ${canSend ? '' : 'disabled'}>${chat.isSending ? 'Stop' : 'Send'}</button>
+              </div>
+            </form>`
+          : `<div class="workspace-chat-required">
+              <h3>Embeddings Required</h3>
+              <p>Enable embeddings before chatting across folders or workspaces.</p>
+              <button type="button" data-action="ai-settings">Open AI Settings</button>
+            </div>`
+      }
+    </section>`;
+}
+
+function renderWorkspaceChatClosePrompt(state: AppState): string {
+  const chat = state.workspaceChat;
+  if (!chat.open || !chat.closePromptOpen) return '';
+  return `
+    <div class="modal-backdrop workspace-chat-save-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceChatSaveTitle">
+        <h2 id="workspaceChatSaveTitle">Save Chat?</h2>
+        <p>Save this chat session as an HVY document before closing it.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-close-workspace-chat">Cancel</button>
+          <button type="button" data-action="discard-workspace-chat">Don't Save</button>
+          <button type="button" data-action="save-workspace-chat" ${state.busy ? 'disabled' : ''}>Save Chat</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWorkspaceChatMessage(message: AppState['workspaceChat']['messages'][number]): string {
+  return `
+    <article class="workspace-chat-message is-${escapeAttr(message.role)}${message.error ? ' is-error' : ''}">
+      <div class="workspace-chat-message-role">${message.role === 'user' ? 'You' : 'Assistant'}</div>
+      <div class="workspace-chat-message-body">${message.role === 'assistant' ? renderWorkspaceChatMarkdown(message.content) : renderPlainChatText(message.content)}</div>
+    </article>`;
+}
+
+function renderWorkspaceChatMarkdown(value: string): string {
+  return markdownToReaderHtml(normalizeMarkdownLists(stripHvySerializationComments(value)), { crossDocumentLinksEnabled: true });
+}
+
+function stripHvySerializationComments(value: string): string {
+  return value.replace(/<!--\/?hvy:[\s\S]*?-->/g, '').trim();
+}
+
+function renderPlainChatText(value: string): string {
+  return escapeHtml(value)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+function renderWorkspaceChatStatus(chat: AppState['workspaceChat']): string {
+  const progress = chat.progress;
+  const showProgress = Boolean(chat.isSending && progress && (progress.queued > 0 || progress.active > 0));
+  if (!chat.status && !chat.error && !showProgress) return '';
+  return `
+    <section class="workspace-chat-status" aria-live="polite">
+      ${chat.error ? `<p class="workspace-chat-error">${escapeHtml(chat.error)}</p>` : ''}
+      ${chat.status ? `<p>${escapeHtml(chat.status)}</p>` : ''}
+      ${showProgress && progress ? `<dl class="workspace-chat-progress" aria-label="Embedding progress">
+        <div><dt>Files</dt><dd>${progress.completed}/${progress.completed + progress.active + progress.queued}</dd></div>
+        <div><dt>Failed</dt><dd>${progress.failed}</dd></div>
+      </dl>` : ''}
     </section>`;
 }
 
@@ -2094,7 +2344,13 @@ function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: stri
     >${escapeHtml(label)}</button>`;
 }
 
-function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVisibility, disabled: boolean): string {
+function renderWorkspaceFilterVisibilityControls(
+  visibility: WorkspaceTemplateVisibility,
+  disabled: boolean,
+  workspacePath: string,
+  embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null,
+): string {
+  const previewEnabled = embeddingPreview?.enabled === true;
   return `
     <div class="search-filter-box">
       <div class="search-filter-box-head">
@@ -2118,10 +2374,12 @@ function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVi
           <input type="checkbox" name="archivedFiles" ${visibility.archivedFiles ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>Archived</span>
         </label>
+        <label class="checkbox-row">
+          <input type="checkbox" data-action="toggle-workspace-embedding-preview" data-workspace-path="${escapeAttr(workspacePath)}" ${previewEnabled ? 'checked' : ''} ${disabled || !workspacePath ? 'disabled' : ''}>
+          <span>Embeddings</span>
+        </label>
       </div>
-      <div class="workspace-filter-actions">
-        <button type="button" class="secondary" data-action="save-filter-file-visibility" ${disabled ? 'disabled' : ''}>Save visibility</button>
-      </div>
+      ${previewEnabled && !embeddingPreview?.loading ? `<div class="workspace-embedding-preview-inline">${escapeHtml(embeddingPreview?.error ?? 'Embedding files are visible in the workspace tree.')}</div>` : ''}
     </div>`;
 }
 
@@ -2235,6 +2493,7 @@ function showWorkspaceContextMenu(
     <button type="button" data-menu-action="import">Import</button>
     <button type="button" data-menu-action="paste">Paste</button>
     ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
+    ${targetDirectory ? '<button type="button" data-menu-action="chat">Chat Folder</button>' : '<button type="button" data-menu-action="chat">Chat Workspace</button>'}
     ${targetDirectory ? `<button type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   `;
   const cleanup = () => {
@@ -2259,6 +2518,7 @@ function showWorkspaceContextMenu(
     if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'filter') handlers.openWorkspaceFilter(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'chat') handlers.openWorkspaceChat(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'delete-folder') {
       if (deleteInfo && deleteInfo.archivedFiles.length > 0) {
         handlers.confirmDeleteWorkspaceFolder(workspacePath, targetDirectory, deleteInfo.folderName, deleteInfo.archivedFiles);
@@ -2329,6 +2589,20 @@ function renderToolbar(state: AppState): string {
     return `
       <div class="toolbar-title">No document selected</div>
       <div class="toolbar-actions"></div>`;
+  }
+  if (document.virtual === 'workspaceChat') {
+    const dirtyState = state.workspaceChat.dirty ? 'dirty' : 'clean';
+    const dirtyLabel = state.workspaceChat.dirty ? 'Unsaved' : 'Saved';
+    return `
+      <div class="toolbar-title">
+        <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
+        <span>${escapeHtml(state.workspaceChat.scopeLabel || 'Workspace chat')}</span>
+      </div>
+      <div class="toolbar-actions">
+        <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
+        <button type="button" data-action="save-workspace-chat" ${state.workspaceChat.messages.length === 0 || state.busy ? 'disabled' : ''}>Save Chat</button>
+        <button type="button" data-action="close-workspace-chat">Close</button>
+      </div>`;
   }
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
@@ -2425,7 +2699,7 @@ function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.savedTemplates)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.savedTemplates, state.workspaceEmbeddingPreviews[workspace.path] ?? null)).join('')}</div>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {
@@ -2502,6 +2776,7 @@ function renderWorkspace(
   fileView: AppState['workspaceFileViews'][string],
   expanded: boolean,
   savedTemplates: SavedTemplate[],
+  embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null,
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
@@ -2534,9 +2809,11 @@ function renderWorkspace(
           <button type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
+          <button type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
         </div>
       </div>
-      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, filter ?? null)).join('')}</ul>
+      ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
+      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, filter ?? null, embeddingPreview)).join('')}</ul>
     </details>`;
 }
 
@@ -2646,6 +2923,7 @@ function renderNode(
   workspaceClipboard: WorkspaceClipboardState | null,
   workspacePath: string,
   activeFilter: AppState['workspaceFilters'][string] | null = null,
+  embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null = null,
 ): string {
   if (node.kind === 'folder') {
     const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds, activeFilter);
@@ -2672,7 +2950,7 @@ function renderNode(
           <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}">
             ${folderLabel}
           </summary>
-          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter, embeddingPreview)).join('')}</ul>
         </details>
       </li>`;
   }
@@ -2682,8 +2960,18 @@ function renderNode(
   const archived = node.archived === true;
   const locked = node.locked === true;
   const hiddenFromAI = node.hiddenFromAI === true;
+  const hasEmbeddingFile = embeddingPreview?.enabled === true && embeddingPreview.sidecars[node.path] === true;
   const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
     ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
+    : '';
+  const embeddingFile = hasEmbeddingFile
+    ? `<ul class="tree tree-embedding-files" aria-label="${escapeAttr(`${node.name} embedding files`)}">
+        <li>
+          <div class="tree-embedding-file" title="${escapeAttr(`${node.path}.emb`)}" aria-disabled="true">
+            <span class="tree-file-name">${escapeHtml(`${node.name}.emb`)}</span>
+          </div>
+        </li>
+      </ul>`
     : '';
   return `
     <li>
@@ -2694,6 +2982,7 @@ function renderNode(
         ${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
         ${extensionBadge}
       </button>
+      ${embeddingFile}
     </li>`;
 }
 
@@ -3326,24 +3615,27 @@ function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string
         ${duration ? `<span class="debug-log-duration">${escapeHtml(duration)}</span>` : ''}
         <time datetime="${escapeAttr(entry.startedAt)}">${escapeHtml(formatDebugLogTime(entry.startedAt))}</time>
       </div>
-      ${renderSemanticDebugLogDetails(entry)}
+      ${renderLlmDebugLogDetails(entry)}
       ${details ? `<pre>${escapeHtml(details)}</pre>` : ''}
     </article>`;
 }
 
 function formatDebugLogEntryDetails(entry: AppState['debugLogEntries'][number]): string {
   if (!entry.details) return '';
-  if (entry.kind === 'llm' && entry.details.task === 'semanticFilter') {
+  if (entry.kind === 'llm' && (entry.details.task === 'semanticFilter' || entry.details.task === 'chat')) {
     const { body: _body, output: _output, payload: _payload, ...summary } = entry.details;
     return JSON.stringify(summary, null, 2);
   }
   return JSON.stringify(entry.details, null, 2);
 }
 
-function renderSemanticDebugLogDetails(entry: AppState['debugLogEntries'][number]): string {
+function renderLlmDebugLogDetails(entry: AppState['debugLogEntries'][number]): string {
   if (entry.kind !== 'llm') return '';
   if (entry.label === 'llm:request' && entry.details?.task === 'semanticFilter') {
     return renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details.body));
+  }
+  if (entry.label === 'llm:response' && entry.details?.task === 'chat') {
+    return renderDebugLogExpandable('LLM response', formatDebugLogValue(entry.details?.output));
   }
   if (entry.label === 'llm:response' && entry.details?.task === 'semanticFilter') {
     return [

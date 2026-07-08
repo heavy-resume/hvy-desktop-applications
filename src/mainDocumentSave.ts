@@ -5,7 +5,8 @@ import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedD
 import { state } from './state';
 import { pdfFileName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
-import { adoptSavedAsDocument, documentSessions, getTabStackIndex, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { activateWorkspaceChatDocument, adoptSavedAsDocument, documentSessions, getTabStackIndex, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -158,6 +159,11 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
 
 export async function selectDocumentTab(path: string): Promise<void> {
   state.tabStackOpen = false;
+  if (isWorkspaceChatDocumentPath(path) && state.workspaceChat.open && currentWorkspaceChatDocumentPath() === path) {
+    activateWorkspaceChatDocument();
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   if (state.document?.path === path) {
     rerender({ preserveMountedDocument: true });
     return;
@@ -203,6 +209,17 @@ export async function commitTabStack(): Promise<void> {
 }
 
 export async function closeDocumentTab(path: string): Promise<void> {
+  if (isWorkspaceChatDocumentPath(path) && state.workspaceChat.open && currentWorkspaceChatDocumentPath() === path) {
+    const wasActive = state.document?.path === path;
+    if (requestCloseWorkspaceChat()) {
+      removeDocumentTabPath(path);
+      if (wasActive) {
+        state.document = null;
+      }
+    }
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   if (state.document?.path === path) {
     await closeCurrentDocument();
     return;

@@ -340,7 +340,8 @@ export async function restoreStartupDocument(): Promise<void> {
 
 export async function restoreHotReloadSession(): Promise<boolean> {
   const snapshot = readHotReloadSessionSnapshot();
-  if (!snapshot || snapshot.tabPaths.length === 0) return false;
+  if (!snapshot) return false;
+  if (snapshot.tabPaths.length === 0) return true;
   let fallbackActivePath: string | null = null;
   for (const path of [...snapshot.tabPaths].reverse()) {
     if (path === snapshot.activePath) continue;
@@ -390,6 +391,7 @@ export async function createSessionFromHotReloadSnapshot(file: DocumentFile, sto
     isNew: false,
     metaOpen: stored?.metaOpen ?? false,
     document: await deserializeHvy(new Uint8Array(file.bytes), file.extension),
+    chatState: null,
     scrollRatio: stored?.scrollRatio ?? null,
     recoveryState: stored?.recoveryState ?? null,
     recoveryBackupId: null,

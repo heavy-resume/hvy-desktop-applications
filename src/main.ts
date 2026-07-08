@@ -4,6 +4,7 @@ import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreferen
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
+import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -12,6 +13,7 @@ export { applyAppColorTheme, bindFindShortcut, boot, createSessionFromHotReloadS
 import { clearActiveRestoredBackupSuppression, markActiveDocumentBackupChanged, markRestoredBackupSuppression, scheduleBackupActiveDocument } from './mainDocumentSave';
 import { syncFileMenuState } from './mainWorkspaceUtils';
 import { documentStorageKey, normalizeAiMaxContextChars, normalizeDocumentMode, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
+import { currentWorkspaceChatDocumentName, currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath } from './workspaceChat';
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
 export { backupDocumentKey, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, upsertWorkspace, sortWorkspaces, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed } from './mainWorkspaceUtils';
@@ -47,6 +49,7 @@ export interface DocumentSession {
   isNew: boolean;
   metaOpen: boolean;
   document: VisualDocument;
+  chatState: ReturnType<MountedDocument['mount']['getChatState']> | null;
   scrollRatio: MountScrollRatio | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
@@ -177,6 +180,17 @@ export function syncDocumentTabs(): void {
       active: true,
     });
   }
+  const workspaceChatPath = state.workspaceChat.open ? currentWorkspaceChatDocumentPath() : null;
+  if (workspaceChatPath) {
+    tabs.set(workspaceChatPath, {
+      path: workspaceChatPath,
+      name: currentWorkspaceChatDocumentName(),
+      dirty: state.workspaceChat.dirty,
+      readOnly: false,
+      hiddenFromAI: false,
+      active: state.document?.path === workspaceChatPath,
+    });
+  }
   for (const session of documentSessions.values()) {
     if (session.readOnly || (!openedDocumentTabOrder.includes(session.path) && !session.dirty && !session.isNew)) continue;
     const active = session.path === state.document?.path;
@@ -191,6 +205,7 @@ export function syncDocumentTabs(): void {
   }
   for (const path of openedDocumentTabOrder) {
     if (tabs.has(path)) continue;
+    if (isWorkspaceChatDocumentPath(path)) continue;
     const session = documentSessions.get(path);
     tabs.set(path, {
       path,
@@ -210,6 +225,29 @@ export function syncDocumentTabs(): void {
     state.tabStackIndex = 0;
   }
   writeHotReloadSessionSnapshot();
+}
+export function activateWorkspaceChatDocument(): void {
+  const path = currentWorkspaceChatDocumentPath();
+  if (!path) return;
+  preserveCurrentDocumentSession();
+  markDocumentTabOpened(path);
+  resetMountLifecycleState();
+  state.document?.mounted?.mount.destroy();
+  state.document = {
+    path,
+    name: currentWorkspaceChatDocumentName(),
+    extension: '.hvy',
+    virtual: 'workspaceChat',
+    mode: 'viewer',
+    dirty: state.workspaceChat.dirty,
+    readOnly: false,
+    hiddenFromAI: false,
+    isNew: false,
+    metaOpen: false,
+    mounted: null,
+    recoveryBackupId: null,
+  };
+  state.selectedFilePath = null;
 }
 export async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
   const loadStartedAt = performance.now();
@@ -247,6 +285,18 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
     () => deserializeHvy(bytes, file.extension),
   );
+  if (!hiddenFromAI && file.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+    const attached = await measureDebugAsync(
+      'load',
+      'openDocument:attachSidecarEmbeddingIndex',
+      { path: file.path },
+      () => attachMatchingSidecarEmbeddingIndex(file.path, document, state.aiSettings),
+    );
+    logDebugEvent('load', 'openDocument:sidecarEmbeddingIndex', {
+      path: file.path,
+      attached,
+    });
+  }
   const recoveryState = options.recovered ? file.recoveryState ?? null : viewSession?.recoveryState ?? null;
   const restoredMode = viewSession?.mode
     ?? readDocumentModePreference(file.path)
@@ -326,6 +376,7 @@ export async function openLaunchDocumentPath(path: string): Promise<void> {
 export function preserveCurrentDocumentSession(): void {
   const openDocument = state.document;
   if (!openDocument?.path || openDocument.readOnly) return;
+  if (openDocument.virtual === 'workspaceChat') return;
   const document = openDocument.mounted?.document ?? pendingMountDocument;
   if (!document) return;
   measurePerf('session:writeDocumentModePreference', { path: openDocument.path }, () => {
@@ -349,6 +400,7 @@ export function preserveCurrentDocumentSession(): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
+    chatState: openDocument.mounted?.mount.getChatState() ?? null,
     scrollRatio: scrollRatioValue,
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
@@ -358,6 +410,7 @@ export function preserveCurrentDocumentSession(): void {
 export function updateCurrentDocumentSession(document: VisualDocument): void {
   const openDocument = state.document;
   if (!openDocument?.path || openDocument.readOnly) return;
+  if (openDocument.virtual === 'workspaceChat') return;
   measurePerf('session:update:writeDocumentModePreference', { path: openDocument.path }, () => {
     writeDocumentModePreference(openDocument.path, openDocument.mode);
   });
@@ -376,6 +429,7 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
+    chatState: openDocument.mounted?.mount.getChatState() ?? documentSessions.get(openDocument.path)?.chatState ?? null,
     scrollRatio: scrollRatioValue,
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
@@ -460,12 +514,28 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     shouldStartSaved: mountShouldStartSaved,
   });
   mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
+  const storedChatState = documentSessions.get(currentDocument.path)?.chatState ?? null;
   const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
     storageKey: documentStorageKey(currentDocument.path || currentDocument.name),
+    initialChatState: storedChatState,
     searchSnapshot,
     hiddenFromAI: currentDocument.hiddenFromAI,
     maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(state.appSettings.imageAttachmentMaxDimensions),
+    onEmbeddingIndexPrepared: currentDocument.extension === '.hvy' && !currentDocument.hiddenFromAI && state.aiSettings.embeddings.enabled
+      ? async () => {
+          const written = await measureDebugAsync(
+            'load',
+            'chat:writePreparedDocumentEmbeddingSidecar',
+            { path },
+            () => writePreparedDocumentEmbeddingSidecar(path, document, state.aiSettings),
+          );
+          logDebugEvent('load', 'chat:preparedDocumentEmbeddingSidecar', {
+            path,
+            written,
+          });
+        }
+      : undefined,
     onDocumentChange: (event) => {
       if (generation !== mountGeneration) return;
       const changeStartedAt = performance.now();
@@ -912,7 +982,7 @@ export function writeHotReloadSessionSnapshot(): void {
       if (readOnly || tabPaths.includes(path)) return;
       tabPaths.push(path);
     };
-    if (state.document) {
+    if (state.document && state.document.virtual !== 'workspaceChat') {
       addTabPath(state.document.path, state.document.readOnly);
     }
     for (const session of documentSessions.values()) {
@@ -927,15 +997,21 @@ export function writeHotReloadSessionSnapshot(): void {
       });
     }
     for (const path of openedDocumentTabOrder) {
+      if (isWorkspaceChatDocumentPath(path)) continue;
       const session = documentSessions.get(path);
       addTabPath(path, session?.readOnly ?? state.documentTabs.find((tab) => tab.path === path)?.readOnly ?? false);
     }
     if (tabPaths.length === 0) {
-      localStorage.removeItem(HOT_RELOAD_SESSION_STORAGE_KEY);
-      sessionStorage.removeItem(HOT_RELOAD_SESSION_STORAGE_KEY);
+      const serialized = JSON.stringify({
+        activePath: null,
+        tabPaths: [],
+        documents: [],
+      } satisfies HotReloadSessionSnapshot);
+      localStorage.setItem(HOT_RELOAD_SESSION_STORAGE_KEY, serialized);
+      sessionStorage.setItem(HOT_RELOAD_SESSION_STORAGE_KEY, serialized);
       return;
     }
-    if (state.document && !state.document.readOnly) {
+    if (state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat') {
       documents.set(state.document.path, {
         path: state.document.path,
         mode: state.document.mode,
@@ -945,7 +1021,7 @@ export function writeHotReloadSessionSnapshot(): void {
       });
     }
     const snapshot: HotReloadSessionSnapshot = {
-      activePath: state.document && !state.document.readOnly ? state.document.path : tabPaths[0] ?? null,
+      activePath: state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' ? state.document.path : tabPaths[0] ?? null,
       tabPaths,
       documents: Array.from(documents.values()).filter((entry) => tabPaths.includes(entry.path)),
     };

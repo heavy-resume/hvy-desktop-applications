@@ -1,10 +1,11 @@
 import { deleteSidecarFile, readDocumentFile, readSidecarFileBytes, writeSidecarFile, type AiSettings, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { createDesktopEmbeddingProvider } from './aiClient';
-import { deserializeHvy, type VisualDocument } from './hvy';
+import { deserializeHvy, serializeHvy, type VisualDocument } from './hvy';
 import type { WorkspaceFilterConfig } from './state';
 import type { HvyDocumentSearchMode, HvyDocumentSearchResult, HvySearchResult, HvySearchSnapshot } from '../../heavy-file-format/src/search/types';
 import type { HvyEmbeddingProvider, HvyEmbeddingVector } from '../../heavy-file-format/src/types';
 import {
+  materializePreparedEmbeddingAttachments,
   planEmbeddingIndexUpdate,
   readEmbeddingIndexFromDocumentBytes,
   type HvyEmbeddingIndexChunk,
@@ -40,6 +41,8 @@ export interface WorkspaceEmbeddingIndexFile {
   bytes: Uint8Array;
   sourceHash: string;
   index: HvySerializedEmbeddingIndex;
+  reusedChunks: number;
+  rebuiltChunks: number;
 }
 
 interface EmbeddingSidecarFile {
@@ -53,6 +56,24 @@ interface EmbeddingSidecarFile {
 }
 
 type EmbeddingIndexedFile = Omit<WorkspaceEmbeddingIndexFile, 'bytes'>;
+
+export interface WorkspaceEmbeddingChunkResult {
+  id: string;
+  documentId: string;
+  documentTitle: string;
+  documentPath: string;
+  sourceFile: string;
+  targetKind: HvyDocumentSearchResult['targetKind'];
+  sectionKey: string;
+  blockId?: string;
+  targetId: string;
+  targetRef?: string;
+  targetPath?: string;
+  label: string;
+  contextLabel?: string;
+  text: string;
+  score: number;
+}
 
 export function embeddingSidecarPath(documentPath: string): string {
   return `${documentPath}${SIDECAR_EXTENSION}`;
@@ -94,7 +115,8 @@ export async function createWorkspaceEmbeddingFilterSnapshots(
       const indexedFile = await readOrBuildEmbeddingIndex(file, settings, provider, filter.signal);
       if (indexedFile) {
         indexed.push(indexedFile);
-        progress.reusedChunks += indexedFile.index.vectors.length;
+        progress.reusedChunks += indexedFile.reusedChunks;
+        progress.rebuiltChunks += indexedFile.rebuiltChunks;
       }
       progress.completed += 1;
     } catch (error) {
@@ -155,7 +177,8 @@ export async function createWorkspaceEmbeddingCandidatePaths(
       const indexedFile = await readOrBuildEmbeddingIndex(file, settings, provider, filter.signal);
       if (indexedFile) {
         indexed.push(indexedFile);
-        progress.reusedChunks += indexedFile.index.vectors.length;
+        progress.reusedChunks += indexedFile.reusedChunks;
+        progress.rebuiltChunks += indexedFile.rebuiltChunks;
       }
       progress.completed += 1;
     } catch (error) {
@@ -181,6 +204,85 @@ export async function createWorkspaceEmbeddingCandidatePaths(
   );
 }
 
+export async function createWorkspaceEmbeddingChunkResults(
+  workspace: Workspace,
+  request: Pick<WorkspaceFilterConfig, 'query' | 'targetDirectory'> & { signal?: AbortSignal },
+  settings: AiSettings,
+  options: {
+    onProgress?: (progress: WorkspaceEmbeddingIndexProgress) => void;
+    maxResults?: number;
+  } = {},
+): Promise<WorkspaceEmbeddingChunkResult[]> {
+  const provider = createDesktopEmbeddingProvider(settings);
+  if (!settings.embeddings.enabled || !provider) {
+    throw new Error('Enable embeddings and choose an embedding provider before using workspace chat.');
+  }
+  const files = flattenWorkspaceFiles(workspace.files)
+    .filter((file) => !file.hiddenFromAI && file.path.toLowerCase().endsWith('.hvy'))
+    .filter((file) => fileMatchesScope(file, workspace.path, request.targetDirectory));
+  const progress: WorkspaceEmbeddingIndexProgress = {
+    queued: files.length,
+    active: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+    currentFile: null,
+    reusedChunks: 0,
+    rebuiltChunks: 0,
+  };
+  const indexed: EmbeddingIndexedFile[] = [];
+  for (const file of files) {
+    throwIfAborted(request.signal);
+    progress.queued -= 1;
+    progress.active = 1;
+    progress.currentFile = file.name;
+    options.onProgress?.({ ...progress });
+    try {
+      const indexedFile = await readOrBuildEmbeddingIndex(file, settings, provider, request.signal);
+      if (indexedFile) {
+        indexed.push(indexedFile);
+        progress.reusedChunks += indexedFile.reusedChunks;
+        progress.rebuiltChunks += indexedFile.rebuiltChunks;
+      }
+      progress.completed += 1;
+    } catch (error) {
+      if (isAbortError(error)) {
+        progress.cancelled += 1 + progress.queued;
+        progress.queued = 0;
+        progress.active = 0;
+        progress.currentFile = null;
+        options.onProgress?.({ ...progress });
+        throw error;
+      }
+      progress.failed += 1;
+    } finally {
+      progress.active = 0;
+      progress.currentFile = null;
+      options.onProgress?.({ ...progress });
+    }
+  }
+  const queryVector = await embedQuery(provider, settings, request.query, request.signal);
+  return rankIndexedFiles(indexed, queryVector)
+    .slice(0, options.maxResults ?? 24)
+    .map((result) => ({
+      id: result.id,
+      documentId: result.documentId,
+      documentTitle: result.documentTitle ?? displayDocumentName(result.documentId),
+      documentPath: result.documentId,
+      sourceFile: result.sourceFile ?? result.documentId,
+      targetKind: result.targetKind,
+      sectionKey: result.sectionKey,
+      ...(result.blockId ? { blockId: result.blockId } : {}),
+      targetId: result.targetId,
+      ...(result.targetRef ? { targetRef: result.targetRef } : {}),
+      ...(result.targetPath ? { targetPath: result.targetPath } : {}),
+      label: result.label,
+      ...(result.contextLabel ? { contextLabel: result.contextLabel } : {}),
+      text: result.matchedText ?? result.preview,
+      score: result.score ?? 0,
+    }));
+}
+
 async function readOrBuildEmbeddingIndex(
   file: WorkspaceFileNode,
   settings: AiSettings,
@@ -193,11 +295,11 @@ async function readOrBuildEmbeddingIndex(
   const embedded = readMatchingEmbeddedIndex(bytes, settings);
   if (embedded) {
     await deleteSidecarFile(embeddingSidecarPath(file.path)).catch(() => undefined);
-    return indexedFile(file, sourceHash, embedded);
+    return indexedFile(file, sourceHash, embedded, embedded.vectors.length, 0);
   }
   const sidecar = await readEmbeddingSidecar(file.path);
   if (sidecar && sidecar.sourceHash === sourceHash && sidecarMatchesSettings(sidecar, settings) && sidecar.chunks.length === sidecar.vectors.length) {
-    return indexedFile(file, sourceHash, sidecarToIndex(sidecar));
+    return indexedFile(file, sourceHash, sidecarToIndex(sidecar), sidecar.vectors.length, 0);
   }
   const document = await deserializeHvy(bytes, documentFile.extension);
   const plan = planEmbeddingIndexUpdate({
@@ -231,7 +333,7 @@ async function readOrBuildEmbeddingIndex(
     vectors,
   };
   await writeEmbeddingSidecar(file.path, sidecarFile);
-  return indexedFile(file, sourceHash, sidecarToIndex(sidecarFile));
+  return indexedFile(file, sourceHash, sidecarToIndex(sidecarFile), plan.reused.length, plan.inputsToEmbed.length);
 }
 
 function readMatchingEmbeddedIndex(bytes: Uint8Array, settings: AiSettings): HvySerializedEmbeddingIndex | null {
@@ -281,13 +383,15 @@ function sidecarToIndex(sidecar: EmbeddingSidecarFile): HvySerializedEmbeddingIn
   };
 }
 
-function indexedFile(file: WorkspaceFileNode, sourceHash: string, index: HvySerializedEmbeddingIndex): EmbeddingIndexedFile {
+function indexedFile(file: WorkspaceFileNode, sourceHash: string, index: HvySerializedEmbeddingIndex, reusedChunks: number, rebuiltChunks: number): EmbeddingIndexedFile {
   return {
     path: file.path,
     name: file.name,
     ...(file.relativePath ? { relativePath: file.relativePath } : {}),
     sourceHash,
     index,
+    reusedChunks,
+    rebuiltChunks,
   };
 }
 
@@ -430,6 +534,26 @@ export async function attachMatchingSidecarEmbeddingIndex(documentPath: string, 
     ...(plan.dimensions !== undefined ? { dimensions: plan.dimensions } : {}),
     derived: true,
   }, bytes);
+  return true;
+}
+
+export async function writePreparedDocumentEmbeddingSidecar(documentPath: string, document: VisualDocument, settings: AiSettings): Promise<boolean> {
+  if (document.extension !== '.hvy') return false;
+  materializePreparedEmbeddingAttachments(document);
+  const bytes = await serializeHvy(document);
+  const index = readMatchingEmbeddedIndex(bytes, settings);
+  if (!index || index.chunks.length !== index.vectors.length) return false;
+  const sourceFile = await readDocumentFile(documentPath);
+  const sidecarFile: EmbeddingSidecarFile = {
+    schemaVersion: SIDECAR_SCHEMA_VERSION,
+    sourcePath: documentPath,
+    sourceHash: hashBytes(new Uint8Array(sourceFile.bytes)),
+    model: index.model,
+    ...(index.dimensions !== undefined ? { dimensions: index.dimensions } : {}),
+    chunks: index.chunks,
+    vectors: index.vectors,
+  };
+  await writeEmbeddingSidecar(documentPath, sidecarFile);
   return true;
 }
 
