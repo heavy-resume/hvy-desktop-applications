@@ -1,4 +1,4 @@
-import { aiProviderDefaultModel, aiProviderPreset, aiProviderPresets } from './aiProviders';
+import { aiEmbeddingDefaultModel, aiEmbeddingProviderPreset, aiEmbeddingProviderPresets, aiEmbeddingProvidersForMode, aiProviderDefaultModel, aiProviderPreset, aiProviderPresets, type AiEmbeddingProviderMode } from './aiProviders';
 import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
@@ -725,6 +725,21 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
       if (settings) handlers.setDefaultAiProvider(settings);
     }
+    if (action === 'select-embedding-mode' && isAiEmbeddingProviderMode(target.dataset.embeddingMode)) {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
+      if (form && settings) {
+        const providerId = aiEmbeddingProvidersForMode(target.dataset.embeddingMode)[0]?.id ?? 'openai';
+        settings.embeddings.providerId = providerId;
+        settings.embeddings.model = settings.embeddings.modelsByProvider?.[providerId] || aiEmbeddingDefaultModel(providerId);
+        settings.embeddings.modelsByProvider = {
+          ...(settings.embeddings.modelsByProvider ?? {}),
+          [providerId]: settings.embeddings.model,
+        };
+        settings.embeddings.dimensions = null;
+        handlers.selectAiProvider(String(new FormData(form).get('selectedProviderId') ?? settings.activeProviderId), settings);
+      }
+    }
     if (action === 'provider-docs') {
       const url = target.dataset.url;
       if (url) handlers.openProviderDocs(url);
@@ -1087,6 +1102,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-action-provider') {
       syncAiActionModelForProvider(target);
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-embedding-provider') {
+      syncAiEmbeddingModelForProvider(target);
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-embedding-model-preset') {
+      syncAiEmbeddingCustomModelInput(target);
     }
   }, { signal });
   root.addEventListener('contextmenu', (event) => {
@@ -4661,29 +4682,64 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
 
 function renderEmbeddingSettingsField(settings: AiSettings): string {
   const config = settings.embeddings;
-  const effectiveProviderId = config.providerId || settings.activeProviderId;
+  const effectiveProviderId = aiEmbeddingProviderPresets.some((preset) => preset.id === config.providerId)
+    ? config.providerId
+    : 'openai';
+  const embeddingProvider = aiEmbeddingProviderPreset(effectiveProviderId);
+  const mode = embeddingProvider.mode;
   const provider = aiProviderPreset(effectiveProviderId);
-  const model = config.modelsByProvider?.[effectiveProviderId]?.trim() || config.model || 'text-embedding-ada-002';
+  const model = config.modelsByProvider?.[effectiveProviderId]?.trim() || config.model || aiEmbeddingDefaultModel(effectiveProviderId);
   const modelsByProvider = { ...(config.modelsByProvider ?? {}), [effectiveProviderId]: model };
+  const presetModelIds = new Set(embeddingProvider.models.map((option) => option.id));
+  const isCustomModel = !presetModelIds.has(model);
+  const showCustomDimensions = isCustomModel || config.dimensions !== null && config.dimensions !== undefined;
+  const providerOptions = aiEmbeddingProvidersForMode(mode);
   const controls = config.enabled ? `
+      <div class="ai-embedding-mode">
+        <span>Mode</span>
+        <div class="segmented-control" role="group" aria-label="Embedding mode">
+          ${(['cloud', 'local'] as const).map((option) => `
+            <button
+              type="button"
+              class="${option === mode ? 'is-active' : ''}"
+              data-action="select-embedding-mode"
+              data-embedding-mode="${escapeAttr(option)}"
+              aria-pressed="${option === mode ? 'true' : 'false'}"
+            >${option === 'cloud' ? 'Cloud' : 'Local'}</button>
+          `).join('')}
+        </div>
+      </div>
       <label>
         <span>Provider</span>
         <select name="embeddingProviderId" data-field="ai-embedding-provider" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
-          ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === effectiveProviderId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
+          ${providerOptions.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === effectiveProviderId ? 'selected' : ''}>${escapeHtml(aiProviderPreset(option.id).name)}</option>`).join('')}
         </select>
       </label>
+      <p class="ai-embedding-warning${effectiveProviderId === 'openai' ? ' is-hidden' : ''}">Untested</p>
       <label>
         <span>Model</span>
-        <input name="embeddingModel" type="text" value="${escapeAttr(model)}" placeholder="${escapeAttr(provider.id === 'openai' ? 'text-embedding-ada-002' : provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
+        <select name="embeddingModelPreset" data-field="ai-embedding-model-preset">
+          ${embeddingProvider.models.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === model ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+          <option value="custom" ${isCustomModel ? 'selected' : ''}>Custom</option>
+        </select>
       </label>
-      <label>
-        <span>Dimensions</span>
-        <input name="embeddingDimensions" type="number" min="1" step="1" value="${escapeAttr(config.dimensions ? String(config.dimensions) : '')}" placeholder="default">
+      <label class="ai-embedding-custom-model${isCustomModel ? '' : ' is-hidden'}">
+        <span>Custom model</span>
+        <input name="embeddingModel" type="text" value="${escapeAttr(isCustomModel ? model : '')}" placeholder="${escapeAttr(embeddingProvider.modelPlaceholder || provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
       </label>
-      <label>
-        <span>Batch size</span>
-        <input name="embeddingBatchSize" type="number" min="1" max="256" step="1" value="${escapeAttr(String(config.batchSize || 8))}">
-      </label>
+      <details class="ai-embedding-advanced">
+        <summary>Advanced</summary>
+        ${showCustomDimensions ? `
+          <label>
+            <span>Custom dimensions</span>
+            <input name="embeddingDimensions" type="number" min="1" step="1" value="${escapeAttr(config.dimensions ? String(config.dimensions) : '')}" placeholder="model default">
+          </label>
+        ` : ''}
+        <label>
+          <span>Batch size</span>
+          <input name="embeddingBatchSize" type="number" min="1" max="256" step="1" value="${escapeAttr(String(config.batchSize || 8))}">
+        </label>
+      </details>
   ` : '';
   return `
     <fieldset class="ai-action-config ai-embedding-config">
@@ -4764,10 +4820,15 @@ function readAiSettingsForm(data: FormData): AiSettings {
 }
 
 function readEmbeddingSettings(data: FormData, parsed: AiSettings | null, fallbackProviderId: string): AiSettings['embeddings'] {
-  const providerId = String(data.get('embeddingProviderId') ?? parsed?.embeddings?.providerId ?? fallbackProviderId).trim() || fallbackProviderId;
+  const parsedProviderId = parsed?.embeddings?.providerId ?? fallbackProviderId;
+  const providerInput = String(data.get('embeddingProviderId') ?? parsedProviderId).trim() || parsedProviderId;
+  const providerId = aiEmbeddingProviderPresets.some((preset) => preset.id === providerInput) ? providerInput : 'openai';
   const modelsByProvider = parseAiActionModelsByProvider(String(data.get('embeddingModelsByProvider') ?? ''));
-  const modelInput = String(data.get('embeddingModel') ?? '').trim();
-  const model = modelInput || modelsByProvider[providerId] || (providerId === 'openai' ? 'text-embedding-ada-002' : aiProviderPreset(providerId).modelPlaceholder);
+  const modelPreset = String(data.get('embeddingModelPreset') ?? '').trim();
+  const modelInput = modelPreset && modelPreset !== 'custom'
+    ? modelPreset
+    : String(data.get('embeddingModel') ?? '').trim();
+  const model = modelInput || modelsByProvider[providerId] || aiEmbeddingDefaultModel(providerId);
   modelsByProvider[providerId] = model;
   return {
     enabled: data.get('embeddingsEnabled') === 'on',
@@ -4845,8 +4906,9 @@ function normalizeAiSettingsForForm(settings: AiSettings): AiSettings {
 }
 
 function normalizeEmbeddingSettingsForForm(settings: AiSettings['embeddings'] | undefined, activeProviderId: string): AiSettings['embeddings'] {
-  const providerId = settings?.providerId?.trim() || 'openai' || activeProviderId;
-  const model = settings?.model?.trim() || settings?.modelsByProvider?.[providerId]?.trim() || 'text-embedding-ada-002';
+  const requestedProviderId = settings?.providerId?.trim() || activeProviderId || 'openai';
+  const providerId = aiEmbeddingProviderPresets.some((preset) => preset.id === requestedProviderId) ? requestedProviderId : 'openai';
+  const model = settings?.model?.trim() || settings?.modelsByProvider?.[providerId]?.trim() || aiEmbeddingDefaultModel(providerId);
   return {
     enabled: settings?.enabled === true,
     providerId,
@@ -4854,7 +4916,7 @@ function normalizeEmbeddingSettingsForForm(settings: AiSettings['embeddings'] | 
     modelsByProvider: {
       ...(settings?.modelsByProvider ?? {}),
       [providerId]: model,
-      openai: settings?.modelsByProvider?.openai?.trim() || 'text-embedding-ada-002',
+      openai: settings?.modelsByProvider?.openai?.trim() || aiEmbeddingDefaultModel('openai'),
     },
     dimensions: normalizeEmbeddingDimensions(settings?.dimensions),
     batchSize: normalizeEmbeddingBatchSize(settings?.batchSize),
@@ -4916,6 +4978,70 @@ function syncAiActionModelForProvider(select: HTMLSelectElement): void {
   modelInput.placeholder = provider.modelPlaceholder;
   select.dataset.effectiveProviderId = providerId;
   modelsInput.value = JSON.stringify(modelsByProvider);
+}
+
+function syncAiEmbeddingModelForProvider(select: HTMLSelectElement): void {
+  const form = select.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+  const fieldset = select.closest<HTMLFieldSetElement>('.ai-embedding-config');
+  const modelSelect = fieldset?.querySelector<HTMLSelectElement>('select[name="embeddingModelPreset"]');
+  const modelInput = fieldset?.querySelector<HTMLInputElement>('input[name="embeddingModel"]');
+  const modelsInput = fieldset?.querySelector<HTMLTextAreaElement>('textarea[name="embeddingModelsByProvider"]');
+  const dimensionsInput = fieldset?.querySelector<HTMLInputElement>('input[name="embeddingDimensions"]');
+  if (!form || !fieldset || !modelSelect || !modelInput || !modelsInput) return;
+  const modelsByProvider = parseAiActionModelsByProvider(modelsInput.value);
+  const previousProviderId = select.dataset.effectiveProviderId || 'openai';
+  const previousModel = selectedEmbeddingModel(modelSelect, modelInput);
+  if (previousProviderId && previousModel) {
+    modelsByProvider[previousProviderId] = previousModel;
+  }
+  const providerId = select.value;
+  const provider = aiEmbeddingProviderPreset(providerId);
+  const model = modelsByProvider[providerId] || aiEmbeddingDefaultModel(providerId);
+  modelSelect.innerHTML = [
+    ...provider.models.map((option) => `<option value="${escapeAttr(option.id)}">${escapeHtml(option.label)}</option>`),
+    '<option value="custom">Custom</option>',
+  ].join('');
+  if (provider.models.some((option) => option.id === model)) {
+    modelSelect.value = model;
+    modelInput.value = '';
+  } else {
+    modelSelect.value = 'custom';
+    modelInput.value = model;
+  }
+  modelInput.placeholder = provider.modelPlaceholder;
+  modelInput.closest('label')?.classList.toggle('is-hidden', modelSelect.value !== 'custom');
+  fieldset.querySelector<HTMLElement>('.ai-embedding-warning')?.classList.toggle('is-hidden', providerId === 'openai');
+  if (dimensionsInput) dimensionsInput.value = '';
+  select.dataset.effectiveProviderId = providerId;
+  modelsInput.value = JSON.stringify(modelsByProvider);
+}
+
+function syncAiEmbeddingCustomModelInput(select: HTMLSelectElement): void {
+  const fieldset = select.closest<HTMLFieldSetElement>('.ai-embedding-config');
+  const providerSelect = fieldset?.querySelector<HTMLSelectElement>('select[name="embeddingProviderId"]');
+  const modelInput = fieldset?.querySelector<HTMLInputElement>('input[name="embeddingModel"]');
+  const modelsInput = fieldset?.querySelector<HTMLTextAreaElement>('textarea[name="embeddingModelsByProvider"]');
+  if (!fieldset || !providerSelect || !modelInput || !modelsInput) return;
+  const provider = aiEmbeddingProviderPreset(providerSelect.value);
+  const isCustom = select.value === 'custom';
+  modelInput.closest('label')?.classList.toggle('is-hidden', !isCustom);
+  if (isCustom) {
+    modelInput.placeholder = provider.modelPlaceholder;
+    modelInput.focus();
+  } else {
+    modelInput.value = '';
+    const modelsByProvider = parseAiActionModelsByProvider(modelsInput.value);
+    modelsByProvider[providerSelect.value] = select.value;
+    modelsInput.value = JSON.stringify(modelsByProvider);
+  }
+}
+
+function selectedEmbeddingModel(modelSelect: HTMLSelectElement, modelInput: HTMLInputElement): string {
+  return modelSelect.value === 'custom' ? modelInput.value.trim() : modelSelect.value.trim();
+}
+
+function isAiEmbeddingProviderMode(value: unknown): value is AiEmbeddingProviderMode {
+  return value === 'cloud' || value === 'local';
 }
 
 function normalizeAiMaxContextChars(value: unknown): number {

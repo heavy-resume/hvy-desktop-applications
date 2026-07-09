@@ -8,6 +8,20 @@ export interface AiProviderPreset {
 }
 
 type AiProviderActionKey = 'chat' | 'edit' | 'importPlanning' | 'importWriting' | 'importCleanup' | 'semanticFilter' | 'compaction';
+export type AiEmbeddingProviderMode = 'cloud' | 'local';
+
+export interface AiEmbeddingModelPreset {
+  id: string;
+  label: string;
+}
+
+export interface AiEmbeddingProviderPreset {
+  id: string;
+  mode: AiEmbeddingProviderMode;
+  modelPlaceholder: string;
+  defaultModel: string;
+  models: AiEmbeddingModelPreset[];
+}
 
 export const aiProviderPresets: AiProviderPreset[] = [
   {
@@ -49,6 +63,30 @@ export const aiProviderPresets: AiProviderPreset[] = [
     apiKeyPlaceholder: 'sk-...',
     modelPlaceholder: 'gpt-5.4-mini',
     docsUrl: 'https://developers.openai.com/api/reference/overview',
+  },
+  {
+    id: 'voyage',
+    name: 'Voyage AI',
+    baseUrl: 'https://api.voyageai.com/v1',
+    apiKeyPlaceholder: 'pa-...',
+    modelPlaceholder: 'voyage-4',
+    docsUrl: 'https://docs.voyageai.com/docs/embeddings',
+  },
+  {
+    id: 'cohere',
+    name: 'Cohere',
+    baseUrl: 'https://api.cohere.com',
+    apiKeyPlaceholder: 'API key',
+    modelPlaceholder: 'embed-v4.0',
+    docsUrl: 'https://docs.cohere.com/v2/reference/embed',
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    apiKeyPlaceholder: 'API key',
+    modelPlaceholder: 'gemini-embedding-001',
+    docsUrl: 'https://ai.google.dev/api/embeddings',
   },
   {
     id: 'anthropic',
@@ -111,4 +149,99 @@ export function aiProviderDefaultModel(id: string, action?: AiProviderActionKey)
       : 'gpt-5.4-mini';
   }
   return aiProviderPreset(id).modelPlaceholder;
+}
+
+export const aiEmbeddingProviderPresets: AiEmbeddingProviderPreset[] = [
+  {
+    id: 'openai',
+    mode: 'cloud',
+    modelPlaceholder: 'text-embedding-ada-002',
+    defaultModel: 'text-embedding-ada-002',
+    models: [
+      { id: 'text-embedding-ada-002', label: 'text-embedding-ada-002' },
+      { id: 'text-embedding-3-small', label: 'text-embedding-3-small' },
+      { id: 'text-embedding-3-large', label: 'text-embedding-3-large' },
+    ],
+  },
+  {
+    id: 'mistral',
+    mode: 'cloud',
+    modelPlaceholder: 'mistral-embed',
+    defaultModel: 'mistral-embed',
+    models: [
+      { id: 'mistral-embed', label: 'mistral-embed' },
+    ],
+  },
+  {
+    id: 'voyage',
+    mode: 'cloud',
+    modelPlaceholder: 'voyage-4',
+    defaultModel: 'voyage-4',
+    models: [
+      { id: 'voyage-4', label: 'voyage-4' },
+      { id: 'voyage-4-large', label: 'voyage-4-large' },
+      { id: 'voyage-4-lite', label: 'voyage-4-lite' },
+      { id: 'voyage-code-3', label: 'voyage-code-3' },
+      { id: 'voyage-law-2', label: 'voyage-law-2' },
+      { id: 'voyage-finance-2', label: 'voyage-finance-2' },
+    ],
+  },
+  {
+    id: 'cohere',
+    mode: 'cloud',
+    modelPlaceholder: 'embed-v4.0',
+    defaultModel: 'embed-v4.0',
+    models: [
+      { id: 'embed-v4.0', label: 'embed-v4.0' },
+      { id: 'embed-english-v3.0', label: 'embed-english-v3.0' },
+      { id: 'embed-multilingual-v3.0', label: 'embed-multilingual-v3.0' },
+    ],
+  },
+  {
+    id: 'gemini',
+    mode: 'cloud',
+    modelPlaceholder: 'gemini-embedding-001',
+    defaultModel: 'gemini-embedding-001',
+    models: [
+      { id: 'gemini-embedding-001', label: 'gemini-embedding-001' },
+    ],
+  },
+  {
+    id: 'ollama',
+    mode: 'local',
+    modelPlaceholder: 'nomic-embed-text',
+    defaultModel: 'nomic-embed-text',
+    models: [
+      { id: 'nomic-embed-text', label: 'nomic-embed-text' },
+      { id: 'mxbai-embed-large', label: 'mxbai-embed-large' },
+    ],
+  },
+  {
+    id: 'lm-studio',
+    mode: 'local',
+    modelPlaceholder: 'local embedding model',
+    defaultModel: 'local-model',
+    models: [
+      { id: 'local-model', label: 'local-model' },
+    ],
+  },
+  {
+    id: 'custom',
+    mode: 'local',
+    modelPlaceholder: 'model name',
+    defaultModel: '',
+    models: [],
+  },
+];
+
+export function aiEmbeddingProviderPreset(id: string): AiEmbeddingProviderPreset {
+  return aiEmbeddingProviderPresets.find((preset) => preset.id === id) ?? aiEmbeddingProviderPresets[0];
+}
+
+export function aiEmbeddingProvidersForMode(mode: AiEmbeddingProviderMode): AiEmbeddingProviderPreset[] {
+  return aiEmbeddingProviderPresets.filter((preset) => preset.mode === mode);
+}
+
+export function aiEmbeddingDefaultModel(id: string): string {
+  return aiEmbeddingProviderPreset(id).defaultModel;
 }
