@@ -1116,6 +1116,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const fileButton = target?.closest<HTMLButtonElement>('.tree-file');
     const path = fileButton?.dataset.path;
     const name = fileButton?.dataset.name;
+    const relativePath = fileButton?.dataset.relativePath ?? name ?? '';
     const archived = fileButton?.dataset.archived === 'true';
     if (fileButton && path && name) {
       const workspacePath = workspacePathForTreeTarget(fileButton, state);
@@ -1123,7 +1124,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.preventDefault();
       const locked = fileButton.dataset.locked === 'true';
       const hiddenFromAI = fileButton.getAttribute('data-hidden-from-ai') === 'true';
-      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
+      showFileContextMenu(event, path, name, relativePath, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
       return;
     }
     const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
@@ -2438,6 +2439,7 @@ function showFileContextMenu(
   event: MouseEvent,
   path: string,
   name: string,
+  relativePath: string,
   workspacePath: string,
   archived: boolean,
   locked: boolean,
@@ -2452,10 +2454,12 @@ function showFileContextMenu(
   menu.className = 'file-context-menu';
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
+  const parentDirectory = parentDirectoryForRelativePath(relativePath);
   menu.innerHTML = archived ? `
     <button type="button" data-menu-action="restore">Restore</button>
     <button type="button" data-menu-action="delete">Delete</button>
   ` : `
+    <button type="button" data-menu-action="new-document">New Document</button>
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
     <button type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
@@ -2482,6 +2486,7 @@ function showFileContextMenu(
     const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
     if (!button) return;
     cleanup();
+    if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, parentDirectory);
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
     if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
@@ -2580,6 +2585,12 @@ function showWorkspaceContextMenu(
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
   });
+}
+
+function parentDirectoryForRelativePath(relativePath: string): string {
+  const segments = relativePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  segments.pop();
+  return segments.join('/');
 }
 
 function closeFileContextMenu(): void {
@@ -3021,7 +3032,7 @@ function renderNode(
     : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
