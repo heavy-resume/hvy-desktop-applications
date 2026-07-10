@@ -875,7 +875,7 @@ button:disabled {
   stroke-width: 2;
 }
 
-.search-filter-box-head > span {
+.search-filter-box-head>span {
   margin-right: auto;
 }
 
@@ -3592,6 +3592,19 @@ button:disabled {
   font-size: 0.78rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.hvy-document-host .text-editor-shell.has-fill-in-selection .text-editor-toolbar-bounds {
+  z-index: 0;
+}
+
+.hvy-document-host .text-editor-shell.has-fill-in-selection .text-editor-toolbar-slot {
+  position: relative;
+  top: auto;
+}
+
+.hvy-document-host .text-editor-shell.has-fill-in-selection .text-use-as-selection {
+  pointer-events: auto;
 }
 
 .hvy-document-host .chat-launcher {

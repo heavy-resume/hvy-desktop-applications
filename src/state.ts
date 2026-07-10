@@ -57,6 +57,7 @@ export interface AppState {
   newFolderWorkspacePath: string | null;
   newFolderParentDirectory: string;
   workspaceExpanded: Record<string, boolean>;
+  workspaceFolderExpanded: Record<string, Record<string, boolean>>;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
   newDocumentDirectory: string;
@@ -228,6 +229,7 @@ export const state: AppState = {
   newFolderWorkspacePath: null,
   newFolderParentDirectory: '',
   workspaceExpanded: {},
+  workspaceFolderExpanded: {},
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,
   newDocumentDirectory: '',

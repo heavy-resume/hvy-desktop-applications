@@ -74,6 +74,7 @@ export interface UiHandlers {
   submitWorkspaceChat(): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
+  setWorkspaceFolderExpanded(workspacePath: string, relativePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
   setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
   setWorkspaceFilterBehavior(mode: SearchFilterMode): void;
@@ -1142,9 +1143,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const workspacePath = workspaceSummary?.parentElement instanceof HTMLDetailsElement
       ? workspaceSummary.parentElement.dataset.workspacePath
       : null;
-    if (!workspaceSummary || !workspacePath) return;
+    if (workspaceSummary && workspacePath) {
+      event.preventDefault();
+      showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '');
+      return;
+    }
+    const workspaceRoot = target?.closest<HTMLElement>('.workspace-root');
+    if (!workspaceRoot?.dataset.workspacePath || target?.closest('.tree .tree')) return;
     event.preventDefault();
-    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '');
+    showWorkspaceContextMenu(event, workspaceRoot.dataset.workspacePath, state.workspaceClipboard, handlers, '');
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
@@ -1162,6 +1169,20 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       if (details.open === wasOpen) return;
       handlers.setWorkspaceExpanded(workspacePath, details.open);
       if (details.open) handlers.refreshWorkspace(workspacePath);
+    }, 0);
+  }, { signal, capture: true });
+  root.addEventListener('click', (event) => {
+    const summary = event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>('.tree summary[data-workspace-folder-target="true"]')
+      : null;
+    const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
+    const workspacePath = summary?.dataset.workspacePath;
+    const relativePath = summary?.dataset.targetDirectory ?? '';
+    if (!summary || !details || !workspacePath) return;
+    const wasOpen = details.open;
+    window.setTimeout(() => {
+      if (details.open === wasOpen) return;
+      handlers.setWorkspaceFolderExpanded(workspacePath, relativePath, details.open);
     }, 0);
   }, { signal, capture: true });
   root.addEventListener('submit', (event) => {
@@ -2720,7 +2741,7 @@ function renderWorkspaces(state: AppState): string {
   if (state.workspaces.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.savedTemplates, state.workspaceEmbeddingPreviews[workspace.path] ?? null)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.workspaceFolderExpanded[workspace.path] ?? {}, state.savedTemplates, state.workspaceEmbeddingPreviews[workspace.path] ?? null)).join('')}</div>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {
@@ -2796,6 +2817,7 @@ function renderWorkspace(
   workspaceClipboard: WorkspaceClipboardState | null,
   fileView: AppState['workspaceFileViews'][string],
   expanded: boolean,
+  folderExpanded: Record<string, boolean>,
   savedTemplates: SavedTemplate[],
   embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null,
 ): string {
@@ -2834,7 +2856,7 @@ function renderWorkspace(
         </div>
       </div>
       ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
-      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, filter ?? null, embeddingPreview)).join('')}</ul>
+      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, folderExpanded, filter ?? null, embeddingPreview)).join('')}</ul>
     </details>`;
 }
 
@@ -2943,6 +2965,7 @@ function renderNode(
   matchedDocumentIds: Set<string> | null,
   workspaceClipboard: WorkspaceClipboardState | null,
   workspacePath: string,
+  folderExpanded: Record<string, boolean>,
   activeFilter: AppState['workspaceFilters'][string] | null = null,
   embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null = null,
 ): string {
@@ -2950,6 +2973,7 @@ function renderNode(
     const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds, activeFilter);
     const name = workspaceNodeName(node);
     const relativePath = workspaceNodeRelativePath(node);
+    const normalizedRelativePath = normalizeTreeRelativePath(relativePath);
     const children = Array.isArray(node.children) ? node.children : [];
     const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
     const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
@@ -2965,13 +2989,14 @@ function renderNode(
           </div>
         </li>`;
     }
+    const open = folderExpanded[normalizedRelativePath] ?? true;
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-        <details open>
+        <details${open ? ' open' : ''}>
           <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}">
             ${folderLabel}
           </summary>
-          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter, embeddingPreview)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, folderExpanded, activeFilter, embeddingPreview)).join('')}</ul>
         </details>
       </li>`;
   }

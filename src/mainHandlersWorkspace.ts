@@ -141,6 +141,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.workspaces = state.workspaces.filter((candidate) => candidate.path !== path);
     delete state.workspaceFilters[path];
     delete state.workspaceExpanded[path];
+    delete state.workspaceFolderExpanded[path];
     clearWorkspaceFilterDocumentCache(path);
     if (state.workspaceFilter.workspacePath === path) {
       state.workspaceFilter.open = false;
@@ -623,6 +624,13 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   },
   setWorkspaceExpanded: (workspacePath, expanded) => {
     state.workspaceExpanded[workspacePath] = expanded;
+  },
+  setWorkspaceFolderExpanded: (workspacePath, relativePath, expanded) => {
+    const normalizedPath = relativePath.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+    state.workspaceFolderExpanded[workspacePath] = {
+      ...(state.workspaceFolderExpanded[workspacePath] ?? {}),
+      [normalizedPath]: expanded,
+    };
   },
   closeWorkspaceFilter: () => {
     state.workspaceFilter.open = false;
