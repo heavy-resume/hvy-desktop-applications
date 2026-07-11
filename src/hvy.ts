@@ -6,6 +6,9 @@ import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bi
 import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
 import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
+import { renderCollapsedSearchBar } from '../../heavy-file-format/src/search/render';
+import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapshot';
+import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
 import type {
@@ -34,6 +37,7 @@ type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocume
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
 } & HvyRecoveryStateMount;
+type SearchSnapshotMount = HvyMount & { getSearchSnapshot: HvyEmbedMount['getSearchSnapshot'] };
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 export interface HvySerializationCostProfile {
   totalProfileMs: number;
@@ -253,7 +257,7 @@ export async function mountHvyDocument(
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
-  const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
+  const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, withEmbeddedSearchCollapsedSurface(root, mount)), options);
   const interactiveMount = withViewerCarouselInteractions(root, mounted);
   const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
   return {
@@ -875,6 +879,17 @@ function withChatPanelResize(root: HTMLElement, mount: HvyMount): HvyMount {
   };
 }
 
+function withEmbeddedSearchCollapsedSurface(root: HTMLElement, mount: SearchSnapshotMount): HvyMount {
+  const cleanup = installEmbeddedSearchCollapsedSurface(root, mount);
+  return {
+    ...mount,
+    destroy() {
+      cleanup();
+      mount.destroy();
+    },
+  };
+}
+
 function withViewerCarouselInteractions(root: HTMLElement, mount: HvyMount): HvyMount {
   const cleanup = installViewerCarouselInteractions(root);
   return {
@@ -1252,6 +1267,50 @@ function installViewerCarouselInteractions(root: HTMLElement): () => void {
   };
   const observer = new MutationObserver(scheduleBind);
   bindCarouselInteractions(root);
+  observer.observe(root, { childList: true, subtree: true });
+  return () => {
+    observer.disconnect();
+    if (frame) {
+      window.cancelAnimationFrame(frame);
+    }
+  };
+}
+
+function installEmbeddedSearchCollapsedSurface(root: HTMLElement, mount: SearchSnapshotMount): () => void {
+  let frame = 0;
+  let renderedSurface: HTMLElement | null = null;
+  let renderedHtml = '';
+  const ensureSurface = () => {
+    frame = 0;
+    const pane = root.querySelector<HTMLElement>('.pane.full-pane');
+    if (!pane || pane.querySelector('.raw-hvy-shell')) {
+      return;
+    }
+    let surface = pane.querySelector<HTMLElement>('[data-search-surface="collapsed"]');
+    if (!surface) {
+      surface = documentOwner().createElement('div');
+      surface.dataset.searchSurface = 'collapsed';
+    }
+    const anchor = pane.querySelector<HTMLElement>('.editor-shell, .viewer-shell, .document-meta-view');
+    if (surface.parentElement !== pane || surface.nextElementSibling !== anchor) {
+      pane.insertBefore(surface, anchor ?? pane.firstChild);
+    }
+    const search = searchSnapshotToState(mount.getSearchSnapshot());
+    search.open = Boolean(search.activeResultId && search.results.length);
+    search.resultsCollapsed = search.open;
+    const html = renderCollapsedSearchBar(search, { escapeHtml: escapeHvyHtml });
+    if (surface !== renderedSurface || html !== renderedHtml) {
+      surface.innerHTML = html;
+      renderedSurface = surface;
+      renderedHtml = html;
+    }
+  };
+  const scheduleEnsure = () => {
+    if (frame) return;
+    frame = window.requestAnimationFrame(ensureSurface);
+  };
+  const observer = new MutationObserver(scheduleEnsure);
+  ensureSurface();
   observer.observe(root, { childList: true, subtree: true });
   return () => {
     observer.disconnect();
