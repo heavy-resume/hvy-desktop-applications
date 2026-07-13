@@ -376,6 +376,7 @@
                 semantic_filter: AiActionConfig::new(" openai-compatible ", " semantic "),
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
+            embeddings: AiEmbeddingSettings::default(),
             max_context_chars: 0,
             max_concurrent_semantic_filters: 0,
         })
@@ -603,17 +604,24 @@ model = "gpt-5.4"
         assert_eq!(
             names,
             vec![
-                "workspace.list",
-                "workspace.tree",
-                "workspace.search",
-                "workspace.create",
-                "workspace.archive",
-                "document.create",
-                "document.archive",
-                "hvy.guidance",
-                "document.cli_based_editor",
+                "workspace_list",
+                "workspace_tree",
+                "workspace_search",
+                "workspace_create",
+                "workspace_archive",
+                "document_create",
+                "document_archive",
+                "hvy_guidance",
+                "document_cli_based_editor",
             ]
         );
+        assert!(names
+            .iter()
+            .all(|name| !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')));
         assert!(tools[2]
             .get("description")
             .and_then(|description| description.as_str())
@@ -778,7 +786,7 @@ model = "gpt-5.4"
         .to_string();
         assert!(
             error.contains(
-                "document.cli_based_editor can only run read commands for locked or archived files."
+                "document_cli_based_editor can only run read commands for locked or archived files."
             )
         );
         assert_eq!(fs::read_to_string(&locked_path).unwrap(), original);
@@ -819,7 +827,7 @@ model = "gpt-5.4"
         .to_string();
         assert!(
             error.contains(
-                "document.cli_based_editor can only run read commands for locked or archived files."
+                "document_cli_based_editor can only run read commands for locked or archived files."
             )
         );
         assert_eq!(fs::read_to_string(&archived_path).unwrap(), original);
@@ -1021,13 +1029,13 @@ model = "gpt-5.4"
 
     #[test]
     fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
-        assert!(ensure_mcp_tool_allowed("workspace.search", "searchOnly").is_ok());
-        assert!(ensure_mcp_tool_allowed("hvy.guidance", "searchOnly").is_ok());
-        assert!(ensure_mcp_tool_allowed("document.cli_based_editor", "searchOnly").is_err());
-        assert!(ensure_mcp_tool_allowed("document.cli_based_editor", "hvyCliEdits").is_ok());
-        assert!(ensure_mcp_tool_allowed("document.create", "hvyCliEdits").is_err());
-        assert!(ensure_mcp_tool_allowed("document.archive", "createImportSave").is_ok());
-        assert!(ensure_mcp_tool_allowed("workspace.create", "createImportSave").is_ok());
+        assert!(ensure_mcp_tool_allowed("workspace_search", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("hvy_guidance", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "searchOnly").is_err());
+        assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "hvyCliEdits").is_ok());
+        assert!(ensure_mcp_tool_allowed("document_create", "hvyCliEdits").is_err());
+        assert!(ensure_mcp_tool_allowed("document_archive", "createImportSave").is_ok());
+        assert!(ensure_mcp_tool_allowed("workspace_create", "createImportSave").is_ok());
     }
 
     #[test]
@@ -1073,7 +1081,7 @@ model = "gpt-5.4"
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "workspace.search",
+                    "name": "workspace_search",
                     "arguments": {
                         "query": "James Hutchison"
                     }
