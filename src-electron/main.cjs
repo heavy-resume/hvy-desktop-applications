@@ -13,6 +13,7 @@ const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const APP_SETTINGS = 'app-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
+const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
 const RECENT_LIMIT = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
 const AI_MIN_CONTEXT_CHARS = 1000;
@@ -461,8 +462,8 @@ async function handleCommand(command, args) {
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
-    case 'load_mcp_settings': return readJson(dataPath(MCP_SETTINGS), defaultMcpSettings());
-    case 'save_mcp_settings': return writeJson(dataPath(MCP_SETTINGS), normalizeMcpSettings(args.settings));
+    case 'load_mcp_settings': return loadMcpSettings();
+    case 'save_mcp_settings': return saveMcpSettings(args.settings);
     case 'load_mcp_server_status': return mcpStatus;
     case 'load_mcp_stdio_launch_config': return defaultMcpStdioLaunchConfig();
     case 'load_mcp_client_install_status': return mcpClientInstallStatuses();
@@ -477,7 +478,7 @@ async function handleCommand(command, args) {
       mcpStatus = { running: false, url: null, message: 'MCP server is stopped.', lastError: null };
       refreshMenu();
       return mcpStatus;
-    case 'update_mcp_workspaces': return null;
+    case 'update_mcp_workspaces': return updateMcpWorkspaces(args.paths);
     case 'load_default_guide': return readDocumentAt(defaultGuidePath());
     case 'load_hvy_guide': return readDocumentAt(hvyGuidePath());
     case 'open_workspace_dialog': return openWorkspaceDialog();
@@ -1995,11 +1996,68 @@ function defaultMcpSettings() {
   };
 }
 
+function loadMcpSettings() {
+  const settings = normalizeMcpSettings(readJson(dataPath(MCP_SETTINGS), defaultMcpSettings()));
+  writeJson(dataPath(MCP_SETTINGS), settings);
+  writeMcpStdioSettings(settings);
+  return settings;
+}
+
+function saveMcpSettings(settings) {
+  const normalized = normalizeMcpSettings(settings);
+  writeJson(dataPath(MCP_SETTINGS), normalized);
+  writeMcpStdioSettings(normalized);
+  return normalized;
+}
+
 function normalizeMcpSettings(settings) {
   return {
     ...defaultMcpSettings(),
     ...(settings || {}),
   };
+}
+
+function mcpStdioWorkspaceConfigPath() {
+  return path.join(sharedAppDataDir(), 'mcp', MCP_STDIO_WORKSPACE_CONFIG);
+}
+
+function readMcpStdioWorkspaceConfig() {
+  const config = readJson(mcpStdioWorkspaceConfigPath(), { workspaces: [], writeAccess: defaultMcpSettings().writeAccess });
+  return {
+    workspaces: Array.isArray(config.workspaces) ? config.workspaces.filter((workspace) => typeof workspace === 'string') : [],
+    writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+  };
+}
+
+function writeMcpStdioWorkspaceConfig(config) {
+  return writeJson(mcpStdioWorkspaceConfigPath(), {
+    workspaces: Array.isArray(config.workspaces) ? config.workspaces : [],
+    writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+  });
+}
+
+function writeMcpStdioSettings(settings) {
+  const config = readMcpStdioWorkspaceConfig();
+  config.writeAccess = settings.writeAccess;
+  writeMcpStdioWorkspaceConfig(config);
+}
+
+function updateMcpWorkspaces(paths) {
+  const normalized = [];
+  for (const candidate of Array.isArray(paths) ? paths : []) {
+    const workspacePath = path.resolve(String(candidate || ''));
+    if (workspaceManifestPath(workspacePath)) {
+      normalized.push(workspacePath);
+    }
+  }
+  normalized.sort();
+  const deduped = [...new Set(normalized)];
+  const settings = normalizeMcpSettings(readJson(dataPath(MCP_SETTINGS), defaultMcpSettings()));
+  writeMcpStdioWorkspaceConfig({
+    workspaces: deduped,
+    writeAccess: settings.writeAccess,
+  });
+  return null;
 }
 
 function defaultMcpStdioLaunchConfig() {

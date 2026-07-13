@@ -10,8 +10,9 @@ where
     R: Read,
     W: Write,
 {
+    let args = args.into_iter().collect::<Vec<_>>();
     let workspace_config_path = cwd.join(MCP_STDIO_WORKSPACE_CONFIG);
-    let mut workspace_config = mcp_stdio_workspace_config(args, env_workspaces, cwd)?;
+    let mut workspace_config = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone())?;
     let mut workspace_paths = workspace_config
         .workspaces
         .iter()
@@ -19,6 +20,14 @@ where
         .collect::<Vec<_>>();
     let mut reader = BufReader::new(input);
     while let Some(message) = read_mcp_stdio_message(&mut reader)? {
+        if let Ok(next_config) = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone()) {
+            workspace_config = next_config;
+            workspace_paths = workspace_config
+                .workspaces
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+        }
         if handle_mcp_stdio_message(
             message,
             &mut output,
@@ -26,7 +35,7 @@ where
             &workspace_paths,
             &workspace_config_path,
         )? {
-            if let Ok(next_config) = read_mcp_workspace_config(&workspace_config_path) {
+            if let Ok(next_config) = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone()) {
                 workspace_config = next_config;
                 workspace_paths = workspace_config
                     .workspaces
