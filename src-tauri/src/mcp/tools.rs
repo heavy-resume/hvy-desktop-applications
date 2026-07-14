@@ -251,6 +251,7 @@ pub(crate) fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<ser
     Ok(serde_json::json!({
         "workspaces": workspaces
             .iter()
+            .filter(|workspace| !workspace.manifest.hidden_from_ai)
             .map(|workspace| serde_json::json!({
                 "name": workspace.manifest.name,
                 "path": workspace.path,
@@ -265,6 +266,7 @@ pub(crate) fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde
     let requested_path = arguments.get("workspacePath").and_then(|path| path.as_str());
     let workspaces = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .filter(|workspace| requested_path.map(|path| path == workspace.path).unwrap_or(true))
         .map(|workspace| serde_json::json!({
             "name": workspace.manifest.name,
@@ -293,6 +295,9 @@ pub(crate) fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: ser
     let query_lower = query.to_ascii_lowercase();
     let mut results = Vec::new();
     for workspace in workspaces {
+        if workspace.manifest.hidden_from_ai {
+            continue;
+        }
         if requested_path.map(|path| path != workspace.path).unwrap_or(false) {
             continue;
         }
@@ -361,6 +366,7 @@ pub(crate) fn mcp_workspace_archive_from(
         .ok_or_else(|| AppError::Message("workspace_archive requires a workspacePath.".into()))?;
     let workspace = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .find(|workspace| workspace.path == workspace_path)
         .ok_or_else(|| AppError::Message("workspace_archive requires an active workspace path.".into()))?;
     if let Some(config_path) = workspace_config_path {
@@ -395,6 +401,7 @@ pub(crate) fn mcp_document_create_from(workspaces: &[Workspace], arguments: serd
         .ok_or_else(|| AppError::Message("document_create requires a name.".into()))?;
     let workspace = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .find(|workspace| workspace.path == workspace_path)
         .ok_or_else(|| AppError::Message("document_create requires an existing active workspace.".into()))?;
     let workspace_path = PathBuf::from(&workspace.path);
@@ -427,6 +434,7 @@ pub(crate) fn mcp_document_archive_from(workspaces: &[Workspace], arguments: ser
     let document_path = PathBuf::from(path);
     let workspace = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .find(|workspace| workspace_contains_visible_document(workspace, &document_path))
         .ok_or_else(|| AppError::Message("document_archive path must be an active HVY document in an added workspace.".into()))?;
     let document_file = flatten_workspace_file_nodes(&workspace.files)
@@ -609,13 +617,18 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 name,
                 path,
                 relative_path,
+                hidden_from_ai,
                 children,
             } => {
+                if *hidden_from_ai {
+                    return None;
+                }
                 let children = mcp_visible_workspace_nodes(children);
                 (!children.is_empty()).then(|| WorkspaceTreeNode::Folder {
                     name: name.clone(),
                     path: path.clone(),
                     relative_path: relative_path.clone(),
+                    hidden_from_ai: *hidden_from_ai,
                     children,
                 })
             }

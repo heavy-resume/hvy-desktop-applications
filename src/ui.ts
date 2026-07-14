@@ -29,6 +29,8 @@ export interface UiHandlers {
   renameWorkspace(path: string, name: string): void;
   archiveWorkspace(path: string): void;
   unarchiveWorkspace(path: string): void;
+  setWorkspaceHiddenFromAI(workspacePath: string, hiddenFromAI: boolean): void;
+  setWorkspaceFolderHiddenFromAI(workspacePath: string, targetDirectory: string, hiddenFromAI: boolean): void;
   toggleWorkspaceActions(path: string): void;
   closeWorkspaceActions(): void;
   createWorkspace(name: string, location: 'managed' | 'choose'): void;
@@ -1136,6 +1138,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         state.workspaceClipboard,
         handlers,
         folderSummary.dataset.targetDirectory ?? '',
+        folderSummary.dataset.hiddenFromAi === 'true',
         workspaceFolderDeleteInfo(state, folderSummary.dataset.workspacePath, folderSummary.dataset.targetDirectory ?? '', folderSummary.dataset.folderName ?? ''),
       );
       return;
@@ -1146,13 +1149,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       : null;
     if (workspaceSummary && workspacePath) {
       event.preventDefault();
-      showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '');
+      const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '', workspace?.manifest.hiddenFromAI === true);
       return;
     }
     const workspaceRoot = target?.closest<HTMLElement>('.workspace-root');
     if (!workspaceRoot?.dataset.workspacePath || target?.closest('.tree .tree')) return;
     event.preventDefault();
-    showWorkspaceContextMenu(event, workspaceRoot.dataset.workspacePath, state.workspaceClipboard, handlers, '');
+    const workspace = state.workspaces.find((candidate) => candidate.path === workspaceRoot.dataset.workspacePath);
+    showWorkspaceContextMenu(event, workspaceRoot.dataset.workspacePath, state.workspaceClipboard, handlers, '', workspace?.manifest.hiddenFromAI === true);
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
@@ -2521,6 +2526,7 @@ function showWorkspaceContextMenu(
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
   targetDirectory = '',
+  hiddenFromAI = false,
   deleteInfo: WorkspaceFolderDeleteInfo | null = null,
 ): void {
   closeFileContextMenu();
@@ -2541,6 +2547,7 @@ function showWorkspaceContextMenu(
     <button type="button" data-menu-action="paste">Paste</button>
     ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
     ${targetDirectory ? '<button type="button" data-menu-action="chat">Chat Folder</button>' : '<button type="button" data-menu-action="chat">Chat Workspace</button>'}
+    <button type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
     ${targetDirectory ? `<button type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   `;
   const cleanup = () => {
@@ -2566,6 +2573,14 @@ function showWorkspaceContextMenu(
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'filter') handlers.openWorkspaceFilter(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'chat') handlers.openWorkspaceChat(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'hide-from-ai') {
+      if (targetDirectory) handlers.setWorkspaceFolderHiddenFromAI(workspacePath, targetDirectory, true);
+      else handlers.setWorkspaceHiddenFromAI(workspacePath, true);
+    }
+    if (button.dataset.menuAction === 'unhide-from-ai') {
+      if (targetDirectory) handlers.setWorkspaceFolderHiddenFromAI(workspacePath, targetDirectory, false);
+      else handlers.setWorkspaceHiddenFromAI(workspacePath, false);
+    }
     if (button.dataset.menuAction === 'delete-folder') {
       if (deleteInfo && deleteInfo.archivedFiles.length > 0) {
         handlers.confirmDeleteWorkspaceFolder(workspacePath, targetDirectory, deleteInfo.folderName, deleteInfo.archivedFiles);
@@ -2842,14 +2857,16 @@ function renderWorkspace(
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
   const documentsActive = fileView === 'documents';
+  const workspaceHiddenFromAI = workspace.manifest.hiddenFromAI === true;
   const fileViewNodes = filterNodesByWorkspaceFileView(workspace.files, fileView, workspace, savedTemplates);
   const visibleFiles = documentsActive
     ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
     : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
-    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
+    <details class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
+        ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
       </summary>
       <button type="button" class="workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
       <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
@@ -2986,16 +3003,17 @@ function renderNode(
     const relativePath = workspaceNodeRelativePath(node);
     const normalizedRelativePath = normalizeTreeRelativePath(relativePath);
     const children = Array.isArray(node.children) ? node.children : [];
+    const hiddenFromAI = node.hiddenFromAI === true;
     const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
     const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
     const folderFilterTrigger = folderOwnsActiveFilter
       ? `<button type="button" class="workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
       : '';
-    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${folderFilterTrigger}`;
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
     if (children.length === 0) {
       return `
         <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-          <div class="tree-folder-row" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}">
+          <div class="tree-folder-row${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
           </div>
         </li>`;
@@ -3004,7 +3022,7 @@ function renderNode(
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details${open ? ' open' : ''}>
-          <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}">
+          <summary class="${hiddenFromAI ? 'is-hidden-from-ai' : ''}" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
           </summary>
           <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, folderExpanded, activeFilter, embeddingPreview)).join('')}</ul>

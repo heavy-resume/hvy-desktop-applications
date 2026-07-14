@@ -1,4 +1,4 @@
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, unarchiveWorkspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, unarchiveWorkspace, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
@@ -167,6 +167,18 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.workspaceManagerOpen = true;
     state.status = `Unarchived ${workspace.manifest.name}`;
     await refreshRecents();
+  }),
+  setWorkspaceHiddenFromAI: (workspacePath, hiddenFromAI) => void runBusy(`${hiddenFromAI ? 'Hiding workspace from AI' : 'Unhiding workspace from AI'}...`, async () => {
+    const workspace = await updateWorkspaceAiAccess(workspacePath, { hiddenFromAI });
+    upsertWorkspace(workspace);
+    clearWorkspaceFilterDocumentCache(workspace.path);
+    state.status = `${workspace.manifest.name} ${hiddenFromAI ? 'hidden from AI' : 'visible to AI'}`;
+  }),
+  setWorkspaceFolderHiddenFromAI: (workspacePath, targetDirectory, hiddenFromAI) => void runBusy(`${hiddenFromAI ? 'Hiding folder from AI' : 'Unhiding folder from AI'}...`, async () => {
+    const workspace = await updateWorkspaceFolderAiAccess(workspacePath, targetDirectory, { hiddenFromAI });
+    upsertWorkspace(workspace);
+    clearWorkspaceFilterDocumentCache(workspace.path);
+    state.status = `${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'Folder'} ${hiddenFromAI ? 'hidden from AI' : 'visible to AI'}`;
   }),
   toggleWorkspaceActions: (path) => {
     state.openWorkspaceActionsPath = state.openWorkspaceActionsPath === path ? null : path;

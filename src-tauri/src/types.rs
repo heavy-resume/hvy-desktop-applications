@@ -15,6 +15,10 @@ struct WorkspaceManifest {
     archived_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     locked_files: Vec<String>,
+    #[serde(default, rename = "hiddenFromAI", skip_serializing_if = "is_false")]
+    hidden_from_ai: bool,
+    #[serde(default, rename = "hiddenFromAIFolders", skip_serializing_if = "Vec::is_empty")]
+    hidden_from_ai_folders: Vec<String>,
     #[serde(default, rename = "hiddenFromAIFiles", skip_serializing_if = "Vec::is_empty")]
     hidden_from_ai_files: Vec<String>,
 }
@@ -106,6 +110,8 @@ enum WorkspaceTreeNode {
         name: String,
         path: String,
         relative_path: String,
+        #[serde(rename = "hiddenFromAI")]
+        hidden_from_ai: bool,
         children: Vec<WorkspaceTreeNode>,
     },
     File {
@@ -124,6 +130,20 @@ enum WorkspaceTreeNode {
 #[serde(rename_all = "camelCase")]
 struct WorkspaceFileAiAccessUpdate {
     locked: Option<bool>,
+    #[serde(rename = "hiddenFromAI")]
+    hidden_from_ai: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceAiAccessUpdate {
+    #[serde(rename = "hiddenFromAI")]
+    hidden_from_ai: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceFolderAiAccessUpdate {
     #[serde(rename = "hiddenFromAI")]
     hidden_from_ai: Option<bool>,
 }

@@ -186,6 +186,38 @@ fn update_workspace_file_ai_access(path: String, updates: WorkspaceFileAiAccessU
 }
 
 #[tauri::command]
+fn update_workspace_ai_access(workspace_path: String, updates: WorkspaceAiAccessUpdate) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    update_workspace_ai_access_at(&workspace_path, updates)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn update_workspace_folder_ai_access(
+    workspace_path: String,
+    target_directory: String,
+    updates: WorkspaceFolderAiAccessUpdate,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let target_directory = target_directory.trim();
+    if target_directory.is_empty() {
+        return Err(AppError::Message("Folder is required.".into()));
+    }
+    let relative = PathBuf::from(target_directory);
+    if relative.is_absolute() || relative.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err(AppError::Message("Folder path must stay inside the workspace.".into()));
+    }
+    let folder_path = workspace_path.join(relative);
+    if !folder_path.is_dir() {
+        return Err(AppError::Message("Folder was not found.".into()));
+    }
+    update_workspace_folder_ai_access_at(&workspace_path, &folder_path, updates)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
 fn archive_workspace(app: AppHandle, path: String) -> AppResult<()> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
@@ -855,8 +887,12 @@ fn delete_workspace_folder(app: AppHandle, request: DeleteWorkspaceFolderRequest
         .iter()
         .map(|path| relative_path(&workspace_path, path))
         .collect();
+    let deleted_folder_relative = target_directory.replace('\\', "/");
     manifest.archived_files.retain(|entry| !deleted_relatives.contains(entry));
     manifest.locked_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.hidden_from_ai_folders.retain(|entry| {
+        entry != &deleted_folder_relative && !entry.starts_with(&format!("{deleted_folder_relative}/"))
+    });
     manifest.hidden_from_ai_files.retain(|entry| !deleted_relatives.contains(entry));
     manifest.updated_at = Utc::now().to_rfc3339();
     write_json_atomically(&manifest_path, &manifest)?;

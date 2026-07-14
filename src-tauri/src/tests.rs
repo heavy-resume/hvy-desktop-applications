@@ -80,6 +80,43 @@
     }
 
     #[test]
+    fn workspace_and_folder_ai_access_hide_descendant_files() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("public")).unwrap();
+        fs::create_dir(dir.path().join("private")).unwrap();
+        let public_path = dir.path().join("public").join("visible.hvy");
+        let private_path = dir.path().join("private").join("secret.hvy");
+        fs::write(&public_path, "visible").unwrap();
+        fs::write(&private_path, "secret").unwrap();
+        initialize_workspace(dir.path()).unwrap();
+
+        update_workspace_folder_ai_access_at(
+            dir.path(),
+            &dir.path().join("private"),
+            WorkspaceFolderAiAccessUpdate {
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        let loaded = load_workspace_from_path(dir.path()).unwrap();
+        let private_folder_hidden = loaded.files.iter().any(|node| {
+            matches!(node, WorkspaceTreeNode::Folder { name, hidden_from_ai: true, .. } if name == "private")
+        });
+        assert!(private_folder_hidden);
+        assert!(!read_document_at(&public_path).unwrap().hidden_from_ai);
+        assert!(read_document_at(&private_path).unwrap().hidden_from_ai);
+
+        update_workspace_ai_access_at(
+            dir.path(),
+            WorkspaceAiAccessUpdate {
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        assert!(read_document_at(&public_path).unwrap().hidden_from_ai);
+    }
+
+    #[test]
     fn import_source_extension_accepts_pdf() {
         assert_eq!(import_source_extension(Path::new("source.pdf")), Some(".pdf".into()));
     }
@@ -232,6 +269,8 @@
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
             locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
             hidden_from_ai_files: Vec::new(),
         };
         write_json_atomically(&dir.path().join(LEGACY_WORKSPACE_MANIFEST), &manifest).unwrap();
@@ -268,6 +307,8 @@
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
             locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
             hidden_from_ai_files: Vec::new(),
         };
         let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
