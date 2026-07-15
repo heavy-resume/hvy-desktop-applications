@@ -4,12 +4,16 @@ import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
+import type { SavedVersion } from './revisionModel';
 
 export interface OpenDocument {
   path: string;
   name: string;
   extension: DocumentExtension;
-  virtual?: 'workspaceChat';
+  virtual?: 'workspaceChat' | 'versionHistory';
+  historySourcePath?: string;
+  historySourceName?: string;
+  historyVersionId?: string;
   mode: HvyMode;
   dirty: boolean;
   readOnly: boolean;
@@ -98,6 +102,9 @@ export interface AppState {
   debugLogDialogOpen: boolean;
   debugLogEntries: DebugLogEntry[];
   recoveryDialogOpen: boolean;
+  versionHistoryDialogOpen: boolean;
+  savedDocumentVersions: SavedVersion[];
+  selectedSavedVersionId: string | null;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
   closeDocumentDraftDialogOpen: boolean;
@@ -270,6 +277,9 @@ export const state: AppState = {
   debugLogDialogOpen: false,
   debugLogEntries: [],
   recoveryDialogOpen: false,
+  versionHistoryDialogOpen: false,
+  savedDocumentVersions: [],
+  selectedSavedVersionId: null,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
   closeDocumentDraftDialogOpen: false,

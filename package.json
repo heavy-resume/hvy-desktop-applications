@@ -31,6 +31,7 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
+    "@automerge/automerge": "^3.3.2",
     "@tauri-apps/api": "^2.9.0",
     "heavy-file-format-ref-impl": "file:../heavy-file-format",
     "pdfmake": "^0.3.9"

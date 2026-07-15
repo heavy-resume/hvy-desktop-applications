@@ -71,6 +71,7 @@ export async function boot(): Promise<void> {
       if (event === 'zoom-document-out') handlers.zoomDocumentOut();
       if (event === 'zoom-document-reset') handlers.resetDocumentZoom();
       if (event === 'recover-backup') void openRecoveryDialog();
+      if (event === 'version-history') handlers.openVersionHistory();
       if (event === 'app-close-requested') void handleAppCloseRequest();
       if (event === 'close-document') handlers.closeDocument();
       if (event === 'save') handlers.save();

@@ -20,6 +20,13 @@ title: ${JSON.stringify(title)}
 `;
 }
 
+export function savedVersionDocumentName(sourceName: string): string {
+  const dot = sourceName.lastIndexOf('.');
+  return dot > 0
+    ? `${sourceName.slice(0, dot)}-saved-version${sourceName.slice(dot)}`
+    : `${sourceName}-saved-version`;
+}
+
 export function documentFileName(name: string, documentType: DocumentCreationType = 'hvy'): string | null {
   const trimmed = name.trim();
   if (!trimmed) return null;

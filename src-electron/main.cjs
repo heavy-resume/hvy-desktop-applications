@@ -227,6 +227,7 @@ function buildMenu() {
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
+        menuItem('Version History...', 'version-history'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem('Quit', 'app-close-requested', 'CmdOrCtrl+Q')]),
       ],
     },
@@ -1657,7 +1658,15 @@ function readThemeAt(filePath) {
 
 function writeBytes(filePath, bytes) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, Buffer.from(normalizeBytes(bytes)));
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tmp`);
+  const file = fs.openSync(tempPath, 'w');
+  try {
+    fs.writeFileSync(file, Buffer.from(normalizeBytes(bytes)));
+    fs.fsyncSync(file);
+  } finally {
+    fs.closeSync(file);
+  }
+  fs.renameSync(tempPath, filePath);
 }
 
 function normalizeBytes(bytes) {

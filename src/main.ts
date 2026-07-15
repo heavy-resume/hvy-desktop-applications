@@ -14,8 +14,9 @@ import { clearActiveRestoredBackupSuppression, markActiveDocumentBackupChanged, 
 import { syncFileMenuState } from './mainWorkspaceUtils';
 import { documentStorageKey, normalizeAiMaxContextChars, normalizeDocumentMode, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
 import { currentWorkspaceChatDocumentName, currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath } from './workspaceChat';
+import { initializeDocumentHistory } from './documentHistory';
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
-export { backupDocumentKey, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
+export { backupDocumentKey, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, upsertWorkspace, sortWorkspaces, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed } from './mainWorkspaceUtils';
 export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder } from './mainUtilities';
 import { render, renderAllAroundDocument as renderUiAroundDocument, renderModals, type UiHandlers } from './ui';
@@ -249,7 +250,7 @@ export function activateWorkspaceChatDocument(): void {
   };
   state.selectedFilePath = null;
 }
-export async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean } = {}): Promise<void> {
+export async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
   const loadStartedAt = performance.now();
   logDebugEvent('load', 'openDocument:start', {
     path: file.path,
@@ -313,6 +314,10 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     metaOpen: viewSession?.metaOpen ?? false,
     mounted: null,
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
+    virtual: options.historyPreview ? 'versionHistory' : undefined,
+    historySourcePath: options.historyPreview?.sourcePath,
+    historySourceName: options.historyPreview?.sourceName,
+    historyVersionId: options.historyPreview?.versionId,
   };
   logDebugEvent('load', 'openDocument:stateInitialized', {
     path: file.path,
@@ -331,6 +336,9 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     markRestoredBackupSuppression(state.document.path, state.document.name);
   }
   state.selectedFilePath = options.defaultDocument ? null : file.path;
+  if (!options.defaultDocument && !options.isNew && !options.historyPreview && file.path) {
+    initializeDocumentHistory(file.path, file.name, document);
+  }
   const defaultDocumentLabel = options.defaultDocumentLabel ?? 'HVY Galaxy guide';
   state.status = options.defaultDocument
     ? `Opened ${defaultDocumentLabel}`
@@ -725,7 +733,7 @@ export function updateDirtyChrome(): void {
   const openDocument = state.document;
   if (!openDocument) return;
   syncDocumentTabs();
-  const label = openDocument.readOnly ? 'Read only' : openDocument.dirty ? 'Unsaved' : 'Saved';
+  const label = openDocument.virtual === 'versionHistory' ? 'Saved version' : openDocument.readOnly ? 'Read only' : openDocument.dirty ? 'Unsaved' : 'Saved';
   const indicator = document.querySelector<HTMLElement>('.dirty-indicator');
   indicator?.replaceChildren(document.createTextNode(label));
   indicator?.setAttribute('data-state', openDocument.readOnly ? 'read-only' : openDocument.dirty ? 'dirty' : 'clean');

@@ -216,7 +216,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
+        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
+        .item(&MenuItemBuilder::new("Version History...").id("version-history").build(app)?);
     #[cfg(not(target_os = "macos"))]
     let file_builder = file_builder
         .separator()

@@ -6,6 +6,7 @@ import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspa
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession } from './main';
+import { recordSuccessfulDocumentSave } from './documentHistory';
 
 let lastFileMenuStateKey: string | null = null;
 
@@ -74,6 +75,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
     bytes,
   });
   adoptSavedAsDocument(file, mounted, document, previousMode, previousPath, previousUseDocumentColors);
+  recordSuccessfulDocumentSave(file.path, file.name, document);
   state.selectedFilePath = file.path;
   state.selectedWorkspacePath = workspacePath;
   upsertWorkspace(await loadWorkspace(workspacePath));

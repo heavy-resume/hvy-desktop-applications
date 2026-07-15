@@ -4,6 +4,7 @@ import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatch
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
+import { savedVersionDocumentName } from './mainUtilities';
 import { richTextActionForShortcutKey, type RichTextAction } from './uiShortcuts';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
@@ -133,6 +134,9 @@ export interface UiHandlers {
   restoreBackup(id: string): void;
   discardBackup(id: string): void;
   cancelRecovery(): void;
+  openVersionHistory(): void;
+  selectSavedVersion(id: string): void;
+  closeVersionHistory(): void;
   cancelCloseDocument(): void;
   closeDocumentWithoutSaving(): void;
   discardCloseDocumentDraft(): void;
@@ -440,6 +444,7 @@ export function renderModals(state: AppState): void {
     ${renderMcpSettingsDiscardDialog(state)}
     ${renderColorThemeDialog(state)}
     ${renderRecoveryDialog(state)}
+    ${renderVersionHistoryDialog(state)}
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
     ${renderCloseDocumentDraftDialog(state)}
@@ -856,6 +861,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
+    if (action === 'select-saved-version' && target.dataset.versionId) handlers.selectSavedVersion(target.dataset.versionId);
+    if (action === 'close-version-history') handlers.closeVersionHistory();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
@@ -2266,7 +2273,7 @@ function workspaceNodeName(node: WorkspaceTreeNode): string {
 
 function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
-  const templateDisabled = state.document.extension === '.md';
+  const templateDisabled = state.document.extension === '.md' || state.document.virtual === 'versionHistory';
   if (state.saveAsKind === 'template' && !templateDisabled) {
     return renderSaveAsTemplateDialog(state);
   }
@@ -2278,7 +2285,9 @@ function renderSaveAsDialog(state: AppState): string {
     ? state.selectedWorkspacePath
     : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null;
-  const name = displayDocumentName(state.document.name);
+  const name = state.document.virtual === 'versionHistory'
+    ? displayDocumentName(savedVersionDocumentName(state.document.historySourceName ?? state.document.name))
+    : displayDocumentName(state.document.name);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="save-as-document">
@@ -4577,6 +4586,33 @@ function renderRecoveryDialog(state: AppState): string {
     }
         <div class="dialog-actions">
           <button type="button" data-action="cancel-recovery">Close</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderVersionHistoryDialog(state: AppState): string {
+  if (!state.versionHistoryDialogOpen) return '';
+  const versions = state.savedDocumentVersions;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="versionHistoryTitle">
+        <h2 id="versionHistoryTitle">Version History</h2>
+        <p class="dialog-note">Choose a saved version to review it. Saving while reviewing creates a new document and does not change the current document.</p>
+        ${versions.length === 0
+      ? '<div class="empty-panel compact">No saved versions are available yet.</div>'
+      : `<div class="recovery-list">
+          ${versions.map((version, index) => `
+            <article class="recovery-item${version.id === state.selectedSavedVersionId ? ' is-selected' : ''}">
+              <button type="button" class="version-history-select" data-action="select-saved-version" data-version-id="${escapeAttr(version.id)}" aria-current="${version.id === state.selectedSavedVersionId ? 'true' : 'false'}">
+                <strong>${index === 0 ? 'Latest saved version' : 'Saved version'}</strong>
+                <span>${escapeHtml(formatBackupTimestamp(version.createdAt))}</span>
+                <small>${escapeHtml(version.displayName)}</small>
+              </button>
+            </article>`).join('')}
+        </div>`}
+        <div class="dialog-actions">
+          <button type="button" data-action="close-version-history">Close</button>
         </div>
       </section>
     </div>`;
