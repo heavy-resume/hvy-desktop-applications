@@ -1827,6 +1827,35 @@ button:disabled {
   padding: 10px;
 }
 
+.workspace-manager-row-reorderable {
+  grid-template-columns: auto minmax(150px, 0.8fr) minmax(0, 1.2fr) minmax(0, auto);
+}
+
+.workspace-manager-row-reorderable.is-dragging {
+  opacity: 0.45;
+}
+
+.workspace-manager-row-reorderable.drop-before {
+  box-shadow: 0 -3px 0 var(--hvy-accent, #326b60);
+}
+
+.workspace-manager-row-reorderable.drop-after {
+  box-shadow: 0 3px 0 var(--hvy-accent, #326b60);
+}
+
+.workspace-reorder-handle {
+  align-self: center;
+  color: var(--hvy-text-alt, #394744);
+  cursor: grab;
+  font-size: 20px;
+  line-height: 1;
+  user-select: none;
+}
+
+.workspace-reorder-handle:active {
+  cursor: grabbing;
+}
+
 .workspace-manager-row-archived {
   background: var(--hvy-surface, #fbfaf7);
 }

@@ -1,5 +1,5 @@
 import { listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DroppedWorkspaceFile, type Workspace } from './backend';
-import { state, workspacePathForFileInWorkspaces } from './state';
+import { state, workspacePathForFileInWorkspaces, type AppState } from './state';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -329,6 +329,21 @@ async function loadWorkspaceEntryUsing(
 
 export function sortWorkspaces(): void {
   state.workspaces.sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
+}
+
+export function reorderedWorkspaceEntries(
+  entries: AppState['workspaceEntries'],
+  draggedPath: string,
+  targetPath: string,
+  before: boolean,
+): AppState['workspaceEntries'] {
+  const reordered = [...entries];
+  const draggedIndex = reordered.findIndex((entry) => entry.path === draggedPath);
+  if (draggedIndex < 0 || !reordered.some((entry) => entry.path === targetPath) || draggedPath === targetPath) return entries;
+  const [dragged] = reordered.splice(draggedIndex, 1);
+  const targetIndex = reordered.findIndex((entry) => entry.path === targetPath);
+  reordered.splice(before ? targetIndex : targetIndex + 1, 0, dragged);
+  return reordered;
 }
 
 export function syncMcpWorkspaces(): void {

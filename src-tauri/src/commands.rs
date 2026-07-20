@@ -4,6 +4,16 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
 }
 
 #[tauri::command]
+fn save_workspace_order(app: AppHandle, workspaces: Vec<String>) -> AppResult<RecentState> {
+    let recent_path = recent_state_path(&app)?;
+    let mut state = read_recent_state(&recent_path)?;
+    state.workspaces = workspaces.iter().map(|path| path_to_string(Path::new(path))).collect();
+    write_json_atomically(&recent_path, &state)?;
+    refresh_menu(&app)?;
+    Ok(state)
+}
+
+#[tauri::command]
 fn save_document_mode_preference(app: AppHandle, path: String, mode: String) -> AppResult<RecentState> {
     let recent_path = recent_state_path(&app)?;
     let mut state = read_recent_state(&recent_path)?;

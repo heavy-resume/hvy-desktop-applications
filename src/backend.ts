@@ -401,6 +401,13 @@ export function loadRecentState(): Promise<RecentState> {
   return invokeDesktop('load_recent_state');
 }
 
+export function saveWorkspaceOrder(workspaces: string[]): Promise<RecentState> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve({ workspaces, files: [] });
+  }
+  return invokeDesktop('save_workspace_order', { workspaces });
+}
+
 export function saveDocumentModePreference(path: string, mode: string): Promise<RecentState> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve({ workspaces: [], files: [], documentModes: { [path]: mode } });

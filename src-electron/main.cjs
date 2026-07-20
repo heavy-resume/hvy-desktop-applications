@@ -457,6 +457,7 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
 async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+    case 'save_workspace_order': return saveWorkspaceOrder(args.workspaces);
     case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
     case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
     case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
@@ -1921,6 +1922,14 @@ function saveDocumentModePreference(entryPath, mode) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   recent.documentModes = { ...(recent.documentModes || {}), [path.resolve(entryPath)]: mode };
   writeJson(dataPath(RECENT_STATE), recent);
+  return recent;
+}
+
+function saveWorkspaceOrder(workspaces) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  recent.workspaces = workspaces.map((entry) => path.resolve(entry));
+  writeJson(dataPath(RECENT_STATE), recent);
+  refreshMenu();
   return recent;
 }
 

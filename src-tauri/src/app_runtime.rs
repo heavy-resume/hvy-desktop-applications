@@ -20,6 +20,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_recent_state,
+            save_workspace_order,
             save_document_mode_preference,
             save_document_color_preference,
             load_ai_settings,

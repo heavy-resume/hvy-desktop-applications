@@ -27,6 +27,7 @@ export interface UiHandlers {
   newWorkspace(): void;
   openWorkspaceManager(): void;
   closeWorkspaceManager(): void;
+  reorderWorkspace(draggedPath: string, targetPath: string, before: boolean): void;
   renameWorkspace(path: string, name: string): void;
   archiveWorkspace(path: string): void;
   unarchiveWorkspace(path: string): void;
@@ -523,6 +524,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindController = new AbortController();
   const { signal } = bindController;
   bindWorkspaceSidebarResize(root, signal);
+  bindWorkspaceManagerReordering(root, handlers, signal);
   document.addEventListener('keydown', (event) => {
     handleApplicationShortcut(event, root, handlers);
   }, { signal, capture: true });
@@ -2812,7 +2814,10 @@ function renderWorkspaceManagerDialog(state: AppState): string {
         <div class="workspace-manager-section">
           <h3>Open</h3>
           <div class="workspace-manager-list">
-            ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaces.map(renderWorkspaceManagerRow).join('')}
+            ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaceEntries.flatMap((entry) => {
+              const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+              return workspace ? [renderWorkspaceManagerRow(workspace)] : [];
+            }).join('')}
           </div>
         </div>
         <div class="workspace-manager-section">
@@ -2830,7 +2835,8 @@ function renderWorkspaceManagerDialog(state: AppState): string {
 
 function renderWorkspaceManagerRow(workspace: Workspace): string {
   return `
-    <form class="workspace-manager-row" data-form="workspace-manager-rename">
+    <form class="workspace-manager-row workspace-manager-row-reorderable" data-form="workspace-manager-rename" data-workspace-path="${escapeAttr(workspace.path)}">
+      <span class="workspace-reorder-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">⠿</span>
       <input name="workspacePath" type="hidden" value="${escapeAttr(workspace.path)}">
       <label>
         <span>Name</span>
@@ -2846,6 +2852,41 @@ function renderWorkspaceManagerRow(workspace: Workspace): string {
         <button type="button" class="danger-button" data-action="archive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Archive</button>
       </div>
     </form>`;
+}
+
+function bindWorkspaceManagerReordering(root: HTMLElement, handlers: UiHandlers, signal: AbortSignal): void {
+  let draggedPath: string | null = null;
+  root.addEventListener('dragstart', (event) => {
+    const handle = event.target instanceof Element ? event.target.closest<HTMLElement>('.workspace-reorder-handle') : null;
+    const row = handle?.closest<HTMLElement>('.workspace-manager-row-reorderable') ?? null;
+    if (!row?.dataset.workspacePath || !event.dataTransfer) return;
+    draggedPath = row.dataset.workspacePath;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-hvy-workspace-order', draggedPath);
+    row.classList.add('is-dragging');
+  }, { signal });
+  root.addEventListener('dragover', (event) => {
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>('.workspace-manager-row-reorderable') : null;
+    if (!row?.dataset.workspacePath || row.dataset.workspacePath === draggedPath) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const before = event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+    root.querySelectorAll('.workspace-manager-row-reorderable').forEach((item) => item.classList.remove('drop-before', 'drop-after'));
+    row.classList.add(before ? 'drop-before' : 'drop-after');
+  }, { signal });
+  root.addEventListener('drop', (event) => {
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>('.workspace-manager-row-reorderable') : null;
+    const source = draggedPath ?? event.dataTransfer?.getData('application/x-hvy-workspace-order') ?? '';
+    const target = row?.dataset.workspacePath ?? '';
+    if (!source || !target || source === target || !row) return;
+    event.preventDefault();
+    const before = event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+    handlers.reorderWorkspace(source, target, before);
+  }, { signal });
+  root.addEventListener('dragend', () => {
+    draggedPath = null;
+    root.querySelectorAll('.workspace-manager-row-reorderable').forEach((item) => item.classList.remove('is-dragging', 'drop-before', 'drop-after'));
+  }, { signal });
 }
 
 function renderArchivedWorkspaceRow(workspace: ArchivedWorkspace): string {

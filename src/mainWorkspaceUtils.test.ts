@@ -32,7 +32,7 @@ vi.mock('./main', () => ({
   updateCurrentDocumentSession: vi.fn(),
 }));
 
-import { creationTemplate, loadWorkspaceEntry, retryWorkspaceEntry, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
+import { creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
 import { state } from './state';
 
 describe('creationTemplate', () => {
@@ -69,6 +69,18 @@ hvy_version: 0.1
 title: "Notes"
 ---
 `);
+  });
+});
+
+describe('workspace ordering', () => {
+  const entries = ['one', 'two', 'three'].map((path) => ({ path, displayName: path, status: 'ready' as const, error: null }));
+
+  it('moves an entry before a target', () => {
+    expect(reorderedWorkspaceEntries(entries, 'three', 'one', true).map((entry) => entry.path)).toEqual(['three', 'one', 'two']);
+  });
+
+  it('moves an entry after a target', () => {
+    expect(reorderedWorkspaceEntries(entries, 'one', 'two', false).map((entry) => entry.path)).toEqual(['two', 'one', 'three']);
   });
 });
 
