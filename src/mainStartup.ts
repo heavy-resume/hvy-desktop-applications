@@ -4,7 +4,7 @@ import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSett
 import { configureDebugLog, measureDebug } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
-import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspace, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, upsertWorkspace, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 
@@ -283,13 +283,14 @@ export async function refreshMcpClientInstallStatus(): Promise<void> {
 }
 
 export async function loadRecentWorkspaces(): Promise<void> {
-  for (const path of state.recent.workspaces) {
-    try {
-      upsertWorkspace(await loadWorkspace(path));
-    } catch {
-      // Recents are pruned by the backend when they are opened or reloaded.
-    }
-  }
+  state.workspaceEntries = state.recent.workspaces.map((path) => ({
+    path,
+    displayName: workspaceDisplayNameFromPath(path),
+    status: 'loading',
+    error: null,
+  }));
+  rerender({ preserveMountedDocument: true });
+  await Promise.all(state.recent.workspaces.map((path) => loadWorkspaceEntry(path)));
   state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
   syncMcpWorkspaces();
 }

@@ -92,10 +92,21 @@ fn load_workspace_from_path(path: &Path) -> AppResult<Workspace> {
 fn load_workspace_from_path_with_options(path: &Path, include_templates: bool) -> AppResult<Workspace> {
     let manifest_path = workspace_manifest_path(path)
         .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
-    let manifest = read_manifest(&manifest_path)?;
+    let manifest = read_manifest(&manifest_path).map_err(|error| {
+        AppError::Message(format!(
+            "Could not read workspace manifest at {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let files = scan_workspace_files(path, &manifest, include_templates).map_err(|error| {
+        AppError::Message(format!(
+            "Could not scan workspace files under {}: {error}",
+            path.display()
+        ))
+    })?;
     Ok(Workspace {
         path: path_to_string(path),
-        files: scan_workspace_files(path, &manifest, include_templates)?,
+        files,
         manifest,
     })
 }

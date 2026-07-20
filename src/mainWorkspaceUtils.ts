@@ -1,4 +1,4 @@
-import { listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DroppedWorkspaceFile, type Workspace } from './backend';
+import { listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DroppedWorkspaceFile, type Workspace } from './backend';
 import { state, workspacePathForFileInWorkspaces } from './state';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
@@ -7,6 +7,7 @@ import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeF
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
+import { logDebugEvent } from './debugLog';
 
 let lastFileMenuStateKey: string | null = null;
 
@@ -227,7 +228,103 @@ export function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspa
     state.workspaces.push(workspace);
   }
   sortWorkspaces();
+  const entryIndex = state.workspaceEntries.findIndex((candidate) => candidate.path === workspace.path);
+  const entry = { path: workspace.path, displayName: workspace.manifest.name, status: 'ready' as const, error: null };
+  if (entryIndex >= 0) state.workspaceEntries[entryIndex] = entry;
+  else state.workspaceEntries.push(entry);
   syncMcpWorkspaces();
+}
+
+export function workspaceDisplayNameFromPath(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '');
+  return normalized.split(/[\\/]/).pop() || path;
+}
+
+export async function loadWorkspaceEntry(path: string): Promise<void> {
+  await loadWorkspaceEntryUsing(path, () => loadWorkspace(path), 'direct');
+}
+
+export async function retryWorkspaceEntry(path: string): Promise<void> {
+  const entry = state.workspaceEntries.find((candidate) => candidate.path === path);
+  const permissionDenied = entry?.status === 'error' && /operation not permitted(?: \(os error 1\))?/i.test(entry.error ?? '');
+  const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
+  await loadWorkspaceEntryUsing(
+    path,
+    permissionDenied && isMac ? () => reauthorizeWorkspace(path) : () => loadWorkspace(path),
+    permissionDenied && isMac ? 'macOSPermissionPicker' : 'direct',
+  );
+}
+
+async function loadWorkspaceEntryUsing(
+  path: string,
+  loader: () => Promise<Workspace | null>,
+  source: 'direct' | 'macOSPermissionPicker',
+): Promise<void> {
+  const startedAt = performance.now();
+  const existing = state.workspaceEntries.find((entry) => entry.path === path);
+  const loading = {
+    path,
+    displayName: existing?.displayName ?? workspaceDisplayNameFromPath(path),
+    status: 'loading' as const,
+    error: null,
+  };
+  const index = state.workspaceEntries.findIndex((entry) => entry.path === path);
+  if (index >= 0) state.workspaceEntries[index] = loading;
+  else state.workspaceEntries.push(loading);
+  logDebugEvent('load', 'workspace:loadStart', {
+    path,
+    displayName: loading.displayName,
+    previousStatus: existing?.status ?? null,
+    source,
+    runtime: typeof window !== 'undefined' && window.hvyElectron
+      ? 'electron'
+      : typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+        ? 'tauri'
+        : 'browser',
+  });
+  rerender({ preserveMountedDocument: true });
+  try {
+    const workspace = await loader();
+    if (!workspace) {
+      if (existing) {
+        const cancelledIndex = state.workspaceEntries.findIndex((entry) => entry.path === path);
+        if (cancelledIndex >= 0) state.workspaceEntries[cancelledIndex] = existing;
+      }
+      logDebugEvent('load', 'workspace:loadCancelled', { path, source });
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    upsertWorkspace(workspace);
+    logDebugEvent('load', 'workspace:loadComplete', {
+      path,
+      manifestName: workspace.manifest.name,
+      rootNodeCount: workspace.files.length,
+      source,
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+    });
+  } catch (error) {
+    state.workspaces = state.workspaces.filter((workspace) => workspace.path !== path);
+    const failedIndex = state.workspaceEntries.findIndex((entry) => entry.path === path);
+    const failed = {
+      ...loading,
+      status: 'error' as const,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    if (failedIndex >= 0) state.workspaceEntries[failedIndex] = failed;
+    else state.workspaceEntries.push(failed);
+    logDebugEvent('load', 'workspace:loadError', {
+      path,
+      displayName: failed.displayName,
+      source,
+      errorMessage: failed.error,
+      errorType: error instanceof Error ? error.name : typeof error,
+      errorStack: error instanceof Error ? error.stack ?? null : null,
+      errorCause: error instanceof Error && error.cause !== undefined ? String(error.cause) : null,
+      durationMs: Math.round((performance.now() - startedAt) * 10) / 10,
+    });
+    syncMcpWorkspaces();
+  }
+  rerender({ preserveMountedDocument: true });
 }
 
 export function sortWorkspaces(): void {

@@ -483,6 +483,7 @@ async function handleCommand(command, args) {
     case 'load_default_guide': return readDocumentAt(defaultGuidePath());
     case 'load_hvy_guide': return readDocumentAt(hvyGuidePath());
     case 'open_workspace_dialog': return openWorkspaceDialog();
+    case 'reauthorize_workspace': return reauthorizeWorkspace(args.path);
     case 'choose_workspace_folder': return chooseWorkspaceFolder();
     case 'create_workspace': return createWorkspace(args.name);
     case 'new_workspace_dialog': return newWorkspaceDialog();
@@ -641,6 +642,21 @@ async function openWorkspaceDialog() {
   const workspace = ensureWorkspace(result.filePaths[0]);
   addRecentWorkspace(result.filePaths[0]);
   return workspace;
+}
+
+async function reauthorizeWorkspace(workspacePath) {
+  const expected = path.resolve(workspacePath);
+  const result = await dialog.showOpenDialog(mainWindow, {
+    defaultPath: expected,
+    message: 'Select this workspace folder to grant HVY Galaxy access',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const selected = path.resolve(result.filePaths[0]);
+  if (selected !== expected) {
+    throw new Error(`Selected folder does not match the workspace requiring access. Expected ${expected}; selected ${selected}.`);
+  }
+  return loadWorkspaceFromPath(selected);
 }
 
 async function chooseWorkspaceFolder() {
@@ -1452,11 +1468,26 @@ function initializeWorkspaceWithName(workspacePath, name) {
 function loadWorkspaceFromPath(workspacePath, includeTemplates = false) {
   const manifestPath = workspaceManifestPath(workspacePath);
   if (!manifestPath) throw new Error('Workspace manifest was not found.');
-  const manifest = readJson(manifestPath, null);
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const code = error && typeof error === 'object' && 'code' in error ? ` [${error.code}]` : '';
+    throw new Error(`Could not read workspace manifest at ${manifestPath}${code}: ${detail}`, { cause: error });
+  }
+  let files;
+  try {
+    files = readWorkspaceChildren(workspacePath, workspacePath, manifest, includeTemplates);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const code = error && typeof error === 'object' && 'code' in error ? ` [${error.code}]` : '';
+    throw new Error(`Could not scan workspace files under ${workspacePath}${code}: ${detail}`, { cause: error });
+  }
   return {
     path: workspacePath,
     manifest,
-    files: readWorkspaceChildren(workspacePath, workspacePath, manifest, includeTemplates),
+    files,
   };
 }
 

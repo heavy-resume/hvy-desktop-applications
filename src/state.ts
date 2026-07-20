@@ -35,6 +35,7 @@ export interface OpenDocumentTab {
 
 export interface AppState {
   workspaces: Workspace[];
+  workspaceEntries: WorkspaceEntry[];
   archivedWorkspaces: ArchivedWorkspace[];
   selectedWorkspacePath: string | null;
   selectedFilePath: string | null;
@@ -131,6 +132,13 @@ export interface AppState {
   documentZoom: number;
 }
 
+export interface WorkspaceEntry {
+  path: string;
+  displayName: string;
+  status: 'loading' | 'ready' | 'error';
+  error: string | null;
+}
+
 export type WorkspaceFileView = 'documents' | 'templates';
 
 export interface WorkspaceFilterConfig {
@@ -210,6 +218,7 @@ export interface WorkspaceClipboardState {
 
 export const state: AppState = {
   workspaces: [],
+  workspaceEntries: [],
   archivedWorkspaces: [],
   selectedWorkspacePath: null,
   selectedFilePath: null,

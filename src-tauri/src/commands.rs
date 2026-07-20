@@ -79,6 +79,26 @@ fn open_workspace_dialog(app: AppHandle) -> AppResult<Option<Workspace>> {
 }
 
 #[tauri::command]
+fn reauthorize_workspace(path: String) -> AppResult<Option<Workspace>> {
+    let expected = PathBuf::from(&path);
+    let Some(selected) = rfd::FileDialog::new()
+        .set_directory(&expected)
+        .set_title("Select this workspace folder to grant HVY Galaxy access")
+        .pick_folder()
+    else {
+        return Ok(None);
+    };
+    if selected != expected {
+        return Err(AppError::Message(format!(
+            "Selected folder does not match the workspace requiring access. Expected {}; selected {}.",
+            expected.display(),
+            selected.display()
+        )));
+    }
+    load_workspace_from_path(&selected).map(Some)
+}
+
+#[tauri::command]
 fn choose_workspace_folder() -> AppResult<Option<WorkspaceOpenCandidate>> {
     let Some(path) = rfd::FileDialog::new().pick_folder() else {
         return Ok(None);

@@ -155,6 +155,7 @@ export interface UiHandlers {
   openRecentFile(path: string): void;
   selectFile(path: string): void;
   refreshWorkspace(path: string): void;
+  retryWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
   archiveFile(path: string, currentName: string): void;
@@ -662,6 +663,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'show-workspace-in-folder' && target.dataset.workspacePath) handlers.showFileInFolder(target.dataset.workspacePath);
     if (action === 'archive-workspace' && target.dataset.workspacePath) handlers.archiveWorkspace(target.dataset.workspacePath);
     if (action === 'unarchive-workspace' && target.dataset.workspacePath) handlers.unarchiveWorkspace(target.dataset.workspacePath);
+    if (action === 'retry-workspace' && target.dataset.workspacePath) handlers.retryWorkspace(target.dataset.workspacePath);
     if (action === 'toggle-workspace-actions' && target.dataset.workspacePath) {
       event.preventDefault();
       event.stopPropagation();
@@ -2773,10 +2775,30 @@ function gearIcon(): string {
 }
 
 function renderWorkspaces(state: AppState): string {
-  if (state.workspaces.length === 0) {
+  if (state.workspaceEntries.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.workspaceFolderExpanded[workspace.path] ?? {}, state.savedTemplates, state.workspaceEmbeddingPreviews[workspace.path] ?? null)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaceEntries.map((entry) => {
+    const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+    if (entry.status === 'ready' && workspace) {
+      return renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.workspaceFolderExpanded[workspace.path] ?? {}, state.savedTemplates, state.workspaceEmbeddingPreviews[workspace.path] ?? null);
+    }
+    return renderPendingWorkspace(entry);
+  }).join('')}</div>`;
+}
+
+function renderPendingWorkspace(entry: AppState['workspaceEntries'][number]): string {
+  const loading = entry.status === 'loading';
+  const detail = loading ? 'Loading…' : entry.error ?? 'Workspace could not be loaded.';
+  return `
+    <section class="workspace-root workspace-root-${entry.status}" data-workspace-path="${escapeAttr(entry.path)}" aria-busy="${loading ? 'true' : 'false'}">
+      <button type="button" class="workspace-state-heading" data-action="${loading ? '' : 'retry-workspace'}" data-workspace-path="${escapeAttr(entry.path)}" title="${escapeAttr(entry.path)}" ${loading ? 'disabled' : ''}>
+        <span>${escapeHtml(entry.displayName)}</span>
+        ${loading ? '<span class="workspace-loading-indicator" aria-hidden="true"></span>' : ''}
+      </button>
+      <div class="workspace-state-detail" title="${escapeAttr(detail)}">${escapeHtml(detail)}</div>
+      ${loading ? '' : `<button type="button" class="workspace-retry-button" data-action="retry-workspace" data-workspace-path="${escapeAttr(entry.path)}">Retry</button>`}
+    </section>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {

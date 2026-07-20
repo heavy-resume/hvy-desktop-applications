@@ -630,6 +630,10 @@ export function openWorkspaceDialog(): Promise<Workspace | null> {
   return invokeDesktop('open_workspace_dialog');
 }
 
+export function reauthorizeWorkspace(path: string): Promise<Workspace | null> {
+  return invokeDesktop('reauthorize_workspace', { path });
+}
+
 export function chooseWorkspaceFolder(): Promise<WorkspaceOpenCandidate | null> {
   return invokeDesktop('choose_workspace_folder');
 }

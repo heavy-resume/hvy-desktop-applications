@@ -3,7 +3,7 @@ import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { getPhvyCompatibilityErrors, openMountedDocumentMeta, serializeHvy } from './hvy';
 import { state } from './state';
-import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, renameDocumentTabPath, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, moveBackupTracking, discardRecoveryStateForBackup, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, workspaceFilterDocumentCache } from './main';
+import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, renameDocumentTabPath, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, moveBackupTracking, discardRecoveryStateForBackup, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, workspaceFilterDocumentCache } from './main';
 import type { UiHandlers } from './ui';
 
 export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace']): Partial<UiHandlers> {
@@ -91,13 +91,13 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     await openDocument(file, { deferMount: true });
     await refreshRecents();
   }),
-  openRecentWorkspace: (path) => void runBusy('Opening recent workspace...', async () => {
-    upsertWorkspace(await loadWorkspace(path));
-    state.selectedWorkspacePath = path;
+  openRecentWorkspace: (path) => void (async () => {
+    await loadWorkspaceEntry(path);
+    if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
     await refreshRecents();
     await refreshArchivedWorkspaces();
     rerender();
-  }),
+  })(),
   openRecentFile: (path) => void runBusy('Opening recent file...', async () => {
     await openDocument(await readDocumentFile(path), { deferMount: true });
     await refreshRecents();
@@ -107,11 +107,12 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     await openDocument(await readDocumentFile(path), { deferMount: true, readOnly: access.readOnly, hiddenFromAI: access.hiddenFromAI });
     await refreshRecents();
   }),
-  refreshWorkspace: (path) => void runBusy('Refreshing workspace...', async () => {
-    upsertWorkspace(await loadWorkspace(path));
-    state.selectedWorkspacePath = path;
+  refreshWorkspace: (path) => void (async () => {
+    await loadWorkspaceEntry(path);
+    if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
     await refreshRecents();
-  }),
+  })(),
+  retryWorkspace: (path) => void retryWorkspaceEntry(path),
   showFileInFolder: (path) => void runBusy('Showing file...', async () => {
     await revealDocumentFile(path);
     state.status = revealStatusLabel();

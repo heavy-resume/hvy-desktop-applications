@@ -41,6 +41,7 @@ pub fn run() {
             load_default_guide,
             load_hvy_guide,
             open_workspace_dialog,
+            reauthorize_workspace,
             choose_workspace_folder,
             create_workspace,
             new_workspace_dialog,

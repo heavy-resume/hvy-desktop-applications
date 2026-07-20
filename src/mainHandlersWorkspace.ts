@@ -139,6 +139,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const workspace = state.workspaces.find((candidate) => candidate.path === path);
     await archiveWorkspace(path);
     state.workspaces = state.workspaces.filter((candidate) => candidate.path !== path);
+    state.workspaceEntries = state.workspaceEntries.filter((candidate) => candidate.path !== path);
     delete state.workspaceFilters[path];
     delete state.workspaceExpanded[path];
     delete state.workspaceFolderExpanded[path];
