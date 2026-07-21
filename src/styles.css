@@ -1828,6 +1828,7 @@ button:disabled {
 }
 
 .workspace-manager-row-reorderable {
+  position: relative;
   grid-template-columns: auto minmax(150px, 0.8fr) minmax(0, 1.2fr) minmax(0, auto);
 }
 
@@ -1835,12 +1836,26 @@ button:disabled {
   opacity: 0.45;
 }
 
-.workspace-manager-row-reorderable.drop-before {
-  box-shadow: 0 -3px 0 var(--hvy-accent, #326b60);
+.workspace-manager-row-reorderable.drop-before::before,
+.workspace-manager-row-reorderable.drop-after::after {
+  position: absolute;
+  z-index: 2;
+  right: 10px;
+  left: 10px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--hvy-accent, #326b60);
+  box-shadow: 0 0 0 2px var(--hvy-surface, #fbfaf7), 0 1px 5px color-mix(in srgb, var(--hvy-accent, #326b60) 55%, transparent);
+  content: '';
+  pointer-events: none;
 }
 
-.workspace-manager-row-reorderable.drop-after {
-  box-shadow: 0 3px 0 var(--hvy-accent, #326b60);
+.workspace-manager-row-reorderable.drop-before::before {
+  top: -8px;
+}
+
+.workspace-manager-row-reorderable.drop-after::after {
+  bottom: -8px;
 }
 
 .workspace-reorder-handle {
