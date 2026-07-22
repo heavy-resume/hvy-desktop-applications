@@ -573,7 +573,12 @@ async function mountRawHvyDocument(
 
   const notifyDirty = (nextDirty: boolean) => {
     dirty = nextDirty;
-    options.onDocumentChange?.({ dirty, source: 'editor', reason: 'raw-hvy-input' });
+    options.onDocumentChange?.({
+      dirty,
+      source: 'editor',
+      reason: 'raw-hvy-input',
+      changedSectionTitles: [],
+    });
   };
 
   const replaceTextareaSelection = (nextValue: string, selectionStart: number, selectionEnd: number) => {
@@ -1076,7 +1081,12 @@ function pasteMetaTemplate(
     } else {
       meta.section_defs = nextDefs;
     }
-    onDocumentChange?.({ dirty: true, reason: `${kind}-template-paste`, source: 'editor' });
+    onDocumentChange?.({
+      dirty: true,
+      reason: `${kind}-template-paste`,
+      source: 'editor',
+      changedSectionTitles: [],
+    });
     mount.openDocumentMeta?.();
   };
   if (kind === 'component') {
