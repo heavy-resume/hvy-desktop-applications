@@ -115,7 +115,7 @@ pub fn run() {
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
-        let _ = event;
+        let _ = (app, event);
     });
 }
 

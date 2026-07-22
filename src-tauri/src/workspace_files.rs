@@ -350,6 +350,7 @@ fn launch_document_path(value: &str) -> Option<String> {
     Some(path_to_string(&path))
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
 fn enqueue_open_document_path(app: &AppHandle, path: &Path) {
     let Some(path) = launch_document_path(&path_to_string(path)) else {
         return;
