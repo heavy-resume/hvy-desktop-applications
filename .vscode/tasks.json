@@ -128,7 +128,7 @@
       "id": "hvyGalaxyVersion",
       "type": "promptString",
       "description": "HVY Galaxy version",
-      "default": "0.1.0-alpha.3"
+      "default": "0.1.0-alpha.4"
     }
   ]
 }
