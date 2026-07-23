@@ -4,6 +4,16 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
 }
 
 #[tauri::command]
+fn save_workspace_order(app: AppHandle, workspaces: Vec<String>) -> AppResult<RecentState> {
+    let recent_path = recent_state_path(&app)?;
+    let mut state = read_recent_state(&recent_path)?;
+    state.workspaces = workspaces.iter().map(|path| path_to_string(Path::new(path))).collect();
+    write_json_atomically(&recent_path, &state)?;
+    refresh_menu(&app)?;
+    Ok(state)
+}
+
+#[tauri::command]
 fn save_document_mode_preference(app: AppHandle, path: String, mode: String) -> AppResult<RecentState> {
     let recent_path = recent_state_path(&app)?;
     let mut state = read_recent_state(&recent_path)?;
@@ -76,6 +86,26 @@ fn open_workspace_dialog(app: AppHandle) -> AppResult<Option<Workspace>> {
     let workspace = ensure_workspace(&path)?;
     add_recent_workspace(&app, &path)?;
     Ok(Some(workspace))
+}
+
+#[tauri::command]
+fn reauthorize_workspace(path: String) -> AppResult<Option<Workspace>> {
+    let expected = PathBuf::from(&path);
+    let Some(selected) = rfd::FileDialog::new()
+        .set_directory(&expected)
+        .set_title("Select this workspace folder to grant HVY Galaxy access")
+        .pick_folder()
+    else {
+        return Ok(None);
+    };
+    if selected != expected {
+        return Err(AppError::Message(format!(
+            "Selected folder does not match the workspace requiring access. Expected {}; selected {}.",
+            expected.display(),
+            selected.display()
+        )));
+    }
+    load_workspace_from_path(&selected).map(Some)
 }
 
 #[tauri::command]
@@ -182,6 +212,38 @@ fn update_workspace_file_ai_access(path: String, updates: WorkspaceFileAiAccessU
     document_extension(&path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents can be updated.".into()))?;
     update_workspace_file_ai_access_at(&workspace_path, &path, updates)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn update_workspace_ai_access(workspace_path: String, updates: WorkspaceAiAccessUpdate) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    update_workspace_ai_access_at(&workspace_path, updates)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn update_workspace_folder_ai_access(
+    workspace_path: String,
+    target_directory: String,
+    updates: WorkspaceFolderAiAccessUpdate,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let target_directory = target_directory.trim();
+    if target_directory.is_empty() {
+        return Err(AppError::Message("Folder is required.".into()));
+    }
+    let relative = PathBuf::from(target_directory);
+    if relative.is_absolute() || relative.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err(AppError::Message("Folder path must stay inside the workspace.".into()));
+    }
+    let folder_path = workspace_path.join(relative);
+    if !folder_path.is_dir() {
+        return Err(AppError::Message("Folder was not found.".into()));
+    }
+    update_workspace_folder_ai_access_at(&workspace_path, &folder_path, updates)?;
     load_workspace_from_path(&workspace_path)
 }
 
@@ -407,6 +469,57 @@ fn read_document_file_bytes(path: String) -> AppResult<tauri::ipc::Response> {
     document_extension(&path)
         .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
     Ok(tauri::ipc::Response::new(fs::read(path)?))
+}
+
+#[tauri::command]
+fn read_embedding_sidecar_file_bytes(path: String) -> AppResult<Option<Vec<u8>>> {
+    let path = PathBuf::from(path);
+    embedding_sidecar_source_path(&path)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(fs::read(path)?))
+}
+
+#[tauri::command]
+fn write_embedding_sidecar_file(path: String, bytes: Vec<u8>) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    let source = embedding_sidecar_source_path(&path)?;
+    if !source.exists() {
+        return Err(AppError::Message("Embedding sidecar source document does not exist.".into()));
+    }
+    write_file_atomically(&path, &bytes)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn write_embedding_sidecar_file_raw(request: tauri::ipc::Request<'_>) -> AppResult<()> {
+    let path = decode_ipc_header(request.headers(), "x-hvy-sidecar-path")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw embedding sidecar bytes.".into()));
+    };
+    write_embedding_sidecar_file(path, bytes.to_vec())
+}
+
+#[tauri::command]
+fn delete_embedding_sidecar_file(path: String) -> AppResult<()> {
+    let path = PathBuf::from(path);
+    embedding_sidecar_source_path(&path)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn embedding_sidecar_source_path(path: &Path) -> AppResult<PathBuf> {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("emb") {
+        return Err(AppError::Message("Embedding sidecar files must use the .emb extension.".into()));
+    }
+    let source = PathBuf::from(path.to_string_lossy().trim_end_matches(".emb"));
+    if document_extension(&source).as_deref() != Some(".hvy") {
+        return Err(AppError::Message("Embedding sidecars are only supported for .hvy documents.".into()));
+    }
+    Ok(source)
 }
 
 #[tauri::command]
@@ -772,6 +885,69 @@ fn delete_document_file(app: AppHandle, path: String) -> AppResult<Option<Worksp
         return load_workspace_from_path(&workspace_path).map(Some);
     }
     Ok(None)
+}
+
+#[tauri::command]
+fn delete_workspace_folder(app: AppHandle, request: DeleteWorkspaceFolderRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let target_directory = request.target_directory.trim();
+    if target_directory.is_empty() {
+        return Err(AppError::Message("Folder is required.".into()));
+    }
+    let relative_directory = PathBuf::from(target_directory);
+    if relative_directory.is_absolute() || relative_directory.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return Err(AppError::Message("Folder path must stay inside the workspace.".into()));
+    }
+    let folder_path = workspace_path.join(relative_directory);
+    let manifest_path = workspace_manifest_path(&workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let archived_files: HashSet<String> = manifest.archived_files.iter().cloned().collect();
+    let deleted_files = workspace_document_files_in_directory(&folder_path)?;
+    let active_file = deleted_files
+        .iter()
+        .map(|path| relative_path(&workspace_path, path))
+        .find(|relative| !archived_files.contains(relative));
+    if active_file.is_some() {
+        return Err(AppError::Message("Folder contains files that are not archived.".into()));
+    }
+    fs::remove_dir_all(&folder_path)?;
+    let deleted_relatives: HashSet<String> = deleted_files
+        .iter()
+        .map(|path| relative_path(&workspace_path, path))
+        .collect();
+    let deleted_folder_relative = target_directory.replace('\\', "/");
+    manifest.archived_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.locked_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.hidden_from_ai_folders.retain(|entry| {
+        entry != &deleted_folder_relative && !entry.starts_with(&format!("{deleted_folder_relative}/"))
+    });
+    manifest.hidden_from_ai_files.retain(|entry| !deleted_relatives.contains(entry));
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)?;
+    for path in deleted_files {
+        remove_recent_file(&app, &path)?;
+    }
+    add_recent_workspace(&app, &workspace_path)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+fn workspace_document_files_in_directory(directory: &Path) -> AppResult<Vec<PathBuf>> {
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(workspace_document_files_in_directory(&path)?);
+        } else if document_extension(&path).is_some() {
+            files.push(path);
+        }
+    }
+    Ok(files)
 }
 
 #[tauri::command]

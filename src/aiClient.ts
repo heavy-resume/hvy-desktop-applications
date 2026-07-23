@@ -1,6 +1,7 @@
 import type { AiActionKey, AiProviderConfig, AiSettings, AppSettings } from './backend';
 import { aiProviderPreset } from './aiProviders';
 import { logDebugEvent } from './debugLog';
+import type { HvyEmbeddingProvider, HvyEmbeddingProviderRequest, HvyEmbeddingVector } from '../../heavy-file-format/src/types';
 
 type HvyChatProvider = 'openai' | 'anthropic' | 'qwen';
 type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit' | 'pdf-template-import';
@@ -63,6 +64,243 @@ export function installAiChatClient(settings: AiSettings, appSettings?: AppSetti
 
 export function activeAiProvider(settings: AiSettings): AiProviderConfig {
   return aiProviderConfig(settings, settings.activeProviderId);
+}
+
+export function createDesktopEmbeddingProvider(settings: AiSettings): HvyEmbeddingProvider | null {
+  const embeddingSettings = settings.embeddings;
+  if (!embeddingSettings?.enabled) return null;
+  const providerId = resolveProviderId(settings, embeddingSettings.providerId || settings.activeProviderId);
+  const provider = aiProviderConfig(settings, providerId);
+  if (!provider?.baseUrl.trim()) return null;
+  return (request) => requestEmbeddings(provider, embeddingSettings.model || request.model, request);
+}
+
+function requestEmbeddings(
+  provider: AiProviderConfig,
+  model: string,
+  request: HvyEmbeddingProviderRequest,
+): Promise<HvyEmbeddingVector[]> {
+  if (provider.provider === 'cohere') {
+    return requestCohereEmbeddings(provider, model, request);
+  }
+  if (provider.provider === 'gemini') {
+    return requestGeminiEmbeddings(provider, model, request);
+  }
+  return requestOpenAiCompatibleEmbeddings(provider, model, request);
+}
+
+async function requestOpenAiCompatibleEmbeddings(
+  provider: AiProviderConfig,
+  model: string,
+  request: HvyEmbeddingProviderRequest,
+): Promise<HvyEmbeddingVector[]> {
+  const normalizedModel = model.trim() || request.model.trim();
+  if (!normalizedModel) {
+    throw new Error('Choose an embedding model.');
+  }
+  const startedAt = performance.now();
+  logDebugEvent('llm', 'embedding:request', {
+    provider: provider.provider,
+    model: normalizedModel,
+    inputCount: request.inputs.length,
+    inputChars: request.inputs.reduce((total, input) => total + input.text.length, 0),
+    ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
+  });
+  const response = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/embeddings`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(provider.apiKey.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
+    },
+    body: JSON.stringify({
+      model: normalizedModel,
+      input: request.inputs.map((input) => input.text),
+      ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
+    }),
+    signal: request.signal,
+  });
+  const payload = await response.json().catch(() => null) as { data?: Array<{ embedding?: number[] }>; embeddings?: number[][]; error?: unknown } | null;
+  const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  if (!response.ok) {
+    logDebugEvent('llm', 'embedding:response', {
+      provider: provider.provider,
+      model: normalizedModel,
+      ok: false,
+      status: response.status,
+      durationMs,
+      payload,
+    });
+    throw new Error(formatProviderHttpError(response.status, payload));
+  }
+  const vectors = Array.isArray(payload?.embeddings)
+    ? payload.embeddings
+    : Array.isArray(payload?.data)
+    ? payload.data.map((entry) => entry.embedding ?? [])
+    : [];
+  if (vectors.length !== request.inputs.length) {
+    throw new Error('Embedding response did not include one vector per input.');
+  }
+  logDebugEvent('llm', 'embedding:response', {
+    provider: provider.provider,
+    model: normalizedModel,
+    ok: true,
+    status: response.status,
+    durationMs,
+    vectorCount: vectors.length,
+    dimensions: vectors[0]?.length ?? 0,
+  });
+  return request.inputs.map((input, index) => ({
+    id: input.id,
+    vector: vectors[index] ?? [],
+  }));
+}
+
+async function requestCohereEmbeddings(
+  provider: AiProviderConfig,
+  model: string,
+  request: HvyEmbeddingProviderRequest,
+): Promise<HvyEmbeddingVector[]> {
+  const normalizedModel = model.trim() || request.model.trim();
+  if (!normalizedModel) {
+    throw new Error('Choose an embedding model.');
+  }
+  const startedAt = performance.now();
+  logDebugEvent('llm', 'embedding:request', {
+    provider: provider.provider,
+    model: normalizedModel,
+    inputCount: request.inputs.length,
+    inputChars: request.inputs.reduce((total, input) => total + input.text.length, 0),
+    adapter: 'cohere-v2',
+  });
+  const response = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/v2/embed`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(provider.apiKey.trim() ? { Authorization: `Bearer ${provider.apiKey.trim()}` } : {}),
+    },
+    body: JSON.stringify({
+      model: normalizedModel,
+      input_type: 'search_document',
+      embedding_types: ['float'],
+      inputs: request.inputs.map((input) => ({
+        content: [{ type: 'text', text: input.text }],
+      })),
+    }),
+    signal: request.signal,
+  });
+  const payload = await response.json().catch(() => null) as {
+    embeddings?: { float?: number[][] } | number[][];
+    error?: unknown;
+    message?: string;
+  } | null;
+  const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  if (!response.ok) {
+    logDebugEvent('llm', 'embedding:response', {
+      provider: provider.provider,
+      model: normalizedModel,
+      ok: false,
+      status: response.status,
+      durationMs,
+      payload,
+    });
+    throw new Error(formatProviderHttpError(response.status, payload));
+  }
+  const vectors = Array.isArray(payload?.embeddings)
+    ? payload.embeddings
+    : Array.isArray(payload?.embeddings?.float)
+    ? payload.embeddings.float
+    : [];
+  if (vectors.length !== request.inputs.length) {
+    throw new Error('Embedding response did not include one vector per input.');
+  }
+  logDebugEvent('llm', 'embedding:response', {
+    provider: provider.provider,
+    model: normalizedModel,
+    ok: true,
+    status: response.status,
+    durationMs,
+    vectorCount: vectors.length,
+    dimensions: vectors[0]?.length ?? 0,
+    adapter: 'cohere-v2',
+  });
+  return request.inputs.map((input, index) => ({
+    id: input.id,
+    vector: vectors[index] ?? [],
+  }));
+}
+
+async function requestGeminiEmbeddings(
+  provider: AiProviderConfig,
+  model: string,
+  request: HvyEmbeddingProviderRequest,
+): Promise<HvyEmbeddingVector[]> {
+  const normalizedModel = model.trim() || request.model.trim();
+  if (!normalizedModel) {
+    throw new Error('Choose an embedding model.');
+  }
+  const modelPath = normalizedModel.startsWith('models/') ? normalizedModel : `models/${normalizedModel}`;
+  const startedAt = performance.now();
+  logDebugEvent('llm', 'embedding:request', {
+    provider: provider.provider,
+    model: normalizedModel,
+    inputCount: request.inputs.length,
+    inputChars: request.inputs.reduce((total, input) => total + input.text.length, 0),
+    ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
+    adapter: 'gemini-batch',
+  });
+  const response = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/${modelPath}:batchEmbedContents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(provider.apiKey.trim() ? { 'x-goog-api-key': provider.apiKey.trim() } : {}),
+    },
+    body: JSON.stringify({
+      requests: request.inputs.map((input) => ({
+        model: modelPath,
+        content: { parts: [{ text: input.text }] },
+        ...(request.dimensions !== undefined
+          ? { embedContentConfig: { outputDimensionality: request.dimensions } }
+          : {}),
+      })),
+    }),
+    signal: request.signal,
+  });
+  const payload = await response.json().catch(() => null) as {
+    embeddings?: Array<{ values?: number[] }>;
+    error?: unknown;
+  } | null;
+  const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  if (!response.ok) {
+    logDebugEvent('llm', 'embedding:response', {
+      provider: provider.provider,
+      model: normalizedModel,
+      ok: false,
+      status: response.status,
+      durationMs,
+      payload,
+    });
+    throw new Error(formatProviderHttpError(response.status, payload));
+  }
+  const vectors = Array.isArray(payload?.embeddings)
+    ? payload.embeddings.map((embedding) => embedding.values ?? [])
+    : [];
+  if (vectors.length !== request.inputs.length) {
+    throw new Error('Embedding response did not include one vector per input.');
+  }
+  logDebugEvent('llm', 'embedding:response', {
+    provider: provider.provider,
+    model: normalizedModel,
+    ok: true,
+    status: response.status,
+    durationMs,
+    vectorCount: vectors.length,
+    dimensions: vectors[0]?.length ?? 0,
+    adapter: 'gemini-batch',
+  });
+  return request.inputs.map((input, index) => ({
+    id: input.id,
+    vector: vectors[index] ?? [],
+  }));
 }
 
 function createAiChatClient(settings: AiSettings, appSettings?: AppSettings): HvyHostChatClient | null {
@@ -180,6 +418,7 @@ function logLlmResponse(
   payload?: unknown,
 ): void {
   const includeSemanticDebug = shouldDebugSemanticSearch(task, appSettings);
+  const includeOutputDebug = includeSemanticDebug || task === 'chat';
   logDebugEvent('llm', 'llm:response', {
     task,
     provider,
@@ -189,7 +428,7 @@ function logLlmResponse(
     durationMs,
     ...(traceRunId ? { traceRunId } : {}),
     ...(includeSemanticDebug ? { body } : {}),
-    ...(includeSemanticDebug && typeof output === 'string' ? { outputChars: output.length, output } : {}),
+    ...(includeOutputDebug && typeof output === 'string' ? { outputChars: output.length, output } : {}),
     ...(includeSemanticDebug && payload !== undefined ? { payload } : {}),
   });
   if (task === 'semanticFilter') {

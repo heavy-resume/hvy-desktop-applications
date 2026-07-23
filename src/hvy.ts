@@ -1,11 +1,16 @@
 import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './backend';
+import { createDesktopEmbeddingProvider } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
 import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
 import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/semantic-provider';
+import { renderCollapsedSearchBar } from '../../heavy-file-format/src/search/render';
+import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapshot';
+import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
+import { state } from './state';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -17,6 +22,7 @@ import type {
   HvySemanticFilterProvider,
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
+import type { HvyChatContextProvider } from '../../heavy-file-format/src/types';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
@@ -26,11 +32,12 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
 } & HvyRecoveryStateMount;
+type SearchSnapshotMount = HvyMount & { getSearchSnapshot: HvyEmbedMount['getSearchSnapshot'] };
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
 export interface HvySerializationCostProfile {
   totalProfileMs: number;
@@ -61,11 +68,14 @@ export interface MountedDocument {
 
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
+  onEmbeddingIndexPrepared?: () => void | Promise<void>;
   storageKey?: string;
   searchSnapshot?: HvySearchSnapshotInput | null;
   hiddenFromAI?: boolean;
   maxContextChars?: number;
   imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
+  chatContextProvider?: HvyChatContextProvider | null;
+  initialChatState?: Parameters<HvyEmbedMount['setChatState']>[0];
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -235,6 +245,11 @@ export async function mountHvyDocument(
     showAdvancedEditor: mode === 'advanced',
     plugins: builtInPlugins,
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
+    initialChatState: options.initialChatState ?? null,
+    chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),
+    chatContextProvider: options.chatContextProvider ?? null,
+    embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
+    crossDocumentLinks: true,
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
@@ -242,7 +257,7 @@ export async function mountHvyDocument(
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
-  const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, mount), options);
+  const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, withEmbeddedSearchCollapsedSurface(root, mount)), options);
   const interactiveMount = withViewerCarouselInteractions(root, mounted);
   const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
   return {
@@ -250,6 +265,19 @@ export async function mountHvyDocument(
     get document() {
       return finalMount.getDocument();
     },
+  };
+}
+
+function embeddingChatContextOptions(onEmbeddingIndexPrepared?: () => void | Promise<void>): Parameters<HvyEmbedModule['mountHvy']>[0]['chatContext'] {
+  const embeddings = state.aiSettings.embeddings;
+  if (!embeddings?.enabled) return null;
+  return {
+    mode: 'embedding-retrieval',
+    embeddingModel: embeddings.model,
+    ...(embeddings.dimensions ? { embeddingDimensions: embeddings.dimensions } : {}),
+    embeddingBatchSize: embeddings.batchSize,
+    persistEmbeddingsToAttachments: true,
+    ...(onEmbeddingIndexPrepared ? { onEmbeddingIndexPrepared } : {}),
   };
 }
 
@@ -338,6 +366,15 @@ function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMou
     }
     const anchor = target.closest<HTMLAnchorElement>('a[href]');
     if (!anchor || !root.contains(anchor)) {
+      return;
+    }
+    if (anchor.dataset.hvyCrossDocument === 'true') {
+      event.preventDefault();
+      event.stopPropagation();
+      root.dispatchEvent(new CustomEvent('hvy:open-workspace-link', {
+        bubbles: true,
+        detail: { href: anchor.getAttribute('href') ?? '' },
+      }));
       return;
     }
     const mailtoLink = mailtoLinkFromHref(anchor.getAttribute('href'));
@@ -536,7 +573,12 @@ async function mountRawHvyDocument(
 
   const notifyDirty = (nextDirty: boolean) => {
     dirty = nextDirty;
-    options.onDocumentChange?.({ dirty, source: 'editor', reason: 'raw-hvy-input' });
+    options.onDocumentChange?.({
+      dirty,
+      source: 'editor',
+      reason: 'raw-hvy-input',
+      changedSectionTitles: [],
+    });
   };
 
   const replaceTextareaSelection = (nextValue: string, selectionStart: number, selectionEnd: number) => {
@@ -788,6 +830,12 @@ async function mountRawHvyDocument(
       textarea.focus();
       documentOwner().execCommand('redo');
     },
+    getChatState() {
+      return {};
+    },
+    setChatState() {
+      return undefined;
+    },
     async buildImportPlan(importOptions) {
       const { buildImportPlanForDocument } = await import('../../heavy-file-format/src/ai-document-import');
       return buildImportPlanForDocument(parseDraft(), {
@@ -827,6 +875,17 @@ function documentOwner(): Document {
 
 function withChatPanelResize(root: HTMLElement, mount: HvyMount): HvyMount {
   const cleanup = installChatPanelResize(root);
+  return {
+    ...mount,
+    destroy() {
+      cleanup();
+      mount.destroy();
+    },
+  };
+}
+
+function withEmbeddedSearchCollapsedSurface(root: HTMLElement, mount: SearchSnapshotMount): HvyMount {
+  const cleanup = installEmbeddedSearchCollapsedSurface(root, mount);
   return {
     ...mount,
     destroy() {
@@ -1022,7 +1081,12 @@ function pasteMetaTemplate(
     } else {
       meta.section_defs = nextDefs;
     }
-    onDocumentChange?.({ dirty: true, reason: `${kind}-template-paste`, source: 'editor' });
+    onDocumentChange?.({
+      dirty: true,
+      reason: `${kind}-template-paste`,
+      source: 'editor',
+      changedSectionTitles: [],
+    });
     mount.openDocumentMeta?.();
   };
   if (kind === 'component') {
@@ -1213,6 +1277,50 @@ function installViewerCarouselInteractions(root: HTMLElement): () => void {
   };
   const observer = new MutationObserver(scheduleBind);
   bindCarouselInteractions(root);
+  observer.observe(root, { childList: true, subtree: true });
+  return () => {
+    observer.disconnect();
+    if (frame) {
+      window.cancelAnimationFrame(frame);
+    }
+  };
+}
+
+function installEmbeddedSearchCollapsedSurface(root: HTMLElement, mount: SearchSnapshotMount): () => void {
+  let frame = 0;
+  let renderedSurface: HTMLElement | null = null;
+  let renderedHtml = '';
+  const ensureSurface = () => {
+    frame = 0;
+    const pane = root.querySelector<HTMLElement>('.pane.full-pane');
+    if (!pane || pane.querySelector('.raw-hvy-shell')) {
+      return;
+    }
+    let surface = pane.querySelector<HTMLElement>('[data-search-surface="collapsed"]');
+    if (!surface) {
+      surface = documentOwner().createElement('div');
+      surface.dataset.searchSurface = 'collapsed';
+    }
+    const anchor = pane.querySelector<HTMLElement>('.editor-shell, .viewer-shell, .document-meta-view');
+    if (surface.parentElement !== pane || surface.nextElementSibling !== anchor) {
+      pane.insertBefore(surface, anchor ?? pane.firstChild);
+    }
+    const search = searchSnapshotToState(mount.getSearchSnapshot());
+    search.open = Boolean(search.activeResultId && search.results.length);
+    search.resultsCollapsed = search.open;
+    const html = renderCollapsedSearchBar(search, { escapeHtml: escapeHvyHtml });
+    if (surface !== renderedSurface || html !== renderedHtml) {
+      surface.innerHTML = html;
+      renderedSurface = surface;
+      renderedHtml = html;
+    }
+  };
+  const scheduleEnsure = () => {
+    if (frame) return;
+    frame = window.requestAnimationFrame(ensureSurface);
+  };
+  const observer = new MutationObserver(scheduleEnsure);
+  ensureSurface();
   observer.observe(root, { childList: true, subtree: true });
   return () => {
     observer.disconnect();

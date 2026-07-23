@@ -15,6 +15,10 @@ struct WorkspaceManifest {
     archived_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     locked_files: Vec<String>,
+    #[serde(default, rename = "hiddenFromAI", skip_serializing_if = "is_false")]
+    hidden_from_ai: bool,
+    #[serde(default, rename = "hiddenFromAIFolders", skip_serializing_if = "Vec::is_empty")]
+    hidden_from_ai_folders: Vec<String>,
     #[serde(default, rename = "hiddenFromAIFiles", skip_serializing_if = "Vec::is_empty")]
     hidden_from_ai_files: Vec<String>,
 }
@@ -86,6 +90,13 @@ struct WorkspaceFolderRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct DeleteWorkspaceFolderRequest {
+    workspace_path: String,
+    target_directory: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct WorkspaceOpenCandidate {
     path: String,
     has_manifest: bool,
@@ -99,6 +110,8 @@ enum WorkspaceTreeNode {
         name: String,
         path: String,
         relative_path: String,
+        #[serde(rename = "hiddenFromAI")]
+        hidden_from_ai: bool,
         children: Vec<WorkspaceTreeNode>,
     },
     File {
@@ -117,6 +130,20 @@ enum WorkspaceTreeNode {
 #[serde(rename_all = "camelCase")]
 struct WorkspaceFileAiAccessUpdate {
     locked: Option<bool>,
+    #[serde(rename = "hiddenFromAI")]
+    hidden_from_ai: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceAiAccessUpdate {
+    #[serde(rename = "hiddenFromAI")]
+    hidden_from_ai: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceFolderAiAccessUpdate {
     #[serde(rename = "hiddenFromAI")]
     hidden_from_ai: Option<bool>,
 }
@@ -365,6 +392,40 @@ fn default_semantic_filter_action_config() -> AiActionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct AiEmbeddingSettings {
+    #[serde(default)]
+    enabled: bool,
+    provider_id: String,
+    model: String,
+    #[serde(default)]
+    models_by_provider: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    dimensions: Option<u32>,
+    #[serde(default = "default_embedding_batch_size")]
+    batch_size: u32,
+}
+
+impl Default for AiEmbeddingSettings {
+    fn default() -> Self {
+        let mut models_by_provider = std::collections::BTreeMap::new();
+        models_by_provider.insert("openai".into(), "text-embedding-ada-002".into());
+        Self {
+            enabled: false,
+            provider_id: "openai".into(),
+            model: "text-embedding-ada-002".into(),
+            models_by_provider,
+            dimensions: None,
+            batch_size: default_embedding_batch_size(),
+        }
+    }
+}
+
+fn default_embedding_batch_size() -> u32 {
+    8
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct AiProviderConfig {
     provider: String,
     base_url: String,
@@ -434,6 +495,8 @@ struct AiSettings {
     active_provider_id: String,
     providers: Vec<AiProviderConfig>,
     actions: AiActionSettings,
+    #[serde(default)]
+    embeddings: AiEmbeddingSettings,
     #[serde(default = "default_ai_max_context_chars")]
     max_context_chars: u32,
     #[serde(default = "default_max_concurrent_semantic_filters", alias = "workspaceFilterFileConcurrency")]
@@ -447,6 +510,7 @@ impl Default for AiSettings {
             active_provider_id: provider.provider.clone(),
             providers: vec![provider],
             actions: AiActionSettings::default(),
+            embeddings: AiEmbeddingSettings::default(),
             max_context_chars: default_ai_max_context_chars(),
             max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
         }

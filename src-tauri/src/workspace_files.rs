@@ -36,6 +36,8 @@ fn initialize_workspace_with_name(path: &Path, name: Option<&str>) -> AppResult<
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
             locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
             hidden_from_ai_files: Vec::new(),
         }
     };
@@ -90,10 +92,21 @@ fn load_workspace_from_path(path: &Path) -> AppResult<Workspace> {
 fn load_workspace_from_path_with_options(path: &Path, include_templates: bool) -> AppResult<Workspace> {
     let manifest_path = workspace_manifest_path(path)
         .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
-    let manifest = read_manifest(&manifest_path)?;
+    let manifest = read_manifest(&manifest_path).map_err(|error| {
+        AppError::Message(format!(
+            "Could not read workspace manifest at {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let files = scan_workspace_files(path, &manifest, include_templates).map_err(|error| {
+        AppError::Message(format!(
+            "Could not scan workspace files under {}: {error}",
+            path.display()
+        ))
+    })?;
     Ok(Workspace {
         path: path_to_string(path),
-        files: scan_workspace_files(path, &manifest, include_templates)?,
+        files,
         manifest,
     })
 }
@@ -169,6 +182,36 @@ fn update_workspace_file_ai_access_at(
     write_json_atomically(&manifest_path, &manifest)
 }
 
+fn update_workspace_ai_access_at(
+    workspace_path: &Path,
+    updates: WorkspaceAiAccessUpdate,
+) -> AppResult<()> {
+    let manifest_path = workspace_manifest_path(workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    if let Some(hidden_from_ai) = updates.hidden_from_ai {
+        manifest.hidden_from_ai = hidden_from_ai;
+    }
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)
+}
+
+fn update_workspace_folder_ai_access_at(
+    workspace_path: &Path,
+    folder_path: &Path,
+    updates: WorkspaceFolderAiAccessUpdate,
+) -> AppResult<()> {
+    let manifest_path = workspace_manifest_path(workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let relative = relative_path(workspace_path, folder_path);
+    if let Some(hidden_from_ai) = updates.hidden_from_ai {
+        update_manifest_file_set(&mut manifest.hidden_from_ai_folders, &relative, hidden_from_ai);
+    }
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)
+}
+
 fn rename_workspace_file_manifest_entries(
     workspace_path: &Path,
     previous_path: &Path,
@@ -182,6 +225,7 @@ fn rename_workspace_file_manifest_entries(
     let next = relative_path(workspace_path, next_path);
     rename_manifest_file_set_entry(&mut manifest.archived_files, &previous, &next);
     rename_manifest_file_set_entry(&mut manifest.locked_files, &previous, &next);
+    rename_manifest_file_set_entry(&mut manifest.hidden_from_ai_folders, &previous, &next);
     rename_manifest_file_set_entry(&mut manifest.hidden_from_ai_files, &previous, &next);
     manifest.updated_at = Utc::now().to_rfc3339();
     write_json_atomically(&manifest_path, &manifest)
@@ -216,10 +260,16 @@ fn workspace_manifest_path(path: &Path) -> Option<PathBuf> {
 }
 
 fn scan_workspace_files(root: &Path, manifest: &WorkspaceManifest, include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
-    scan_directory(root, root, manifest, include_templates)
+    scan_directory(root, root, manifest, include_templates, manifest.hidden_from_ai)
 }
 
-fn scan_directory(root: &Path, directory: &Path, manifest: &WorkspaceManifest, include_templates: bool) -> AppResult<Vec<WorkspaceTreeNode>> {
+fn scan_directory(
+    root: &Path,
+    directory: &Path,
+    manifest: &WorkspaceManifest,
+    include_templates: bool,
+    hidden_from_ai_inherited: bool,
+) -> AppResult<Vec<WorkspaceTreeNode>> {
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -231,11 +281,15 @@ fn scan_directory(root: &Path, directory: &Path, manifest: &WorkspaceManifest, i
             continue;
         }
         if path.is_dir() {
-            let children = scan_directory(root, &path, manifest, include_templates)?;
+            let relative_path = relative_path(root, &path);
+            let hidden_from_ai = hidden_from_ai_inherited
+                || manifest.hidden_from_ai_folders.iter().any(|hidden| hidden == &relative_path);
+            let children = scan_directory(root, &path, manifest, include_templates, hidden_from_ai)?;
             folders.push(WorkspaceTreeNode::Folder {
                 name,
                 path: path_to_string(&path),
-                relative_path: relative_path(root, &path),
+                relative_path,
+                hidden_from_ai,
                 children,
             });
         } else if let Some(extension) = document_extension(&path) {
@@ -245,7 +299,8 @@ fn scan_directory(root: &Path, directory: &Path, manifest: &WorkspaceManifest, i
                 path: path_to_string(&path),
                 archived: manifest.archived_files.iter().any(|archived| archived == &relative_path),
                 locked: manifest.locked_files.iter().any(|locked| locked == &relative_path),
-                hidden_from_ai: manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative_path),
+                hidden_from_ai: hidden_from_ai_inherited
+                    || manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative_path),
                 relative_path,
                 extension,
             });
@@ -295,6 +350,7 @@ fn launch_document_path(value: &str) -> Option<String> {
     Some(path_to_string(&path))
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
 fn enqueue_open_document_path(app: &AppHandle, path: &Path) {
     let Some(path) = launch_document_path(&path_to_string(path)) else {
         return;
@@ -502,7 +558,11 @@ fn document_file_ai_access(path: &Path) -> (bool, bool) {
     let relative = relative_path(&workspace_path, path);
     (
         manifest.locked_files.iter().any(|locked| locked == &relative),
-        manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative),
+        manifest.hidden_from_ai
+            || manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative)
+            || manifest.hidden_from_ai_folders.iter().any(|hidden| {
+                relative == *hidden || relative.starts_with(&format!("{hidden}/"))
+            }),
     )
 }
 

@@ -4,7 +4,7 @@ import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSett
 import { configureDebugLog, measureDebug } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
-import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspace, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, upsertWorkspace, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 
@@ -71,6 +71,7 @@ export async function boot(): Promise<void> {
       if (event === 'zoom-document-out') handlers.zoomDocumentOut();
       if (event === 'zoom-document-reset') handlers.resetDocumentZoom();
       if (event === 'recover-backup') void openRecoveryDialog();
+      if (event === 'version-history') handlers.openVersionHistory();
       if (event === 'app-close-requested') void handleAppCloseRequest();
       if (event === 'close-document') handlers.closeDocument();
       if (event === 'save') handlers.save();
@@ -282,13 +283,14 @@ export async function refreshMcpClientInstallStatus(): Promise<void> {
 }
 
 export async function loadRecentWorkspaces(): Promise<void> {
-  for (const path of state.recent.workspaces) {
-    try {
-      upsertWorkspace(await loadWorkspace(path));
-    } catch {
-      // Recents are pruned by the backend when they are opened or reloaded.
-    }
-  }
+  state.workspaceEntries = state.recent.workspaces.map((path) => ({
+    path,
+    displayName: workspaceDisplayNameFromPath(path),
+    status: 'loading',
+    error: null,
+  }));
+  rerender({ preserveMountedDocument: true });
+  await Promise.all(state.recent.workspaces.map((path) => loadWorkspaceEntry(path)));
   state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
   syncMcpWorkspaces();
 }
@@ -340,7 +342,8 @@ export async function restoreStartupDocument(): Promise<void> {
 
 export async function restoreHotReloadSession(): Promise<boolean> {
   const snapshot = readHotReloadSessionSnapshot();
-  if (!snapshot || snapshot.tabPaths.length === 0) return false;
+  if (!snapshot) return false;
+  if (snapshot.tabPaths.length === 0) return true;
   let fallbackActivePath: string | null = null;
   for (const path of [...snapshot.tabPaths].reverse()) {
     if (path === snapshot.activePath) continue;
@@ -390,6 +393,7 @@ export async function createSessionFromHotReloadSnapshot(file: DocumentFile, sto
     isNew: false,
     metaOpen: stored?.metaOpen ?? false,
     document: await deserializeHvy(new Uint8Array(file.bytes), file.extension),
+    chatState: null,
     scrollRatio: stored?.scrollRatio ?? null,
     recoveryState: stored?.recoveryState ?? null,
     recoveryBackupId: null,

@@ -1,6 +1,6 @@
 {
   "name": "hvy-galaxy-desktop",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "productName": "HVY Galaxy",
   "main": "src-electron/main.cjs",
   "private": true,
@@ -31,6 +31,7 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
+    "@automerge/automerge": "^3.3.2",
     "@tauri-apps/api": "^2.9.0",
     "heavy-file-format-ref-impl": "file:../heavy-file-format",
     "pdfmake": "^0.3.9"
@@ -40,7 +41,7 @@
     "@tauri-apps/cli": "^2.9.0",
     "@types/node": "^24.6.0",
     "brython": "^3.14.0",
-    "electron": "^37.9.0",
+    "electron": "^43.2.0",
     "electron-winstaller": "^5.4.0",
     "playwright": "^1.60.0",
     "typescript": "^5.8.3",

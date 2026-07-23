@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type McpClientInstallTarget } from './backend';
+import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { state } from './state';
@@ -9,6 +9,17 @@ import type { UiHandlers } from './ui';
 interface DocumentColorTheme {
   name: string;
   colors: Record<string, string>;
+}
+
+async function persistAiSettings(settings: AiSettings): Promise<void> {
+  state.aiSettings = await saveAiSettings(settings);
+  installAiChatClient(state.aiSettings, state.appSettings);
+  state.aiSettingsDialogOpen = false;
+  state.aiSettingsDraft = null;
+  state.aiSettingsDialogInitialJson = null;
+  state.aiSettingsDiscardDialogOpen = false;
+  state.aiSettingsSelectedProviderId = null;
+  state.status = 'Saved AI settings';
 }
 
 function currentDocumentColorTheme(): DocumentColorTheme {
@@ -171,16 +182,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         void mountCurrentDocument();
       });
   },
-  saveAiSettings: (settings) => void runBusy('Saving AI settings...', async () => {
-    state.aiSettings = await saveAiSettings(settings);
-    installAiChatClient(state.aiSettings, state.appSettings);
-    state.aiSettingsDialogOpen = false;
-    state.aiSettingsDraft = null;
-    state.aiSettingsDialogInitialJson = null;
-    state.aiSettingsDiscardDialogOpen = false;
-    state.aiSettingsSelectedProviderId = null;
-    state.status = 'Saved AI settings';
-  }),
+  saveAiSettings: (settings) => {
+    void runBusy('Saving AI settings...', async () => {
+      await persistAiSettings(settings);
+    });
+  },
   cancelAiSettings: (settings) => {
     if (aiSettingsChanged(settings)) {
       state.aiSettingsDiscardDialogOpen = true;

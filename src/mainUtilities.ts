@@ -20,6 +20,13 @@ title: ${JSON.stringify(title)}
 `;
 }
 
+export function savedVersionDocumentName(sourceName: string): string {
+  const dot = sourceName.lastIndexOf('.');
+  return dot > 0
+    ? `${sourceName.slice(0, dot)}-saved-version${sourceName.slice(dot)}`
+    : `${sourceName}-saved-version`;
+}
+
 export function documentFileName(name: string, documentType: DocumentCreationType = 'hvy'): string | null {
   const trimmed = name.trim();
   if (!trimmed) return null;
@@ -386,11 +393,27 @@ export async function copyMcpSetupValue(value: string, label: string): Promise<v
 }
 
 export function canonicalAiSettings(settings: typeof state.aiSettings): typeof state.aiSettings {
+  const embeddings = settings.embeddings ?? {
+    enabled: false,
+    providerId: 'openai',
+    model: 'text-embedding-ada-002',
+    modelsByProvider: { openai: 'text-embedding-ada-002' },
+    dimensions: null,
+    batchSize: 8,
+  };
   return {
     activeProviderId: settings.activeProviderId,
     providers: [...settings.providers].sort((left, right) => left.provider.localeCompare(right.provider)),
     maxContextChars: normalizeAiMaxContextChars(settings.maxContextChars),
     maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(settings.maxConcurrentSemanticFilters),
+    embeddings: {
+      enabled: embeddings.enabled === true,
+      providerId: embeddings.providerId || settings.activeProviderId,
+      model: embeddings.model || 'text-embedding-ada-002',
+      modelsByProvider: embeddings.modelsByProvider ?? {},
+      dimensions: embeddings.dimensions ?? null,
+      batchSize: normalizeEmbeddingBatchSize(embeddings.batchSize),
+    },
     actions: {
       chat: settings.actions.chat,
       edit: settings.actions.edit,
@@ -401,6 +424,12 @@ export function canonicalAiSettings(settings: typeof state.aiSettings): typeof s
       compaction: settings.actions.compaction,
     },
   };
+}
+
+function normalizeEmbeddingBatchSize(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 8;
+  return Math.min(256, Math.max(1, Math.floor(parsed)));
 }
 
 export function canonicalAppSettings(settings: AppSettings): AppSettings {

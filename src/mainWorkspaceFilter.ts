@@ -2,6 +2,7 @@ import type { HvyDocumentSearchDocument, HvySemanticFilterProvider } from '../..
 import { getSemanticResponseDebug } from './aiClient';
 import { readDocumentFile, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { logDebugEvent } from './debugLog';
+import { createWorkspaceEmbeddingCandidatePaths } from './embeddingIndex';
 import { loadWorkspace } from './mainWorkspaceUtils';
 import { createHvyDocumentFilterSnapshot, deserializeHvy, desktopSemanticFilterProvider, setMountedSearchSnapshot, type VisualDocument } from './hvy';
 import { state, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, type WorkspaceFilterConfig } from './state';
@@ -46,15 +47,44 @@ export async function submitWorkspaceFilter(): Promise<void> {
     if (!workspace) {
       throw new Error('Open a workspace before filtering.');
     }
-    const documents = await buildWorkspaceFilterDocuments(workspace, targetDirectory);
+    const embeddingCandidatePaths = state.workspaceFilter.mode === 'embedding'
+      ? await createWorkspaceEmbeddingCandidatePaths(workspace, {
+        query,
+        targetDirectory,
+        signal: abortController.signal,
+      }, state.aiSettings, {
+        onProgress: (progress) => {
+          state.workspaceFilter.error = null;
+          state.workspaceFilter.status = progress.rebuiltChunks > 0
+            ? `Rebuilding embeddings: ${progress.rebuiltChunks} rebuilt, ${progress.reusedChunks} reused`
+            : progress.failed > 0
+            ? `Embedding search skipped ${progress.failed} failed files`
+            : null;
+          if (state.workspaceFilter.status) {
+            state.status = state.workspaceFilter.status;
+          }
+          scheduleWorkspaceFilterProgressRender();
+        },
+      })
+      : null;
+    if (embeddingCandidatePaths && embeddingCandidatePaths.length === 0) {
+      state.workspaceFilter.error = 'No embedding candidates. Try a broader prompt.';
+      state.workspaceFilter.status = null;
+      state.status = 'Ready';
+      return;
+    }
+    const documents = await buildWorkspaceFilterDocuments(workspace, targetDirectory, embeddingCandidatePaths ?? undefined);
+    const snapshotMode = state.workspaceFilter.mode === 'embedding' ? 'semantic' : state.workspaceFilter.mode;
     const snapshots = await createWorkspaceFilterSnapshots(documents, {
       query,
-      mode: state.workspaceFilter.mode,
+      mode: snapshotMode,
       filterMode: state.workspaceFilter.filterMode,
       signal: abortController.signal,
     });
-    if (state.workspaceFilter.mode === 'semantic' && !workspaceFilterSnapshotsHaveMatches(snapshots)) {
-      state.workspaceFilter.error = 'No semantic matches. Try a more specific prompt.';
+    if ((state.workspaceFilter.mode === 'semantic' || state.workspaceFilter.mode === 'embedding') && !workspaceFilterSnapshotsHaveMatches(snapshots)) {
+      state.workspaceFilter.error = state.workspaceFilter.mode === 'embedding'
+        ? 'No semantic matches in the embedding candidates. Try a broader prompt.'
+        : 'No semantic matches. Try a more specific prompt.';
       state.workspaceFilter.status = null;
       state.status = 'Ready';
       return;
@@ -285,7 +315,7 @@ async function createWorkspaceFilterSnapshotForSearchDocument(
     return await createHvyDocumentFilterSnapshot({
       document: entry.document,
       query: filter.query,
-      mode: filter.mode,
+      mode: filter.mode === 'embedding' ? 'keyword' : filter.mode,
       view: 'viewer',
       filterMode: filter.filterMode,
       traceRunId,
@@ -359,11 +389,14 @@ function isInvalidSemanticCandidateIdError(error: unknown): boolean {
 export async function buildWorkspaceFilterDocuments(
   workspace: Awaited<ReturnType<typeof loadWorkspace>>,
   targetDirectory = '',
+  candidatePaths?: string[],
 ): Promise<HvyDocumentSearchDocument[]> {
   const documents: HvyDocumentSearchDocument[] = [];
   const scope = normalizeFolderScope(targetDirectory);
+  const candidates = candidatePaths ? new Set(candidatePaths.map(normalizeFilePath)) : null;
   for (const file of flattenWorkspaceFiles(workspace.files)) {
     if (file.hiddenFromAI) continue;
+    if (candidates && !candidates.has(normalizeFilePath(file.path))) continue;
     if (scope && !workspaceFilterFileRelativePath(file, workspace.path).startsWith(`${scope}/`)) continue;
     const session = documentSessions.get(file.path);
     const openDocument = state.document?.path === file.path ? state.document : null;

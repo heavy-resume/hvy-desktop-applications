@@ -20,6 +20,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_recent_state,
+            save_workspace_order,
             save_document_mode_preference,
             save_document_color_preference,
             load_ai_settings,
@@ -41,6 +42,7 @@ pub fn run() {
             load_default_guide,
             load_hvy_guide,
             open_workspace_dialog,
+            reauthorize_workspace,
             choose_workspace_folder,
             create_workspace,
             new_workspace_dialog,
@@ -58,6 +60,10 @@ pub fn run() {
             read_document_file,
             read_document_file_metadata,
             read_document_file_bytes,
+            read_embedding_sidecar_file_bytes,
+            write_embedding_sidecar_file,
+            write_embedding_sidecar_file_raw,
+            delete_embedding_sidecar_file,
             save_document_file,
             save_document_file_raw,
             save_document_as_dialog,
@@ -68,6 +74,8 @@ pub fn run() {
             save_document_template,
             update_workspace_template_visibility,
             update_workspace_file_ai_access,
+            update_workspace_ai_access,
+            update_workspace_folder_ai_access,
             open_color_theme_dialog,
             save_color_theme_as_dialog,
             update_file_menu_state,
@@ -78,6 +86,7 @@ pub fn run() {
             archive_document_file,
             restore_document_file,
             delete_document_file,
+            delete_workspace_folder,
             save_document_to_workspace,
             save_document_to_workspace_raw,
             copy_document_to_workspace,
@@ -106,7 +115,7 @@ pub fn run() {
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
-        let _ = event;
+        let _ = (app, event);
     });
 }
 
@@ -209,7 +218,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
-        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?);
+        .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
+        .item(&MenuItemBuilder::new("Version History...").id("version-history").build(app)?);
     #[cfg(not(target_os = "macos"))]
     let file_builder = file_builder
         .separator()

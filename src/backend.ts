@@ -36,6 +36,8 @@ export interface WorkspaceManifest {
   templateVisibility?: WorkspaceTemplateVisibility;
   archivedFiles?: string[];
   lockedFiles?: string[];
+  hiddenFromAI?: boolean;
+  hiddenFromAIFolders?: string[];
   hiddenFromAIFiles?: string[];
 }
 
@@ -53,6 +55,7 @@ export interface WorkspaceFolderNode {
   name: string;
   path: string;
   relativePath: string;
+  hiddenFromAI?: boolean;
   children: WorkspaceTreeNode[];
 }
 
@@ -211,6 +214,11 @@ export interface WorkspaceFolderRequest {
   name: string;
 }
 
+export interface DeleteWorkspaceFolderRequest {
+  workspacePath: string;
+  targetDirectory: string;
+}
+
 export interface SystemFileClipboardRequest {
   paths: string[];
   operation: 'copy' | 'cut';
@@ -306,10 +314,20 @@ export interface AiActionConfig {
 
 export type AiActionSettings = Record<AiActionKey, AiActionConfig>;
 
+export interface AiEmbeddingSettings {
+  enabled: boolean;
+  providerId: string;
+  model: string;
+  modelsByProvider?: Record<string, string>;
+  dimensions?: number | null;
+  batchSize: number;
+}
+
 export interface AiSettings {
   activeProviderId: string;
   providers: AiProviderConfig[];
   actions: AiActionSettings;
+  embeddings: AiEmbeddingSettings;
   maxContextChars: number;
   maxConcurrentSemanticFilters: number;
 }
@@ -381,6 +399,13 @@ export function loadRecentState(): Promise<RecentState> {
     return Promise.resolve({ workspaces: [], files: [] });
   }
   return invokeDesktop('load_recent_state');
+}
+
+export function saveWorkspaceOrder(workspaces: string[]): Promise<RecentState> {
+  if (!isTauriRuntime() && !isElectronRuntime()) {
+    return Promise.resolve({ workspaces, files: [] });
+  }
+  return invokeDesktop('save_workspace_order', { workspaces });
 }
 
 export function saveDocumentModePreference(path: string, mode: string): Promise<RecentState> {
@@ -484,6 +509,7 @@ export function defaultAiSettings(): AiSettings {
     activeProviderId: provider.provider,
     providers: [provider],
     actions: defaultAiActionSettings(),
+    embeddings: defaultAiEmbeddingSettings(),
     maxContextChars: 40_000,
     maxConcurrentSemanticFilters: 3,
   };
@@ -588,6 +614,17 @@ export function defaultAiActionSettings(providerId = 'default'): AiActionSetting
   };
 }
 
+export function defaultAiEmbeddingSettings(providerId = 'openai'): AiEmbeddingSettings {
+  return {
+    enabled: false,
+    providerId,
+    model: 'text-embedding-ada-002',
+    modelsByProvider: { openai: 'text-embedding-ada-002' },
+    dimensions: null,
+    batchSize: 8,
+  };
+}
+
 export function loadDefaultGuide(): Promise<DocumentFile> {
   return invokeDesktop<DocumentFile>('load_default_guide').then(normalizeDocumentFileBytes);
 }
@@ -598,6 +635,10 @@ export function loadHvyGuide(): Promise<DocumentFile> {
 
 export function openWorkspaceDialog(): Promise<Workspace | null> {
   return invokeDesktop('open_workspace_dialog');
+}
+
+export function reauthorizeWorkspace(path: string): Promise<Workspace | null> {
+  return invokeDesktop('reauthorize_workspace', { path });
 }
 
 export function chooseWorkspaceFolder(): Promise<WorkspaceOpenCandidate | null> {
@@ -686,6 +727,24 @@ export function saveDocumentFile(request: SaveDocumentRequest): Promise<Document
   return invokeDesktop('save_document_file', { path: request.path, bytes: request.bytes });
 }
 
+export function readSidecarFileBytes(path: string): Promise<Uint8Array | null> {
+  return invokeDesktop<ArrayBuffer | Uint8Array | number[] | BufferJson | null>('read_embedding_sidecar_file_bytes', { path })
+    .then((bytes) => bytes ? normalizeDesktopBytes(bytes) : null);
+}
+
+export function writeSidecarFile(path: string, bytes: Uint8Array | number[]): Promise<void> {
+  if (isTauriRuntime()) {
+    return invoke<void>('write_embedding_sidecar_file_raw', toUint8Array(bytes), {
+      headers: { 'x-hvy-sidecar-path': encodeURIComponent(path) },
+    });
+  }
+  return invokeDesktop('write_embedding_sidecar_file', { path, bytes });
+}
+
+export function deleteSidecarFile(path: string): Promise<void> {
+  return invokeDesktop('delete_embedding_sidecar_file', { path });
+}
+
 export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFileMetadata | null> {
   if (isTauriRuntime()) {
     return invoke<DocumentFileMetadata | null>('save_document_as_dialog_raw', toUint8Array(request.bytes), {
@@ -722,6 +781,21 @@ export function updateWorkspaceFileAiAccess(
   updates: { locked?: boolean; hiddenFromAI?: boolean },
 ): Promise<Workspace> {
   return invokeDesktop('update_workspace_file_ai_access', { path, updates });
+}
+
+export function updateWorkspaceAiAccess(
+  workspacePath: string,
+  updates: { hiddenFromAI?: boolean },
+): Promise<Workspace> {
+  return invokeDesktop('update_workspace_ai_access', { workspacePath, updates });
+}
+
+export function updateWorkspaceFolderAiAccess(
+  workspacePath: string,
+  targetDirectory: string,
+  updates: { hiddenFromAI?: boolean },
+): Promise<Workspace> {
+  return invokeDesktop('update_workspace_folder_ai_access', { workspacePath, targetDirectory, updates });
 }
 
 export function openColorThemeDialog(): Promise<ThemeFile | null> {
@@ -777,6 +851,10 @@ export function restoreDocumentFile(path: string): Promise<Workspace> {
 
 export function deleteDocumentFile(path: string): Promise<Workspace | null> {
   return invokeDesktop('delete_document_file', { path });
+}
+
+export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Promise<Workspace> {
+  return invokeDesktop('delete_workspace_folder', { request });
 }
 
 export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFileMetadata> {

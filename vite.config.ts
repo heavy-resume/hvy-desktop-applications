@@ -90,8 +90,12 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(packageJson.version),
   },
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
+  optimizeDeps: {
+    entries: ['index.html'],
+  },
   resolve: {
     alias: {
+      '@automerge/automerge': resolve('node_modules/@automerge/automerge/dist/mjs/entrypoints/fullfat_base64.js'),
       'pdfmake/build/pdfmake.js': require.resolve('pdfmake/build/pdfmake.js'),
       'pdfmake/build/vfs_fonts.js': require.resolve('pdfmake/build/vfs_fonts.js'),
     },

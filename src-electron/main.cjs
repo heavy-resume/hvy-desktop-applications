@@ -13,6 +13,7 @@ const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const APP_SETTINGS = 'app-settings.json';
 const MCP_SETTINGS = 'mcp-settings.json';
+const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
 const RECENT_LIMIT = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
 const AI_MIN_CONTEXT_CHARS = 1000;
@@ -226,6 +227,7 @@ function buildMenu() {
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
+        menuItem('Version History...', 'version-history'),
         ...(process.platform === 'darwin' ? [] : [{ type: 'separator' }, menuItem('Quit', 'app-close-requested', 'CmdOrCtrl+Q')]),
       ],
     },
@@ -455,14 +457,15 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
 async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+    case 'save_workspace_order': return saveWorkspaceOrder(args.workspaces);
     case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
     case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
     case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
-    case 'load_mcp_settings': return readJson(dataPath(MCP_SETTINGS), defaultMcpSettings());
-    case 'save_mcp_settings': return writeJson(dataPath(MCP_SETTINGS), normalizeMcpSettings(args.settings));
+    case 'load_mcp_settings': return loadMcpSettings();
+    case 'save_mcp_settings': return saveMcpSettings(args.settings);
     case 'load_mcp_server_status': return mcpStatus;
     case 'load_mcp_stdio_launch_config': return defaultMcpStdioLaunchConfig();
     case 'load_mcp_client_install_status': return mcpClientInstallStatuses();
@@ -477,10 +480,11 @@ async function handleCommand(command, args) {
       mcpStatus = { running: false, url: null, message: 'MCP server is stopped.', lastError: null };
       refreshMenu();
       return mcpStatus;
-    case 'update_mcp_workspaces': return null;
+    case 'update_mcp_workspaces': return updateMcpWorkspaces(args.paths);
     case 'load_default_guide': return readDocumentAt(defaultGuidePath());
     case 'load_hvy_guide': return readDocumentAt(hvyGuidePath());
     case 'open_workspace_dialog': return openWorkspaceDialog();
+    case 'reauthorize_workspace': return reauthorizeWorkspace(args.path);
     case 'choose_workspace_folder': return chooseWorkspaceFolder();
     case 'create_workspace': return createWorkspace(args.name);
     case 'new_workspace_dialog': return newWorkspaceDialog();
@@ -499,6 +503,9 @@ async function handleCommand(command, args) {
     case 'read_document_file': return readDocumentFile(args.path);
     case 'read_document_file_metadata': return readDocumentFileMetadata(args.path);
     case 'read_document_file_bytes': return readDocumentBytesAt(args.path);
+    case 'read_embedding_sidecar_file_bytes': return readEmbeddingSidecarFileBytes(args.path);
+    case 'write_embedding_sidecar_file': return writeEmbeddingSidecarFile(args.path, args.bytes);
+    case 'delete_embedding_sidecar_file': return deleteEmbeddingSidecarFile(args.path);
     case 'save_document_file': return saveDocumentFile(args.path, args.bytes);
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
@@ -507,6 +514,8 @@ async function handleCommand(command, args) {
     case 'save_document_template': return saveDocumentTemplate(args.request);
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
     case 'update_workspace_file_ai_access': return updateWorkspaceFileAiAccess(args.path, args.updates);
+    case 'update_workspace_ai_access': return updateWorkspaceAiAccess(args.workspacePath, args.updates);
+    case 'update_workspace_folder_ai_access': return updateWorkspaceFolderAiAccess(args.workspacePath, args.targetDirectory, args.updates);
     case 'open_color_theme_dialog': return openColorThemeDialog();
     case 'save_color_theme_as_dialog': return saveColorThemeAsDialog(args.suggestedName, args.bytes);
     case 'update_file_menu_state': return updateFileMenuState(args.state);
@@ -517,6 +526,7 @@ async function handleCommand(command, args) {
     case 'archive_document_file': return archiveDocumentFile(args.path);
     case 'restore_document_file': return restoreDocumentFile(args.path);
     case 'delete_document_file': return deleteDocumentFile(args.path);
+    case 'delete_workspace_folder': return deleteWorkspaceFolder(args.request);
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
@@ -635,6 +645,21 @@ async function openWorkspaceDialog() {
   return workspace;
 }
 
+async function reauthorizeWorkspace(workspacePath) {
+  const expected = path.resolve(workspacePath);
+  const result = await dialog.showOpenDialog(mainWindow, {
+    defaultPath: expected,
+    message: 'Select this workspace folder to grant HVY Galaxy access',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const selected = path.resolve(result.filePaths[0]);
+  if (selected !== expected) {
+    throw new Error(`Selected folder does not match the workspace requiring access. Expected ${expected}; selected ${selected}.`);
+  }
+  return loadWorkspaceFromPath(selected);
+}
+
 async function chooseWorkspaceFolder() {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -705,6 +730,40 @@ function updateWorkspaceFileAiAccess(filePath, updates) {
   if (!workspacePath) throw new Error('Document must be inside a workspace.');
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be updated.');
   updateWorkspaceFileAiAccessAt(workspacePath, filePath, updates || {});
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function updateWorkspaceAiAccess(workspacePath, updates) {
+  ensureWorkspace(workspacePath);
+  const manifestPath = workspaceManifestPath(workspacePath);
+  const manifest = readJson(manifestPath, null);
+  if (typeof updates?.hiddenFromAI === 'boolean') {
+    manifest.hiddenFromAI = updates.hiddenFromAI;
+  }
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function updateWorkspaceFolderAiAccess(workspacePath, targetDirectory, updates) {
+  ensureWorkspace(workspacePath);
+  const relative = String(targetDirectory || '').trim();
+  if (!relative) throw new Error('Folder is required.');
+  const folderPath = path.resolve(workspacePath, relative);
+  const workspaceRoot = path.resolve(workspacePath);
+  if (folderPath !== workspaceRoot && !folderPath.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('Folder path must stay inside the workspace.');
+  }
+  if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    throw new Error('Folder was not found.');
+  }
+  const manifestPath = workspaceManifestPath(workspacePath);
+  const manifest = readJson(manifestPath, null);
+  if (typeof updates?.hiddenFromAI === 'boolean') {
+    updateManifestFileSet(manifest, 'hiddenFromAIFolders', relativeWorkspacePath(workspacePath, folderPath), updates.hiddenFromAI);
+  }
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
   return loadWorkspaceFromPath(workspacePath);
 }
 
@@ -1045,6 +1104,56 @@ function deleteDocumentFile(filePath) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
+function deleteWorkspaceFolder(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const targetDirectory = String(request?.targetDirectory || '').trim();
+  if (!targetDirectory) throw new Error('Folder is required.');
+  const workspaceRoot = path.resolve(workspacePath);
+  const folderPath = path.resolve(workspaceRoot, targetDirectory);
+  if (folderPath === workspaceRoot || !folderPath.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('Folder path must stay inside the workspace.');
+  }
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) throw new Error('Workspace manifest was not found.');
+  const manifest = readJson(manifestPath, null);
+  const archivedFiles = new Set(manifest?.archivedFiles ?? []);
+  const deletedFiles = workspaceDocumentFilesInDirectory(workspacePath, folderPath);
+  const activeFile = deletedFiles.find((filePath) => !archivedFiles.has(relativeWorkspacePath(workspacePath, filePath)));
+  if (activeFile) throw new Error('Folder contains files that are not archived.');
+  fs.rmSync(folderPath, { recursive: true });
+  const deletedRelatives = new Set(deletedFiles.map((filePath) => relativeWorkspacePath(workspacePath, filePath)));
+  for (const key of ['archivedFiles', 'lockedFiles', 'hiddenFromAIFiles']) {
+    if (!Array.isArray(manifest[key])) continue;
+    manifest[key] = manifest[key].filter((entry) => !deletedRelatives.has(entry));
+    if (manifest[key].length === 0) delete manifest[key];
+  }
+  if (Array.isArray(manifest.hiddenFromAIFolders)) {
+    const deletedFolderRelative = targetDirectory.replace(/\\/g, '/');
+    manifest.hiddenFromAIFolders = manifest.hiddenFromAIFolders.filter((entry) => entry !== deletedFolderRelative && !entry.startsWith(`${deletedFolderRelative}/`));
+    if (manifest.hiddenFromAIFolders.length === 0) delete manifest.hiddenFromAIFolders;
+  }
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+  deletedFiles.forEach(removeRecentFile);
+  addRecentWorkspace(workspacePath);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function workspaceDocumentFilesInDirectory(workspacePath, directory) {
+  if (!fs.existsSync(directory)) return [];
+  const files = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...workspaceDocumentFilesInDirectory(workspacePath, entryPath));
+      continue;
+    }
+    if (documentExtension(entryPath)) files.push(entryPath);
+  }
+  return files;
+}
+
 function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   const fileName = ensureDocumentFileName(name);
@@ -1349,6 +1458,8 @@ function initializeWorkspaceWithName(workspacePath, name) {
     expandedPaths: [],
     templateVisibility: normalizeTemplateVisibility(null),
     lockedFiles: [],
+    hiddenFromAI: false,
+    hiddenFromAIFolders: [],
     hiddenFromAIFiles: [],
   };
   writeJson(manifestPath, manifest);
@@ -1358,11 +1469,26 @@ function initializeWorkspaceWithName(workspacePath, name) {
 function loadWorkspaceFromPath(workspacePath, includeTemplates = false) {
   const manifestPath = workspaceManifestPath(workspacePath);
   if (!manifestPath) throw new Error('Workspace manifest was not found.');
-  const manifest = readJson(manifestPath, null);
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const code = error && typeof error === 'object' && 'code' in error ? ` [${error.code}]` : '';
+    throw new Error(`Could not read workspace manifest at ${manifestPath}${code}: ${detail}`, { cause: error });
+  }
+  let files;
+  try {
+    files = readWorkspaceChildren(workspacePath, workspacePath, manifest, includeTemplates);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const code = error && typeof error === 'object' && 'code' in error ? ` [${error.code}]` : '';
+    throw new Error(`Could not scan workspace files under ${workspacePath}${code}: ${detail}`, { cause: error });
+  }
   return {
     path: workspacePath,
     manifest,
-    files: readWorkspaceChildren(workspacePath, workspacePath, manifest, includeTemplates),
+    files,
   };
 }
 
@@ -1418,21 +1544,25 @@ function createWorkspaceFolder(request) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
-function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates = false) {
+function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates = false, hiddenFromAIInherited = manifest?.hiddenFromAI === true) {
   const archivedFiles = new Set(manifest?.archivedFiles ?? []);
   const lockedFiles = new Set(manifest?.lockedFiles ?? []);
+  const hiddenFromAIFolders = new Set(manifest?.hiddenFromAIFolders ?? []);
   const hiddenFromAIFiles = new Set(manifest?.hiddenFromAIFiles ?? []);
   return fs.readdirSync(directory, { withFileTypes: true })
     .filter((entry) => !entry.name.startsWith('.') && (includeTemplates || path.join(directory, entry.name) !== workspaceTemplatesDir(root)))
     .map((entry) => {
       const entryPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
+        const relativePath = relativeWorkspacePath(root, entryPath);
+        const hiddenFromAI = hiddenFromAIInherited || hiddenFromAIFolders.has(relativePath);
         return {
           kind: 'folder',
           name: entry.name,
           path: entryPath,
-          relativePath: relativeWorkspacePath(root, entryPath),
-          children: readWorkspaceChildren(root, entryPath, manifest, includeTemplates),
+          relativePath,
+          hiddenFromAI,
+          children: readWorkspaceChildren(root, entryPath, manifest, includeTemplates, hiddenFromAI),
         };
       }
       const extension = documentExtension(entryPath);
@@ -1446,7 +1576,7 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
         extension,
         archived: archivedFiles.has(relativePath),
         locked: lockedFiles.has(relativePath),
-        hiddenFromAI: hiddenFromAIFiles.has(relativePath),
+        hiddenFromAI: hiddenFromAIInherited || hiddenFromAIFiles.has(relativePath),
       };
     })
     .filter(Boolean)
@@ -1482,6 +1612,37 @@ function readDocumentBytesAt(filePath) {
   return fs.readFileSync(filePath);
 }
 
+function embeddingSidecarSourcePath(sidecarPath) {
+  const resolved = path.resolve(sidecarPath);
+  if (!resolved.endsWith('.emb')) {
+    throw new Error('Embedding sidecar files must use the .emb extension.');
+  }
+  const source = resolved.slice(0, -'.emb'.length);
+  if (documentExtension(source) !== '.hvy') {
+    throw new Error('Embedding sidecars are only supported for .hvy documents.');
+  }
+  return source;
+}
+
+function readEmbeddingSidecarFileBytes(sidecarPath) {
+  embeddingSidecarSourcePath(sidecarPath);
+  if (!fs.existsSync(sidecarPath)) return null;
+  return fs.readFileSync(sidecarPath);
+}
+
+function writeEmbeddingSidecarFile(sidecarPath, bytes) {
+  const source = embeddingSidecarSourcePath(sidecarPath);
+  if (!fs.existsSync(source)) {
+    throw new Error('Embedding sidecar source document does not exist.');
+  }
+  fs.writeFileSync(sidecarPath, Buffer.from(normalizeBytes(bytes)));
+}
+
+function deleteEmbeddingSidecarFile(sidecarPath) {
+  embeddingSidecarSourcePath(sidecarPath);
+  if (fs.existsSync(sidecarPath)) fs.unlinkSync(sidecarPath);
+}
+
 function documentFileAiAccess(filePath) {
   const workspacePath = workspaceRootForDocument(path.dirname(filePath));
   if (!workspacePath) return { locked: false, hiddenFromAI: false };
@@ -1491,7 +1652,9 @@ function documentFileAiAccess(filePath) {
   const relative = relativeWorkspacePath(workspacePath, filePath);
   return {
     locked: (manifest?.lockedFiles ?? []).includes(relative),
-    hiddenFromAI: (manifest?.hiddenFromAIFiles ?? []).includes(relative),
+    hiddenFromAI: manifest?.hiddenFromAI === true
+      || (manifest?.hiddenFromAIFiles ?? []).includes(relative)
+      || (manifest?.hiddenFromAIFolders ?? []).some((folder) => relative === folder || relative.startsWith(`${folder}/`)),
   };
 }
 
@@ -1527,7 +1690,20 @@ function readThemeAt(filePath) {
 
 function writeBytes(filePath, bytes) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, Buffer.from(bytes));
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.tmp`);
+  const file = fs.openSync(tempPath, 'w');
+  try {
+    fs.writeFileSync(file, Buffer.from(normalizeBytes(bytes)));
+    fs.fsyncSync(file);
+  } finally {
+    fs.closeSync(file);
+  }
+  fs.renameSync(tempPath, filePath);
+}
+
+function normalizeBytes(bytes) {
+  if (bytes && bytes.type === 'Buffer' && Array.isArray(bytes.data)) return bytes.data;
+  return bytes;
 }
 
 function documentExtension(filePath) {
@@ -1593,6 +1769,7 @@ function renameWorkspaceFileManifestEntries(workspacePath, previousPath, nextPat
   const next = relativeWorkspacePath(workspacePath, nextPath);
   renameManifestFileSetEntry(manifest, 'archivedFiles', previous, next);
   renameManifestFileSetEntry(manifest, 'lockedFiles', previous, next);
+  renameManifestFileSetEntry(manifest, 'hiddenFromAIFolders', previous, next);
   renameManifestFileSetEntry(manifest, 'hiddenFromAIFiles', previous, next);
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
@@ -1748,6 +1925,14 @@ function saveDocumentModePreference(entryPath, mode) {
   return recent;
 }
 
+function saveWorkspaceOrder(workspaces) {
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  recent.workspaces = workspaces.map((entry) => path.resolve(entry));
+  writeJson(dataPath(RECENT_STATE), recent);
+  refreshMenu();
+  return recent;
+}
+
 function saveDocumentColorPreference(entryPath, useDocumentColors) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   recent.documentColorUses = { ...(recent.documentColorUses || {}), [path.resolve(entryPath)]: Boolean(useDocumentColors) };
@@ -1787,8 +1972,20 @@ function defaultAiSettings() {
       semanticFilter: { providerId: 'openai', model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
       compaction: { providerId: 'openai', model: 'gpt-5.4-nano', modelsByProvider: { openai: 'gpt-5.4-nano' } },
     },
+    embeddings: defaultAiEmbeddingSettings(),
     maxContextChars: DEFAULT_AI_MAX_CONTEXT_CHARS,
     maxConcurrentSemanticFilters: 3,
+  };
+}
+
+function defaultAiEmbeddingSettings() {
+  return {
+    enabled: false,
+    providerId: 'openai',
+    model: 'text-embedding-ada-002',
+    modelsByProvider: { openai: 'text-embedding-ada-002' },
+    dimensions: null,
+    batchSize: 8,
   };
 }
 
@@ -1820,12 +2017,46 @@ function normalizeDebugLogMaxBytes(value) {
 }
 
 function normalizeAiSettings(settings) {
+  const defaults = defaultAiSettings();
   return {
-    ...defaultAiSettings(),
+    ...defaults,
     ...(settings || {}),
+    embeddings: normalizeAiEmbeddingSettings(settings?.embeddings, settings?.activeProviderId || defaults.activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(settings?.maxContextChars),
     maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(settings?.maxConcurrentSemanticFilters ?? settings?.workspaceFilterFileConcurrency),
   };
+}
+
+function normalizeAiEmbeddingSettings(value, activeProviderId = 'openai') {
+  const defaults = defaultAiEmbeddingSettings();
+  const settings = value && typeof value === 'object' ? value : {};
+  const providerId = String(settings.providerId || activeProviderId || defaults.providerId).trim() || defaults.providerId;
+  const model = String(settings.model || settings.modelsByProvider?.[providerId] || defaults.model).trim() || defaults.model;
+  const dimensions = normalizeEmbeddingDimensions(settings.dimensions);
+  return {
+    enabled: settings.enabled === true,
+    providerId,
+    model,
+    modelsByProvider: {
+      ...(settings.modelsByProvider || {}),
+      [providerId]: model,
+      openai: String(settings.modelsByProvider?.openai || defaults.modelsByProvider.openai),
+    },
+    dimensions,
+    batchSize: normalizeEmbeddingBatchSize(settings.batchSize),
+  };
+}
+
+function normalizeEmbeddingDimensions(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeEmbeddingBatchSize(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 8;
+  return Math.min(256, Math.max(1, Math.floor(parsed)));
 }
 
 function normalizeAiMaxContextChars(value) {
@@ -1864,11 +2095,68 @@ function defaultMcpSettings() {
   };
 }
 
+function loadMcpSettings() {
+  const settings = normalizeMcpSettings(readJson(dataPath(MCP_SETTINGS), defaultMcpSettings()));
+  writeJson(dataPath(MCP_SETTINGS), settings);
+  writeMcpStdioSettings(settings);
+  return settings;
+}
+
+function saveMcpSettings(settings) {
+  const normalized = normalizeMcpSettings(settings);
+  writeJson(dataPath(MCP_SETTINGS), normalized);
+  writeMcpStdioSettings(normalized);
+  return normalized;
+}
+
 function normalizeMcpSettings(settings) {
   return {
     ...defaultMcpSettings(),
     ...(settings || {}),
   };
+}
+
+function mcpStdioWorkspaceConfigPath() {
+  return path.join(sharedAppDataDir(), 'mcp', MCP_STDIO_WORKSPACE_CONFIG);
+}
+
+function readMcpStdioWorkspaceConfig() {
+  const config = readJson(mcpStdioWorkspaceConfigPath(), { workspaces: [], writeAccess: defaultMcpSettings().writeAccess });
+  return {
+    workspaces: Array.isArray(config.workspaces) ? config.workspaces.filter((workspace) => typeof workspace === 'string') : [],
+    writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+  };
+}
+
+function writeMcpStdioWorkspaceConfig(config) {
+  return writeJson(mcpStdioWorkspaceConfigPath(), {
+    workspaces: Array.isArray(config.workspaces) ? config.workspaces : [],
+    writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+  });
+}
+
+function writeMcpStdioSettings(settings) {
+  const config = readMcpStdioWorkspaceConfig();
+  config.writeAccess = settings.writeAccess;
+  writeMcpStdioWorkspaceConfig(config);
+}
+
+function updateMcpWorkspaces(paths) {
+  const normalized = [];
+  for (const candidate of Array.isArray(paths) ? paths : []) {
+    const workspacePath = path.resolve(String(candidate || ''));
+    if (workspaceManifestPath(workspacePath)) {
+      normalized.push(workspacePath);
+    }
+  }
+  normalized.sort();
+  const deduped = [...new Set(normalized)];
+  const settings = normalizeMcpSettings(readJson(dataPath(MCP_SETTINGS), defaultMcpSettings()));
+  writeMcpStdioWorkspaceConfig({
+    workspaces: deduped,
+    writeAccess: settings.writeAccess,
+  });
+  return null;
 }
 
 function defaultMcpStdioLaunchConfig() {

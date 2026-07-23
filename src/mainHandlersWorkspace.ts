@@ -1,8 +1,10 @@
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, renameWorkspace, saveDocumentFile, unarchiveWorkspace } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, unarchiveWorkspace, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
 import { state } from './state';
-import { pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, syncMcpWorkspaces, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder } from './main';
+import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
+import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, syncMcpWorkspaces, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath } from './main';
 import type { UiHandlers } from './ui';
 
 export function createWorkspaceHandlers(): Partial<UiHandlers> {
@@ -59,6 +61,37 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  deleteWorkspaceFolder: (workspacePath, targetDirectory) => {
+    if (!workspacePath || !targetDirectory) return;
+    state.deleteFolderWorkspacePath = null;
+    state.deleteFolderDirectory = '';
+    state.deleteFolderName = null;
+    state.deleteFolderArchivedFiles = [];
+    void runBusy('Deleting folder...', async () => {
+      const workspace = await deleteWorkspaceFolder({ workspacePath, targetDirectory });
+      upsertWorkspace(await loadWorkspace(workspace.path));
+      clearWorkspaceFilterDocumentCache(workspace.path);
+      await refreshSavedTemplates(workspace.path);
+      await refreshRecents();
+      state.status = `Deleted ${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'folder'}`;
+    });
+  },
+  confirmDeleteWorkspaceFolder: (workspacePath, targetDirectory, folderName, archivedFiles) => {
+    state.deleteFolderWorkspacePath = workspacePath;
+    state.deleteFolderDirectory = targetDirectory;
+    state.deleteFolderName = folderName;
+    state.deleteFolderArchivedFiles = archivedFiles;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelDeleteWorkspaceFolder: () => {
+    state.deleteFolderWorkspacePath = null;
+    state.deleteFolderDirectory = '';
+    state.deleteFolderName = null;
+    state.deleteFolderArchivedFiles = [];
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   newWorkspace: () => {
     state.openWorkspaceActionsPath = null;
     state.newWorkspaceDialogOpen = true;
@@ -84,6 +117,14 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  reorderWorkspace: (draggedPath, targetPath, before) => void runBusy('Reordering workspaces...', async () => {
+    const entries = reorderedWorkspaceEntries(state.workspaceEntries, draggedPath, targetPath, before);
+    if (entries === state.workspaceEntries) return;
+    state.workspaceEntries = entries;
+    state.recent = await saveWorkspaceOrder(entries.map((entry) => entry.path));
+    state.workspaceManagerOpen = true;
+    state.status = 'Reordered workspaces';
+  }, { preserveMountedDocument: true }),
   renameWorkspace: (path, name) => void runBusy('Renaming workspace...', async () => {
     const trimmed = name.trim();
     if (!path || !trimmed) {
@@ -106,8 +147,10 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const workspace = state.workspaces.find((candidate) => candidate.path === path);
     await archiveWorkspace(path);
     state.workspaces = state.workspaces.filter((candidate) => candidate.path !== path);
+    state.workspaceEntries = state.workspaceEntries.filter((candidate) => candidate.path !== path);
     delete state.workspaceFilters[path];
     delete state.workspaceExpanded[path];
+    delete state.workspaceFolderExpanded[path];
     clearWorkspaceFilterDocumentCache(path);
     if (state.workspaceFilter.workspacePath === path) {
       state.workspaceFilter.open = false;
@@ -133,6 +176,18 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.workspaceManagerOpen = true;
     state.status = `Unarchived ${workspace.manifest.name}`;
     await refreshRecents();
+  }),
+  setWorkspaceHiddenFromAI: (workspacePath, hiddenFromAI) => void runBusy(`${hiddenFromAI ? 'Hiding workspace from AI' : 'Unhiding workspace from AI'}...`, async () => {
+    const workspace = await updateWorkspaceAiAccess(workspacePath, { hiddenFromAI });
+    upsertWorkspace(workspace);
+    clearWorkspaceFilterDocumentCache(workspace.path);
+    state.status = `${workspace.manifest.name} ${hiddenFromAI ? 'hidden from AI' : 'visible to AI'}`;
+  }),
+  setWorkspaceFolderHiddenFromAI: (workspacePath, targetDirectory, hiddenFromAI) => void runBusy(`${hiddenFromAI ? 'Hiding folder from AI' : 'Unhiding folder from AI'}...`, async () => {
+    const workspace = await updateWorkspaceFolderAiAccess(workspacePath, targetDirectory, { hiddenFromAI });
+    upsertWorkspace(workspace);
+    clearWorkspaceFilterDocumentCache(workspace.path);
+    state.status = `${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'Folder'} ${hiddenFromAI ? 'hidden from AI' : 'visible to AI'}`;
   }),
   toggleWorkspaceActions: (path) => {
     state.openWorkspaceActionsPath = state.openWorkspaceActionsPath === path ? null : path;
@@ -564,8 +619,39 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     },
     { preserveMountedDocument: true }
   ),
+  toggleWorkspaceEmbeddingPreview: (workspacePath) => {
+    const current = state.workspaceEmbeddingPreviews[workspacePath];
+    state.openWorkspaceActionsPath = null;
+    if (current?.enabled) {
+      state.workspaceEmbeddingPreviews[workspacePath] = {
+        enabled: false,
+        loading: false,
+        sidecars: {},
+        error: null,
+      };
+      state.status = 'Embedding preview hidden';
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    state.workspaceEmbeddingPreviews[workspacePath] = {
+      enabled: true,
+      loading: true,
+      sidecars: {},
+      error: null,
+    };
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+    void refreshWorkspaceEmbeddingPreview(workspacePath);
+  },
   setWorkspaceExpanded: (workspacePath, expanded) => {
     state.workspaceExpanded[workspacePath] = expanded;
+  },
+  setWorkspaceFolderExpanded: (workspacePath, relativePath, expanded) => {
+    const normalizedPath = relativePath.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+    state.workspaceFolderExpanded[workspacePath] = {
+      ...(state.workspaceFolderExpanded[workspacePath] ?? {}),
+      [normalizedPath]: expanded,
+    };
   },
   closeWorkspaceFilter: () => {
     state.workspaceFilter.open = false;
@@ -574,6 +660,71 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  openWorkspaceChat: (workspacePath, targetDirectory = '') => {
+    closeUiBeforeWorkspaceFilter();
+    openWorkspaceChat(workspacePath, targetDirectory);
+    activateWorkspaceChatDocument();
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  closeWorkspaceChat: () => {
+    const activeWorkspaceChat = state.document?.virtual === 'workspaceChat';
+    const path = currentWorkspaceChatDocumentPath();
+    if (requestCloseWorkspaceChat()) {
+      if (path) {
+        removeDocumentTabPath(path);
+      }
+      if (activeWorkspaceChat) {
+        state.document = null;
+      }
+      rerender({ preserveMountedDocument: true });
+    } else {
+      rerender({ preserveMountedDocument: true });
+    }
+  },
+  saveWorkspaceChat: () => void runBusy('Saving chat...', async () => {
+    const activeWorkspaceChat = state.document?.virtual === 'workspaceChat';
+    const path = currentWorkspaceChatDocumentPath();
+    await saveWorkspaceChat();
+    if (activeWorkspaceChat && !state.workspaceChat.open) {
+      state.document = null;
+    }
+    if (!state.workspaceChat.open && path) {
+      removeDocumentTabPath(path);
+    }
+  }, { preserveMountedDocument: true }),
+  discardWorkspaceChat: () => {
+    const activeWorkspaceChat = state.document?.virtual === 'workspaceChat';
+    const path = currentWorkspaceChatDocumentPath();
+    discardWorkspaceChat();
+    if (path) {
+      removeDocumentTabPath(path);
+    }
+    if (activeWorkspaceChat) {
+      state.document = null;
+    }
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelCloseWorkspaceChat: () => {
+    cancelCloseWorkspaceChat();
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelWorkspaceChatIndexing: () => {
+    cancelWorkspaceChatIndexing();
+    rerender({ preserveMountedDocument: true });
+  },
+  updateWorkspaceChatDraft: (value) => {
+    updateWorkspaceChatDraft(value);
+  },
+  submitWorkspaceChat: () => {
+    void submitWorkspaceChat(() => rerender({ preserveMountedDocument: true }));
+    rerender({ preserveMountedDocument: true });
+  },
+  openWorkspaceLink: (href) => void runBusy('Opening linked document...', async () => {
+    const path = resolveWorkspaceHref(href);
+    if (!path) return;
+    await openDocument(await readDocumentFile(path), { deferMount: true });
+  }),
   setWorkspaceFilterMode: (mode) => {
     state.workspaceFilter.mode = mode;
     state.workspaceFilter.error = null;
@@ -595,4 +746,45 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   submitWorkspaceFilter: () => void submitWorkspaceFilter(),
   clearWorkspaceFilter: () => void clearWorkspaceFilter(),
   };
+}
+
+async function refreshWorkspaceEmbeddingPreview(workspacePath: string): Promise<void> {
+  const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+  if (!workspace) return;
+  const files = flattenWorkspaceFilesForEmbeddingPreview(workspace.files)
+    .filter((file) => file.extension === '.hvy' && !file.hiddenFromAI);
+  const sidecars: Record<string, boolean> = {};
+  try {
+    await Promise.all(files.map(async (file) => {
+      const bytes = await readSidecarFileBytes(embeddingSidecarPath(file.path)).catch(() => null);
+      if (bytes) {
+        sidecars[file.path] = true;
+      }
+    }));
+    const current = state.workspaceEmbeddingPreviews[workspacePath];
+    if (!current?.enabled) return;
+    state.workspaceEmbeddingPreviews[workspacePath] = {
+      enabled: true,
+      loading: false,
+      sidecars,
+      error: null,
+    };
+    const count = Object.keys(sidecars).length;
+    state.status = count === 1 ? 'Found embeddings for 1 file' : `Found embeddings for ${count} files`;
+  } catch (error) {
+    const current = state.workspaceEmbeddingPreviews[workspacePath];
+    if (!current?.enabled) return;
+    state.workspaceEmbeddingPreviews[workspacePath] = {
+      enabled: true,
+      loading: false,
+      sidecars,
+      error: error instanceof Error ? error.message : String(error),
+    };
+    state.status = 'Embedding preview failed';
+  }
+  rerender({ preserveMountedDocument: true });
+}
+
+function flattenWorkspaceFilesForEmbeddingPreview(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFilesForEmbeddingPreview(node.children));
 }

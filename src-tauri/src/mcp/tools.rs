@@ -1,7 +1,7 @@
 pub(crate) fn mcp_tool_list() -> serde_json::Value {
     serde_json::json!([
         {
-            "name": "workspace.list",
+            "name": "workspace_list",
             "description": "List workspaces currently added to HVY Galaxy without reading HVY file contents. Use this to discover which workspaces are available through HVY Galaxy.",
             "inputSchema": {
                 "type": "object",
@@ -10,7 +10,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "workspace.tree",
+            "name": "workspace_tree",
             "description": "Return low-context file trees for workspaces currently added to HVY Galaxy. Use this when the user asks what HVY files or folders are available in a workspace.",
             "inputSchema": {
                 "type": "object",
@@ -24,7 +24,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "workspace.search",
+            "name": "workspace_search",
             "description": "Search HVY files in workspaces currently added to HVY Galaxy and return matching file paths, snippets, and line numbers. Use this to answer questions like which HVY file contains a resume, a person's name, a topic, or other document content.",
             "inputSchema": {
                 "type": "object",
@@ -47,7 +47,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "workspace.create",
+            "name": "workspace_create",
             "description": "Create a new HVY Galaxy workspace folder and add it to this MCP server's workspace list. Use this before creating documents when the user wants a new workspace.",
             "inputSchema": {
                 "type": "object",
@@ -66,7 +66,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "workspace.archive",
+            "name": "workspace_archive",
             "description": "Archive a workspace for this MCP server by removing it from the active MCP workspace list. This does not delete workspace files.",
             "inputSchema": {
                 "type": "object",
@@ -81,8 +81,8 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "document.create",
-            "description": "Create a new blank HVY document in an existing workspace. After creation, use document.cli_based_editor to edit the existing document with HVY CLI commands.",
+            "name": "document_create",
+            "description": "Create a new blank HVY document in an existing workspace. After creation, use document_cli_based_editor to edit the existing document with HVY CLI commands.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -104,7 +104,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "document.archive",
+            "name": "document_archive",
             "description": "Archive an existing document inside its workspace. This hides it from normal active workspace views and does not delete the file.",
             "inputSchema": {
                 "type": "object",
@@ -119,7 +119,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "hvy.guidance",
+            "name": "hvy_guidance",
             "description": "Return the HVY Galaxy AI guide file. Use this before creating or substantially editing HVY Galaxy workspaces and documents.",
             "inputSchema": {
                 "type": "object",
@@ -128,7 +128,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
-            "name": "document.cli_based_editor",
+            "name": "document_cli_based_editor",
             "description": "CLI based editor for one existing HVY document in a workspace. Use this for edits after finding or creating a document: inspect with commands like ls, find, rg, cat, sed -n, echo, man, hvy request_structure, hvy search, hvy preview, hvy cheatsheet, hvy recipe, and hvy lint. Mutate with hvy insert/remove, sed -i, echo/printf redirection, cp, mv, rm, and plugin commands. Locked and archived documents allow inspection commands and block commands that mutate document state.",
             "inputSchema": {
                 "type": "object",
@@ -204,17 +204,17 @@ fn handle_mcp_tool_call_from_with_access_config_and_archive_path(
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
     let result = match name {
-        "workspace.list" => mcp_workspace_list_from(workspaces)?,
-        "workspace.tree" => mcp_workspace_tree_from(workspaces, arguments)?,
-        "workspace.search" => mcp_workspace_search_from(workspaces, arguments)?,
-        "workspace.create" => mcp_workspace_create_from(arguments, workspace_config_path)?,
-        "workspace.archive" => {
+        "workspace_list" => mcp_workspace_list_from(workspaces)?,
+        "workspace_tree" => mcp_workspace_tree_from(workspaces, arguments)?,
+        "workspace_search" => mcp_workspace_search_from(workspaces, arguments)?,
+        "workspace_create" => mcp_workspace_create_from(arguments, workspace_config_path)?,
+        "workspace_archive" => {
             mcp_workspace_archive_from(workspaces, arguments, workspace_config_path, archived_workspaces_path)?
         }
-        "document.create" => mcp_document_create_from(workspaces, arguments)?,
-        "document.archive" => mcp_document_archive_from(workspaces, arguments)?,
-        "hvy.guidance" => mcp_hvy_guidance()?,
-        "document.cli_based_editor" => mcp_document_cli_from(workspaces, arguments)?,
+        "document_create" => mcp_document_create_from(workspaces, arguments)?,
+        "document_archive" => mcp_document_archive_from(workspaces, arguments)?,
+        "hvy_guidance" => mcp_hvy_guidance()?,
+        "document_cli_based_editor" => mcp_document_cli_from(workspaces, arguments)?,
         _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
     };
     Ok(mcp_tool_result(result))
@@ -231,9 +231,9 @@ pub(crate) fn ensure_mcp_tool_allowed(name: &str, write_access: &str) -> AppResu
 
 fn mcp_tool_required_access(name: &str) -> u8 {
     match name {
-        "workspace.list" | "workspace.tree" | "workspace.search" | "hvy.guidance" => 0,
-        "document.cli_based_editor" => 1,
-        "workspace.create" | "workspace.archive" | "document.create" | "document.archive" => 2,
+        "workspace_list" | "workspace_tree" | "workspace_search" | "hvy_guidance" => 0,
+        "document_cli_based_editor" => 1,
+        "workspace_create" | "workspace_archive" | "document_create" | "document_archive" => 2,
         _ => 2,
     }
 }
@@ -251,6 +251,7 @@ pub(crate) fn mcp_workspace_list_from(workspaces: &[Workspace]) -> AppResult<ser
     Ok(serde_json::json!({
         "workspaces": workspaces
             .iter()
+            .filter(|workspace| !workspace.manifest.hidden_from_ai)
             .map(|workspace| serde_json::json!({
                 "name": workspace.manifest.name,
                 "path": workspace.path,
@@ -265,6 +266,7 @@ pub(crate) fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde
     let requested_path = arguments.get("workspacePath").and_then(|path| path.as_str());
     let workspaces = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .filter(|workspace| requested_path.map(|path| path == workspace.path).unwrap_or(true))
         .map(|workspace| serde_json::json!({
             "name": workspace.manifest.name,
@@ -282,7 +284,7 @@ pub(crate) fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: ser
         .unwrap_or("")
         .trim();
     if query.is_empty() {
-        return Err(AppError::Message("workspace.search requires a non-empty query.".into()));
+        return Err(AppError::Message("workspace_search requires a non-empty query.".into()));
     }
     let max = arguments
         .get("max")
@@ -293,6 +295,9 @@ pub(crate) fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: ser
     let query_lower = query.to_ascii_lowercase();
     let mut results = Vec::new();
     for workspace in workspaces {
+        if workspace.manifest.hidden_from_ai {
+            continue;
+        }
         if requested_path.map(|path| path != workspace.path).unwrap_or(false) {
             continue;
         }
@@ -338,7 +343,7 @@ pub(crate) fn mcp_workspace_create_from(
     let path = arguments
         .get("path")
         .and_then(|path| path.as_str())
-        .ok_or_else(|| AppError::Message("workspace.create requires a path.".into()))?;
+        .ok_or_else(|| AppError::Message("workspace_create requires a path.".into()))?;
     let name = arguments.get("name").and_then(|name| name.as_str()).map(str::trim).filter(|name| !name.is_empty());
     let path = PathBuf::from(path);
     fs::create_dir_all(&path)?;
@@ -358,11 +363,12 @@ pub(crate) fn mcp_workspace_archive_from(
     let workspace_path = arguments
         .get("workspacePath")
         .and_then(|path| path.as_str())
-        .ok_or_else(|| AppError::Message("workspace.archive requires a workspacePath.".into()))?;
+        .ok_or_else(|| AppError::Message("workspace_archive requires a workspacePath.".into()))?;
     let workspace = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .find(|workspace| workspace.path == workspace_path)
-        .ok_or_else(|| AppError::Message("workspace.archive requires an active workspace path.".into()))?;
+        .ok_or_else(|| AppError::Message("workspace_archive requires an active workspace path.".into()))?;
     if let Some(config_path) = workspace_config_path {
         update_mcp_workspace_config_path(config_path, Path::new(workspace_path), false)?;
     }
@@ -388,15 +394,16 @@ pub(crate) fn mcp_document_create_from(workspaces: &[Workspace], arguments: serd
     let workspace_path = arguments
         .get("workspacePath")
         .and_then(|path| path.as_str())
-        .ok_or_else(|| AppError::Message("document.create requires a workspacePath.".into()))?;
+        .ok_or_else(|| AppError::Message("document_create requires a workspacePath.".into()))?;
     let name = arguments
         .get("name")
         .and_then(|name| name.as_str())
-        .ok_or_else(|| AppError::Message("document.create requires a name.".into()))?;
+        .ok_or_else(|| AppError::Message("document_create requires a name.".into()))?;
     let workspace = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .find(|workspace| workspace.path == workspace_path)
-        .ok_or_else(|| AppError::Message("document.create requires an existing active workspace.".into()))?;
+        .ok_or_else(|| AppError::Message("document_create requires an existing active workspace.".into()))?;
     let workspace_path = PathBuf::from(&workspace.path);
     ensure_workspace(&workspace_path)?;
     let file_name = document_file_name(name)?;
@@ -423,18 +430,19 @@ pub(crate) fn mcp_document_archive_from(workspaces: &[Workspace], arguments: ser
     let path = arguments
         .get("path")
         .and_then(|path| path.as_str())
-        .ok_or_else(|| AppError::Message("document.archive requires a path.".into()))?;
+        .ok_or_else(|| AppError::Message("document_archive requires a path.".into()))?;
     let document_path = PathBuf::from(path);
     let workspace = workspaces
         .iter()
+        .filter(|workspace| !workspace.manifest.hidden_from_ai)
         .find(|workspace| workspace_contains_visible_document(workspace, &document_path))
-        .ok_or_else(|| AppError::Message("document.archive path must be an active HVY document in an added workspace.".into()))?;
+        .ok_or_else(|| AppError::Message("document_archive path must be an active HVY document in an added workspace.".into()))?;
     let document_file = flatten_workspace_file_nodes(&workspace.files)
         .into_iter()
         .find(|file| Path::new(&file.path) == document_path.as_path())
-        .ok_or_else(|| AppError::Message("document.archive path must be an active HVY document in an added workspace.".into()))?;
+        .ok_or_else(|| AppError::Message("document_archive path must be an active HVY document in an added workspace.".into()))?;
     if file_locked(&document_file) {
-        return Err(AppError::Message("document.archive is not available for locked files.".into()));
+        return Err(AppError::Message("document_archive is not available for locked files.".into()));
     }
     update_archived_document_file(Path::new(&workspace.path), &document_path, true)?;
     Ok(serde_json::json!({
@@ -506,28 +514,28 @@ pub(crate) fn mcp_document_cli_from(
     let path = arguments
         .get("path")
         .and_then(|path| path.as_str())
-        .ok_or_else(|| AppError::Message("document.cli_based_editor requires a document path.".into()))?;
+        .ok_or_else(|| AppError::Message("document_cli_based_editor requires a document path.".into()))?;
     let command = arguments
         .get("command")
         .and_then(|command| command.as_str())
-        .ok_or_else(|| AppError::Message("document.cli_based_editor requires a command.".into()))?
+        .ok_or_else(|| AppError::Message("document_cli_based_editor requires a command.".into()))?
         .trim();
     if command.is_empty() {
-        return Err(AppError::Message("document.cli_based_editor requires a non-empty command.".into()));
+        return Err(AppError::Message("document_cli_based_editor requires a non-empty command.".into()));
     }
     let cwd = arguments.get("cwd").and_then(|cwd| cwd.as_str()).unwrap_or("/");
     let document_path = PathBuf::from(path);
     let workspace = workspaces
         .iter()
         .find(|workspace| workspace_contains_visible_document(workspace, &document_path))
-        .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
+        .ok_or_else(|| AppError::Message("document_cli_based_editor path must be an HVY document in an added workspace.".into()))?;
     let document_file = flatten_workspace_file_nodes(&workspace.files)
         .into_iter()
         .find(|file| Path::new(&file.path) == document_path.as_path())
-        .ok_or_else(|| AppError::Message("document.cli_based_editor path must be an HVY document in an added workspace.".into()))?;
+        .ok_or_else(|| AppError::Message("document_cli_based_editor path must be an HVY document in an added workspace.".into()))?;
     let read_only = file_locked(&document_file) || file_archived(&document_file);
     document_extension(&document_path)
-        .ok_or_else(|| AppError::Message("document.cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
+        .ok_or_else(|| AppError::Message("document_cli_based_editor supports .hvy, .thvy, .phvy, and .md documents.".into()))?;
 
     let result = if read_only {
         mcp_run_read_only_cli_command(&document_path, cwd, command)?
@@ -553,7 +561,7 @@ fn mcp_run_read_only_cli_command(document_path: &Path, cwd: &str, command: &str)
     let result = result?;
     if result.get("mutated").and_then(|mutated| mutated.as_bool()).unwrap_or(false) {
         return Err(AppError::Message(
-            "document.cli_based_editor can only run read commands for locked or archived files.".into(),
+            "document_cli_based_editor can only run read commands for locked or archived files.".into(),
         ));
     }
     Ok(result)
@@ -609,13 +617,18 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 name,
                 path,
                 relative_path,
+                hidden_from_ai,
                 children,
             } => {
+                if *hidden_from_ai {
+                    return None;
+                }
                 let children = mcp_visible_workspace_nodes(children);
                 (!children.is_empty()).then(|| WorkspaceTreeNode::Folder {
                     name: name.clone(),
                     path: path.clone(),
                     relative_path: relative_path.clone(),
+                    hidden_from_ai: *hidden_from_ai,
                     children,
                 })
             }

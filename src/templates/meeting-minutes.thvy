@@ -55,6 +55,9 @@ component_defs:
     baseType: container
     tags: meeting-minute
     description: Timestamped meeting note
+    sortValueDefs:
+      Time:
+        type: datetime
     schema:
       css: "margin: 0.5rem 0; padding: 0.65rem 0.8rem; border: 1px solid var(--hvy-border); background: var(--hvy-surface);"
       containerExpanded: true
@@ -104,13 +107,12 @@ component_defs:
       if entries is None:
           raise RuntimeError("Minute entries list was not found.")
 
-      sort_time = doc.time.now_unix_ms()
+      sort_id = doc.time.now_unix_ms()
       display_time = doc.time.now_local()
       entry = entries.append_child(
           "minute-entry",
           {
-              "id": "minute-entry-" + str(sort_time),
-              "sortKeys": {"Time": sort_time},
+              "id": "minute-entry-" + str(sort_id),
               "tags": "meeting-minute"
           },
           "",
@@ -122,7 +124,7 @@ component_defs:
               "tags": "minute-entry-time",
               "css": "margin: 0 0 0.25rem; color: var(--hvy-text-muted);"
           },
-          "**" + display_time + "**",
+          "**<!--hvy:sort-value {\"key\":\"Time\"}-->" + display_time + "<!--/hvy:sort-value-->**",
           "container"
       )
       entry.append_child(

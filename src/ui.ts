@@ -1,9 +1,10 @@
-import { aiProviderDefaultModel, aiProviderPreset, aiProviderPresets } from './aiProviders';
+import { aiEmbeddingDefaultModel, aiEmbeddingProviderPreset, aiEmbeddingProviderPresets, aiEmbeddingProvidersForMode, aiProviderDefaultModel, aiProviderPreset, aiProviderPresets, type AiEmbeddingProviderMode } from './aiProviders';
 import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
+import { savedVersionDocumentName } from './mainUtilities';
 import { richTextActionForShortcutKey, type RichTextAction } from './uiShortcuts';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import appIconUrl from '../src-tauri/icons/Square310x310Logo.png';
@@ -17,16 +18,21 @@ import {
   renderTagEditor,
   serializeTags,
 } from '../../heavy-file-format/src/editor/tag-editor';
+import { markdownToReaderHtml, normalizeMarkdownLists } from '../../heavy-file-format/src/markdown';
 import { deserializeDocumentBytes } from '../../heavy-file-format/src/serialization';
+import { isWorkspacePathTarget } from '../../heavy-file-format/src/workspace-links';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
 export interface UiHandlers {
   newWorkspace(): void;
   openWorkspaceManager(): void;
   closeWorkspaceManager(): void;
+  reorderWorkspace(draggedPath: string, targetPath: string, before: boolean): void;
   renameWorkspace(path: string, name: string): void;
   archiveWorkspace(path: string): void;
   unarchiveWorkspace(path: string): void;
+  setWorkspaceHiddenFromAI(workspacePath: string, hiddenFromAI: boolean): void;
+  setWorkspaceFolderHiddenFromAI(workspacePath: string, targetDirectory: string, hiddenFromAI: boolean): void;
   toggleWorkspaceActions(path: string): void;
   closeWorkspaceActions(): void;
   createWorkspace(name: string, location: 'managed' | 'choose'): void;
@@ -56,9 +62,23 @@ export interface UiHandlers {
   cancelImport(): void;
   addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
+  deleteWorkspaceFolder(workspacePath: string, targetDirectory: string): void;
+  confirmDeleteWorkspaceFolder(workspacePath: string, targetDirectory: string, folderName: string, archivedFiles: string[]): void;
+  cancelDeleteWorkspaceFolder(): void;
   openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;
+  openWorkspaceChat(workspacePath: string, targetDirectory?: string): void;
+  toggleWorkspaceEmbeddingPreview(workspacePath: string): void;
+  closeWorkspaceChat(): void;
+  saveWorkspaceChat(): void;
+  discardWorkspaceChat(): void;
+  cancelCloseWorkspaceChat(): void;
+  cancelWorkspaceChatIndexing(): void;
+  openWorkspaceLink(href: string): void;
+  updateWorkspaceChatDraft(value: string): void;
+  submitWorkspaceChat(): void;
   setWorkspaceFileView(workspacePath: string, view: AppState['workspaceFileViews'][string]): void;
   setWorkspaceExpanded(workspacePath: string, expanded: boolean): void;
+  setWorkspaceFolderExpanded(workspacePath: string, relativePath: string, expanded: boolean): void;
   closeWorkspaceFilter(): void;
   setWorkspaceFilterMode(mode: HvyDocumentSearchMode): void;
   setWorkspaceFilterBehavior(mode: SearchFilterMode): void;
@@ -115,6 +135,9 @@ export interface UiHandlers {
   restoreBackup(id: string): void;
   discardBackup(id: string): void;
   cancelRecovery(): void;
+  openVersionHistory(): void;
+  selectSavedVersion(id: string): void;
+  closeVersionHistory(): void;
   cancelCloseDocument(): void;
   closeDocumentWithoutSaving(): void;
   discardCloseDocumentDraft(): void;
@@ -133,6 +156,7 @@ export interface UiHandlers {
   openRecentFile(path: string): void;
   selectFile(path: string): void;
   refreshWorkspace(path: string): void;
+  retryWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
   archiveFile(path: string, currentName: string): void;
@@ -191,6 +215,10 @@ if (!app) {
 }
 
 const appRoot = app;
+type WorkspaceChatScrollState = {
+  scrollTop: number;
+  stickToLatest: boolean;
+} | null;
 let bindController: AbortController | null = null;
 let uiBound = false;
 let renderedRenameFilePath: string | null = null;
@@ -310,18 +338,89 @@ export function renderLeftPanel(state: AppState): void {
 }
 
 export function renderDocumentControls(state: AppState): void {
+  const workspaceChatActive = state.document?.virtual === 'workspaceChat';
+  const workspaceChatScroll = captureWorkspaceChatScroll();
   documentControlsRoot().innerHTML = `
     ${renderDocumentTabs(state)}
     <header class="document-toolbar">
       ${renderToolbar(state)}
     </header>
     <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
-  documentModeControlsRoot().innerHTML = state.document ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
+  documentModeControlsRoot().innerHTML = state.document && !workspaceChatActive ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
   const mount = hvyMountRoot();
-  mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document));
-  if (!state.document || !state.document.mounted) {
+  mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document && !workspaceChatActive));
+  mount.classList.toggle('is-workspace-chat-document', workspaceChatActive);
+  if (workspaceChatActive) {
+    mount.innerHTML = renderWorkspaceChatDocument(state);
+    bindWorkspaceChatScrollControls(mount);
+    restoreWorkspaceChatScroll(workspaceChatScroll);
+  } else if (!state.document || !state.document.mounted) {
     mount.innerHTML = renderEmptyState(state);
   }
+}
+
+function captureWorkspaceChatScroll(): WorkspaceChatScrollState {
+  const scroller = appRoot.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+  if (!scroller) return null;
+  const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  return {
+    scrollTop: scroller.scrollTop,
+    stickToLatest: distanceFromBottom <= 48,
+  };
+}
+
+function restoreWorkspaceChatScroll(captured: WorkspaceChatScrollState): void {
+  if (!captured) {
+    scrollWorkspaceChatToLatest();
+    return;
+  }
+  const restore = (): void => {
+    const scroller = appRoot.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+    if (!scroller) return;
+    if (captured.stickToLatest) {
+      scroller.scrollTop = scroller.scrollHeight;
+    } else {
+      scroller.scrollTop = Math.min(captured.scrollTop, scroller.scrollHeight);
+    }
+    updateWorkspaceChatScrollButton(scroller);
+  };
+  restore();
+  requestAnimationFrame(() => {
+    restore();
+    requestAnimationFrame(restore);
+  });
+}
+
+function bindWorkspaceChatScrollControls(root: ParentNode): void {
+  const scroller = root.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+  const button = root.querySelector<HTMLButtonElement>('[data-action="workspace-chat-scroll-bottom"]');
+  if (!scroller || !button) return;
+  scroller.addEventListener('scroll', () => updateWorkspaceChatScrollButton(scroller));
+  button.addEventListener('click', () => {
+    scroller.scrollTo({
+      top: scroller.scrollHeight,
+      behavior: 'smooth',
+    });
+  });
+  updateWorkspaceChatScrollButton(scroller);
+}
+
+function scrollWorkspaceChatToLatest(): void {
+  const scroller = appRoot.querySelector<HTMLDivElement>('[data-workspace-chat-scroll-container="true"]');
+  if (!scroller) return;
+  scroller.scrollTop = scroller.scrollHeight;
+  updateWorkspaceChatScrollButton(scroller);
+  requestAnimationFrame(() => {
+    scroller.scrollTop = scroller.scrollHeight;
+    updateWorkspaceChatScrollButton(scroller);
+  });
+}
+
+function updateWorkspaceChatScrollButton(scroller: HTMLDivElement): void {
+  const button = appRoot.querySelector<HTMLButtonElement>('[data-action="workspace-chat-scroll-bottom"]');
+  if (!button) return;
+  const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  button.hidden = distanceFromBottom <= 32;
 }
 
 export function renderModals(state: AppState): void {
@@ -338,6 +437,7 @@ export function renderModals(state: AppState): void {
     ${renderExportedPdfDialog(state)}
     ${renderAboutDialog(state)}
     ${renderDebugLogDialog(state)}
+    ${renderWorkspaceChatClosePrompt(state)}
     ${renderAppSettingsDialog(state)}
     ${renderAppSettingsDiscardDialog(state)}
     ${renderAiSettingsDialog(state)}
@@ -346,14 +446,16 @@ export function renderModals(state: AppState): void {
     ${renderMcpSettingsDiscardDialog(state)}
     ${renderColorThemeDialog(state)}
     ${renderRecoveryDialog(state)}
+    ${renderVersionHistoryDialog(state)}
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
     ${renderCloseDocumentDraftDialog(state)}
     ${renderAppCloseDialog(state)}
     ${renderRenameFileDialog(state)}
     ${renderDeleteFileDialog(state)}
+    ${renderDeleteFolderDialog(state)}
     ${renderWorkspaceTransferDialog(state)}
-    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters)}`;
+    ${renderWorkspaceFilterDialog(state.workspaceFilter, state.workspaces, state.workspaceFilters, state.aiSettings, state.workspaceEmbeddingPreviews)}`;
   refreshRenderedFormState(appRoot, state);
   if (state.aiSettingsDialogOpen) {
     requestAnimationFrame(() => syncAiRangeFields(appRoot));
@@ -422,6 +524,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   bindController = new AbortController();
   const { signal } = bindController;
   bindWorkspaceSidebarResize(root, signal);
+  bindWorkspaceManagerReordering(root, handlers, signal);
   document.addEventListener('keydown', (event) => {
     handleApplicationShortcut(event, root, handlers);
   }, { signal, capture: true });
@@ -442,9 +545,22 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const clickedDismissBackdrop = dismissBackdropFromTarget(event.target);
     const dismissBackdropClick = Boolean(clickedDismissBackdrop && clickedDismissBackdrop === dismissBackdropPointerStart);
     dismissBackdropPointerStart = null;
-    const target = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
+    const eventTarget = event.target instanceof Element ? event.target : null;
+    const workspaceLink = eventTarget?.closest<HTMLAnchorElement>('a[href]');
+    const workspaceHref = workspaceLink?.getAttribute('href') ?? '';
+    if (
+      workspaceLink
+      && workspaceLink.closest('[data-workspace-chat-document="true"]')
+      && (workspaceLink.dataset.hvyCrossDocument === 'true' || isWorkspacePathTarget(workspaceHref))
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.openWorkspaceLink(workspaceHref);
+      return;
+    }
+    const target = eventTarget?.closest<HTMLElement>('[data-action]') ?? null;
     if (!target) {
-      const backdrop = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.modal-backdrop') : null;
+      const backdrop = eventTarget instanceof HTMLElement ? eventTarget.closest<HTMLElement>('.modal-backdrop') : null;
       if (backdrop && backdrop === event.target && dismissBackdropClick) {
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
@@ -516,6 +632,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           handlers.cancelDeleteFile();
           return;
         }
+        if (backdrop.querySelector('.delete-folder-dialog')) {
+          handlers.cancelDeleteWorkspaceFolder();
+          return;
+        }
         if (backdrop.querySelector('form[data-form="workspace-transfer"]')) {
           handlers.cancelWorkspaceTransfer();
           return;
@@ -530,12 +650,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
           return;
         }
       }
-      if (!(event.target as HTMLElement).closest('.workspace-actions-menu')) {
+      if (!eventTarget?.closest('.workspace-actions-menu')) {
         handlers.closeWorkspaceActions();
       }
       return;
     }
-    if (target.closest('#hvyMount')) return;
+    if (target.closest('#hvyMount') && !target.closest('[data-workspace-chat-document="true"]')) return;
     if (target instanceof HTMLButtonElement && target.disabled) return;
     const action = target.dataset.action;
     if (action === 'close-workspace-filter' && clickedDismissBackdrop && !dismissBackdropClick) return;
@@ -545,6 +665,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'show-workspace-in-folder' && target.dataset.workspacePath) handlers.showFileInFolder(target.dataset.workspacePath);
     if (action === 'archive-workspace' && target.dataset.workspacePath) handlers.archiveWorkspace(target.dataset.workspacePath);
     if (action === 'unarchive-workspace' && target.dataset.workspacePath) handlers.unarchiveWorkspace(target.dataset.workspacePath);
+    if (action === 'retry-workspace' && target.dataset.workspacePath) handlers.retryWorkspace(target.dataset.workspacePath);
     if (action === 'toggle-workspace-actions' && target.dataset.workspacePath) {
       event.preventDefault();
       event.stopPropagation();
@@ -570,15 +691,30 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.stopPropagation();
       handlers.openWorkspaceFilter(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     }
+    if (action === 'open-workspace-chat' && target.dataset.workspacePath) {
+      event.preventDefault();
+      event.stopPropagation();
+      handlers.openWorkspaceChat(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    }
+    if (action === 'toggle-workspace-embedding-preview' && target.dataset.workspacePath) {
+      handlers.toggleWorkspaceEmbeddingPreview(target.dataset.workspacePath);
+    }
     if (action === 'set-workspace-file-view' && target.dataset.workspacePath && isWorkspaceFileView(target.dataset.view)) {
       handlers.setWorkspaceFileView(target.dataset.workspacePath, target.dataset.view);
     }
     if (action === 'close-workspace-filter') handlers.closeWorkspaceFilter();
+    if (action === 'close-workspace-chat') handlers.closeWorkspaceChat();
+    if (action === 'save-workspace-chat') handlers.saveWorkspaceChat();
+    if (action === 'discard-workspace-chat') handlers.discardWorkspaceChat();
+    if (action === 'cancel-close-workspace-chat') handlers.cancelCloseWorkspaceChat();
+    if (action === 'cancel-workspace-chat-indexing') handlers.cancelWorkspaceChatIndexing();
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
     if (action === 'delete-file') handlers.deleteFile();
     if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
+    if (action === 'delete-folder') handlers.deleteWorkspaceFolder(state.deleteFolderWorkspacePath ?? '', state.deleteFolderDirectory);
+    if (action === 'cancel-delete-folder') handlers.cancelDeleteWorkspaceFolder();
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'cancel-new-folder') handlers.cancelNewFolder();
     if (action === 'about') handlers.openAbout();
@@ -600,6 +736,21 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
       const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
       if (settings) handlers.setDefaultAiProvider(settings);
+    }
+    if (action === 'select-embedding-mode' && isAiEmbeddingProviderMode(target.dataset.embeddingMode)) {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      const settings = form ? readAiSettingsForm(new FormData(form)) : undefined;
+      if (form && settings) {
+        const providerId = aiEmbeddingProvidersForMode(target.dataset.embeddingMode)[0]?.id ?? 'openai';
+        settings.embeddings.providerId = providerId;
+        settings.embeddings.model = settings.embeddings.modelsByProvider?.[providerId] || aiEmbeddingDefaultModel(providerId);
+        settings.embeddings.modelsByProvider = {
+          ...(settings.embeddings.modelsByProvider ?? {}),
+          [providerId]: settings.embeddings.model,
+        };
+        settings.embeddings.dimensions = null;
+        handlers.selectAiProvider(String(new FormData(form).get('selectedProviderId') ?? settings.activeProviderId), settings);
+      }
     }
     if (action === 'provider-docs') {
       const url = target.dataset.url;
@@ -714,6 +865,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'restore-backup' && target.dataset.backupId) handlers.restoreBackup(target.dataset.backupId);
     if (action === 'discard-backup' && target.dataset.backupId) handlers.discardBackup(target.dataset.backupId);
     if (action === 'cancel-recovery') handlers.cancelRecovery();
+    if (action === 'select-saved-version' && target.dataset.versionId) handlers.selectSavedVersion(target.dataset.versionId);
+    if (action === 'close-version-history') handlers.closeVersionHistory();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
@@ -766,12 +919,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-export') handlers.cancelSaveTemplate();
     if (action === 'save-before-export-pdf') handlers.saveBeforeExportPdf();
     if (action === 'cancel-export-pdf-save-prompt') handlers.cancelExportPdfSavePrompt();
-    if (action === 'save-filter-file-visibility') {
-      const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
-      if (form) {
-        handlers.saveWorkspaceTemplateVisibility(String(form.dataset.workspacePath ?? ''), readWorkspaceTemplateVisibilityForm(new FormData(form)));
-      }
-    }
     if (action === 'set-save-template-scope' && isTemplateScope(target.dataset.scope)) handlers.setSaveTemplateScope(target.dataset.scope);
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
@@ -839,6 +986,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       if (form) updateWorkspaceFilterSubmit(form);
       return;
     }
+    if (field === 'embeddings-enabled') {
+      const form = target.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+      if (form) {
+        const data = new FormData(form);
+        const settings = readAiSettingsForm(data);
+        handlers.selectAiProvider(String(data.get('selectedProviderId') ?? settings.activeProviderId), settings);
+      }
+      return;
+    }
     if (field === 'import-source-text') {
       handlers.updateImportSourceText(target.value);
       const form = target.closest<HTMLFormElement>('form[data-form="import-document"], form[data-form="import-current"]');
@@ -902,6 +1058,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     handlers.updateColorTheme(name, nextValue);
   }, { signal });
   root.addEventListener('keydown', (event) => {
+    const chatTarget = event.target instanceof HTMLTextAreaElement ? event.target : null;
+    if (
+      chatTarget?.dataset.field === 'workspace-chat-draft' &&
+      event.key === 'Enter' &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+      chatTarget.closest('form')?.requestSubmit();
+      return;
+    }
     const target = event.target instanceof HTMLInputElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
     if (handleTagEditorKeydown(event, target, importExcludeTagHelpers)) {
@@ -933,6 +1099,17 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.setImportNewSectionsOnly(target.checked);
       return;
     }
+    if (
+      target instanceof HTMLInputElement
+      && target.type === 'checkbox'
+      && ['hvyDocuments', 'thvyTemplates', 'phvyTemplates', 'archivedFiles'].includes(target.name)
+    ) {
+      const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
+      if (form) {
+        handlers.saveWorkspaceTemplateVisibility(String(form.dataset.workspacePath ?? ''), readWorkspaceTemplateVisibilityForm(new FormData(form)));
+      }
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.dataset.field === 'import-workspace-source') {
       handlers.selectImportWorkspaceSource(target.value);
       return;
@@ -940,12 +1117,19 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-action-provider') {
       syncAiActionModelForProvider(target);
     }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-embedding-provider') {
+      syncAiEmbeddingModelForProvider(target);
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'ai-embedding-model-preset') {
+      syncAiEmbeddingCustomModelInput(target);
+    }
   }, { signal });
   root.addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     const fileButton = target?.closest<HTMLButtonElement>('.tree-file');
     const path = fileButton?.dataset.path;
     const name = fileButton?.dataset.name;
+    const relativePath = fileButton?.dataset.relativePath ?? name ?? '';
     const archived = fileButton?.dataset.archived === 'true';
     if (fileButton && path && name) {
       const workspacePath = workspacePathForTreeTarget(fileButton, state);
@@ -953,7 +1137,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.preventDefault();
       const locked = fileButton.dataset.locked === 'true';
       const hiddenFromAI = fileButton.getAttribute('data-hidden-from-ai') === 'true';
-      showFileContextMenu(event, path, name, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
+      showFileContextMenu(event, path, name, relativePath, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
       return;
     }
     const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
@@ -965,6 +1149,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         state.workspaceClipboard,
         handlers,
         folderSummary.dataset.targetDirectory ?? '',
+        folderSummary.dataset.hiddenFromAi === 'true',
+        workspaceFolderDeleteInfo(state, folderSummary.dataset.workspacePath, folderSummary.dataset.targetDirectory ?? '', folderSummary.dataset.folderName ?? ''),
       );
       return;
     }
@@ -972,9 +1158,17 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const workspacePath = workspaceSummary?.parentElement instanceof HTMLDetailsElement
       ? workspaceSummary.parentElement.dataset.workspacePath
       : null;
-    if (!workspaceSummary || !workspacePath) return;
+    if (workspaceSummary && workspacePath) {
+      event.preventDefault();
+      const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '', workspace?.manifest.hiddenFromAI === true);
+      return;
+    }
+    const workspaceRoot = target?.closest<HTMLElement>('.workspace-root');
+    if (!workspaceRoot?.dataset.workspacePath || target?.closest('.tree .tree')) return;
     event.preventDefault();
-    showWorkspaceContextMenu(event, workspacePath, state.workspaceClipboard, handlers, '');
+    const workspace = state.workspaces.find((candidate) => candidate.path === workspaceRoot.dataset.workspacePath);
+    showWorkspaceContextMenu(event, workspaceRoot.dataset.workspacePath, state.workspaceClipboard, handlers, '', workspace?.manifest.hiddenFromAI === true);
   }, { signal });
   root.addEventListener('mousedown', (event) => {
     if (event.button !== 2) return;
@@ -994,10 +1188,24 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       if (details.open) handlers.refreshWorkspace(workspacePath);
     }, 0);
   }, { signal, capture: true });
+  root.addEventListener('click', (event) => {
+    const summary = event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>('.tree summary[data-workspace-folder-target="true"]')
+      : null;
+    const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
+    const workspacePath = summary?.dataset.workspacePath;
+    const relativePath = summary?.dataset.targetDirectory ?? '';
+    if (!summary || !details || !workspacePath) return;
+    const wasOpen = details.open;
+    window.setTimeout(() => {
+      if (details.open === wasOpen) return;
+      handlers.setWorkspaceFolderExpanded(workspacePath, relativePath, details.open);
+    }, 0);
+  }, { signal, capture: true });
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
     if (!form) return;
-    if (form.closest('#hvyMount')) return;
+    if (form.closest('#hvyMount') && form.dataset.form !== 'workspace-chat') return;
     event.preventDefault();
     if (form.dataset.form === 'new-workspace') {
       const data = new FormData(form);
@@ -1088,6 +1296,9 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (form.dataset.form === 'workspace-filter') {
       handlers.submitWorkspaceFilter();
     }
+    if (form.dataset.form === 'workspace-chat') {
+      handlers.submitWorkspaceChat();
+    }
     if (form.dataset.form === 'rename-file') {
       const data = new FormData(form);
       handlers.submitRenameFile(String(data.get('fileName') ?? ''));
@@ -1113,6 +1324,23 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         );
       }
     }
+  }, { signal });
+  root.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLTextAreaElement)) return;
+    if (target.dataset.field === 'workspace-chat-draft') {
+      handlers.updateWorkspaceChatDraft(target.value);
+      const form = target.closest<HTMLFormElement>('form[data-form="workspace-chat"]');
+      const submit = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submit) {
+        submit.disabled = target.value.trim().length === 0;
+      }
+    }
+  }, { signal });
+  root.addEventListener('hvy:open-workspace-link', (event) => {
+    if (!(event instanceof CustomEvent)) return;
+    const href = typeof event.detail?.href === 'string' ? event.detail.href : '';
+    if (href) handlers.openWorkspaceLink(href);
   }, { signal });
   document.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && handleWorkspaceClipboardShortcut(event, state, handlers)) {
@@ -1192,6 +1420,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.delete-file-dialog')) {
       event.preventDefault();
       handlers.cancelDeleteFile();
+      return;
+    }
+    if (root.querySelector('.delete-folder-dialog')) {
+      event.preventDefault();
+      handlers.cancelDeleteWorkspaceFolder();
       return;
     }
     if (root.querySelector('form[data-form="workspace-transfer"]')) {
@@ -1554,6 +1787,61 @@ function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { 
   return null;
 }
 
+interface WorkspaceFolderDeleteInfo {
+  folderName: string;
+  activeFileCount: number;
+  archivedFiles: string[];
+}
+
+function workspaceFolderDeleteInfo(state: AppState, workspacePath: string, targetDirectory: string, fallbackFolderName = ''): WorkspaceFolderDeleteInfo | null {
+  if (!targetDirectory) return null;
+  const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+  if (!workspace) {
+    return {
+      folderName: fallbackFolderName || targetDirectory.split('/').filter(Boolean).at(-1) || 'folder',
+      activeFileCount: 0,
+      archivedFiles: [],
+    };
+  }
+  const folder = findWorkspaceFolderNode(workspace.files, targetDirectory);
+  if (!folder) {
+    return {
+      folderName: fallbackFolderName || targetDirectory.split('/').filter(Boolean).at(-1) || 'folder',
+      activeFileCount: 0,
+      archivedFiles: [],
+    };
+  }
+  let activeFileCount = 0;
+  const archivedFiles: string[] = [];
+  const visit = (nodes: WorkspaceTreeNode[]) => {
+    for (const node of nodes) {
+      if (node.kind === 'folder') {
+        visit(node.children);
+        continue;
+      }
+      if (node.archived === true) archivedFiles.push(workspaceNodeRelativePath(node));
+      else activeFileCount += 1;
+    }
+  };
+  visit(folder.children);
+  return {
+    folderName: workspaceNodeName(folder),
+    activeFileCount,
+    archivedFiles: archivedFiles.sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+function findWorkspaceFolderNode(nodes: WorkspaceTreeNode[], targetDirectory: string): Extract<WorkspaceTreeNode, { kind: 'folder' }> | null {
+  const normalizedTarget = normalizeTreeRelativePath(targetDirectory);
+  for (const node of nodes) {
+    if (node.kind !== 'folder') continue;
+    if (normalizeTreeRelativePath(workspaceNodeRelativePath(node)) === normalizedTarget) return node;
+    const match = findWorkspaceFolderNode(node.children, targetDirectory);
+    if (match) return match;
+  }
+  return null;
+}
+
 function workspaceDropTargetFromEvent(event: Event): { element: HTMLElement; workspacePath: string; targetDirectory: string } | null {
   if (!(event.target instanceof HTMLElement)) return null;
   const folderSummary = event.target.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
@@ -1577,7 +1865,13 @@ function hasDraggedWorkspaceFile(event: DragEvent): boolean {
   return Array.from(event.dataTransfer?.types ?? []).includes('application/x-hvy-workspace-file');
 }
 
-function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: Workspace[], activeFilters: AppState['workspaceFilters']): string {
+function renderWorkspaceFilterDialog(
+  filter: WorkspaceFilterState,
+  workspaces: Workspace[],
+  activeFilters: AppState['workspaceFilters'],
+  aiSettings: AiSettings,
+  embeddingPreviews: AppState['workspaceEmbeddingPreviews'],
+): string {
   if (!filter.open) {
     return '';
   }
@@ -1593,18 +1887,19 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
     && activeFilter.filterMode === filter.filterMode
   );
   const isSemantic = filter.mode === 'semantic';
-  const stopSemanticFilter = filter.isLoading && isSemantic;
-  const submitLabel = stopSemanticFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
+  const isEmbedding = filter.mode === 'embedding';
+  const stopRunningFilter = filter.isLoading && (isSemantic || isEmbedding);
+  const submitLabel = stopRunningFilter ? 'Stop' : applied ? 'Update filter' : 'Filter';
   const visibility = workspaceTemplateVisibility(scopedWorkspace);
   const status = filter.isLoading
-    ? filter.status ?? (isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
+    ? filter.status ?? (isEmbedding ? '' : isSemantic ? `Analyzing ${filterTargetName}...` : `Filtering ${filterTargetName}...`)
     : filter.error
       ? filter.error
       : '';
   return `
     <section class="workspace-filter-overlay" aria-label="Workspace filter">
       <div class="workspace-filter-backdrop" data-action="close-workspace-filter"></div>
-      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}" data-form="workspace-filter" data-workspace-path="${escapeAttr(filter.workspacePath ?? '')}" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
+      <form class="workspace-filter-dialog${isSemantic ? ' is-semantic-mode' : ''}${isEmbedding ? ' is-embedding-mode' : ''}" data-form="workspace-filter" data-workspace-path="${escapeAttr(filter.workspacePath ?? '')}" data-loading="${filter.isLoading ? 'true' : 'false'}" role="dialog" aria-modal="true" aria-label="Filter workspace">
         <div class="search-tabbar">
           <div class="workspace-filter-title">
             ${funnelIcon()}
@@ -1612,12 +1907,12 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           </div>
           <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
-        ${renderWorkspaceFilterVisibilityControls(visibility, filter.isLoading)}
+        ${renderWorkspaceFilterVisibilityControls(visibility, filter.isLoading, filter.workspacePath ?? '', filter.workspacePath ? embeddingPreviews[filter.workspacePath] ?? null : null)}
         <div class="search-input-row">
           <span class="search-input-icon" aria-hidden="true">${funnelIcon()}</span>
           <label>
             <span>Filter document</span>
-            ${isSemantic
+            ${isSemantic || isEmbedding
       ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
       : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
     }
@@ -1628,8 +1923,11 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
           <div class="search-filter-box-head">
             ${funnelIcon()}
             <span>Filter Technique</span>
+            ${renderWorkspaceFilterModeButton('keyword', 'Keyword', filter)}
             ${renderWorkspaceFilterModeButton('semantic', 'Semantic', filter)}
+            ${renderWorkspaceFilterModeButton('embedding', 'Embeddings', filter, !aiSettings.embeddings.enabled)}
           </div>
+          <div class="search-filter-technique-note">${escapeHtml(workspaceFilterModeDescription(filter.mode))}</div>
           <div class="search-filter-mode-group" role="group" aria-label="Filter behavior">
             ${renderWorkspaceFilterBehaviorButton('deprioritize', 'Shade', filter)}
             ${renderWorkspaceFilterBehaviorButton('hide', 'Hide', filter)}
@@ -1641,11 +1939,106 @@ function renderWorkspaceFilterDialog(filter: WorkspaceFilterState, workspaces: W
             class="secondary${applied ? ' is-active' : ''}"
             data-role="workspace-filter-submit"
             aria-pressed="${applied ? 'true' : 'false'}"
-            ${!stopSemanticFilter && (filter.isLoading || filter.queryDraft.trim().length === 0) ? 'disabled' : ''}
+            ${!stopRunningFilter && (filter.isLoading || filter.queryDraft.trim().length === 0) ? 'disabled' : ''}
           >${submitLabel}</button>
           ${activeFilter ? `<button type="button" class="ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
         </div>
       </form>
+    </section>`;
+}
+
+function renderWorkspaceChatDocument(state: AppState): string {
+  const chat = state.workspaceChat;
+  if (!chat.open) return '';
+  const embeddingsEnabled = state.aiSettings.embeddings.enabled;
+  const canSend = embeddingsEnabled && !state.busy && (chat.isSending || chat.draft.trim().length > 0);
+  return `
+    <section class="workspace-chat-document" data-workspace-chat-document="true" aria-label="${escapeAttr(chat.targetDirectory ? 'Chat folder' : 'Chat workspace')}">
+      ${
+        embeddingsEnabled
+          ? `<form class="workspace-chat-native" data-form="workspace-chat">
+              <div class="workspace-chat-thread-shell">
+                <div class="workspace-chat-thread" data-workspace-chat-scroll-container="true" role="log" aria-live="polite">
+                  ${chat.messages.length === 0
+                    ? `<div class="workspace-chat-empty">
+                        <strong>${escapeHtml(chat.targetDirectory ? 'Ask this folder' : 'Ask this workspace')}</strong>
+                        <p>Questions use embeddings from HVY files in this scope.</p>
+                      </div>`
+                    : chat.messages.map(renderWorkspaceChatMessage).join('')}
+                </div>
+                <button type="button" class="workspace-chat-scroll-bottom" data-action="workspace-chat-scroll-bottom" hidden>Latest ↓</button>
+              </div>
+              ${renderWorkspaceChatStatus(chat)}
+              <label class="workspace-chat-composer">
+                <span>Question</span>
+                <textarea data-field="workspace-chat-draft" rows="4" placeholder="${escapeAttr(chat.targetDirectory ? 'Ask about this folder...' : 'Ask about this workspace...')}" ${chat.isSending ? 'disabled' : ''}>${escapeHtml(chat.draft)}</textarea>
+              </label>
+              <div class="workspace-chat-actions">
+                ${chat.isSending ? '<span>Working...</span>' : ''}
+                <button type="submit" class="secondary" ${canSend ? '' : 'disabled'}>${chat.isSending ? 'Stop' : 'Send'}</button>
+              </div>
+            </form>`
+          : `<div class="workspace-chat-required">
+              <h3>Embeddings Required</h3>
+              <p>Enable embeddings before chatting across folders or workspaces.</p>
+              <button type="button" data-action="ai-settings">Open AI Settings</button>
+            </div>`
+      }
+    </section>`;
+}
+
+function renderWorkspaceChatClosePrompt(state: AppState): string {
+  const chat = state.workspaceChat;
+  if (!chat.open || !chat.closePromptOpen) return '';
+  return `
+    <div class="modal-backdrop workspace-chat-save-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceChatSaveTitle">
+        <h2 id="workspaceChatSaveTitle">Save Chat?</h2>
+        <p>Save this chat session as an HVY document before closing it.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-close-workspace-chat">Cancel</button>
+          <button type="button" data-action="discard-workspace-chat">Don't Save</button>
+          <button type="button" data-action="save-workspace-chat" ${state.busy ? 'disabled' : ''}>Save Chat</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderWorkspaceChatMessage(message: AppState['workspaceChat']['messages'][number]): string {
+  return `
+    <article class="workspace-chat-message is-${escapeAttr(message.role)}${message.error ? ' is-error' : ''}">
+      <div class="workspace-chat-message-role">${message.role === 'user' ? 'You' : 'Assistant'}</div>
+      <div class="workspace-chat-message-body">${message.role === 'assistant' ? renderWorkspaceChatMarkdown(message.content) : renderPlainChatText(message.content)}</div>
+    </article>`;
+}
+
+function renderWorkspaceChatMarkdown(value: string): string {
+  return markdownToReaderHtml(normalizeMarkdownLists(stripHvySerializationComments(value)), { crossDocumentLinksEnabled: true });
+}
+
+function stripHvySerializationComments(value: string): string {
+  return value.replace(/<!--\/?hvy:[\s\S]*?-->/g, '').trim();
+}
+
+function renderPlainChatText(value: string): string {
+  return escapeHtml(value)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+function renderWorkspaceChatStatus(chat: AppState['workspaceChat']): string {
+  const progress = chat.progress;
+  const showProgress = Boolean(chat.isSending && progress && (progress.queued > 0 || progress.active > 0));
+  if (!chat.status && !chat.error && !showProgress) return '';
+  return `
+    <section class="workspace-chat-status" aria-live="polite">
+      ${chat.error ? `<p class="workspace-chat-error">${escapeHtml(chat.error)}</p>` : ''}
+      ${chat.status ? `<p>${escapeHtml(chat.status)}</p>` : ''}
+      ${showProgress && progress ? `<dl class="workspace-chat-progress" aria-label="Embedding progress">
+        <div><dt>Files</dt><dd>${progress.completed}/${progress.completed + progress.active + progress.queued}</dd></div>
+        <div><dt>Failed</dt><dd>${progress.failed}</dd></div>
+      </dl>` : ''}
     </section>`;
 }
 
@@ -1686,6 +2079,26 @@ function renderDeleteFileDialog(state: AppState): string {
         <div class="dialog-actions">
           <button type="button" data-action="cancel-delete-file">Cancel</button>
           <button type="button" class="danger-button" data-action="delete-file" ${state.busy ? 'disabled' : ''}>Delete</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderDeleteFolderDialog(state: AppState): string {
+  if (!state.deleteFolderWorkspacePath || !state.deleteFolderName || state.deleteFolderArchivedFiles.length === 0) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog delete-folder-dialog" role="dialog" aria-modal="true" aria-labelledby="deleteFolderTitle">
+        <h2 id="deleteFolderTitle">Delete archived files?</h2>
+        <p class="dialog-note">${escapeHtml(state.deleteFolderName)} contains ${state.deleteFolderArchivedFiles.length} archived file${state.deleteFolderArchivedFiles.length === 1 ? '' : 's'} that will be removed from disk.</p>
+        <div class="delete-folder-file-list" role="list" aria-label="Archived files in folder">
+          ${state.deleteFolderArchivedFiles.map((file) => `<div role="listitem">${escapeHtml(file)}</div>`).join('')}
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-delete-folder">Cancel</button>
+          <button type="button" class="danger-button" data-action="delete-folder" ${state.busy ? 'disabled' : ''}>Delete</button>
         </div>
       </section>
     </div>`;
@@ -1864,7 +2277,7 @@ function workspaceNodeName(node: WorkspaceTreeNode): string {
 
 function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
-  const templateDisabled = state.document.extension === '.md';
+  const templateDisabled = state.document.extension === '.md' || state.document.virtual === 'versionHistory';
   if (state.saveAsKind === 'template' && !templateDisabled) {
     return renderSaveAsTemplateDialog(state);
   }
@@ -1876,7 +2289,9 @@ function renderSaveAsDialog(state: AppState): string {
     ? state.selectedWorkspacePath
     : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null;
-  const name = displayDocumentName(state.document.name);
+  const name = state.document.virtual === 'versionHistory'
+    ? displayDocumentName(savedVersionDocumentName(state.document.historySourceName ?? state.document.name))
+    : displayDocumentName(state.document.name);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="save-as-document">
@@ -1958,16 +2373,24 @@ function renderSaveAsKindControl(activeKind: AppState['saveAsKind'], templateDis
     </div>`;
 }
 
-function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState): string {
+function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: string, filter: WorkspaceFilterState, disabled = false): string {
   const active = filter.mode === mode;
+  const icon = mode === 'keyword' ? gearIcon() : sparklesIcon();
   return `
     <button
       type="button"
       class="search-tab${active ? ' is-active' : ''}"
       data-action="set-workspace-filter-mode"
-      data-filter-mode="${escapeAttr(filter.mode === 'semantic' ? 'keyword' : mode)}"
+      data-filter-mode="${escapeAttr(mode)}"
       aria-pressed="${active ? 'true' : 'false'}"
-    >${sparklesIcon()}<span>${escapeHtml(label)}</span></button>`;
+      ${disabled ? 'disabled title="Enable embeddings in AI settings"' : ''}
+    >${icon}<span>${escapeHtml(label)}</span></button>`;
+}
+
+function workspaceFilterModeDescription(mode: HvyDocumentSearchMode): string {
+  if (mode === 'semantic') return 'Use AI to evaluate matches. Slower.';
+  if (mode === 'embedding') return 'Use embeddings to speed up semantic search. Faster, but may create false negatives.';
+  return 'Use keyword matching';
 }
 
 function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: string, filter: WorkspaceFilterState): string {
@@ -1982,7 +2405,13 @@ function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: stri
     >${escapeHtml(label)}</button>`;
 }
 
-function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVisibility, disabled: boolean): string {
+function renderWorkspaceFilterVisibilityControls(
+  visibility: WorkspaceTemplateVisibility,
+  disabled: boolean,
+  workspacePath: string,
+  embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null,
+): string {
+  const previewEnabled = embeddingPreview?.enabled === true;
   return `
     <div class="search-filter-box">
       <div class="search-filter-box-head">
@@ -2006,10 +2435,12 @@ function renderWorkspaceFilterVisibilityControls(visibility: WorkspaceTemplateVi
           <input type="checkbox" name="archivedFiles" ${visibility.archivedFiles ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>Archived</span>
         </label>
+        <label class="checkbox-row">
+          <input type="checkbox" data-action="toggle-workspace-embedding-preview" data-workspace-path="${escapeAttr(workspacePath)}" ${previewEnabled ? 'checked' : ''} ${disabled || !workspacePath ? 'disabled' : ''}>
+          <span>Embeddings</span>
+        </label>
       </div>
-      <div class="workspace-filter-actions">
-        <button type="button" class="secondary" data-action="save-filter-file-visibility" ${disabled ? 'disabled' : ''}>Save visibility</button>
-      </div>
+      ${previewEnabled && !embeddingPreview?.loading ? `<div class="workspace-embedding-preview-inline">${escapeHtml(embeddingPreview?.error ?? 'Embedding files are visible in the workspace tree.')}</div>` : ''}
     </div>`;
 }
 
@@ -2026,6 +2457,7 @@ function showFileContextMenu(
   event: MouseEvent,
   path: string,
   name: string,
+  relativePath: string,
   workspacePath: string,
   archived: boolean,
   locked: boolean,
@@ -2040,10 +2472,12 @@ function showFileContextMenu(
   menu.className = 'file-context-menu';
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
+  const parentDirectory = parentDirectoryForRelativePath(relativePath);
   menu.innerHTML = archived ? `
     <button type="button" data-menu-action="restore">Restore</button>
     <button type="button" data-menu-action="delete">Delete</button>
   ` : `
+    <button type="button" data-menu-action="new-document">New Document</button>
     <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
     <button type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
@@ -2070,6 +2504,7 @@ function showFileContextMenu(
     const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
     if (!button) return;
     cleanup();
+    if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, parentDirectory);
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
     if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
@@ -2104,6 +2539,8 @@ function showWorkspaceContextMenu(
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
   targetDirectory = '',
+  hiddenFromAI = false,
+  deleteInfo: WorkspaceFolderDeleteInfo | null = null,
 ): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
@@ -2111,6 +2548,10 @@ function showWorkspaceContextMenu(
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   void clipboard;
+  const deleteDisabled = deleteInfo === null || deleteInfo.activeFileCount > 0;
+  const deleteTitle = deleteDisabled && deleteInfo?.activeFileCount
+    ? `Folder contains ${deleteInfo.activeFileCount} active file${deleteInfo.activeFileCount === 1 ? '' : 's'}`
+    : 'Delete folder';
   menu.innerHTML = `
     <button type="button" data-menu-action="new-folder">New Folder</button>
     <button type="button" data-menu-action="new-document">New Document</button>
@@ -2118,6 +2559,9 @@ function showWorkspaceContextMenu(
     <button type="button" data-menu-action="import">Import</button>
     <button type="button" data-menu-action="paste">Paste</button>
     ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
+    ${targetDirectory ? '<button type="button" data-menu-action="chat">Chat Folder</button>' : '<button type="button" data-menu-action="chat">Chat Workspace</button>'}
+    <button type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
+    ${targetDirectory ? `<button type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -2141,6 +2585,22 @@ function showWorkspaceContextMenu(
     if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'filter') handlers.openWorkspaceFilter(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'chat') handlers.openWorkspaceChat(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'hide-from-ai') {
+      if (targetDirectory) handlers.setWorkspaceFolderHiddenFromAI(workspacePath, targetDirectory, true);
+      else handlers.setWorkspaceHiddenFromAI(workspacePath, true);
+    }
+    if (button.dataset.menuAction === 'unhide-from-ai') {
+      if (targetDirectory) handlers.setWorkspaceFolderHiddenFromAI(workspacePath, targetDirectory, false);
+      else handlers.setWorkspaceHiddenFromAI(workspacePath, false);
+    }
+    if (button.dataset.menuAction === 'delete-folder') {
+      if (deleteInfo && deleteInfo.archivedFiles.length > 0) {
+        handlers.confirmDeleteWorkspaceFolder(workspacePath, targetDirectory, deleteInfo.folderName, deleteInfo.archivedFiles);
+      } else {
+        handlers.deleteWorkspaceFolder(workspacePath, targetDirectory);
+      }
+    }
   });
   document.body.append(menu);
   activeFileContextMenuCleanup = cleanup;
@@ -2153,6 +2613,12 @@ function showWorkspaceContextMenu(
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
   });
+}
+
+function parentDirectoryForRelativePath(relativePath: string): string {
+  const segments = relativePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  segments.pop();
+  return segments.join('/');
 }
 
 function closeFileContextMenu(): void {
@@ -2204,6 +2670,20 @@ function renderToolbar(state: AppState): string {
     return `
       <div class="toolbar-title">No document selected</div>
       <div class="toolbar-actions"></div>`;
+  }
+  if (document.virtual === 'workspaceChat') {
+    const dirtyState = state.workspaceChat.dirty ? 'dirty' : 'clean';
+    const dirtyLabel = state.workspaceChat.dirty ? 'Unsaved' : 'Saved';
+    return `
+      <div class="toolbar-title">
+        <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
+        <span>${escapeHtml(state.workspaceChat.scopeLabel || 'Workspace chat')}</span>
+      </div>
+      <div class="toolbar-actions">
+        <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
+        <button type="button" data-action="save-workspace-chat" ${state.workspaceChat.messages.length === 0 || state.busy ? 'disabled' : ''}>Save Chat</button>
+        <button type="button" data-action="close-workspace-chat">Close</button>
+      </div>`;
   }
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
@@ -2297,10 +2777,30 @@ function gearIcon(): string {
 }
 
 function renderWorkspaces(state: AppState): string {
-  if (state.workspaces.length === 0) {
+  if (state.workspaceEntries.length === 0) {
     return '<div class="empty-panel">Open or create a workspace to browse HVY files.</div>';
   }
-  return `<div class="tree-list">${state.workspaces.map((workspace) => renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.savedTemplates)).join('')}</div>`;
+  return `<div class="tree-list">${state.workspaceEntries.map((entry) => {
+    const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+    if (entry.status === 'ready' && workspace) {
+      return renderWorkspace(workspace, state.selectedFilePath, state.openWorkspaceActionsPath, state.workspaceFilters, state.workspaceClipboard, state.workspaceFileViews[workspace.path] ?? 'documents', state.workspaceExpanded[workspace.path] ?? true, state.workspaceFolderExpanded[workspace.path] ?? {}, state.savedTemplates, state.workspaceEmbeddingPreviews[workspace.path] ?? null);
+    }
+    return renderPendingWorkspace(entry);
+  }).join('')}</div>`;
+}
+
+function renderPendingWorkspace(entry: AppState['workspaceEntries'][number]): string {
+  const loading = entry.status === 'loading';
+  const detail = loading ? 'Loading…' : entry.error ?? 'Workspace could not be loaded.';
+  return `
+    <section class="workspace-root workspace-root-${entry.status}" data-workspace-path="${escapeAttr(entry.path)}" aria-busy="${loading ? 'true' : 'false'}">
+      <button type="button" class="workspace-state-heading" data-action="${loading ? '' : 'retry-workspace'}" data-workspace-path="${escapeAttr(entry.path)}" title="${escapeAttr(entry.path)}" ${loading ? 'disabled' : ''}>
+        <span>${escapeHtml(entry.displayName)}</span>
+        ${loading ? '<span class="workspace-loading-indicator" aria-hidden="true"></span>' : ''}
+      </button>
+      <div class="workspace-state-detail" title="${escapeAttr(detail)}">${escapeHtml(detail)}</div>
+      ${loading ? '' : `<button type="button" class="workspace-retry-button" data-action="retry-workspace" data-workspace-path="${escapeAttr(entry.path)}">Retry</button>`}
+    </section>`;
 }
 
 function renderWorkspaceManagerDialog(state: AppState): string {
@@ -2314,7 +2814,10 @@ function renderWorkspaceManagerDialog(state: AppState): string {
         <div class="workspace-manager-section">
           <h3>Open</h3>
           <div class="workspace-manager-list">
-            ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaces.map(renderWorkspaceManagerRow).join('')}
+            ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaceEntries.flatMap((entry) => {
+              const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+              return workspace ? [renderWorkspaceManagerRow(workspace)] : [];
+            }).join('')}
           </div>
         </div>
         <div class="workspace-manager-section">
@@ -2332,7 +2835,8 @@ function renderWorkspaceManagerDialog(state: AppState): string {
 
 function renderWorkspaceManagerRow(workspace: Workspace): string {
   return `
-    <form class="workspace-manager-row" data-form="workspace-manager-rename">
+    <form class="workspace-manager-row workspace-manager-row-reorderable" data-form="workspace-manager-rename" data-workspace-path="${escapeAttr(workspace.path)}">
+      <span class="workspace-reorder-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">⠿</span>
       <input name="workspacePath" type="hidden" value="${escapeAttr(workspace.path)}">
       <label>
         <span>Name</span>
@@ -2348,6 +2852,41 @@ function renderWorkspaceManagerRow(workspace: Workspace): string {
         <button type="button" class="danger-button" data-action="archive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Archive</button>
       </div>
     </form>`;
+}
+
+function bindWorkspaceManagerReordering(root: HTMLElement, handlers: UiHandlers, signal: AbortSignal): void {
+  let draggedPath: string | null = null;
+  root.addEventListener('dragstart', (event) => {
+    const handle = event.target instanceof Element ? event.target.closest<HTMLElement>('.workspace-reorder-handle') : null;
+    const row = handle?.closest<HTMLElement>('.workspace-manager-row-reorderable') ?? null;
+    if (!row?.dataset.workspacePath || !event.dataTransfer) return;
+    draggedPath = row.dataset.workspacePath;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-hvy-workspace-order', draggedPath);
+    row.classList.add('is-dragging');
+  }, { signal });
+  root.addEventListener('dragover', (event) => {
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>('.workspace-manager-row-reorderable') : null;
+    if (!row?.dataset.workspacePath || row.dataset.workspacePath === draggedPath) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const before = event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+    root.querySelectorAll('.workspace-manager-row-reorderable').forEach((item) => item.classList.remove('drop-before', 'drop-after'));
+    row.classList.add(before ? 'drop-before' : 'drop-after');
+  }, { signal });
+  root.addEventListener('drop', (event) => {
+    const row = event.target instanceof Element ? event.target.closest<HTMLElement>('.workspace-manager-row-reorderable') : null;
+    const source = draggedPath ?? event.dataTransfer?.getData('application/x-hvy-workspace-order') ?? '';
+    const target = row?.dataset.workspacePath ?? '';
+    if (!source || !target || source === target || !row) return;
+    event.preventDefault();
+    const before = event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+    handlers.reorderWorkspace(source, target, before);
+  }, { signal });
+  root.addEventListener('dragend', () => {
+    draggedPath = null;
+    root.querySelectorAll('.workspace-manager-row-reorderable').forEach((item) => item.classList.remove('is-dragging', 'drop-before', 'drop-after'));
+  }, { signal });
 }
 
 function renderArchivedWorkspaceRow(workspace: ArchivedWorkspace): string {
@@ -2376,7 +2915,9 @@ function renderWorkspace(
   workspaceClipboard: WorkspaceClipboardState | null,
   fileView: AppState['workspaceFileViews'][string],
   expanded: boolean,
+  folderExpanded: Record<string, boolean>,
   savedTemplates: SavedTemplate[],
+  embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null,
 ): string {
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
@@ -2388,14 +2929,16 @@ function renderWorkspace(
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
   const documentsActive = fileView === 'documents';
+  const workspaceHiddenFromAI = workspace.manifest.hiddenFromAI === true;
   const fileViewNodes = filterNodesByWorkspaceFileView(workspace.files, fileView, workspace, savedTemplates);
   const visibleFiles = documentsActive
     ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
     : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
-    <details class="workspace-root" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
+    <details class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
       <summary title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
+        ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
       </summary>
       <button type="button" class="workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
       <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
@@ -2409,9 +2952,11 @@ function renderWorkspace(
           <button type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
           <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
           <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
+          <button type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
         </div>
       </div>
-      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, filter ?? null)).join('')}</ul>
+      ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
+      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, folderExpanded, filter ?? null, embeddingPreview)).join('')}</ul>
     </details>`;
 }
 
@@ -2520,34 +3065,39 @@ function renderNode(
   matchedDocumentIds: Set<string> | null,
   workspaceClipboard: WorkspaceClipboardState | null,
   workspacePath: string,
+  folderExpanded: Record<string, boolean>,
   activeFilter: AppState['workspaceFilters'][string] | null = null,
+  embeddingPreview: AppState['workspaceEmbeddingPreviews'][string] | null = null,
 ): string {
   if (node.kind === 'folder') {
     const hasMatch = nodeHasFilterMatch(node, matchedDocumentIds, activeFilter);
     const name = workspaceNodeName(node);
     const relativePath = workspaceNodeRelativePath(node);
+    const normalizedRelativePath = normalizeTreeRelativePath(relativePath);
     const children = Array.isArray(node.children) ? node.children : [];
+    const hiddenFromAI = node.hiddenFromAI === true;
     const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
     const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
     const folderFilterTrigger = folderOwnsActiveFilter
       ? `<button type="button" class="workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
       : '';
-    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${folderFilterTrigger}`;
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
     if (children.length === 0) {
       return `
         <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-          <div class="tree-folder-row" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+          <div class="tree-folder-row${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
           </div>
         </li>`;
     }
+    const open = folderExpanded[normalizedRelativePath] ?? true;
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-        <details open>
-          <summary data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}">
+        <details${open ? ' open' : ''}>
+          <summary class="${hiddenFromAI ? 'is-hidden-from-ai' : ''}" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
           </summary>
-          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, activeFilter)).join('')}</ul>
+          <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, folderExpanded, activeFilter, embeddingPreview)).join('')}</ul>
         </details>
       </li>`;
   }
@@ -2557,18 +3107,29 @@ function renderNode(
   const archived = node.archived === true;
   const locked = node.locked === true;
   const hiddenFromAI = node.hiddenFromAI === true;
+  const hasEmbeddingFile = embeddingPreview?.enabled === true && embeddingPreview.sidecars[node.path] === true;
   const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
     ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
     : '';
+  const embeddingFile = hasEmbeddingFile
+    ? `<ul class="tree tree-embedding-files" aria-label="${escapeAttr(`${node.name} embedding files`)}">
+        <li>
+          <div class="tree-embedding-file" title="${escapeAttr(`${node.path}.emb`)}" aria-disabled="true">
+            <span class="tree-file-name">${escapeHtml(`${node.name}.emb`)}</span>
+          </div>
+        </li>
+      </ul>`
+    : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
         ${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
         ${extensionBadge}
       </button>
+      ${embeddingFile}
     </li>`;
 }
 
@@ -3201,24 +3762,27 @@ function renderDebugLogEntry(entry: AppState['debugLogEntries'][number]): string
         ${duration ? `<span class="debug-log-duration">${escapeHtml(duration)}</span>` : ''}
         <time datetime="${escapeAttr(entry.startedAt)}">${escapeHtml(formatDebugLogTime(entry.startedAt))}</time>
       </div>
-      ${renderSemanticDebugLogDetails(entry)}
+      ${renderLlmDebugLogDetails(entry)}
       ${details ? `<pre>${escapeHtml(details)}</pre>` : ''}
     </article>`;
 }
 
 function formatDebugLogEntryDetails(entry: AppState['debugLogEntries'][number]): string {
   if (!entry.details) return '';
-  if (entry.kind === 'llm' && entry.details.task === 'semanticFilter') {
+  if (entry.kind === 'llm' && (entry.details.task === 'semanticFilter' || entry.details.task === 'chat')) {
     const { body: _body, output: _output, payload: _payload, ...summary } = entry.details;
     return JSON.stringify(summary, null, 2);
   }
   return JSON.stringify(entry.details, null, 2);
 }
 
-function renderSemanticDebugLogDetails(entry: AppState['debugLogEntries'][number]): string {
+function renderLlmDebugLogDetails(entry: AppState['debugLogEntries'][number]): string {
   if (entry.kind !== 'llm') return '';
   if (entry.label === 'llm:request' && entry.details?.task === 'semanticFilter') {
     return renderDebugLogExpandable('Semantic prompt', formatSemanticRequestPrompt(entry.details.body));
+  }
+  if (entry.label === 'llm:response' && entry.details?.task === 'chat') {
+    return renderDebugLogExpandable('LLM response', formatDebugLogValue(entry.details?.output));
   }
   if (entry.label === 'llm:response' && entry.details?.task === 'semanticFilter') {
     return [
@@ -3445,6 +4009,7 @@ function renderAiSettingsDialog(state: AppState): string {
             value="${escapeAttr(String(maxConcurrentSemanticFilters))}"
           >
         </label>
+        ${renderEmbeddingSettingsField(settings)}
         <div class="ai-task-grid">
           ${renderActionConfigField('chat', 'Chat / Q&A', settings)}
           ${renderActionConfigField('edit', 'Document and component edit', settings)}
@@ -4089,6 +4654,33 @@ function renderRecoveryDialog(state: AppState): string {
     </div>`;
 }
 
+function renderVersionHistoryDialog(state: AppState): string {
+  if (!state.versionHistoryDialogOpen) return '';
+  const versions = state.savedDocumentVersions;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="versionHistoryTitle">
+        <h2 id="versionHistoryTitle">Version History</h2>
+        <p class="dialog-note">Choose a saved version to review it. Saving while reviewing creates a new document and does not change the current document.</p>
+        ${versions.length === 0
+      ? '<div class="empty-panel compact">No saved versions are available yet.</div>'
+      : `<div class="recovery-list">
+          ${versions.map((version, index) => `
+            <article class="recovery-item${version.id === state.selectedSavedVersionId ? ' is-selected' : ''}">
+              <button type="button" class="version-history-select" data-action="select-saved-version" data-version-id="${escapeAttr(version.id)}" aria-current="${version.id === state.selectedSavedVersionId ? 'true' : 'false'}">
+                <strong>${index === 0 ? 'Latest saved version' : 'Saved version'}</strong>
+                <span>${escapeHtml(formatBackupTimestamp(version.createdAt))}</span>
+                <small>${escapeHtml(version.displayName)}</small>
+              </button>
+            </article>`).join('')}
+        </div>`}
+        <div class="dialog-actions">
+          <button type="button" data-action="close-version-history">Close</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function renderCloseDocumentDialog(state: AppState): string {
   if (!state.closeDocumentDialogOpen) {
     return '';
@@ -4241,6 +4833,79 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
     </fieldset>`;
 }
 
+function renderEmbeddingSettingsField(settings: AiSettings): string {
+  const config = settings.embeddings;
+  const effectiveProviderId = aiEmbeddingProviderPresets.some((preset) => preset.id === config.providerId)
+    ? config.providerId
+    : 'openai';
+  const embeddingProvider = aiEmbeddingProviderPreset(effectiveProviderId);
+  const mode = embeddingProvider.mode;
+  const provider = aiProviderPreset(effectiveProviderId);
+  const model = config.modelsByProvider?.[effectiveProviderId]?.trim() || config.model || aiEmbeddingDefaultModel(effectiveProviderId);
+  const modelsByProvider = { ...(config.modelsByProvider ?? {}), [effectiveProviderId]: model };
+  const presetModelIds = new Set(embeddingProvider.models.map((option) => option.id));
+  const isCustomModel = !presetModelIds.has(model);
+  const showCustomDimensions = isCustomModel || config.dimensions !== null && config.dimensions !== undefined;
+  const providerOptions = aiEmbeddingProvidersForMode(mode);
+  const controls = config.enabled ? `
+      <div class="ai-embedding-mode">
+        <span>Mode</span>
+        <div class="segmented-control" role="group" aria-label="Embedding mode">
+          ${(['cloud', 'local'] as const).map((option) => `
+            <button
+              type="button"
+              class="${option === mode ? 'is-active' : ''}"
+              data-action="select-embedding-mode"
+              data-embedding-mode="${escapeAttr(option)}"
+              aria-pressed="${option === mode ? 'true' : 'false'}"
+            >${option === 'cloud' ? 'Cloud' : 'Local'}</button>
+          `).join('')}
+        </div>
+      </div>
+      <label>
+        <span>Provider</span>
+        <select name="embeddingProviderId" data-field="ai-embedding-provider" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
+          ${providerOptions.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === effectiveProviderId ? 'selected' : ''}>${escapeHtml(aiProviderPreset(option.id).name)}</option>`).join('')}
+        </select>
+      </label>
+      <p class="ai-embedding-warning${effectiveProviderId === 'openai' ? ' is-hidden' : ''}">Untested</p>
+      <label>
+        <span>Model</span>
+        <select name="embeddingModelPreset" data-field="ai-embedding-model-preset">
+          ${embeddingProvider.models.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === model ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
+          <option value="custom" ${isCustomModel ? 'selected' : ''}>Custom</option>
+        </select>
+      </label>
+      <label class="ai-embedding-custom-model${isCustomModel ? '' : ' is-hidden'}">
+        <span>Custom model</span>
+        <input name="embeddingModel" type="text" value="${escapeAttr(isCustomModel ? model : '')}" placeholder="${escapeAttr(embeddingProvider.modelPlaceholder || provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
+      </label>
+      <details class="ai-embedding-advanced">
+        <summary>Advanced</summary>
+        ${showCustomDimensions ? `
+          <label>
+            <span>Custom dimensions</span>
+            <input name="embeddingDimensions" type="number" min="1" step="1" value="${escapeAttr(config.dimensions ? String(config.dimensions) : '')}" placeholder="model default">
+          </label>
+        ` : ''}
+        <label>
+          <span>Batch size</span>
+          <input name="embeddingBatchSize" type="number" min="1" max="256" step="1" value="${escapeAttr(String(config.batchSize || 8))}">
+        </label>
+      </details>
+  ` : '';
+  return `
+    <fieldset class="ai-action-config ai-embedding-config">
+      <legend>Embeddings</legend>
+      <textarea name="embeddingModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
+      <label class="checkbox-row">
+        <input name="embeddingsEnabled" data-field="embeddings-enabled" type="checkbox" ${config.enabled ? 'checked' : ''}>
+        <span>Use embeddings</span>
+      </label>
+      ${controls}
+    </fieldset>`;
+}
+
 function readAppSettingsForm(data: FormData): AppSettings {
   return {
     ...parseAppSettings(String(data.get('settingsJson') ?? '')),
@@ -4301,8 +4966,30 @@ function readAiSettingsForm(data: FormData): AiSettings {
     activeProviderId,
     providers,
     actions: readActionSettings(data, activeProviderId),
+    embeddings: readEmbeddingSettings(data, parsed, activeProviderId),
     maxContextChars: normalizeAiMaxContextChars(data.get('maxContextChars')),
     maxConcurrentSemanticFilters: normalizeMaxConcurrentSemanticFilters(data.get('maxConcurrentSemanticFilters')),
+  };
+}
+
+function readEmbeddingSettings(data: FormData, parsed: AiSettings | null, fallbackProviderId: string): AiSettings['embeddings'] {
+  const parsedProviderId = parsed?.embeddings?.providerId ?? fallbackProviderId;
+  const providerInput = String(data.get('embeddingProviderId') ?? parsedProviderId).trim() || parsedProviderId;
+  const providerId = aiEmbeddingProviderPresets.some((preset) => preset.id === providerInput) ? providerInput : 'openai';
+  const modelsByProvider = parseAiActionModelsByProvider(String(data.get('embeddingModelsByProvider') ?? ''));
+  const modelPreset = String(data.get('embeddingModelPreset') ?? '').trim();
+  const modelInput = modelPreset && modelPreset !== 'custom'
+    ? modelPreset
+    : String(data.get('embeddingModel') ?? '').trim();
+  const model = modelInput || modelsByProvider[providerId] || aiEmbeddingDefaultModel(providerId);
+  modelsByProvider[providerId] = model;
+  return {
+    enabled: data.get('embeddingsEnabled') === 'on',
+    providerId,
+    model,
+    modelsByProvider,
+    dimensions: normalizeEmbeddingDimensions(data.get('embeddingDimensions')),
+    batchSize: normalizeEmbeddingBatchSize(data.get('embeddingBatchSize')),
   };
 }
 
@@ -4367,6 +5054,25 @@ function normalizeAiSettingsForForm(settings: AiSettings): AiSettings {
       semanticFilter: normalizeAiActionConfigForForm(settings.actions.semanticFilter, activeProviderId, 'semanticFilter'),
       compaction: normalizeAiActionConfigForForm(settings.actions.compaction, activeProviderId, 'compaction'),
     },
+    embeddings: normalizeEmbeddingSettingsForForm(settings.embeddings, activeProviderId),
+  };
+}
+
+function normalizeEmbeddingSettingsForForm(settings: AiSettings['embeddings'] | undefined, activeProviderId: string): AiSettings['embeddings'] {
+  const requestedProviderId = settings?.providerId?.trim() || activeProviderId || 'openai';
+  const providerId = aiEmbeddingProviderPresets.some((preset) => preset.id === requestedProviderId) ? requestedProviderId : 'openai';
+  const model = settings?.model?.trim() || settings?.modelsByProvider?.[providerId]?.trim() || aiEmbeddingDefaultModel(providerId);
+  return {
+    enabled: settings?.enabled === true,
+    providerId,
+    model,
+    modelsByProvider: {
+      ...(settings?.modelsByProvider ?? {}),
+      [providerId]: model,
+      openai: settings?.modelsByProvider?.openai?.trim() || aiEmbeddingDefaultModel('openai'),
+    },
+    dimensions: normalizeEmbeddingDimensions(settings?.dimensions),
+    batchSize: normalizeEmbeddingBatchSize(settings?.batchSize),
   };
 }
 
@@ -4427,6 +5133,70 @@ function syncAiActionModelForProvider(select: HTMLSelectElement): void {
   modelsInput.value = JSON.stringify(modelsByProvider);
 }
 
+function syncAiEmbeddingModelForProvider(select: HTMLSelectElement): void {
+  const form = select.closest<HTMLFormElement>('form[data-form="ai-settings"]');
+  const fieldset = select.closest<HTMLFieldSetElement>('.ai-embedding-config');
+  const modelSelect = fieldset?.querySelector<HTMLSelectElement>('select[name="embeddingModelPreset"]');
+  const modelInput = fieldset?.querySelector<HTMLInputElement>('input[name="embeddingModel"]');
+  const modelsInput = fieldset?.querySelector<HTMLTextAreaElement>('textarea[name="embeddingModelsByProvider"]');
+  const dimensionsInput = fieldset?.querySelector<HTMLInputElement>('input[name="embeddingDimensions"]');
+  if (!form || !fieldset || !modelSelect || !modelInput || !modelsInput) return;
+  const modelsByProvider = parseAiActionModelsByProvider(modelsInput.value);
+  const previousProviderId = select.dataset.effectiveProviderId || 'openai';
+  const previousModel = selectedEmbeddingModel(modelSelect, modelInput);
+  if (previousProviderId && previousModel) {
+    modelsByProvider[previousProviderId] = previousModel;
+  }
+  const providerId = select.value;
+  const provider = aiEmbeddingProviderPreset(providerId);
+  const model = modelsByProvider[providerId] || aiEmbeddingDefaultModel(providerId);
+  modelSelect.innerHTML = [
+    ...provider.models.map((option) => `<option value="${escapeAttr(option.id)}">${escapeHtml(option.label)}</option>`),
+    '<option value="custom">Custom</option>',
+  ].join('');
+  if (provider.models.some((option) => option.id === model)) {
+    modelSelect.value = model;
+    modelInput.value = '';
+  } else {
+    modelSelect.value = 'custom';
+    modelInput.value = model;
+  }
+  modelInput.placeholder = provider.modelPlaceholder;
+  modelInput.closest('label')?.classList.toggle('is-hidden', modelSelect.value !== 'custom');
+  fieldset.querySelector<HTMLElement>('.ai-embedding-warning')?.classList.toggle('is-hidden', providerId === 'openai');
+  if (dimensionsInput) dimensionsInput.value = '';
+  select.dataset.effectiveProviderId = providerId;
+  modelsInput.value = JSON.stringify(modelsByProvider);
+}
+
+function syncAiEmbeddingCustomModelInput(select: HTMLSelectElement): void {
+  const fieldset = select.closest<HTMLFieldSetElement>('.ai-embedding-config');
+  const providerSelect = fieldset?.querySelector<HTMLSelectElement>('select[name="embeddingProviderId"]');
+  const modelInput = fieldset?.querySelector<HTMLInputElement>('input[name="embeddingModel"]');
+  const modelsInput = fieldset?.querySelector<HTMLTextAreaElement>('textarea[name="embeddingModelsByProvider"]');
+  if (!fieldset || !providerSelect || !modelInput || !modelsInput) return;
+  const provider = aiEmbeddingProviderPreset(providerSelect.value);
+  const isCustom = select.value === 'custom';
+  modelInput.closest('label')?.classList.toggle('is-hidden', !isCustom);
+  if (isCustom) {
+    modelInput.placeholder = provider.modelPlaceholder;
+    modelInput.focus();
+  } else {
+    modelInput.value = '';
+    const modelsByProvider = parseAiActionModelsByProvider(modelsInput.value);
+    modelsByProvider[providerSelect.value] = select.value;
+    modelsInput.value = JSON.stringify(modelsByProvider);
+  }
+}
+
+function selectedEmbeddingModel(modelSelect: HTMLSelectElement, modelInput: HTMLInputElement): string {
+  return modelSelect.value === 'custom' ? modelInput.value.trim() : modelSelect.value.trim();
+}
+
+function isAiEmbeddingProviderMode(value: unknown): value is AiEmbeddingProviderMode {
+  return value === 'cloud' || value === 'local';
+}
+
 function normalizeAiMaxContextChars(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_AI_MAX_CONTEXT_CHARS;
@@ -4438,6 +5208,18 @@ function normalizeMaxConcurrentSemanticFilters(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MAX_CONCURRENT_SEMANTIC_FILTERS;
   return Math.min(MAX_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.max(MIN_MAX_CONCURRENT_SEMANTIC_FILTERS, Math.round(parsed)));
+}
+
+function normalizeEmbeddingDimensions(value: unknown): number | null {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function normalizeEmbeddingBatchSize(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 8;
+  return Math.min(256, Math.max(1, Math.floor(parsed)));
 }
 
 function normalizeImageAttachmentMaxDimensions(value: unknown): ImageAttachmentMaxDimensions {
@@ -4517,7 +5299,7 @@ function isHvyMode(value: string | undefined): value is HvyMode {
 }
 
 function isWorkspaceFilterMode(value: string | undefined): value is HvyDocumentSearchMode {
-  return value === 'keyword' || value === 'semantic';
+  return value === 'keyword' || value === 'semantic' || value === 'embedding';
 }
 
 function isWorkspaceFilterBehavior(value: string | undefined): value is SearchFilterMode {

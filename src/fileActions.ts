@@ -14,6 +14,7 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const hasDocument = Boolean(document);
   const editableDocument = Boolean(document && !document.readOnly);
   const mountedEditableDocument = Boolean(document?.mounted && editableDocument);
+  const historyPreview = document?.virtual === 'versionHistory';
   const editableTemplateDocument = Boolean(document && editableDocument && isWorkspaceTemplatePath(state, document.path));
   const editableHvyDocument = Boolean(document && editableDocument && document.extension !== '.md');
   const documentWorkspacePath = currentDocumentWorkspacePath(state);
@@ -21,8 +22,8 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
 
   return {
     closeDocument: hasDocument,
-    save: Boolean((document?.dirty || editableTemplateDocument) && editableDocument),
-    saveAs: mountedEditableDocument,
+    save: historyPreview || Boolean((document?.dirty || editableTemplateDocument) && editableDocument),
+    saveAs: historyPreview || mountedEditableDocument,
     saveToWorkspace: Boolean(mountedEditableDocument && hasWorkspaceDestination),
     exportPdf: Boolean(document?.extension === '.phvy' && mountedEditableDocument && !editableTemplateDocument),
     importCurrent: editableHvyDocument,

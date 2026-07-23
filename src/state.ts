@@ -3,11 +3,17 @@ import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
+import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
+import type { SavedVersion } from './revisionModel';
 
 export interface OpenDocument {
   path: string;
   name: string;
   extension: DocumentExtension;
+  virtual?: 'workspaceChat' | 'versionHistory';
+  historySourcePath?: string;
+  historySourceName?: string;
+  historyVersionId?: string;
   mode: HvyMode;
   dirty: boolean;
   readOnly: boolean;
@@ -29,6 +35,7 @@ export interface OpenDocumentTab {
 
 export interface AppState {
   workspaces: Workspace[];
+  workspaceEntries: WorkspaceEntry[];
   archivedWorkspaces: ArchivedWorkspace[];
   selectedWorkspacePath: string | null;
   selectedFilePath: string | null;
@@ -55,6 +62,7 @@ export interface AppState {
   newFolderWorkspacePath: string | null;
   newFolderParentDirectory: string;
   workspaceExpanded: Record<string, boolean>;
+  workspaceFolderExpanded: Record<string, Record<string, boolean>>;
   newWorkspaceLocation: 'managed' | 'choose';
   newDocumentWorkspacePath: string | null;
   newDocumentDirectory: string;
@@ -95,6 +103,9 @@ export interface AppState {
   debugLogDialogOpen: boolean;
   debugLogEntries: DebugLogEntry[];
   recoveryDialogOpen: boolean;
+  versionHistoryDialogOpen: boolean;
+  savedDocumentVersions: SavedVersion[];
+  selectedSavedVersionId: string | null;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
   closeDocumentDraftDialogOpen: boolean;
@@ -107,12 +118,25 @@ export interface AppState {
   renameFileCurrentName: string | null;
   deleteFilePath: string | null;
   deleteFileName: string | null;
+  deleteFolderWorkspacePath: string | null;
+  deleteFolderDirectory: string;
+  deleteFolderName: string | null;
+  deleteFolderArchivedFiles: string[];
   workspaceTransfer: WorkspaceTransferState | null;
   workspaceFilter: WorkspaceFilterState;
+  workspaceChat: WorkspaceChatState;
+  workspaceEmbeddingPreviews: Record<string, WorkspaceEmbeddingPreviewState>;
   workspaceFilters: Record<string, WorkspaceFilterConfig>;
   workspaceFileViews: Record<string, WorkspaceFileView>;
   appZoom: number;
   documentZoom: number;
+}
+
+export interface WorkspaceEntry {
+  path: string;
+  displayName: string;
+  status: 'loading' | 'ready' | 'error';
+  error: string | null;
 }
 
 export type WorkspaceFileView = 'documents' | 'templates';
@@ -138,6 +162,45 @@ export interface WorkspaceFilterState {
   error: string | null;
 }
 
+export interface WorkspaceChatSource {
+  id: string;
+  label: string;
+  detail: string;
+  path: string;
+  href: string;
+  score: number;
+  excerpt: string;
+}
+
+export interface WorkspaceChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  error?: boolean;
+}
+
+export interface WorkspaceChatState {
+  open: boolean;
+  workspacePath: string | null;
+  targetDirectory: string;
+  scopeLabel: string;
+  status: string | null;
+  error: string | null;
+  dirty: boolean;
+  closePromptOpen: boolean;
+  isSending: boolean;
+  draft: string;
+  progress: WorkspaceEmbeddingIndexProgress | null;
+  messages: WorkspaceChatMessage[];
+}
+
+export interface WorkspaceEmbeddingPreviewState {
+  enabled: boolean;
+  loading: boolean;
+  sidecars: Record<string, boolean>;
+  error: string | null;
+}
+
 export interface WorkspaceTransferState {
   mode: 'saveCurrent' | 'copyFile' | 'moveFile';
   sourcePath: string | null;
@@ -155,6 +218,7 @@ export interface WorkspaceClipboardState {
 
 export const state: AppState = {
   workspaces: [],
+  workspaceEntries: [],
   archivedWorkspaces: [],
   selectedWorkspacePath: null,
   selectedFilePath: null,
@@ -181,6 +245,7 @@ export const state: AppState = {
   newFolderWorkspacePath: null,
   newFolderParentDirectory: '',
   workspaceExpanded: {},
+  workspaceFolderExpanded: {},
   newWorkspaceLocation: 'managed',
   newDocumentWorkspacePath: null,
   newDocumentDirectory: '',
@@ -221,6 +286,9 @@ export const state: AppState = {
   debugLogDialogOpen: false,
   debugLogEntries: [],
   recoveryDialogOpen: false,
+  versionHistoryDialogOpen: false,
+  savedDocumentVersions: [],
+  selectedSavedVersionId: null,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
   closeDocumentDraftDialogOpen: false,
@@ -233,6 +301,10 @@ export const state: AppState = {
   renameFileCurrentName: null,
   deleteFilePath: null,
   deleteFileName: null,
+  deleteFolderWorkspacePath: null,
+  deleteFolderDirectory: '',
+  deleteFolderName: null,
+  deleteFolderArchivedFiles: [],
   workspaceTransfer: null,
   workspaceFilter: {
     open: false,
@@ -246,6 +318,21 @@ export const state: AppState = {
     status: null,
     error: null,
   },
+  workspaceChat: {
+    open: false,
+    workspacePath: null,
+    targetDirectory: '',
+    scopeLabel: '',
+    status: null,
+    error: null,
+    dirty: false,
+    closePromptOpen: false,
+    isSending: false,
+    draft: '',
+    progress: null,
+    messages: [],
+  },
+  workspaceEmbeddingPreviews: {},
   workspaceFilters: {},
   workspaceFileViews: {},
   appZoom: 1,

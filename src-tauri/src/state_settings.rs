@@ -347,10 +347,12 @@ fn normalize_ai_settings(settings: AiSettings) -> AppResult<AiSettings> {
         active_provider_id.into()
     };
     let actions = normalize_ai_actions(settings.actions, &providers, &active_provider_id);
+    let embeddings = normalize_ai_embeddings(settings.embeddings, &providers, &active_provider_id);
     Ok(AiSettings {
         active_provider_id,
         providers,
         actions,
+        embeddings,
         max_context_chars: normalize_ai_max_context_chars(settings.max_context_chars),
         max_concurrent_semantic_filters: normalize_max_concurrent_semantic_filters(
             settings.max_concurrent_semantic_filters,
@@ -371,6 +373,13 @@ fn normalize_max_concurrent_semantic_filters(value: u32) -> u32 {
         return default_max_concurrent_semantic_filters();
     }
     value.clamp(1, 16)
+}
+
+fn normalize_embedding_batch_size(value: u32) -> u32 {
+    if value == 0 {
+        return default_embedding_batch_size();
+    }
+    value.clamp(1, 256)
 }
 
 fn normalize_image_attachment_max_dimensions(value: ImageAttachmentMaxDimensions) -> ImageAttachmentMaxDimensions {
@@ -423,6 +432,42 @@ fn normalize_ai_actions(
         import_cleanup: normalize_ai_action(actions.import_cleanup, providers, active_provider_id),
         semantic_filter: normalize_ai_action(actions.semantic_filter, providers, active_provider_id),
         compaction: normalize_ai_action(actions.compaction, providers, active_provider_id),
+    }
+}
+
+fn normalize_ai_embeddings(
+    embeddings: AiEmbeddingSettings,
+    providers: &[AiProviderConfig],
+    active_provider_id: &str,
+) -> AiEmbeddingSettings {
+    let default_settings = AiEmbeddingSettings::default();
+    let mut provider_id = embeddings.provider_id.trim().to_string();
+    if provider_id == "default" || provider_id.is_empty() || !providers.iter().any(|provider| provider.provider == provider_id) {
+        provider_id = active_provider_id.to_string();
+    }
+    let mut models_by_provider = embeddings.models_by_provider;
+    let model = embeddings.model.trim();
+    let model = if model.is_empty() {
+        models_by_provider
+            .get(&provider_id)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(default_settings.model.as_str())
+            .to_string()
+    } else {
+        model.to_string()
+    };
+    models_by_provider.insert(provider_id.clone(), model.clone());
+    models_by_provider
+        .entry("openai".into())
+        .or_insert_with(|| "text-embedding-ada-002".into());
+    AiEmbeddingSettings {
+        enabled: embeddings.enabled,
+        provider_id,
+        model,
+        models_by_provider,
+        dimensions: embeddings.dimensions.filter(|value| *value > 0),
+        batch_size: normalize_embedding_batch_size(embeddings.batch_size),
     }
 }
 
@@ -492,6 +537,7 @@ fn preset_ai_settings(settings: AiSettingsPresetFile) -> AiSettings {
             semantic_filter: AiActionConfig::new(&provider_id, active_models.semantic_filter.trim()),
             compaction: AiActionConfig::new(&provider_id, active_models.compaction.trim()),
         },
+        embeddings: AiEmbeddingSettings::default(),
         max_context_chars: default_ai_max_context_chars(),
         max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
     }
@@ -509,6 +555,7 @@ fn legacy_ai_settings(settings: AiSettingsLegacy) -> AiSettings {
         active_provider_id: provider_id.clone(),
         providers: vec![provider],
         actions: same_model_ai_action_settings(&provider_id, &model),
+        embeddings: AiEmbeddingSettings::default(),
         max_context_chars: default_ai_max_context_chars(),
         max_concurrent_semantic_filters: default_max_concurrent_semantic_filters(),
     }

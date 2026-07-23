@@ -1,5 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const backendMocks = vi.hoisted(() => ({
+  loadWorkspace: vi.fn(),
+  reauthorizeWorkspace: vi.fn(),
+  updateMcpWorkspaces: vi.fn(() => Promise.resolve()),
+}));
+const debugLogMocks = vi.hoisted(() => ({ logDebugEvent: vi.fn() }));
+
+vi.mock('./backend', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./backend')>(),
+  loadWorkspace: backendMocks.loadWorkspace,
+  reauthorizeWorkspace: backendMocks.reauthorizeWorkspace,
+  updateMcpWorkspaces: backendMocks.updateMcpWorkspaces,
+}));
+
+vi.mock('./debugLog', () => debugLogMocks);
+
 vi.mock('./main', () => ({
   adoptSavedAsDocument: vi.fn(),
   backupDocumentKey: vi.fn(),
@@ -16,7 +32,7 @@ vi.mock('./main', () => ({
   updateCurrentDocumentSession: vi.fn(),
 }));
 
-import { creationTemplate } from './mainWorkspaceUtils';
+import { creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
 import { state } from './state';
 
 describe('creationTemplate', () => {
@@ -53,5 +69,96 @@ hvy_version: 0.1
 title: "Notes"
 ---
 `);
+  });
+});
+
+describe('workspace ordering', () => {
+  const entries = ['one', 'two', 'three'].map((path) => ({ path, displayName: path, status: 'ready' as const, error: null }));
+
+  it('moves an entry before a target', () => {
+    expect(reorderedWorkspaceEntries(entries, 'three', 'one', true).map((entry) => entry.path)).toEqual(['three', 'one', 'two']);
+  });
+
+  it('moves an entry after a target', () => {
+    expect(reorderedWorkspaceEntries(entries, 'one', 'two', false).map((entry) => entry.path)).toEqual(['two', 'one', 'three']);
+  });
+});
+
+describe('workspace sidebar lifecycle', () => {
+  it('uses the folder name before a manifest is available', () => {
+    expect(workspaceDisplayNameFromPath('/Users/example/OneDrive/HVY Work/')).toBe('HVY Work');
+    expect(workspaceDisplayNameFromPath('C:\\Users\\example\\HVY Work')).toBe('HVY Work');
+  });
+
+  it('keeps a failed workspace as an error entry and excludes it from ready workspaces', async () => {
+    state.workspaces = [];
+    state.workspaceEntries = [];
+    backendMocks.loadWorkspace.mockRejectedValueOnce(new Error('Operation not permitted'));
+
+    await loadWorkspaceEntry('/OneDrive/HVY Work');
+
+    expect(state.workspaces).toEqual([]);
+    expect(state.workspaceEntries).toEqual([{
+      path: '/OneDrive/HVY Work',
+      displayName: 'HVY Work',
+      status: 'error',
+      error: 'Operation not permitted',
+    }]);
+    expect(debugLogMocks.logDebugEvent).toHaveBeenCalledWith('load', 'workspace:loadError', expect.objectContaining({
+      path: '/OneDrive/HVY Work',
+      errorMessage: 'Operation not permitted',
+      errorType: 'Error',
+    }));
+  });
+
+  it('retries an error entry and hydrates it in place', async () => {
+    state.workspaces = [];
+    state.workspaceEntries = [{
+      path: '/OneDrive/HVY Work',
+      displayName: 'HVY Work',
+      status: 'error',
+      error: 'Operation not permitted',
+    }];
+    backendMocks.loadWorkspace.mockResolvedValueOnce({
+      path: '/OneDrive/HVY Work',
+      manifest: { schemaVersion: 1, name: 'Work', createdAt: '', updatedAt: '' },
+      files: [],
+    });
+
+    await loadWorkspaceEntry('/OneDrive/HVY Work');
+
+    expect(state.workspaces).toHaveLength(1);
+    expect(state.workspaceEntries).toEqual([{
+      path: '/OneDrive/HVY Work',
+      displayName: 'Work',
+      status: 'ready',
+      error: null,
+    }]);
+  });
+
+  it('uses the macOS permission picker when retrying an operation-not-permitted error', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Macintosh' });
+    state.workspaces = [];
+    state.workspaceEntries = [{
+      path: '/OneDrive/HVY Work',
+      displayName: 'HVY Work',
+      status: 'error',
+      error: 'Operation not permitted (os error 1)',
+    }];
+    backendMocks.reauthorizeWorkspace.mockResolvedValueOnce({
+      path: '/OneDrive/HVY Work',
+      manifest: { schemaVersion: 1, name: 'Work', createdAt: '', updatedAt: '' },
+      files: [],
+    });
+
+    await retryWorkspaceEntry('/OneDrive/HVY Work');
+
+    expect(backendMocks.reauthorizeWorkspace).toHaveBeenCalledWith('/OneDrive/HVY Work');
+    expect(state.workspaceEntries[0]?.status).toBe('ready');
+    expect(debugLogMocks.logDebugEvent).toHaveBeenCalledWith('load', 'workspace:loadStart', expect.objectContaining({
+      path: '/OneDrive/HVY Work',
+      source: 'macOSPermissionPicker',
+    }));
+    vi.unstubAllGlobals();
   });
 });

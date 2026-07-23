@@ -80,6 +80,43 @@
     }
 
     #[test]
+    fn workspace_and_folder_ai_access_hide_descendant_files() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("public")).unwrap();
+        fs::create_dir(dir.path().join("private")).unwrap();
+        let public_path = dir.path().join("public").join("visible.hvy");
+        let private_path = dir.path().join("private").join("secret.hvy");
+        fs::write(&public_path, "visible").unwrap();
+        fs::write(&private_path, "secret").unwrap();
+        initialize_workspace(dir.path()).unwrap();
+
+        update_workspace_folder_ai_access_at(
+            dir.path(),
+            &dir.path().join("private"),
+            WorkspaceFolderAiAccessUpdate {
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        let loaded = load_workspace_from_path(dir.path()).unwrap();
+        let private_folder_hidden = loaded.files.iter().any(|node| {
+            matches!(node, WorkspaceTreeNode::Folder { name, hidden_from_ai: true, .. } if name == "private")
+        });
+        assert!(private_folder_hidden);
+        assert!(!read_document_at(&public_path).unwrap().hidden_from_ai);
+        assert!(read_document_at(&private_path).unwrap().hidden_from_ai);
+
+        update_workspace_ai_access_at(
+            dir.path(),
+            WorkspaceAiAccessUpdate {
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        assert!(read_document_at(&public_path).unwrap().hidden_from_ai);
+    }
+
+    #[test]
     fn import_source_extension_accepts_pdf() {
         assert_eq!(import_source_extension(Path::new("source.pdf")), Some(".pdf".into()));
     }
@@ -232,6 +269,8 @@
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
             locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
             hidden_from_ai_files: Vec::new(),
         };
         write_json_atomically(&dir.path().join(LEGACY_WORKSPACE_MANIFEST), &manifest).unwrap();
@@ -268,6 +307,8 @@
             template_visibility: WorkspaceTemplateVisibility::default(),
             archived_files: Vec::new(),
             locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
             hidden_from_ai_files: Vec::new(),
         };
         let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
@@ -376,6 +417,7 @@
                 semantic_filter: AiActionConfig::new(" openai-compatible ", " semantic "),
                 compaction: AiActionConfig::new(" openai-compatible ", " compact "),
             },
+            embeddings: AiEmbeddingSettings::default(),
             max_context_chars: 0,
             max_concurrent_semantic_filters: 0,
         })
@@ -603,17 +645,24 @@ model = "gpt-5.4"
         assert_eq!(
             names,
             vec![
-                "workspace.list",
-                "workspace.tree",
-                "workspace.search",
-                "workspace.create",
-                "workspace.archive",
-                "document.create",
-                "document.archive",
-                "hvy.guidance",
-                "document.cli_based_editor",
+                "workspace_list",
+                "workspace_tree",
+                "workspace_search",
+                "workspace_create",
+                "workspace_archive",
+                "document_create",
+                "document_archive",
+                "hvy_guidance",
+                "document_cli_based_editor",
             ]
         );
+        assert!(names
+            .iter()
+            .all(|name| !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')));
         assert!(tools[2]
             .get("description")
             .and_then(|description| description.as_str())
@@ -778,7 +827,7 @@ model = "gpt-5.4"
         .to_string();
         assert!(
             error.contains(
-                "document.cli_based_editor can only run read commands for locked or archived files."
+                "document_cli_based_editor can only run read commands for locked or archived files."
             )
         );
         assert_eq!(fs::read_to_string(&locked_path).unwrap(), original);
@@ -819,7 +868,7 @@ model = "gpt-5.4"
         .to_string();
         assert!(
             error.contains(
-                "document.cli_based_editor can only run read commands for locked or archived files."
+                "document_cli_based_editor can only run read commands for locked or archived files."
             )
         );
         assert_eq!(fs::read_to_string(&archived_path).unwrap(), original);
@@ -1021,13 +1070,13 @@ model = "gpt-5.4"
 
     #[test]
     fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
-        assert!(ensure_mcp_tool_allowed("workspace.search", "searchOnly").is_ok());
-        assert!(ensure_mcp_tool_allowed("hvy.guidance", "searchOnly").is_ok());
-        assert!(ensure_mcp_tool_allowed("document.cli_based_editor", "searchOnly").is_err());
-        assert!(ensure_mcp_tool_allowed("document.cli_based_editor", "hvyCliEdits").is_ok());
-        assert!(ensure_mcp_tool_allowed("document.create", "hvyCliEdits").is_err());
-        assert!(ensure_mcp_tool_allowed("document.archive", "createImportSave").is_ok());
-        assert!(ensure_mcp_tool_allowed("workspace.create", "createImportSave").is_ok());
+        assert!(ensure_mcp_tool_allowed("workspace_search", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("hvy_guidance", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "searchOnly").is_err());
+        assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "hvyCliEdits").is_ok());
+        assert!(ensure_mcp_tool_allowed("document_create", "hvyCliEdits").is_err());
+        assert!(ensure_mcp_tool_allowed("document_archive", "createImportSave").is_ok());
+        assert!(ensure_mcp_tool_allowed("workspace_create", "createImportSave").is_ok());
     }
 
     #[test]
@@ -1073,7 +1122,7 @@ model = "gpt-5.4"
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "workspace.search",
+                    "name": "workspace_search",
                     "arguments": {
                         "query": "James Hutchison"
                     }

@@ -1,10 +1,13 @@
 import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup } from './backend';
 import { logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
+import { attachMatchingSidecarEmbeddingIndex, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
 import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, profileHvySerializationCosts, serializeHvy, serializeMountedDocumentAsync, type VisualDocument } from './hvy';
 import { state } from './state';
-import { pdfFileName } from './mainUtilities';
+import { pdfFileName, savedVersionDocumentName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
-import { adoptSavedAsDocument, documentSessions, getTabStackIndex, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { activateWorkspaceChatDocument, adoptSavedAsDocument, documentSessions, getTabStackIndex, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
+import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -19,6 +22,10 @@ export async function saveCurrentDocument(): Promise<void> {
   const openDocument = state.document;
   const mounted = openDocument?.mounted;
   if (!openDocument || !mounted) return;
+  if (openDocument.virtual === 'versionHistory') {
+    openSaveAsDialog();
+    return;
+  }
   if (openDocument.isNew || !openDocument.path) {
     openSaveAsDialog();
     return;
@@ -35,6 +42,9 @@ export async function saveCurrentDocument(): Promise<void> {
       return;
     }
     const document = mounted.document;
+    if (openDocument.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+      await attachMatchingSidecarEmbeddingIndex(openDocument.path, document, state.aiSettings);
+    }
     await logSerializationCostProfile('save', openDocument.path, null, document);
     const bytes = await measureDebugAsync('perf', 'save:serializeMountedDocument', { path: openDocument.path }, () => serializeMountedDocumentAsync(mounted));
     const writeStartedAt = performance.now();
@@ -54,9 +64,13 @@ export async function saveCurrentDocument(): Promise<void> {
       }
     }
     markMountedDocumentSaved(mounted);
+    if (openDocument.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+      await deleteSidecarIfSavedDocumentContainsMatchingIndex(openDocument.path, new Uint8Array(bytes), state.aiSettings);
+    }
     openDocument.dirty = false;
     openDocument.recoveryBackupId = null;
     state.status = `Saved ${openDocument.name}`;
+    recordSuccessfulDocumentSave(openDocument.path, openDocument.name, document);
     updateCurrentDocumentSession(document);
     await refreshOpenWorkspaceForFile(openDocument.path);
     await refreshRecents();
@@ -75,8 +89,51 @@ export async function saveCurrentDocument(): Promise<void> {
   }
 }
 
+export async function openVersionHistory(): Promise<void> {
+  const document = state.document;
+  if (!document?.path || document.isNew || document.virtual === 'workspaceChat') return;
+  const historyPath = document.virtual === 'versionHistory' ? document.historySourcePath : document.path;
+  if (!historyPath) return;
+  await runBusy('Loading version history...', async () => {
+    state.savedDocumentVersions = await listSavedDocumentVersions(historyPath);
+    const reviewedVersionId = document.virtual === 'versionHistory' ? document.historyVersionId : null;
+    state.selectedSavedVersionId = state.savedDocumentVersions.some((version) => version.id === reviewedVersionId)
+      ? reviewedVersionId ?? null
+      : state.savedDocumentVersions[0]?.id ?? null;
+    state.versionHistoryDialogOpen = true;
+    state.status = state.savedDocumentVersions.length ? 'Loaded version history' : 'No saved versions available';
+    rerender({ preserveMountedDocument: true });
+  }, { preserveMountedDocument: true });
+}
+
+export async function openSavedVersionPreview(versionId: string): Promise<void> {
+  const document = state.document;
+  if (!document?.path) return;
+  const sourcePath = document.virtual === 'versionHistory' ? document.historySourcePath : document.path;
+  const sourceName = document.virtual === 'versionHistory' ? document.historySourceName : document.name;
+  if (!sourcePath || !sourceName) return;
+  await runBusy('Opening saved version...', async () => {
+    const version = state.savedDocumentVersions.find((candidate) => candidate.id === versionId);
+    const bytes = await materializeSavedDocumentVersion(sourcePath, versionId);
+    state.versionHistoryDialogOpen = false;
+    await openDocument({
+      path: `version-history:${encodeURIComponent(sourcePath)}:${versionId}`,
+      name: `${sourceName} — ${version ? new Date(version.createdAt).toLocaleString() : 'Saved version'}`,
+      extension: document.extension,
+      bytes,
+      locked: true,
+      hiddenFromAI: true,
+    }, {
+      readOnly: true,
+      hiddenFromAI: true,
+      historyPreview: { sourcePath, sourceName, versionId },
+    });
+    state.status = 'Reviewing saved version';
+  }, { preserveMountedDocument: true });
+}
+
 export function openSaveAsDialog(): void {
-  if (!state.document?.mounted || state.document.readOnly) return;
+  if (!state.document?.mounted || (state.document.readOnly && state.document.virtual !== 'versionHistory')) return;
   state.saveAsDialogOpen = true;
   state.saveAsKind = 'document';
   state.saveAsScope = state.workspaces.length > 0 ? 'workspace' : 'anywhere';
@@ -126,7 +183,7 @@ export async function saveBeforeExportPdf(): Promise<void> {
 
 export async function performSaveCurrentDocumentAs(): Promise<void> {
   if (!state.document?.mounted) return;
-  if (state.document.readOnly) {
+  if (state.document.readOnly && state.document.virtual !== 'versionHistory') {
     state.status = 'The HVY Galaxy guide is read-only';
     rerender();
     return;
@@ -137,9 +194,13 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
   const previousMode = state.document.mode;
   const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const document = getMountedDocument(state.document.mounted);
-  const file = await saveDocumentAsDialog({ suggestedName: state.document.name, bytes });
+  const suggestedName = state.document.virtual === 'versionHistory'
+    ? savedVersionDocumentName(state.document.historySourceName ?? state.document.name)
+    : state.document.name;
+  const file = await saveDocumentAsDialog({ suggestedName, bytes });
   if (!file) return;
   adoptSavedAsDocument(file, state.document.mounted, document, previousMode, previousPath, previousUseDocumentColors);
+  recordSuccessfulDocumentSave(file.path, file.name, document);
   state.selectedFilePath = file.path;
   state.status = `Saved ${file.name}`;
   await refreshOpenWorkspaceForFile(file.path);
@@ -151,6 +212,18 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
 
 export async function selectDocumentTab(path: string): Promise<void> {
   state.tabStackOpen = false;
+  if (state.document?.virtual === 'versionHistory' && state.document.path !== path) {
+    const previewPath = state.document.path;
+    state.document.mounted?.mount.destroy();
+    resetMountLifecycleState();
+    removeDocumentTabPath(previewPath);
+    state.document = null;
+  }
+  if (isWorkspaceChatDocumentPath(path) && state.workspaceChat.open && currentWorkspaceChatDocumentPath() === path) {
+    activateWorkspaceChatDocument();
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   if (state.document?.path === path) {
     rerender({ preserveMountedDocument: true });
     return;
@@ -196,6 +269,17 @@ export async function commitTabStack(): Promise<void> {
 }
 
 export async function closeDocumentTab(path: string): Promise<void> {
+  if (isWorkspaceChatDocumentPath(path) && state.workspaceChat.open && currentWorkspaceChatDocumentPath() === path) {
+    const wasActive = state.document?.path === path;
+    if (requestCloseWorkspaceChat()) {
+      removeDocumentTabPath(path);
+      if (wasActive) {
+        state.document = null;
+      }
+    }
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   if (state.document?.path === path) {
     await closeCurrentDocument();
     return;
@@ -248,6 +332,7 @@ export async function saveAndCloseDocument(): Promise<void> {
   await runBusy('Saving...', async () => {
     const bytes = Array.from(await serializeHvy(session.document));
     await saveDocumentFile({ path: session.path, bytes });
+    recordSuccessfulDocumentSave(session.path, session.name, session.document);
     documentSessions.delete(session.path);
     removeDocumentTabPath(session.path);
     workspaceFilterDocumentCache.delete(session.path);
