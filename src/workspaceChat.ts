@@ -101,7 +101,7 @@ export async function submitWorkspaceChat(onUpdate?: () => void): Promise<void> 
     state.workspaceChat.status = null;
     onUpdate?.();
     const context = buildWorkspaceChatContext(results, state.aiSettings.maxContextChars);
-    const output = await requestProxyCompletion({
+    const completionParams = {
       settings: {
         provider: 'openai',
         model: state.aiSettings.actions.chat.model,
@@ -115,7 +115,32 @@ export async function submitWorkspaceChat(onUpdate?: () => void): Promise<void> 
       maxContextChars: state.aiSettings.maxContextChars,
       client: window.HVY_CHAT_CLIENT ?? null,
       signal: abortController.signal,
-    });
+    } as const;
+    const draftOutput = await requestProxyCompletion(completionParams);
+    const sourceLinks = workspaceChatSourceLinks(results);
+    const invalidLinks = invalidWorkspaceCitationTargets(draftOutput, sourceLinks.map((source) => source.target));
+    let output = draftOutput;
+    if (invalidLinks.length > 0) {
+      state.workspaceChat.status = 'Correcting source links...';
+      onUpdate?.();
+      output = await requestProxyCompletion({
+        ...completionParams,
+        messages: [
+          ...completionParams.messages,
+          { id: crypto.randomUUID(), role: 'assistant', content: draftOutput },
+          {
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: buildWorkspaceCitationRepairPrompt(invalidLinks, sourceLinks.map((source) => source.link)),
+          },
+        ],
+        debugLabel: 'workspace-chat-link-repair',
+      });
+      const remainingInvalidLinks = invalidWorkspaceCitationTargets(output, sourceLinks.map((source) => source.target));
+      if (remainingInvalidLinks.length > 0) {
+        output = removeInvalidWorkspaceCitations(output, remainingInvalidLinks);
+      }
+    }
     state.workspaceChat.messages = [...state.workspaceChat.messages, chatMessage('assistant', output)];
     state.workspaceChat.status = null;
     onUpdate?.();
@@ -242,6 +267,53 @@ function uniqueSourceLinks(results: WorkspaceEmbeddingChunkResult[]): Array<{ pa
     });
   }
   return sources;
+}
+
+function workspaceChatSourceLinks(results: WorkspaceEmbeddingChunkResult[]): Array<{ target: string; link: string }> {
+  const links = new Map<string, string>();
+  for (const result of results) {
+    const documentTarget = workspaceDocumentTarget(result.documentPath);
+    const chunkTarget = workspaceLinkTarget(result);
+    links.set(documentTarget, markdownWorkspaceLink(result.documentTitle, documentTarget));
+    links.set(chunkTarget, markdownWorkspaceLink(result.documentTitle, chunkTarget));
+  }
+  return [...links].map(([target, link]) => ({
+    target: encodeMarkdownLinkTarget(target),
+    link,
+  }));
+}
+
+export function invalidWorkspaceCitationTargets(output: string, allowedTargets: string[]): string[] {
+  const allowed = new Set(allowedTargets);
+  const invalid = new Set<string>();
+  for (const match of output.matchAll(/\[[^\]\n]*\]\(([^)\n]+)\)/g)) {
+    const target = match[1].trim();
+    if (target.startsWith('/') && !allowed.has(target)) {
+      invalid.add(target);
+    }
+  }
+  return [...invalid];
+}
+
+export function removeInvalidWorkspaceCitations(output: string, invalidTargets: string[]): string {
+  const invalid = new Set(invalidTargets);
+  return output.replace(/\[([^\]\n]*)\]\(([^)\n]+)\)/g, (markdownLink, label: string, rawTarget: string) => (
+    invalid.has(rawTarget.trim()) ? label : markdownLink
+  ));
+}
+
+export function buildWorkspaceCitationRepairPrompt(invalidTargets: string[], sourceLinks: string[]): string {
+  return [
+    'Your draft contains workspace citation links that were not among the source links provided to you.',
+    '',
+    'Invalid link targets:',
+    ...invalidTargets.map((target) => `- ${target}`),
+    '',
+    'The source links you may choose from are:',
+    ...sourceLinks.map((link) => `- ${link}`),
+    '',
+    'Return the complete corrected answer. Preserve the answer content, but replace each invalid workspace citation with the appropriate source link above. Copy link targets exactly. Do not mention this correction.',
+  ].join('\n');
 }
 
 function markdownWorkspaceLink(label: string, target: string): string {
