@@ -654,6 +654,8 @@ model = "gpt-5.4"
                 "document_archive",
                 "hvy_guidance",
                 "document_cli_based_editor",
+                "search_hvy_document",
+                "apply_hvy_patch",
             ]
         );
         assert!(names
@@ -680,6 +682,14 @@ model = "gpt-5.4"
         assert_eq!(
             tools[8]["inputSchema"]["required"].as_array().unwrap()[0],
             serde_json::json!("path")
+        );
+        assert_eq!(
+            tools[9]["inputSchema"]["required"],
+            serde_json::json!(["path", "query"])
+        );
+        assert_eq!(
+            tools[10]["inputSchema"]["required"],
+            serde_json::json!(["path", "patch"])
         );
     }
 
@@ -872,6 +882,48 @@ model = "gpt-5.4"
             )
         );
         assert_eq!(fs::read_to_string(&archived_path).unwrap(), original);
+    }
+
+    #[test]
+    fn mcp_agent_tools_search_and_patch_a_document() {
+        let dir = tempdir().unwrap();
+        let document_path = dir.path().join("guide.hvy");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("hvy-guide.hvy"),
+            &document_path,
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Agent Tools")).unwrap();
+        let workspaces = vec![load_workspace_from_path(dir.path()).unwrap()];
+        let path = path_to_string(&document_path);
+
+        let search = mcp_search_hvy_document_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path.clone(),
+                "query": "AI assisted editing",
+                "limit": 2
+            }),
+        )
+        .unwrap();
+        assert_eq!(search["query"], "AI assisted editing");
+        assert_eq!(search["results"].as_array().unwrap().len(), 2);
+
+        let patch = mcp_apply_hvy_patch_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path,
+                "patch": "*** Begin Patch\n*** Update File: /body/welcome/text-0/text.txt\n@@\n-# HVY File Format\n+# HVY File Format MCP Test\n*** End Patch"
+            }),
+        )
+        .unwrap();
+        assert_eq!(patch["appliedFileCount"], 1);
+        assert_eq!(patch["failedFileCount"], 0);
+        assert!(fs::read_to_string(document_path)
+            .unwrap()
+            .contains("# HVY File Format MCP Test"));
     }
 
     #[test]
@@ -1072,8 +1124,11 @@ model = "gpt-5.4"
     fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
         assert!(ensure_mcp_tool_allowed("workspace_search", "searchOnly").is_ok());
         assert!(ensure_mcp_tool_allowed("hvy_guidance", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("search_hvy_document", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("apply_hvy_patch", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "hvyCliEdits").is_ok());
+        assert!(ensure_mcp_tool_allowed("apply_hvy_patch", "hvyCliEdits").is_ok());
         assert!(ensure_mcp_tool_allowed("document_create", "hvyCliEdits").is_err());
         assert!(ensure_mcp_tool_allowed("document_archive", "createImportSave").is_ok());
         assert!(ensure_mcp_tool_allowed("workspace_create", "createImportSave").is_ok());
