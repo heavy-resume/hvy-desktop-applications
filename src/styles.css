@@ -43,6 +43,10 @@ body,
   height: 100%;
 }
 
+html {
+  background: var(--hvy-bg, #f4f1eb);
+}
+
 body {
   margin: 0;
   min-width: 920px;

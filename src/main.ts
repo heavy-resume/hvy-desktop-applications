@@ -15,6 +15,8 @@ import { syncFileMenuState } from './mainWorkspaceUtils';
 import { documentStorageKey, normalizeAiMaxContextChars, normalizeDocumentMode, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
 import { currentWorkspaceChatDocumentName, currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath } from './workspaceChat';
 import { initializeDocumentHistory } from './documentHistory';
+import { recordDocumentNavigation } from './documentNavigationHistory';
+import { captureDocumentViewState, restoreDocumentViewState, type DocumentViewState } from './documentViewState';
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
 export { backupDocumentKey, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, workspaceDisplayNameFromPath, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, upsertWorkspace, sortWorkspaces, reorderedWorkspaceEntries, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed } from './mainWorkspaceUtils';
@@ -52,6 +54,7 @@ export interface DocumentSession {
   document: VisualDocument;
   chatState: ReturnType<MountedDocument['mount']['getChatState']> | null;
   scrollRatio: MountScrollRatio | null;
+  viewState: DocumentViewState | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
 }
@@ -349,6 +352,7 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     : options.isNew
     ? 'Created blank HVY document'
     : `Opened ${file.name}`;
+  recordDocumentNavigation(file.path);
   if (options.deferMount) {
     pendingMountDocument = document;
     pendingMountRecoveryState = recoveryState;
@@ -360,12 +364,13 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
   }
   measureDebug('load', 'openDocument:rerenderBeforeMount', { path: file.path }, () => rerender());
   await mountCurrentDocument(document);
-  restoreMountScrollRatio(mountRoot, viewSession?.scrollRatio ?? null);
   if (recoveryState && state.document?.mounted) {
     measureDebug('load', 'openDocument:applyRecoveryState', { path: file.path }, () => {
       applyMountedRecoveryState(state.document!.mounted!, recoveryState);
     });
   }
+  await restoreDocumentViewState(mountRoot, viewSession?.viewState ?? null);
+  restoreMountScrollRatio(mountRoot, viewSession?.scrollRatio ?? null);
   logDebugEvent('load', 'openDocument:complete', {
     path: file.path,
     durationMs: Math.round((performance.now() - loadStartedAt) * 10) / 10,
@@ -383,7 +388,7 @@ export async function openLaunchDocumentPath(path: string): Promise<void> {
 }
 export function preserveCurrentDocumentSession(): void {
   const openDocument = state.document;
-  if (!openDocument?.path || openDocument.readOnly) return;
+  if (!openDocument?.path) return;
   if (openDocument.virtual === 'workspaceChat') return;
   const document = openDocument.mounted?.document ?? pendingMountDocument;
   if (!document) return;
@@ -410,6 +415,7 @@ export function preserveCurrentDocumentSession(): void {
     document,
     chatState: openDocument.mounted?.mount.getChatState() ?? null,
     scrollRatio: scrollRatioValue,
+    viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
@@ -439,6 +445,7 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     document,
     chatState: openDocument.mounted?.mount.getChatState() ?? documentSessions.get(openDocument.path)?.chatState ?? null,
     scrollRatio: scrollRatioValue,
+    viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
   });
@@ -828,11 +835,16 @@ export function applyZoomSettings(): void {
   applyDocumentZoom();
 }
 export function applyAppZoom(): void {
+  const shell = document.querySelector<HTMLElement>('.app-shell');
   if (state.appZoom === 1) {
     document.body.style.removeProperty('zoom');
+    shell?.style.removeProperty('width');
+    shell?.style.removeProperty('height');
     return;
   }
   document.body.style.setProperty('zoom', String(state.appZoom));
+  shell?.style.setProperty('width', `${100 / state.appZoom}vw`);
+  shell?.style.setProperty('height', `${100 / state.appZoom}vh`);
 }
 export function applyDocumentZoom(): void {
   if (!mountRoot) return;

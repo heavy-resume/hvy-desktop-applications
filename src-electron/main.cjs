@@ -137,6 +137,7 @@ function createWindow() {
       sandbox: false,
     },
   });
+  window.webContents.setVisualZoomLevelLimits(1, 1);
   window.on('close', (event) => {
     if (appCloseAllowed) return;
     event.preventDefault();
@@ -149,6 +150,14 @@ function createWindow() {
     if (!nativeQuitRequested) {
       appCloseAllowed = false;
     }
+  });
+  window.on('swipe', (_event, direction) => {
+    if (direction === 'left') emitMenu('navigate-forward');
+    if (direction === 'right') emitMenu('navigate-back');
+  });
+  window.webContents.on('app-command', (_event, command) => {
+    if (command === 'browser-backward') emitMenu('navigate-back');
+    if (command === 'browser-forward') emitMenu('navigate-forward');
   });
   return window;
 }

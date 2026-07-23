@@ -36,6 +36,7 @@ async function smokeViewport(viewport) {
       page.getByText('Startup error').waitFor({ timeout: 10_000 }),
     ]);
     await assertAppShellFillsViewport(page, viewport, 'empty document state');
+    await assertWorkspaceZoomFillsViewport(page, viewport);
     await page.getByTitle('New HVY document').click();
     await page.locator('.document-tab-name', { hasText: 'Untitled.hvy' }).waitFor({ timeout: 10_000 });
     await page.locator('.dirty-indicator', { hasText: 'Unsaved' }).waitFor({ timeout: 10_000 });
@@ -112,6 +113,49 @@ async function smokeViewport(viewport) {
   } finally {
     await page.close();
   }
+}
+
+async function assertWorkspaceZoomFillsViewport(page, viewport) {
+  for (const appZoom of [0.5, 0.67, 0.8, 0.9, 1.1, 1.25, 1.5, 1.75, 2]) {
+    await page.evaluate((zoom) => {
+      localStorage.setItem('hvy-galaxy:zoom', JSON.stringify({ appZoom: zoom, documentZoom: 1 }));
+    }, appZoom);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('.app-shell').waitFor({ timeout: 10_000 });
+    const layout = await page.evaluate(() => {
+      const bounds = (selector) => {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) return null;
+        const rect = element.getBoundingClientRect();
+        return { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
+      };
+      return {
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        body: bounds('body'),
+        app: bounds('#app'),
+        shell: bounds('.app-shell'),
+        sidebar: bounds('.workspace-sidebar'),
+        documentShell: bounds('.document-shell'),
+        bodyStyle: document.body.getAttribute('style'),
+      };
+    });
+    const fillsViewport = (rect) => rect
+      && Math.abs(rect.top) <= 1
+      && Math.abs(rect.left) <= 1
+      && Math.abs(rect.right - layout.viewport.width) <= 1
+      && Math.abs(rect.bottom - layout.viewport.height) <= 1;
+    const fillsViewportHeight = (rect) => rect
+      && Math.abs(rect.top) <= 1
+      && Math.abs(rect.bottom - layout.viewport.height) <= 1;
+    if (!fillsViewport(layout.shell) || !fillsViewportHeight(layout.sidebar) || !fillsViewportHeight(layout.documentShell)) {
+      throw new Error(`Workspace zoom ${appZoom} does not fill ${viewport.width}x${viewport.height}: ${JSON.stringify(layout)}`);
+    }
+  }
+  await page.evaluate(() => {
+    localStorage.setItem('hvy-galaxy:zoom', JSON.stringify({ appZoom: 1, documentZoom: 1 }));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.locator('.app-shell').waitFor({ timeout: 10_000 });
 }
 
 async function assertAppShellFillsViewport(page, viewport, stateName) {

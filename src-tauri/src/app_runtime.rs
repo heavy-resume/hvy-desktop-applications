@@ -11,6 +11,8 @@ pub fn run() {
         .setup(|app| {
             set_native_process_name();
             install_camera_permission_handler(app.handle());
+            #[cfg(target_os = "macos")]
+            macos_three_finger_swipe::install(app.handle().clone());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {

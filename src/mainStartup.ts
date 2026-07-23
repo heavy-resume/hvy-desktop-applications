@@ -7,6 +7,7 @@ import { state } from './state';
 import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
+import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
 
 let findShortcutBound = false;
 
@@ -24,6 +25,8 @@ export async function boot(): Promise<void> {
     setMountRoot(render(state, handlers));
     applyZoomSettings();
     bindFindShortcut();
+    bindDocumentNavigationInputs();
+    bindNativeZoomGestureSuppression();
     await refreshRecents();
     await refreshArchivedWorkspaces();
     state.appSettings = await loadAppSettings();
@@ -72,6 +75,8 @@ export async function boot(): Promise<void> {
       if (event === 'zoom-document-reset') handlers.resetDocumentZoom();
       if (event === 'recover-backup') void openRecoveryDialog();
       if (event === 'version-history') handlers.openVersionHistory();
+      if (event === 'navigate-back') void navigateDocumentHistory('back');
+      if (event === 'navigate-forward') void navigateDocumentHistory('forward');
       if (event === 'app-close-requested') void handleAppCloseRequest();
       if (event === 'close-document') handlers.closeDocument();
       if (event === 'save') handlers.save();
@@ -108,6 +113,43 @@ export async function boot(): Promise<void> {
   } catch (error) {
     showStartupError(error);
   }
+}
+
+export async function navigateDocumentHistory(direction: DocumentNavigationDirection): Promise<void> {
+  const path = beginDocumentNavigation(direction);
+  if (!path) return;
+  try {
+    await selectDocumentTab(path);
+  } catch (error) {
+    cancelDocumentNavigation(direction);
+    showStartupError(error);
+  }
+}
+
+let documentNavigationInputsBound = false;
+
+export function bindDocumentNavigationInputs(): void {
+  if (documentNavigationInputsBound) return;
+  documentNavigationInputsBound = true;
+  window.addEventListener('auxclick', (event) => {
+    if (event.button !== 3 && event.button !== 4) return;
+    event.preventDefault();
+    void navigateDocumentHistory(event.button === 3 ? 'back' : 'forward');
+  });
+}
+
+let nativeZoomGestureSuppressionBound = false;
+
+export function bindNativeZoomGestureSuppression(): void {
+  if (nativeZoomGestureSuppressionBound) return;
+  nativeZoomGestureSuppressionBound = true;
+  const preventNativeZoom = (event: Event) => event.preventDefault();
+  window.addEventListener('gesturestart', preventNativeZoom, { passive: false });
+  window.addEventListener('gesturechange', preventNativeZoom, { passive: false });
+  window.addEventListener('gestureend', preventNativeZoom, { passive: false });
+  window.addEventListener('wheel', (event) => {
+    if (event.ctrlKey || event.metaKey) event.preventDefault();
+  }, { passive: false });
 }
 
 export async function copyCurrentDocumentAsRichText(): Promise<void> {
@@ -395,6 +437,7 @@ export async function createSessionFromHotReloadSnapshot(file: DocumentFile, sto
     document: await deserializeHvy(new Uint8Array(file.bytes), file.extension),
     chatState: null,
     scrollRatio: stored?.scrollRatio ?? null,
+    viewState: null,
     recoveryState: stored?.recoveryState ?? null,
     recoveryBackupId: null,
   };

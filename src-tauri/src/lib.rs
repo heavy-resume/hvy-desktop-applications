@@ -18,6 +18,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 
 mod mcp;
+#[cfg(target_os = "macos")]
+mod macos_three_finger_swipe;
 
 const WORKSPACE_MANIFEST: &str = ".hvyworkspace.json";
 const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
