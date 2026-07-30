@@ -470,6 +470,12 @@ struct AppSettings {
     #[serde(default)]
     image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
     #[serde(default)]
+    power_scripting_allowed_files: Vec<String>,
+    #[serde(default)]
+    power_script_acceptances: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    power_script_acceptance_scripts: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<PowerScriptAcceptanceEntry>>>,
+    #[serde(default)]
     debug_semantic_search: bool,
     #[serde(default = "default_debug_log_max_bytes")]
     debug_log_max_bytes: u64,
@@ -479,10 +485,19 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
+            power_scripting_allowed_files: Vec::new(),
+            power_script_acceptances: std::collections::BTreeMap::new(),
+            power_script_acceptance_scripts: std::collections::BTreeMap::new(),
             debug_semantic_search: false,
             debug_log_max_bytes: default_debug_log_max_bytes(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PowerScriptAcceptanceEntry {
+    id: String,
+    hash: String,
 }
 
 fn default_debug_log_max_bytes() -> u64 {

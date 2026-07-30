@@ -435,9 +435,54 @@ function normalizeEmbeddingBatchSize(value: unknown): number {
 export function canonicalAppSettings(settings: AppSettings): AppSettings {
   return {
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
+    powerScriptingAllowedFiles: normalizePowerScriptingAllowedFiles(settings.powerScriptingAllowedFiles),
+    powerScriptAcceptances: normalizePowerScriptAcceptances(settings.powerScriptAcceptances),
+    powerScriptAcceptanceScripts: normalizePowerScriptAcceptanceScripts(settings.powerScriptAcceptanceScripts),
     debugSemanticSearch: settings.debugSemanticSearch === true,
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings.debugLogMaxBytes),
   };
+}
+
+export function normalizePowerScriptAcceptanceScripts(
+  value: unknown,
+): Record<string, Record<string, Array<{ id: string; hash: string }>>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([path, acceptances]) => {
+    if (!acceptances || typeof acceptances !== 'object' || Array.isArray(acceptances)) return [path, {}];
+    const normalized = Object.fromEntries(Object.entries(acceptances).map(([fingerprint, scripts]) => [
+      fingerprint,
+      (Array.isArray(scripts) ? scripts : []).flatMap((script) => {
+        if (!script || typeof script !== 'object' || Array.isArray(script)) return [];
+        const record = script as Record<string, unknown>;
+        const id = typeof record.id === 'string' ? record.id.trim() : '';
+        const hash = typeof record.hash === 'string' ? record.hash.trim() : '';
+        return id && hash ? [{ id, hash }] : [];
+      }),
+    ]).filter(([, scripts]) => scripts.length > 0));
+    return [path.trim(), normalized];
+  }).filter(([path, acceptances]) => Boolean(path) && Object.keys(acceptances).length > 0));
+}
+
+export function normalizePowerScriptAcceptances(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .map(([path, fingerprints]) => [path.trim(), [...new Set(
+      (Array.isArray(fingerprints) ? fingerprints : [])
+        .filter((fingerprint): fingerprint is string => typeof fingerprint === 'string')
+        .map((fingerprint) => fingerprint.trim())
+        .filter(Boolean),
+    )].sort()] as const)
+    .filter(([path, fingerprints]) => Boolean(path) && fingerprints.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right)));
+}
+
+export function normalizePowerScriptingAllowedFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((path): path is string => typeof path === 'string')
+    .map((path) => path.trim())
+    .filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
 }
 
 export function normalizeDebugLogMaxBytes(value: unknown): number {

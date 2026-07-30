@@ -64,6 +64,7 @@ export async function boot(): Promise<void> {
       if (event === 'about') handlers.openAbout();
       if (event === 'debug-log') handlers.openDebugLog();
       if (event === 'app-settings') handlers.openAppSettings();
+      if (event === 'review-scripting') handlers.openScriptingReview();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
       if (event === 'colors') handlers.openColorTheme();

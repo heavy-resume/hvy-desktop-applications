@@ -11,6 +11,8 @@ import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapsh
 import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -66,6 +68,33 @@ export interface MountedDocument {
   document: VisualDocument;
 }
 
+export function powerScriptDescriptors(document: VisualDocument): Array<{ id: string; hash: string }> {
+  const scripts: Array<{ id: string; hash: string }> = [];
+  const visitBlocks = (blocks: VisualDocument['sections'][number]['blocks']): void => {
+    for (const block of blocks) {
+      if (block.schema.component === 'plugin' && block.schema.plugin === 'hvy.power-scripting') {
+        scripts.push({
+          id: block.schema.id,
+          hash: `sha256-${bytesToHex(sha256(new TextEncoder().encode(block.text)))}`,
+        });
+      }
+      visitBlocks(block.schema.containerBlocks ?? []);
+      visitBlocks(block.schema.componentListBlocks ?? []);
+      visitBlocks((block.schema.gridItems ?? []).map((item) => item.block));
+      visitBlocks(block.schema.expandableStubBlocks?.children ?? []);
+      visitBlocks(block.schema.expandableContentBlocks?.children ?? []);
+    }
+  };
+  const visitSections = (sections: VisualDocument['sections']): void => {
+    for (const section of sections) {
+      visitBlocks(section.blocks);
+      visitSections(section.children);
+    }
+  };
+  visitSections(document.sections);
+  return scripts;
+}
+
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
   onEmbeddingIndexPrepared?: () => void | Promise<void>;
@@ -76,6 +105,9 @@ export interface MountHvyDocumentOptions {
   imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
   chatContextProvider?: HvyChatContextProvider | null;
   initialChatState?: Parameters<HvyEmbedMount['setChatState']>[0];
+  powerScripts?: Parameters<HvyEmbedModule['mountHvy']>[0]['powerScripts'];
+  getPowerScriptAcceptance?: Parameters<HvyEmbedModule['mountHvy']>[0]['getPowerScriptAcceptance'];
+  onPowerScriptAcceptanceChanged?: Parameters<HvyEmbedModule['mountHvy']>[0]['onPowerScriptAcceptanceChanged'];
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -254,6 +286,9 @@ export async function mountHvyDocument(
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     editorClipboard: editorClipboardHost,
     storageKey: null,
+    powerScripts: options.powerScripts ?? 'prompt',
+    getPowerScriptAcceptance: options.getPowerScriptAcceptance,
+    onPowerScriptAcceptanceChanged: options.onPowerScriptAcceptanceChanged,
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });

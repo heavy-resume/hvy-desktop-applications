@@ -217,6 +217,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&save_as)
         .item(&save_to_workspace)
         .separator()
+        .item(&MenuItemBuilder::new("Review Scripting...").id("review-scripting").build(app)?)
+        .separator()
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()

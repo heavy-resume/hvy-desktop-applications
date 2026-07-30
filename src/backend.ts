@@ -339,6 +339,9 @@ export interface ImageAttachmentMaxDimensions {
 
 export interface AppSettings {
   imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
+  powerScriptingAllowedFiles: string[];
+  powerScriptAcceptances: Record<string, string[]>;
+  powerScriptAcceptanceScripts: Record<string, Record<string, Array<{ id: string; hash: string }>>>;
   debugSemanticSearch: boolean;
   debugLogMaxBytes: number;
 }
@@ -518,6 +521,9 @@ export function defaultAiSettings(): AiSettings {
 export function defaultAppSettings(): AppSettings {
   return {
     imageAttachmentMaxDimensions: { width: 1080, height: 1080 },
+    powerScriptingAllowedFiles: [],
+    powerScriptAcceptances: {},
+    powerScriptAcceptanceScripts: {},
     debugSemanticSearch: false,
     debugLogMaxBytes: 10 * 1024 * 1024,
   };

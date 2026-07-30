@@ -97,6 +97,10 @@ export interface UiHandlers {
   cancelAppSettings(settings?: AppSettings): void;
   discardAppSettingsChanges(): void;
   keepEditingAppSettings(): void;
+  openScriptingReview(): void;
+  closeScriptingReview(): void;
+  setWholeFilePowerScriptingAllowed(path: string, allowed: boolean): void;
+  revokePowerScriptAcceptance(path: string, fingerprint: string): void;
   openAiSettings(): void;
   selectAiProvider(providerId: string, settings: AiSettings): void;
   setDefaultAiProvider(settings: AiSettings): void;
@@ -440,6 +444,7 @@ export function renderModals(state: AppState): void {
     ${renderWorkspaceChatClosePrompt(state)}
     ${renderAppSettingsDialog(state)}
     ${renderAppSettingsDiscardDialog(state)}
+    ${renderScriptingReviewDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
@@ -568,6 +573,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.debug-log-dialog')) {
           handlers.closeDebugLog();
+          return;
+        }
+        if (backdrop.querySelector('.scripting-review-dialog')) {
+          handlers.closeScriptingReview();
           return;
         }
         if (backdrop.querySelector('.workspace-manager-dialog')) {
@@ -720,6 +729,17 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'about') handlers.openAbout();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
+    if (action === 'review-scripting') handlers.openScriptingReview();
+    if (action === 'close-scripting-review') handlers.closeScriptingReview();
+    if (action === 'allow-file-power-scripting' && target.dataset.path) {
+      handlers.setWholeFilePowerScriptingAllowed(target.dataset.path, true);
+    }
+    if (action === 'revoke-file-power-scripting' && target.dataset.path) {
+      handlers.setWholeFilePowerScriptingAllowed(target.dataset.path, false);
+    }
+    if (action === 'revoke-power-script' && target.dataset.path && target.dataset.fingerprint) {
+      handlers.revokePowerScriptAcceptance(target.dataset.path, target.dataset.fingerprint);
+    }
     if (action === 'cancel-app-settings') {
       const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
       handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form)) : undefined);
@@ -984,6 +1004,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.updateWorkspaceFilterQuery(target.value);
       const form = target.closest<HTMLFormElement>('form[data-form="workspace-filter"]');
       if (form) updateWorkspaceFilterSubmit(form);
+      return;
+    }
+    if (field === 'scripting-review-filter') {
+      const query = target.value.trim().toLocaleLowerCase();
+      target.closest('.scripting-review-dialog')
+        ?.querySelectorAll<HTMLElement>('.scripting-review-file')
+        .forEach((row) => {
+          row.hidden = Boolean(query) && !row.innerText.toLocaleLowerCase().includes(query);
+        });
       return;
     }
     if (field === 'embeddings-enabled') {
@@ -1356,6 +1385,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (root.querySelector('.debug-log-dialog')) {
       event.preventDefault();
       handlers.closeDebugLog();
+      return;
+    }
+    if (root.querySelector('.scripting-review-dialog')) {
+      event.preventDefault();
+      handlers.closeScriptingReview();
       return;
     }
     if (root.querySelector('.workspace-manager-dialog')) {
@@ -3854,6 +3888,79 @@ function formatDebugLogTime(value: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+function renderScriptingReviewDialog(state: AppState): string {
+  if (!state.scriptingReviewDialogOpen) return '';
+  const currentPath = state.document && !state.document.isNew ? state.document.path : null;
+  const paths = [...new Set([
+    ...(currentPath ? [currentPath] : []),
+    ...state.appSettings.powerScriptingAllowedFiles,
+    ...Object.keys(state.appSettings.powerScriptAcceptances),
+  ])].sort((left, right) => {
+    if (left === currentPath) return -1;
+    if (right === currentPath) return 1;
+    return left.localeCompare(right);
+  });
+  const files = paths.map((path) => {
+    const wholeFileAllowed = state.appSettings.powerScriptingAllowedFiles.includes(path);
+    const fingerprints = state.appSettings.powerScriptAcceptances[path] ?? [];
+    return `
+      <section class="scripting-review-file">
+        <div class="scripting-review-file-heading">
+          <div>
+            <strong>${escapeHtml(path.split(/[\\/]/).pop() || path)}${path === currentPath ? ' (current file)' : ''}</strong>
+            <div class="scripting-review-path">${escapeHtml(path)}</div>
+          </div>
+          <button
+            type="button"
+            data-action="${wholeFileAllowed ? 'revoke-file-power-scripting' : 'allow-file-power-scripting'}"
+            data-path="${escapeAttr(path)}"
+          >${wholeFileAllowed ? 'Revoke whole file' : 'Allow All'}</button>
+        </div>
+        ${wholeFileAllowed ? '<p class="dialog-note">Every power script in this file is allowed, including scripts added or changed later.</p>' : ''}
+        ${fingerprints.length > 0 ? `
+          <div class="scripting-review-fingerprints">
+            ${fingerprints.map((fingerprint) => {
+              const scripts = state.appSettings.powerScriptAcceptanceScripts[path]?.[fingerprint] ?? [];
+              return `
+              <div class="scripting-review-acceptance">
+                <div class="scripting-review-script-list">
+                  ${scripts.length > 0 ? scripts.map((script) => `
+                    <div class="scripting-review-script">
+                      <strong>${escapeHtml(script.id)}</strong>
+                      <code title="${escapeAttr(script.hash)}">${escapeHtml(script.hash)}</code>
+                    </div>`).join('') : `
+                    <div class="scripting-review-script">
+                      <strong>Legacy approval</strong>
+                      <code title="${escapeAttr(fingerprint)}">${escapeHtml(fingerprint)}</code>
+                    </div>`}
+                </div>
+                <button
+                  type="button"
+                  data-action="revoke-power-script"
+                  data-path="${escapeAttr(path)}"
+                  data-fingerprint="${escapeAttr(fingerprint)}"
+                >Revoke</button>
+              </div>`;
+            }).join('')}
+          </div>` : '<p class="dialog-note">No individual script approvals.</p>'}
+      </section>`;
+  }).join('');
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog scripting-review-dialog" role="dialog" aria-modal="true" aria-labelledby="scriptingReviewTitle">
+        <h2 id="scriptingReviewTitle">Review Power Scripting</h2>
+        <p class="dialog-note">Whole-file approval trusts future script changes. Individual approvals apply only to the accepted script fingerprint.</p>
+        <input type="search" data-field="scripting-review-filter" placeholder="Filter by file or script hash" autocomplete="off">
+        <div class="scripting-review-files">
+          ${files || '<p class="dialog-note">No power scripting approvals have been saved.</p>'}
+        </div>
+        <div class="dialog-actions">
+          <button type="button" data-action="close-scripting-review">Done</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function renderAppSettingsDialog(state: AppState): string {
   if (!state.appSettingsDialogOpen) {
     return '';
@@ -4933,12 +5040,24 @@ function parseAppSettings(value: string): AppSettings {
     const parsed = JSON.parse(value) as Partial<AppSettings>;
     return {
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
+      powerScriptingAllowedFiles: Array.isArray(parsed.powerScriptingAllowedFiles)
+        ? parsed.powerScriptingAllowedFiles.filter((path): path is string => typeof path === 'string')
+        : [],
+      powerScriptAcceptances: parsed.powerScriptAcceptances && typeof parsed.powerScriptAcceptances === 'object'
+        ? parsed.powerScriptAcceptances
+        : {},
+      powerScriptAcceptanceScripts: parsed.powerScriptAcceptanceScripts && typeof parsed.powerScriptAcceptanceScripts === 'object'
+        ? parsed.powerScriptAcceptanceScripts
+        : {},
       debugSemanticSearch: parsed.debugSemanticSearch === true,
       debugLogMaxBytes: normalizeDebugLogMaxBytes(parsed.debugLogMaxBytes),
     };
   } catch {
     return {
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(null),
+      powerScriptingAllowedFiles: [],
+      powerScriptAcceptances: {},
+      powerScriptAcceptanceScripts: {},
       debugSemanticSearch: false,
       debugLogMaxBytes: DEFAULT_DEBUG_LOG_MAX_BYTES,
     };

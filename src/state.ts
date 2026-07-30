@@ -88,6 +88,7 @@ export interface AppState {
   appSettingsDraft: AppSettings | null;
   appSettingsDialogInitialJson: string | null;
   appSettingsDiscardDialogOpen: boolean;
+  scriptingReviewDialogOpen: boolean;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -271,6 +272,7 @@ export const state: AppState = {
   appSettingsDraft: null,
   appSettingsDialogInitialJson: null,
   appSettingsDiscardDialogOpen: false,
+  scriptingReviewDialogOpen: false,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

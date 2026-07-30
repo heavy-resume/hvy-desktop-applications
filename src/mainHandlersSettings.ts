@@ -113,6 +113,48 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  openScriptingReview: () => {
+    state.scriptingReviewDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  closeScriptingReview: () => {
+    state.scriptingReviewDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  setWholeFilePowerScriptingAllowed: (path, allowed) => void runBusy('Updating power scripting approvals...', async () => {
+    const allowedFiles = new Set(state.appSettings.powerScriptingAllowedFiles);
+    if (allowed) allowedFiles.add(path);
+    else allowedFiles.delete(path);
+    state.appSettings = await saveAppSettings({
+      ...state.appSettings,
+      powerScriptingAllowedFiles: [...allowedFiles],
+    });
+    state.status = allowed ? 'Allowed power scripting for file' : 'Revoked whole-file power scripting';
+    rerender({ preserveMountedDocument: true });
+  }),
+  revokePowerScriptAcceptance: (path, fingerprint) => void runBusy('Revoking power script approval...', async () => {
+    const fingerprints = (state.appSettings.powerScriptAcceptances[path] ?? [])
+      .filter((candidate) => candidate !== fingerprint);
+    const powerScriptAcceptances = { ...state.appSettings.powerScriptAcceptances };
+    if (fingerprints.length > 0) powerScriptAcceptances[path] = fingerprints;
+    else delete powerScriptAcceptances[path];
+    const fileAcceptanceScripts = Object.fromEntries(
+      Object.entries(state.appSettings.powerScriptAcceptanceScripts[path] ?? {})
+        .filter(([candidate]) => candidate !== fingerprint),
+    );
+    const powerScriptAcceptanceScripts = { ...state.appSettings.powerScriptAcceptanceScripts };
+    if (Object.keys(fileAcceptanceScripts).length > 0) powerScriptAcceptanceScripts[path] = fileAcceptanceScripts;
+    else delete powerScriptAcceptanceScripts[path];
+    state.appSettings = await saveAppSettings({
+      ...state.appSettings,
+      powerScriptAcceptances,
+      powerScriptAcceptanceScripts,
+    });
+    state.status = 'Revoked power script approval';
+    rerender({ preserveMountedDocument: true });
+  }),
   openAbout: () => {
     closeUiBeforeAbout();
     state.aboutDialogOpen = true;

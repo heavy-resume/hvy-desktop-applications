@@ -1,9 +1,9 @@
 import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
-import { readDocumentFile, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
+import { readDocumentFile, saveAppSettings, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { getFileActionAvailability } from './fileActions';
-import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
+import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
 import { createHandlers } from './mainHandlers';
@@ -530,6 +530,9 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
   });
   mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
   const storedChatState = documentSessions.get(currentDocument.path)?.chatState ?? null;
+  const powerScripts = state.appSettings.powerScriptingAllowedFiles.includes(currentDocument.path)
+    ? 'enabled'
+    : 'prompt';
   const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
     storageKey: documentStorageKey(currentDocument.path || currentDocument.name),
     initialChatState: storedChatState,
@@ -537,6 +540,51 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     hiddenFromAI: currentDocument.hiddenFromAI,
     maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(state.appSettings.imageAttachmentMaxDimensions),
+    powerScripts,
+    getPowerScriptAcceptance: ({ fingerprint }) =>
+      (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint),
+    onPowerScriptAcceptanceChanged: ({ document: acceptedDocument, fingerprint, accepted }) => {
+      if (!accepted || (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint)) return;
+      const acceptedFingerprints = [...(state.appSettings.powerScriptAcceptances[path] ?? []), fingerprint];
+      const settings = {
+        ...state.appSettings,
+        powerScriptAcceptances: {
+          ...state.appSettings.powerScriptAcceptances,
+          [path]: acceptedFingerprints,
+        },
+        powerScriptAcceptanceScripts: {
+          ...state.appSettings.powerScriptAcceptanceScripts,
+          [path]: {
+            ...(state.appSettings.powerScriptAcceptanceScripts[path] ?? {}),
+            [fingerprint]: powerScriptDescriptors(acceptedDocument),
+          },
+        },
+      };
+      state.appSettings = settings;
+      void saveAppSettings(settings)
+        .then((savedSettings) => {
+          state.appSettings = savedSettings;
+          state.status = 'Remembered power scripting approval';
+          rerender({ preserveMountedDocument: true });
+        })
+        .catch((error: unknown) => {
+          state.appSettings = {
+            ...state.appSettings,
+            powerScriptAcceptances: {
+              ...state.appSettings.powerScriptAcceptances,
+              [path]: (state.appSettings.powerScriptAcceptances[path] ?? [])
+                .filter((candidate) => candidate !== fingerprint),
+            },
+            powerScriptAcceptanceScripts: {
+              ...state.appSettings.powerScriptAcceptanceScripts,
+              [path]: Object.fromEntries(Object.entries(state.appSettings.powerScriptAcceptanceScripts[path] ?? {})
+                .filter(([candidate]) => candidate !== fingerprint)),
+            },
+          };
+          state.error = error instanceof Error ? error.message : String(error);
+          rerender({ preserveMountedDocument: true });
+        });
+    },
     onEmbeddingIndexPrepared: currentDocument.extension === '.hvy' && !currentDocument.hiddenFromAI && state.aiSettings.embeddings.enabled
       ? async () => {
           const written = await measureDebugAsync(

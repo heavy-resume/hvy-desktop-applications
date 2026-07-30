@@ -232,6 +232,8 @@ function buildMenu() {
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
         { type: 'separator' },
+        menuItem('Review Scripting...', 'review-scripting'),
+        { type: 'separator' },
         menuItem('Export PDF...', 'export-pdf'),
         menuItem('Import Into Current...', 'import-current'),
         { type: 'separator' },
@@ -2004,6 +2006,9 @@ function defaultAppSettings() {
       width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
       height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
     },
+    powerScriptingAllowedFiles: [],
+    powerScriptAcceptances: {},
+    powerScriptAcceptanceScripts: {},
     debugSemanticSearch: false,
     debugLogMaxBytes: 10 * 1024 * 1024,
   };
@@ -2014,9 +2019,55 @@ function normalizeAppSettings(settings) {
     ...defaultAppSettings(),
     ...(settings || {}),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
+    powerScriptingAllowedFiles: normalizePowerScriptingAllowedFiles(settings?.powerScriptingAllowedFiles),
+    powerScriptAcceptances: normalizePowerScriptAcceptances(settings?.powerScriptAcceptances),
+    powerScriptAcceptanceScripts: normalizePowerScriptAcceptanceScripts(settings?.powerScriptAcceptanceScripts),
     debugSemanticSearch: settings?.debugSemanticSearch === true,
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings?.debugLogMaxBytes),
   };
+}
+
+function normalizePowerScriptAcceptanceScripts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([filePath, acceptances]) => String(filePath).trim() && acceptances && typeof acceptances === 'object' && !Array.isArray(acceptances))
+    .map(([filePath, acceptances]) => [
+      path.resolve(String(filePath).trim()),
+      Object.fromEntries(Object.entries(acceptances)
+        .map(([fingerprint, scripts]) => [
+          fingerprint,
+          (Array.isArray(scripts) ? scripts : [])
+            .filter((script) => script && typeof script.id === 'string' && script.id.trim() && typeof script.hash === 'string' && script.hash.trim())
+            .map((script) => ({ id: script.id.trim(), hash: script.hash.trim() })),
+        ])
+        .filter(([, scripts]) => scripts.length > 0)),
+    ])
+    .filter(([, acceptances]) => Object.keys(acceptances).length > 0));
+}
+
+function normalizePowerScriptAcceptances(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([filePath]) => String(filePath).trim())
+    .map(([filePath, fingerprints]) => [
+      path.resolve(String(filePath).trim()),
+      [...new Set((Array.isArray(fingerprints) ? fingerprints : [])
+        .filter((fingerprint) => typeof fingerprint === 'string')
+        .map((fingerprint) => fingerprint.trim())
+        .filter(Boolean))].sort(),
+    ])
+    .filter(([filePath, fingerprints]) => filePath && fingerprints.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function normalizePowerScriptingAllowedFiles(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((filePath) => typeof filePath === 'string')
+    .map((filePath) => filePath.trim())
+    .filter(Boolean)
+    .map((filePath) => path.resolve(filePath)))]
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function normalizeDebugLogMaxBytes(value) {

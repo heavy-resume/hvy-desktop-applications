@@ -1647,6 +1647,67 @@ button:disabled {
   padding: 18px;
 }
 
+.scripting-review-dialog {
+  width: min(860px, 100%);
+}
+
+.scripting-review-files,
+.scripting-review-fingerprints {
+  display: grid;
+  gap: 10px;
+}
+
+.scripting-review-files {
+  max-height: min(58vh, 620px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.scripting-review-file {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.scripting-review-file-heading,
+.scripting-review-acceptance {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scripting-review-file-heading > div {
+  min-width: 0;
+}
+
+.scripting-review-path {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--hvy-text-alt, #394744);
+  font-size: 12px;
+}
+
+.scripting-review-script-list {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+}
+
+.scripting-review-script {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.scripting-review-script code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 .field-group {
   display: grid;
   gap: 7px;

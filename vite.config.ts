@@ -35,6 +35,18 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/scripting/scripting.ts',
   },
   {
+    id: 'hvy.canvas',
+    key: 'canvas',
+    exportName: 'canvasPlugin',
+    modulePath: 'src/plugins/canvas/canvas.ts',
+  },
+  {
+    id: 'hvy.power-scripting',
+    key: 'powerScripting',
+    exportName: 'powerScriptingPlugin',
+    modulePath: 'src/plugins/power-scripting/power-scripting.ts',
+  },
+  {
     id: 'hvy.graph',
     key: 'graph',
     exportName: 'graphPlugin',

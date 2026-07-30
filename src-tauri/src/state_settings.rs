@@ -325,8 +325,32 @@ fn read_app_settings(path: &Path) -> AppResult<AppSettings> {
 }
 
 fn normalize_app_settings(settings: AppSettings) -> AppSettings {
+    let mut power_scripting_allowed_files: Vec<String> = settings.power_scripting_allowed_files
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+    power_scripting_allowed_files.sort();
+    power_scripting_allowed_files.dedup();
+    let power_script_acceptances = settings.power_script_acceptances
+        .into_iter()
+        .filter_map(|(path, fingerprints)| {
+            let path = path.trim().to_string();
+            let mut fingerprints: Vec<String> = fingerprints.into_iter()
+                .map(|fingerprint| fingerprint.trim().to_string())
+                .filter(|fingerprint| !fingerprint.is_empty())
+                .collect();
+            fingerprints.sort();
+            fingerprints.dedup();
+            if path.is_empty() || fingerprints.is_empty() { None } else { Some((path, fingerprints)) }
+        })
+        .collect();
+    let power_script_acceptance_scripts = settings.power_script_acceptance_scripts;
     AppSettings {
         image_attachment_max_dimensions: normalize_image_attachment_max_dimensions(settings.image_attachment_max_dimensions),
+        power_scripting_allowed_files,
+        power_script_acceptances,
+        power_script_acceptance_scripts,
         debug_semantic_search: settings.debug_semantic_search,
         debug_log_max_bytes: normalize_debug_log_max_bytes(settings.debug_log_max_bytes),
     }

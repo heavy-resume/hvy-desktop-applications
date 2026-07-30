@@ -12,6 +12,8 @@ declare module 'virtual:hvy-built-in-plugins' {
     form?: HvyPlugin;
     progressBar?: HvyPlugin;
     scripting?: HvyPlugin;
+    canvas?: HvyPlugin;
+    powerScripting?: HvyPlugin;
     graph?: HvyPlugin;
     qrCode?: HvyPlugin;
     video?: HvyPlugin;
