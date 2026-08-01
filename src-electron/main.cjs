@@ -233,6 +233,7 @@ function buildMenu() {
         menuItem('Save to Workspace...', 'save-to-workspace'),
         { type: 'separator' },
         menuItem('Review Scripting...', 'review-scripting'),
+        menuItem('Manage Plugins...', 'manage-plugins'),
         { type: 'separator' },
         menuItem('Export PDF...', 'export-pdf'),
         menuItem('Import Into Current...', 'import-current'),
@@ -473,6 +474,7 @@ async function handleCommand(command, args) {
     case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
     case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
+    case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return loadMcpSettings();
@@ -2011,6 +2013,8 @@ function defaultAppSettings() {
     powerScriptAcceptanceScripts: {},
     debugSemanticSearch: false,
     debugLogMaxBytes: 10 * 1024 * 1024,
+    pluginPolicies: {},
+    pluginAcceptances: {},
   };
 }
 
@@ -2024,7 +2028,27 @@ function normalizeAppSettings(settings) {
     powerScriptAcceptanceScripts: normalizePowerScriptAcceptanceScripts(settings?.powerScriptAcceptanceScripts),
     debugSemanticSearch: settings?.debugSemanticSearch === true,
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings?.debugLogMaxBytes),
+    pluginPolicies: normalizePluginPolicies(settings?.pluginPolicies),
+    pluginAcceptances: normalizePowerScriptAcceptances(settings?.pluginAcceptances),
   };
+}
+
+function normalizePluginPolicies(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key, policy]) => String(key).trim() && ['disabled', 'enabled', 'conditional'].includes(policy)));
+}
+
+function loadInstalledPluginPackages() {
+  const directory = dataPath('plugins');
+  fs.mkdirSync(directory, { recursive: true });
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.hvy.plugin'))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => {
+      const pluginPath = path.join(directory, entry.name);
+      return { name: entry.name, path: pluginPath, bytes: [...fs.readFileSync(pluginPath)] };
+    });
 }
 
 function normalizePowerScriptAcceptanceScripts(value) {

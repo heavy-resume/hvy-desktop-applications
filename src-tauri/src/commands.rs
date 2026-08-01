@@ -60,6 +60,36 @@ fn save_app_settings(app: AppHandle, settings: AppSettings) -> AppResult<AppSett
     Ok(settings)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledPluginPackageFile {
+    name: String,
+    path: String,
+    bytes: Vec<u8>,
+}
+
+#[tauri::command]
+fn load_installed_plugin_packages(app: AppHandle) -> AppResult<Vec<InstalledPluginPackageFile>> {
+    let directory = app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("plugins");
+    fs::create_dir_all(&directory)?;
+    let mut entries = fs::read_dir(&directory)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".hvy.plugin"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    entries.into_iter().map(|entry| {
+        let path = entry.path();
+        Ok(InstalledPluginPackageFile {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: path_to_string(&path),
+            bytes: fs::read(path)?,
+        })
+    }).collect()
+}
+
 #[tauri::command]
 fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
     let resource_path = app

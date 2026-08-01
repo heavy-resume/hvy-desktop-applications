@@ -1,4 +1,4 @@
-import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './backend';
+import { openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
 import { createDesktopEmbeddingProvider } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
@@ -11,6 +11,7 @@ import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapsh
 import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
+import { enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import type {
@@ -270,12 +271,40 @@ export async function mountHvyDocument(
     return mountRawHvyDocument(root, document, options);
   }
   const embedMode = mode === 'advanced' ? 'editor' : mode;
+  const documentPath = state.document?.path ?? '';
+  const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
+  const plugins = [
+    ...builtInPlugins,
+    ...downloadedPlugins.filter((plugin) => !builtInPlugins.some((builtIn) => builtIn.id === plugin.id)),
+  ];
   const mount = mountHvy({
     root,
     document,
     mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
-    plugins: builtInPlugins,
+    plugins,
+    pluginAuthorization: 'prompt',
+    getPluginAuthorization: (request) => (
+      (state.appSettings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(request))
+    ),
+    onPluginAuthorizationChanged: (request) => {
+      const key = pluginAcceptanceKey(request);
+      const current = state.appSettings.pluginAcceptances[documentPath] ?? [];
+      const next = request.accepted
+        ? [...new Set([...current, key])]
+        : current.filter((candidate) => candidate !== key);
+      const settings = {
+        ...state.appSettings,
+        pluginAcceptances: {
+          ...state.appSettings.pluginAcceptances,
+          [documentPath]: next,
+        },
+      };
+      state.appSettings = settings;
+      void saveAppSettings(settings).then((saved) => {
+        state.appSettings = saved;
+      });
+    },
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
     initialChatState: options.initialChatState ?? null,
     chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),

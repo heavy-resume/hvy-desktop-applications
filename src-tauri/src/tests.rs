@@ -440,6 +440,8 @@
         let settings = normalize_app_settings(AppSettings {
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions { width: 0, height: 20_000 },
             power_scripting_allowed_files: vec![" /tmp/trusted.hvy ".into(), "/tmp/trusted.hvy".into(), "".into()],
+            plugin_policies: std::collections::BTreeMap::new(),
+            plugin_acceptances: std::collections::BTreeMap::new(),
             power_script_acceptances: std::collections::BTreeMap::new(),
             power_script_acceptance_scripts: std::collections::BTreeMap::new(),
             debug_semantic_search: true,

@@ -1,5 +1,6 @@
 import { aiEmbeddingDefaultModel, aiEmbeddingProviderPreset, aiEmbeddingProviderPresets, aiEmbeddingProvidersForMode, aiProviderDefaultModel, aiProviderPreset, aiProviderPresets, type AiEmbeddingProviderMode } from './aiProviders';
 import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { getInstalledPlugins } from './pluginManager';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
@@ -610,7 +611,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         const appSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
         if (appSettingsForm) {
-          handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm)));
+          handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm), state.document?.path ?? ''));
           return;
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
@@ -742,7 +743,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (action === 'cancel-app-settings') {
       const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
-      handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form)) : undefined);
+      handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form), state.document?.path ?? '') : undefined);
     }
     if (action === 'discard-app-settings-changes') handlers.discardAppSettingsChanges();
     if (action === 'keep-editing-app-settings') handlers.keepEditingAppSettings();
@@ -1312,7 +1313,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (form.dataset.form === 'app-settings') {
       const data = new FormData(form);
-      handlers.saveAppSettings(readAppSettingsForm(data));
+      handlers.saveAppSettings(readAppSettingsForm(data, state.document?.path ?? ''));
     }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
@@ -1433,7 +1434,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       ?? root.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
     if (appSettingsForm) {
       event.preventDefault();
-      handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm)));
+      handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm), state.document?.path ?? ''));
       return;
     }
     if (root.querySelector('.workspace-filter-dialog')) {
@@ -3999,6 +4000,35 @@ function renderAppSettingsDialog(state: AppState): string {
           </label>
         </fieldset>
         <fieldset class="ai-action-config">
+          <legend>Downloaded plugins</legend>
+          <p class="dialog-note">Place <code>.hvy.plugin</code> packages in the application data <code>plugins</code> directory. Disabled packages are never imported.</p>
+          ${getInstalledPlugins().map((record) => {
+            if (!record.manifest) {
+              return `<div class="dialog-note"><strong>${escapeHtml(record.file.name)}</strong>: ${escapeHtml(record.error ?? 'Invalid package')}</div>`;
+            }
+            const policy = settings.pluginPolicies[record.key] ?? 'disabled';
+            const requiresPerFileApproval = record.manifest.authorization === 'required';
+            const currentPath = state.document?.path ?? '';
+            const acceptedForCurrentFile = Boolean(currentPath)
+              && (settings.pluginAcceptances[currentPath] ?? []).includes(record.key);
+            return `<label>
+              <span>${escapeHtml(record.manifest.displayName)} <small>${escapeHtml(record.manifest.id)} ${escapeHtml(record.manifest.version)}</small></span>
+              <small>${record.manifest.permissions.length > 0
+                ? `Requests: ${escapeHtml(record.manifest.permissions.join(', '))}`
+                : 'Requests no package permissions'}${requiresPerFileApproval ? '; package requires per-file approval' : ''}</small>
+              <select name="pluginPolicy:${escapeAttr(record.key)}">
+                <option value="disabled" ${policy === 'disabled' ? 'selected' : ''}>Disabled</option>
+                <option value="conditional" ${policy === 'conditional' ? 'selected' : ''}>Per-file approval</option>
+                <option value="enabled" ${policy === 'enabled' ? 'selected' : ''} ${requiresPerFileApproval ? 'disabled' : ''}>Enabled for all files</option>
+              </select>
+            </label>
+            ${currentPath ? `<label class="inline-checkbox">
+              <input name="pluginAccepted:${escapeAttr(record.key)}" type="checkbox" ${acceptedForCurrentFile ? 'checked' : ''}>
+              <span>Allow this exact version for the current file</span>
+            </label>` : ''}`;
+          }).join('') || '<p class="dialog-note">No downloaded plugins found.</p>'}
+        </fieldset>
+        <fieldset class="ai-action-config">
           <legend>Debug log</legend>
           <label class="inline-checkbox">
             <input name="debugSemanticSearch" type="checkbox" ${settings.debugSemanticSearch ? 'checked' : ''}>
@@ -5013,15 +5043,29 @@ function renderEmbeddingSettingsField(settings: AiSettings): string {
     </fieldset>`;
 }
 
-function readAppSettingsForm(data: FormData): AppSettings {
+function readAppSettingsForm(data: FormData, currentPath = ''): AppSettings {
+  const pluginPolicies = Object.fromEntries(
+    [...data.entries()]
+      .filter(([key, value]) => key.startsWith('pluginPolicy:') && ['disabled', 'enabled', 'conditional'].includes(String(value)))
+      .map(([key, value]) => [key.slice('pluginPolicy:'.length), String(value) as 'disabled' | 'enabled' | 'conditional'])
+  );
+  const parsedSettings = parseAppSettings(String(data.get('settingsJson') ?? ''));
+  const acceptedForCurrentFile = [...data.keys()]
+    .filter((key) => key.startsWith('pluginAccepted:'))
+    .map((key) => key.slice('pluginAccepted:'.length));
+  const pluginAcceptances = currentPath
+    ? { ...parsedSettings.pluginAcceptances, [currentPath]: acceptedForCurrentFile }
+    : parsedSettings.pluginAcceptances;
   return {
-    ...parseAppSettings(String(data.get('settingsJson') ?? '')),
+    ...parsedSettings,
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions({
       width: data.get('imageAttachmentMaxWidth'),
       height: data.get('imageAttachmentMaxHeight'),
     }),
     debugSemanticSearch: data.get('debugSemanticSearch') === 'on',
     debugLogMaxBytes: normalizeDebugLogMaxBytes(Number(data.get('debugLogMaxMegabytes')) * 1024 * 1024),
+    pluginPolicies,
+    pluginAcceptances,
   };
 }
 
@@ -5051,6 +5095,8 @@ function parseAppSettings(value: string): AppSettings {
         : {},
       debugSemanticSearch: parsed.debugSemanticSearch === true,
       debugLogMaxBytes: normalizeDebugLogMaxBytes(parsed.debugLogMaxBytes),
+      pluginPolicies: parsed.pluginPolicies && typeof parsed.pluginPolicies === 'object' ? parsed.pluginPolicies : {},
+      pluginAcceptances: parsed.pluginAcceptances && typeof parsed.pluginAcceptances === 'object' ? parsed.pluginAcceptances : {},
     };
   } catch {
     return {
@@ -5060,6 +5106,8 @@ function parseAppSettings(value: string): AppSettings {
       powerScriptAcceptanceScripts: {},
       debugSemanticSearch: false,
       debugLogMaxBytes: DEFAULT_DEBUG_LOG_MAX_BYTES,
+      pluginPolicies: {},
+      pluginAcceptances: {},
     };
   }
 }

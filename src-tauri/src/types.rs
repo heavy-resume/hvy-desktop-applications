@@ -479,6 +479,10 @@ struct AppSettings {
     debug_semantic_search: bool,
     #[serde(default = "default_debug_log_max_bytes")]
     debug_log_max_bytes: u64,
+    #[serde(default)]
+    plugin_policies: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    plugin_acceptances: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for AppSettings {
@@ -490,6 +494,8 @@ impl Default for AppSettings {
             power_script_acceptance_scripts: std::collections::BTreeMap::new(),
             debug_semantic_search: false,
             debug_log_max_bytes: default_debug_log_max_bytes(),
+            plugin_policies: std::collections::BTreeMap::new(),
+            plugin_acceptances: std::collections::BTreeMap::new(),
         }
     }
 }

@@ -344,6 +344,14 @@ export interface AppSettings {
   powerScriptAcceptanceScripts: Record<string, Record<string, Array<{ id: string; hash: string }>>>;
   debugSemanticSearch: boolean;
   debugLogMaxBytes: number;
+  pluginPolicies: Record<string, 'disabled' | 'enabled' | 'conditional'>;
+  pluginAcceptances: Record<string, string[]>;
+}
+
+export interface InstalledPluginPackageFile {
+  name: string;
+  path: string;
+  bytes: number[];
 }
 
 export function isTauriRuntime(): boolean {
@@ -447,6 +455,11 @@ export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
   return invokeDesktop('save_app_settings', { settings });
 }
 
+export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFile[]> {
+  if (!isTauriRuntime() && !isElectronRuntime()) return Promise.resolve([]);
+  return invokeDesktop('load_installed_plugin_packages');
+}
+
 export function loadMcpSettings(): Promise<McpSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpSettings());
@@ -526,6 +539,8 @@ export function defaultAppSettings(): AppSettings {
     powerScriptAcceptanceScripts: {},
     debugSemanticSearch: false,
     debugLogMaxBytes: 10 * 1024 * 1024,
+    pluginPolicies: {},
+    pluginAcceptances: {},
   };
 }
 

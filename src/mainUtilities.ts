@@ -440,6 +440,8 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
     powerScriptAcceptanceScripts: normalizePowerScriptAcceptanceScripts(settings.powerScriptAcceptanceScripts),
     debugSemanticSearch: settings.debugSemanticSearch === true,
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings.debugLogMaxBytes),
+    pluginPolicies: settings.pluginPolicies ?? {},
+    pluginAcceptances: settings.pluginAcceptances ?? {},
   };
 }
 

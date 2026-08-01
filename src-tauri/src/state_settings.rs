@@ -353,6 +353,12 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
         power_script_acceptance_scripts,
         debug_semantic_search: settings.debug_semantic_search,
         debug_log_max_bytes: normalize_debug_log_max_bytes(settings.debug_log_max_bytes),
+        plugin_policies: settings.plugin_policies.into_iter()
+            .filter(|(key, policy)| !key.trim().is_empty() && matches!(policy.as_str(), "disabled" | "enabled" | "conditional"))
+            .collect(),
+        plugin_acceptances: settings.plugin_acceptances.into_iter()
+            .filter(|(path, keys)| !path.trim().is_empty() && !keys.is_empty())
+            .collect(),
     }
 }
 

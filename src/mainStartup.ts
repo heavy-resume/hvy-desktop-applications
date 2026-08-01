@@ -8,6 +8,7 @@ import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFro
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
+import { refreshInstalledPlugins } from './pluginManager';
 
 let findShortcutBound = false;
 
@@ -30,6 +31,7 @@ export async function boot(): Promise<void> {
     await refreshRecents();
     await refreshArchivedWorkspaces();
     state.appSettings = await loadAppSettings();
+    await refreshInstalledPlugins();
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     state.aiSettings = await loadAiSettings();
     state.mcpSettings = await loadMcpSettings();
@@ -65,6 +67,7 @@ export async function boot(): Promise<void> {
       if (event === 'debug-log') handlers.openDebugLog();
       if (event === 'app-settings') handlers.openAppSettings();
       if (event === 'review-scripting') handlers.openScriptingReview();
+      if (event === 'manage-plugins') handlers.openAppSettings();
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
       if (event === 'colors') handlers.openColorTheme();

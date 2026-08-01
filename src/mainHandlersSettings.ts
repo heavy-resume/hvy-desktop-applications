@@ -5,6 +5,7 @@ import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './d
 import { state } from './state';
 import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
+import { refreshInstalledPlugins } from './pluginManager';
 
 interface DocumentColorTheme {
   name: string;
@@ -67,7 +68,8 @@ function editingDocumentColorTheme(): boolean {
 
 export function createSettingsHandlers(): Partial<UiHandlers> {
   return {
-  openAppSettings: () => {
+  openAppSettings: () => void runBusy('Scanning plugins...', async () => {
+    await refreshInstalledPlugins();
     closeUiBeforeAppSettings();
     state.appSettingsDraft = cloneAppSettings(state.appSettings);
     state.appSettingsDialogInitialJson = JSON.stringify(canonicalAppSettings(state.appSettingsDraft));
@@ -75,7 +77,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.appSettingsDialogOpen = true;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
-  },
+  }),
   saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {
     state.appSettings = await saveAppSettings(settings);
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
