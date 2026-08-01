@@ -460,6 +460,10 @@ export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFil
   return invokeDesktop('load_installed_plugin_packages');
 }
 
+export function installPluginPackage(name: string, bytes: number[]): Promise<void> {
+  return invokeDesktop('install_plugin_package', { name, bytes });
+}
+
 export function loadMcpSettings(): Promise<McpSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpSettings());

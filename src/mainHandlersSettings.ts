@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { installMcpClient, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
+import { installMcpClient, installPluginPackage, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { state } from './state';
@@ -67,15 +67,27 @@ function editingDocumentColorTheme(): boolean {
 }
 
 export function createSettingsHandlers(): Partial<UiHandlers> {
-  return {
-  openAppSettings: () => void runBusy('Scanning plugins...', async () => {
+  const openAppSettings = (mode: 'settings' | 'plugins') => void runBusy('Scanning plugins...', async () => {
     await refreshInstalledPlugins();
     closeUiBeforeAppSettings();
+    state.appSettingsDialogMode = mode;
     state.appSettingsDraft = cloneAppSettings(state.appSettings);
     state.appSettingsDialogInitialJson = JSON.stringify(canonicalAppSettings(state.appSettingsDraft));
     state.appSettingsDiscardDialogOpen = false;
     state.appSettingsDialogOpen = true;
     state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  });
+  return {
+  openAppSettings: () => openAppSettings('settings'),
+  openPluginManager: () => openAppSettings('plugins'),
+  installPluginFiles: (files, settings) => void runBusy('Installing plugins...', async () => {
+    state.appSettingsDraft = settings;
+    for (const file of files) {
+      await installPluginPackage(file.name, Array.from(new Uint8Array(await file.arrayBuffer())));
+    }
+    await refreshInstalledPlugins();
+    state.status = files.length === 1 ? `Installed ${files[0].name}` : `Installed ${files.length} plugins`;
     rerender({ preserveMountedDocument: true });
   }),
   saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {

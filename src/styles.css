@@ -1859,6 +1859,129 @@ button:disabled {
   width: min(640px, 100%);
 }
 
+.app-settings-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(688px, 100%);
+  overflow: hidden;
+}
+
+.app-settings-scroll {
+  display: grid;
+  min-height: 0;
+  gap: 14px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+}
+
+.app-settings-actions {
+  border-top: 1px solid var(--hvy-border, #c5cec8);
+  padding-top: 14px;
+}
+
+.app-settings-checkbox {
+  display: flex !important;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.app-settings-checkbox input {
+  margin: 0;
+}
+
+.dimension-input {
+  position: relative;
+  display: block;
+}
+
+.image-dimension-settings {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.image-dimension-settings > .dialog-note {
+  grid-column: 1 / -1;
+}
+
+.dimension-input input {
+  padding-right: 42px;
+}
+
+.dialog .dimension-input > span {
+  position: absolute;
+  top: 50%;
+  right: 24px;
+  color: var(--hvy-text-muted, #65716d);
+  font-size: inherit;
+  font-weight: 400;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.plugin-install-zone {
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.plugin-install-zone.is-drag-over {
+  border-color: var(--hvy-accent-1, #477d7c);
+  background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 10%, var(--hvy-surface, #fbfaf7));
+}
+
+.plugin-install-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.plugin-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.plugin-settings-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 210px);
+  align-items: center;
+  gap: 14px !important;
+  border-top: 1px solid color-mix(in srgb, var(--hvy-border, #c5cec8) 65%, transparent);
+  padding-top: 8px;
+}
+
+.plugin-settings-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.plugin-settings-row small {
+  color: var(--hvy-text-muted, #65716d);
+  overflow-wrap: anywhere;
+}
+
+.plugin-file-picker {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid var(--hvy-border-input, #b8c2bd);
+  border-radius: 6px;
+  background: var(--hvy-button-bg, #ffffff);
+  color: var(--hvy-text, #152223);
+  cursor: pointer;
+  padding: 7px 10px;
+}
+
+.dialog .plugin-file-picker > span {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: normal;
+}
+
+.plugin-file-picker input {
+  display: none;
+}
+
 .workspace-manager-dialog {
   width: min(760px, 100%);
 }

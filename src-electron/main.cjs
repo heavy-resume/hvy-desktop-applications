@@ -232,7 +232,7 @@ function buildMenu() {
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
         { type: 'separator' },
-        menuItem('Review Scripting...', 'review-scripting'),
+        menuItem('Power Scripting...', 'review-scripting'),
         menuItem('Manage Plugins...', 'manage-plugins'),
         { type: 'separator' },
         menuItem('Export PDF...', 'export-pdf'),
@@ -475,6 +475,7 @@ async function handleCommand(command, args) {
     case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
+    case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return loadMcpSettings();
@@ -2049,6 +2050,16 @@ function loadInstalledPluginPackages() {
       const pluginPath = path.join(directory, entry.name);
       return { name: entry.name, path: pluginPath, bytes: [...fs.readFileSync(pluginPath)] };
     });
+}
+
+function installPluginPackage(name, bytes) {
+  const fileName = path.basename(String(name || ''));
+  if (!fileName.endsWith('.hvy.plugin') || fileName !== name) {
+    throw new Error('Choose a .hvy.plugin package.');
+  }
+  const directory = dataPath('plugins');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, fileName), Buffer.from(bytes));
 }
 
 function normalizePowerScriptAcceptanceScripts(value) {

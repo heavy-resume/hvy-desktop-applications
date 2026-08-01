@@ -85,6 +85,7 @@ export interface AppState {
   exportPdfSavePromptOpen: boolean;
   exportedPdfPath: string | null;
   appSettingsDialogOpen: boolean;
+  appSettingsDialogMode: 'settings' | 'plugins';
   appSettingsDraft: AppSettings | null;
   appSettingsDialogInitialJson: string | null;
   appSettingsDiscardDialogOpen: boolean;
@@ -269,6 +270,7 @@ export const state: AppState = {
   exportPdfSavePromptOpen: false,
   exportedPdfPath: null,
   appSettingsDialogOpen: false,
+  appSettingsDialogMode: 'settings',
   appSettingsDraft: null,
   appSettingsDialogInitialJson: null,
   appSettingsDiscardDialogOpen: false,

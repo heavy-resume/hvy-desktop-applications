@@ -30,6 +30,7 @@ pub fn run() {
             save_ai_settings,
             save_app_settings,
             load_installed_plugin_packages,
+            install_plugin_package,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             mcp::load_mcp_server_status,
@@ -218,7 +219,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&save_as)
         .item(&save_to_workspace)
         .separator()
-        .item(&MenuItemBuilder::new("Review Scripting...").id("review-scripting").build(app)?)
+        .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
         .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)

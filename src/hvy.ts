@@ -273,9 +273,10 @@ export async function mountHvyDocument(
   const embedMode = mode === 'advanced' ? 'editor' : mode;
   const documentPath = state.document?.path ?? '';
   const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
+  const activeBuiltInPlugins = builtInPlugins.filter((plugin) => state.appSettings.pluginPolicies[plugin.id] !== 'disabled');
   const plugins = [
-    ...builtInPlugins,
-    ...downloadedPlugins.filter((plugin) => !builtInPlugins.some((builtIn) => builtIn.id === plugin.id)),
+    ...activeBuiltInPlugins,
+    ...downloadedPlugins.filter((plugin) => !activeBuiltInPlugins.some((builtIn) => builtIn.id === plugin.id)),
   ];
   const mount = mountHvy({
     root,

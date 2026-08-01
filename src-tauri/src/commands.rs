@@ -91,6 +91,22 @@ fn load_installed_plugin_packages(app: AppHandle) -> AppResult<Vec<InstalledPlug
 }
 
 #[tauri::command]
+fn install_plugin_package(app: AppHandle, name: String, bytes: Vec<u8>) -> AppResult<()> {
+    let file_name = Path::new(&name)
+        .file_name()
+        .ok_or_else(|| AppError::Message("Choose a .hvy.plugin package.".into()))?;
+    if !name.ends_with(".hvy.plugin") || file_name.to_string_lossy() != name {
+        return Err(AppError::Message("Choose a .hvy.plugin package.".into()));
+    }
+    let directory = app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("plugins");
+    fs::create_dir_all(&directory)?;
+    fs::write(directory.join(file_name), bytes)?;
+    Ok(())
+}
+
+#[tauri::command]
 fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
     let resource_path = app
         .path()

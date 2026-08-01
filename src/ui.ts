@@ -21,6 +21,7 @@ import {
 } from '../../heavy-file-format/src/editor/tag-editor';
 import { markdownToReaderHtml, normalizeMarkdownLists } from '../../heavy-file-format/src/markdown';
 import { deserializeDocumentBytes } from '../../heavy-file-format/src/serialization';
+import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import { isWorkspacePathTarget } from '../../heavy-file-format/src/workspace-links';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 
@@ -94,6 +95,8 @@ export interface UiHandlers {
   clearDebugLog(): void;
   saveDebugLogSettings(settings: AppSettings): void;
   openAppSettings(): void;
+  openPluginManager(): void;
+  installPluginFiles(files: File[], settings: AppSettings): void;
   saveAppSettings(settings: AppSettings): void;
   cancelAppSettings(settings?: AppSettings): void;
   discardAppSettingsChanges(): void;
@@ -944,7 +947,26 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'create-file') handlers.createFile();
     if (action === 'select-file' && target.dataset.path) handlers.selectFile(target.dataset.path);
   }, { signal });
+  root.addEventListener('change', (event) => {
+    const input = event.target instanceof HTMLInputElement && event.target.matches('input[data-plugin-file-picker]')
+      ? event.target
+      : null;
+    if (!input?.files?.length) return;
+    const form = input.closest<HTMLFormElement>('form[data-form="app-settings"]');
+    handlers.installPluginFiles(
+      Array.from(input.files),
+      readAppSettingsForm(new FormData(form!), state.document?.path ?? ''),
+    );
+    input.value = '';
+  }, { signal });
   root.addEventListener('dragover', (event) => {
+    const pluginDropZone = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-plugin-drop-zone]') : null;
+    if (pluginDropZone && hasDraggedFiles(event)) {
+      event.preventDefault();
+      event.dataTransfer!.dropEffect = 'copy';
+      pluginDropZone.classList.add('is-drag-over');
+      return;
+    }
     const dropTarget = workspaceDropTargetFromEvent(event);
     if (!dropTarget || (!hasDraggedFiles(event) && !hasDraggedWorkspaceFile(event))) return;
     event.preventDefault();
@@ -952,12 +974,28 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     dropTarget.element.classList.add('is-drag-over');
   }, { signal });
   root.addEventListener('dragleave', (event) => {
-    const dropTarget = workspaceDropTargetFromEvent(event);
+    const pluginDropZone = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-plugin-drop-zone]') : null;
     const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+    if (pluginDropZone && (!relatedTarget || !pluginDropZone.contains(relatedTarget))) {
+      pluginDropZone.classList.remove('is-drag-over');
+      return;
+    }
+    const dropTarget = workspaceDropTargetFromEvent(event);
     if (!dropTarget || (relatedTarget && dropTarget.element.contains(relatedTarget))) return;
     dropTarget.element.classList.remove('is-drag-over');
   }, { signal });
   root.addEventListener('drop', (event) => {
+    const pluginDropZone = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-plugin-drop-zone]') : null;
+    if (pluginDropZone && event.dataTransfer?.files.length) {
+      event.preventDefault();
+      pluginDropZone.classList.remove('is-drag-over');
+      const form = pluginDropZone.closest<HTMLFormElement>('form[data-form="app-settings"]');
+      handlers.installPluginFiles(
+        Array.from(event.dataTransfer.files),
+        readAppSettingsForm(new FormData(form!), state.document?.path ?? ''),
+      );
+      return;
+    }
     const dropTarget = workspaceDropTargetFromEvent(event);
     const workspacePath = dropTarget?.workspacePath;
     if (!dropTarget || !workspacePath || !event.dataTransfer) return;
@@ -3967,41 +4005,78 @@ function renderAppSettingsDialog(state: AppState): string {
     return '';
   }
   const settings = state.appSettingsDraft ?? state.appSettings;
+  const pluginManager = state.appSettingsDialogMode === 'plugins';
   const imageAttachmentMaxDimensions = normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions);
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="app-settings">
-        <h2>Settings</h2>
-        <p class="dialog-note">Configure application defaults used when a document does not set its own value.</p>
+      <form class="dialog app-settings-dialog" data-form="app-settings">
+        <h2>${pluginManager ? 'Manage Plugins' : 'Settings'}</h2>
+        <div class="app-settings-scroll">
+        <p class="dialog-note">${pluginManager
+          ? 'Configure downloaded plugin access.'
+          : 'Configure application defaults used when a document does not set its own value.'}</p>
         <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
-        <fieldset class="ai-action-config">
+        ${pluginManager ? '' : `<fieldset class="ai-action-config image-dimension-settings">
           <legend>Attached image defaults</legend>
+          <p class="dialog-note">Images are downscaled to reduce file size.</p>
           <label>
-            <span>Reduce width</span>
-            <input
-              name="imageAttachmentMaxWidth"
-              type="number"
-              min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
-              max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
-              step="1"
-              value="${escapeAttr(String(imageAttachmentMaxDimensions.width))}"
-            >
+            <span>Maximum width</span>
+            <span class="dimension-input">
+              <input
+                name="imageAttachmentMaxWidth"
+                type="number"
+                min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
+                max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
+                step="1"
+                value="${escapeAttr(String(imageAttachmentMaxDimensions.width))}"
+              >
+              <span aria-hidden="true">px</span>
+            </span>
           </label>
           <label>
-            <span>Reduce height</span>
-            <input
-              name="imageAttachmentMaxHeight"
-              type="number"
-              min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
-              max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
-              step="1"
-              value="${escapeAttr(String(imageAttachmentMaxDimensions.height))}"
-            >
+            <span>Maximum height</span>
+            <span class="dimension-input">
+              <input
+                name="imageAttachmentMaxHeight"
+                type="number"
+                min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
+                max="${MAX_IMAGE_ATTACHMENT_DIMENSION}"
+                step="1"
+                value="${escapeAttr(String(imageAttachmentMaxDimensions.height))}"
+              >
+              <span aria-hidden="true">px</span>
+            </span>
           </label>
-        </fieldset>
+        </fieldset>`}
         <fieldset class="ai-action-config">
-          <legend>Downloaded plugins</legend>
-          <p class="dialog-note">Place <code>.hvy.plugin</code> packages in the application data <code>plugins</code> directory. Disabled packages are never imported.</p>
+          <legend>Built-in plugins</legend>
+          <p class="dialog-note">These plugins are included with HVY Galaxy.</p>
+          <div class="plugin-settings-list">
+            ${builtInPlugins.map((plugin) => {
+              const enabled = settings.pluginPolicies[plugin.id] !== 'disabled';
+              return `<label class="plugin-settings-row">
+                <span>
+                  <strong>${escapeHtml(plugin.displayName)}</strong>
+                  <small>Built in · ${escapeHtml(plugin.id)} · ${escapeHtml(plugin.version)}</small>
+                </span>
+                <select name="pluginPolicy:${escapeAttr(plugin.id)}" aria-label="${escapeAttr(`${plugin.displayName} status`)}">
+                  <option value="enabled" ${enabled ? 'selected' : ''}>Enabled</option>
+                  <option value="disabled" ${enabled ? '' : 'selected'}>Disabled</option>
+                </select>
+              </label>`;
+            }).join('')}
+          </div>
+        </fieldset>
+        <fieldset class="ai-action-config plugin-install-zone" data-plugin-drop-zone>
+          <legend>Custom plugins</legend>
+          <div class="plugin-install-controls">
+            <p class="dialog-note">Choose a <code>.hvy.plugin</code> package or drag one here. Newly installed plugins remain disabled until you enable them.</p>
+            <label class="plugin-file-picker">
+              <input data-plugin-file-picker type="file" accept=".hvy.plugin" multiple>
+              <span>Add plugin…</span>
+            </label>
+          </div>
+          <div class="plugin-settings-list">
           ${getInstalledPlugins().map((record) => {
             if (!record.manifest) {
               return `<div class="dialog-note"><strong>${escapeHtml(record.file.name)}</strong>: ${escapeHtml(record.error ?? 'Invalid package')}</div>`;
@@ -4011,11 +4086,14 @@ function renderAppSettingsDialog(state: AppState): string {
             const currentPath = state.document?.path ?? '';
             const acceptedForCurrentFile = Boolean(currentPath)
               && (settings.pluginAcceptances[currentPath] ?? []).includes(record.key);
-            return `<label>
-              <span>${escapeHtml(record.manifest.displayName)} <small>${escapeHtml(record.manifest.id)} ${escapeHtml(record.manifest.version)}</small></span>
-              <small>${record.manifest.permissions.length > 0
-                ? `Requests: ${escapeHtml(record.manifest.permissions.join(', '))}`
-                : 'Requests no package permissions'}${requiresPerFileApproval ? '; package requires per-file approval' : ''}</small>
+            return `<label class="plugin-settings-row">
+              <span>
+                <strong>${escapeHtml(record.manifest.displayName)}</strong>
+                <small>Custom · ${escapeHtml(record.manifest.id)} · ${escapeHtml(record.manifest.version)}</small>
+                <small>${record.manifest.permissions.length > 0
+                  ? `Requests: ${escapeHtml(record.manifest.permissions.join(', '))}`
+                  : 'Requests no package permissions'}${requiresPerFileApproval ? '; package requires per-file approval' : ''}</small>
+              </span>
               <select name="pluginPolicy:${escapeAttr(record.key)}">
                 <option value="disabled" ${policy === 'disabled' ? 'selected' : ''}>Disabled</option>
                 <option value="conditional" ${policy === 'conditional' ? 'selected' : ''}>Per-file approval</option>
@@ -4026,11 +4104,12 @@ function renderAppSettingsDialog(state: AppState): string {
               <input name="pluginAccepted:${escapeAttr(record.key)}" type="checkbox" ${acceptedForCurrentFile ? 'checked' : ''}>
               <span>Allow this exact version for the current file</span>
             </label>` : ''}`;
-          }).join('') || '<p class="dialog-note">No downloaded plugins found.</p>'}
+          }).join('') || '<p class="dialog-note">No custom plugins installed.</p>'}
+          </div>
         </fieldset>
-        <fieldset class="ai-action-config">
+        ${pluginManager ? '' : `<fieldset class="ai-action-config">
           <legend>Debug log</legend>
-          <label class="inline-checkbox">
+          <label class="inline-checkbox app-settings-checkbox">
             <input name="debugSemanticSearch" type="checkbox" ${settings.debugSemanticSearch ? 'checked' : ''}>
             <span>Debug semantic search</span>
           </label>
@@ -4044,8 +4123,9 @@ function renderAppSettingsDialog(state: AppState): string {
               value="${escapeAttr(String(debugLogMaxMegabytes(settings.debugLogMaxBytes)))}"
             >
           </label>
-        </fieldset>
-        <div class="dialog-actions">
+        </fieldset>`}
+        </div>
+        <div class="dialog-actions app-settings-actions">
           <button type="button" data-action="cancel-app-settings">Cancel</button>
           <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
@@ -5044,26 +5124,52 @@ function renderEmbeddingSettingsField(settings: AiSettings): string {
 }
 
 function readAppSettingsForm(data: FormData, currentPath = ''): AppSettings {
-  const pluginPolicies = Object.fromEntries(
+  const parsedSettings = parseAppSettings(String(data.get('settingsJson') ?? ''));
+  const visiblePluginPolicies = Object.fromEntries(
     [...data.entries()]
       .filter(([key, value]) => key.startsWith('pluginPolicy:') && ['disabled', 'enabled', 'conditional'].includes(String(value)))
       .map(([key, value]) => [key.slice('pluginPolicy:'.length), String(value) as 'disabled' | 'enabled' | 'conditional'])
   );
-  const parsedSettings = parseAppSettings(String(data.get('settingsJson') ?? ''));
+  const pluginPolicies = { ...parsedSettings.pluginPolicies };
+  for (const [key, policy] of Object.entries(visiblePluginPolicies)) {
+    if (builtInPlugins.some((plugin) => plugin.id === key)
+      && policy === 'enabled'
+      && !(key in parsedSettings.pluginPolicies)) {
+      continue;
+    }
+    pluginPolicies[key] = policy;
+  }
+  const visiblePluginKeys = new Set(Object.keys(visiblePluginPolicies));
   const acceptedForCurrentFile = [...data.keys()]
     .filter((key) => key.startsWith('pluginAccepted:'))
     .map((key) => key.slice('pluginAccepted:'.length));
-  const pluginAcceptances = currentPath
-    ? { ...parsedSettings.pluginAcceptances, [currentPath]: acceptedForCurrentFile }
+  const existingAcceptances = parsedSettings.pluginAcceptances[currentPath] ?? [];
+  const nextCurrentAcceptances = [
+    ...existingAcceptances.filter((key) => !visiblePluginKeys.has(key)),
+    ...acceptedForCurrentFile,
+  ];
+  const pluginAcceptances = currentPath && visiblePluginKeys.size > 0
+    ? {
+      ...parsedSettings.pluginAcceptances,
+      ...(nextCurrentAcceptances.length > 0 || currentPath in parsedSettings.pluginAcceptances
+        ? { [currentPath]: nextCurrentAcceptances }
+        : {}),
+    }
     : parsedSettings.pluginAcceptances;
   return {
     ...parsedSettings,
-    imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions({
-      width: data.get('imageAttachmentMaxWidth'),
-      height: data.get('imageAttachmentMaxHeight'),
-    }),
-    debugSemanticSearch: data.get('debugSemanticSearch') === 'on',
-    debugLogMaxBytes: normalizeDebugLogMaxBytes(Number(data.get('debugLogMaxMegabytes')) * 1024 * 1024),
+    imageAttachmentMaxDimensions: data.has('imageAttachmentMaxWidth') || data.has('imageAttachmentMaxHeight')
+      ? normalizeImageAttachmentMaxDimensions({
+        width: data.get('imageAttachmentMaxWidth'),
+        height: data.get('imageAttachmentMaxHeight'),
+      })
+      : parsedSettings.imageAttachmentMaxDimensions,
+    debugSemanticSearch: data.has('debugSemanticSearch') || data.has('debugLogMaxMegabytes')
+      ? data.get('debugSemanticSearch') === 'on'
+      : parsedSettings.debugSemanticSearch,
+    debugLogMaxBytes: data.has('debugLogMaxMegabytes')
+      ? normalizeDebugLogMaxBytes(Number(data.get('debugLogMaxMegabytes')) * 1024 * 1024)
+      : parsedSettings.debugLogMaxBytes,
     pluginPolicies,
     pluginAcceptances,
   };
