@@ -210,6 +210,15 @@ async function assertModalPreservesDocumentMount(page, viewport) {
   });
   await page.getByTitle('New workspace').click();
   await page.locator('form[data-form="new-workspace"]').waitFor({ timeout: 10_000 });
+  const workspaceName = page.locator('input[name="workspaceName"]');
+  const createWorkspace = page.getByRole('button', { name: 'Create' });
+  if (await createWorkspace.isEnabled()) {
+    throw new Error('Create workspace button is enabled before a workspace name is entered.');
+  }
+  await workspaceName.fill('Workspace button smoke');
+  if (!(await createWorkspace.isEnabled())) {
+    throw new Error('Create workspace button did not enable after a workspace name was entered.');
+  }
   const preservation = await page.evaluate(() => {
     const mount = document.querySelector('#hvyMount');
     const fixture = document.querySelector('.hvy-smoke-scroll-fixture');

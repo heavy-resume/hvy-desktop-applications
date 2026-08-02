@@ -3287,7 +3287,7 @@ function renderNewWorkspaceDialog(state: AppState): string {
         ${managedActive ? `
           <label>
             <span>Name</span>
-            <input name="workspaceName" type="text" autocomplete="off" autofocus required>
+            <input name="workspaceName" type="text" autocomplete="off" autofocus required data-field="workspace-name">
           </label>
           <p class="dialog-note" data-role="workspace-name-note">Choose a unique name for a new app-managed workspace.</p>
         ` : ''}
