@@ -14,7 +14,7 @@ const builtInDefinitions = [
     id: 'hvy.db-table',
     key: 'dbTable',
     exportName: 'dbTablePlugin',
-    modulePath: 'src/plugins/db-table-plugin.ts',
+    modulePath: 'src/plugins/db-table/db-table-component.ts',
   },
   {
     id: 'hvy.form',

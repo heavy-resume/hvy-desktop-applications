@@ -887,11 +887,11 @@ async function mountRawHvyDocument(
     isDirty() {
       return dirty || textarea.value !== lastSavedText;
     },
-    undo() {
+    async undo() {
       textarea.focus();
       documentOwner().execCommand('undo');
     },
-    redo() {
+    async redo() {
       textarea.focus();
       documentOwner().execCommand('redo');
     },
@@ -1485,12 +1485,12 @@ export function applyMountedRecoveryState(mounted: MountedDocument, recoveryStat
   mounted.mount.applyRecoveryState?.(recoveryState);
 }
 
-export function undoMountedDocument(mounted: MountedDocument): void {
-  mounted.mount.undo();
+export function undoMountedDocument(mounted: MountedDocument): Promise<void> {
+  return mounted.mount.undo();
 }
 
-export function redoMountedDocument(mounted: MountedDocument): void {
-  mounted.mount.redo();
+export function redoMountedDocument(mounted: MountedDocument): Promise<void> {
+  return mounted.mount.redo();
 }
 
 export function getMountedDocument(mounted: MountedDocument): VisualDocument {

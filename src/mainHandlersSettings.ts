@@ -6,8 +6,9 @@ import { state } from './state';
 import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
-import { controlIntegrationBrowser, openIntegrationBrowser, runIntegrationStorageProbe } from './integrationBrowser';
+import { controlIntegrationBrowser, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
+import { applyInspectionPrivacyRules, createCustomPageIntegration, createIntegrationProfile, matchingInspectionPrivacyRules, saveIntegrationRegistry } from './integrationRegistry';
 
 interface DocumentColorTheme {
   name: string;
@@ -100,14 +101,237 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  requestAddIntegrationPage: () => {
+    state.addIntegrationPageDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelAddIntegrationPage: () => {
+    state.addIntegrationPageDialogOpen = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  addIntegrationPage: (name, url) => {
+    const integration = createCustomPageIntegration(name, url);
+    const profile = createIntegrationProfile(integration.profileProviderId, `${integration.name} profile`);
+    state.integrationRegistry = {
+      ...state.integrationRegistry,
+      integrations: [...state.integrationRegistry.integrations, integration],
+      profiles: [...state.integrationRegistry.profiles, profile],
+    };
+    state.selectedIntegrationId = integration.id;
+    state.selectedIntegrationProfileId = profile.id;
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.addIntegrationPageDialogOpen = false;
+    state.status = `Added ${integration.name}`;
+    rerender({ preserveMountedDocument: true });
+  },
+  selectIntegration: (integrationId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    if (!integration) throw new Error('Integration was not found.');
+    state.selectedIntegrationId = integration.id;
+    state.selectedIntegrationProfileId = state.integrationRegistry.profiles.find((profile) => profile.providerId === integration.profileProviderId)?.id ?? '';
+    rerender({ preserveMountedDocument: true });
+  },
+  selectIntegrationProfile: (profileId) => {
+    state.selectedIntegrationProfileId = profileId;
+    rerender({ preserveMountedDocument: true });
+  },
+  requestAddIntegrationProfile: () => {
+    state.addIntegrationProfileDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelAddIntegrationProfile: () => {
+    state.addIntegrationProfileDialogOpen = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  addIntegrationProfile: (name) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
+    if (!integration) throw new Error('Integration was not found.');
+    const profile = createIntegrationProfile(integration.profileProviderId, name);
+    state.integrationRegistry = { ...state.integrationRegistry, profiles: [...state.integrationRegistry.profiles, profile] };
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.selectedIntegrationProfileId = profile.id;
+    state.addIntegrationProfileDialogOpen = false;
+    state.status = `Added ${profile.name}`;
+    rerender({ preserveMountedDocument: true });
+  },
+  openIntegrationPage: (integrationId, pageId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!page) throw new Error('Integration page was not found.');
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!profile || profile.providerId !== integration?.profileProviderId) throw new Error('Choose an integration profile.');
+    if (page.id === 'gmail' || page.id === 'google-calendar') {
+      const destination = page.id === 'gmail' ? 'gmail' : 'calendar';
+      void runBusy(`Opening ${page.name}...`, async () => {
+        await openIntegrationBrowser(destination, profile.id, profile.browserStoreId);
+        state.integrationVaultStatus = await loadIntegrationVaultStatus();
+        state.status = `Opened ${page.name}`;
+      }, { preserveMountedDocument: true });
+      return;
+    }
+    void runBusy(`Opening ${page.name}...`, async () => {
+      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId);
+      state.integrationVaultStatus = await loadIntegrationVaultStatus();
+      state.status = `Opened ${page.name}`;
+    }, { preserveMountedDocument: true });
+  },
+  addActionForIntegrationPage: (integrationId, pageId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!page) throw new Error('Integration page was not found.');
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!profile || profile.providerId !== integration?.profileProviderId) throw new Error('Choose an integration profile.');
+    state.integrationActionDraftIntegrationId = integrationId;
+    state.integrationActionDraftPageId = pageId;
+    state.integrationActionExamples = [];
+    state.integrationActionExampleRules = [];
+    state.integrationActionAnchors = [];
+    state.integrationActionAnchorRules = [];
+    state.integrationActionSelectionKind = 'example';
+    state.integrationActionSelectionPending = true;
+    state.integrationActionBuilderStep = 'review';
+    state.integrationActionDraftName = '';
+    state.integrationActionDraftDescription = '';
+    state.integrationActionBuilderOpen = true;
+    state.integrationInspectionResult = null;
+    void runBusy(`Opening ${page.name} for action selection...`, async () => {
+      if (page.id === 'gmail' || page.id === 'google-calendar') {
+        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, true);
+      } else {
+        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, true);
+      }
+      state.status = `Select the ${page.name} content this action should use`;
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', profile.id));
+  },
+  closeIntegrationActionBuilder: () => {
+    if (state.integrationActionSelectionPending) {
+      void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    }
+    state.integrationActionSelectionPending = false;
+    state.integrationActionBuilderOpen = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelIntegrationActionSelection: () => {
+    void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    state.integrationActionSelectionPending = false;
+    state.status = 'Canceled page selection';
+    rerender({ preserveMountedDocument: true });
+  },
+  addAnotherIntegrationActionExample: () => {
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderStep = 'review';
+    state.integrationActionSelectionKind = 'example';
+    state.integrationActionSelectionPending = true;
+    void runBusy('Starting another selection...', async () => {
+      await controlIntegrationBrowser('inspect', state.selectedIntegrationProfileId);
+      state.status = 'Select another field or example in the open page';
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  addIntegrationActionAnchor: () => {
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderStep = 'review';
+    state.integrationActionSelectionKind = 'anchor';
+    state.integrationActionSelectionPending = true;
+    void runBusy('Starting anchor selection...', async () => {
+      await controlIntegrationBrowser('inspect-anchor', state.selectedIntegrationProfileId);
+      state.status = 'Select a stable label, container, or other anchor in the open page';
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  removeIntegrationActionSelection: (kind, index) => {
+    if (kind === 'anchor') {
+      state.integrationActionAnchors.splice(index, 1);
+      state.integrationActionAnchorRules.splice(index, 1);
+    } else {
+      state.integrationActionExamples.splice(index, 1);
+      state.integrationActionExampleRules.splice(index, 1);
+    }
+    const useAnchor = state.integrationActionAnchors.length > 0;
+    const nextItems = useAnchor ? state.integrationActionAnchors : state.integrationActionExamples;
+    const nextRules = useAnchor ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
+    state.integrationActionSelectionKind = useAnchor ? 'anchor' : 'example';
+    state.integrationInspectionResult = nextItems.at(-1) ?? null;
+    state.inspectionPrivacyRules = nextRules.at(-1) ? [...nextRules.at(-1)!] : [];
+    rerender({ preserveMountedDocument: true });
+  },
+  reviewIntegrationActionSelection: (kind, index) => {
+    const items = kind === 'anchor' ? state.integrationActionAnchors : state.integrationActionExamples;
+    const rules = kind === 'anchor' ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
+    state.integrationActionSelectionKind = kind;
+    state.integrationInspectionResult = items[index] ?? null;
+    state.inspectionPrivacyRules = [...(rules[index] ?? [])];
+    state.integrationActionBuilderStep = 'review';
+    rerender({ preserveMountedDocument: true });
+  },
+  continueIntegrationActionBuilder: () => {
+    state.integrationActionBuilderStep = 'instructions';
+    rerender({ preserveMountedDocument: true });
+  },
+  backIntegrationActionBuilder: () => {
+    state.integrationActionBuilderStep = state.integrationActionBuilderStep === 'confirm' ? 'instructions' : 'review';
+    rerender({ preserveMountedDocument: true });
+  },
+  reviewIntegrationActionRequest: (name, description) => {
+    state.integrationActionDraftName = name.trim();
+    state.integrationActionDraftDescription = description.trim();
+    state.integrationActionBuilderStep = 'confirm';
+    rerender({ preserveMountedDocument: true });
+  },
+  saveIntegrationActionDraft: () => {
+    const name = state.integrationActionDraftName;
+    const description = state.integrationActionDraftDescription;
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationActionDraftIntegrationId);
+    if (!integration || !state.integrationActionDraftPageId) throw new Error('Action integration was not found.');
+    integration.actions.push({
+      id: `action-${crypto.randomUUID()}`,
+      integrationId: integration.id,
+      name: name.trim(),
+      description: description.trim(),
+      pageIds: [state.integrationActionDraftPageId],
+      script: '',
+      resultSchema: {},
+      permissions: ['dom:read'],
+      version: 1,
+      status: 'draft',
+      examples: state.integrationActionExamples.map((example, index) => applyInspectionPrivacyRules(example, state.integrationActionExampleRules[index] ?? [])),
+      anchors: state.integrationActionAnchors.map((anchor, index) => applyInspectionPrivacyRules(anchor, state.integrationActionAnchorRules[index] ?? [])),
+    });
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.integrationActionBuilderOpen = false;
+    state.status = `Saved ${name.trim()} as an action draft`;
+    rerender({ preserveMountedDocument: true });
+  },
+  setInspectionPrivacyRule: (path, action, label) => {
+    const relatedPaths = new Set(matchingInspectionPrivacyRules(state.integrationInspectionResult, path, 'remove').map((rule) => rule.path));
+    state.inspectionPrivacyRules = state.inspectionPrivacyRules.filter((rule) => !relatedPaths.has(rule.path));
+    if (action !== 'keep') {
+      const matchingRules = matchingInspectionPrivacyRules(state.integrationInspectionResult, path, action, action === 'label' ? label || 'REDACTED' : undefined);
+      const matchingPaths = new Set(matchingRules.map((rule) => rule.path));
+      state.inspectionPrivacyRules = state.inspectionPrivacyRules.filter((rule) => !matchingPaths.has(rule.path));
+      state.inspectionPrivacyRules.push(...matchingRules);
+    }
+    if (state.integrationActionSelectionKind === 'anchor') state.integrationActionAnchorRules[state.integrationActionAnchorRules.length - 1] = [...state.inspectionPrivacyRules];
+    else state.integrationActionExampleRules[state.integrationActionExampleRules.length - 1] = [...state.inspectionPrivacyRules];
+  },
+  updateInspectionPrivacyLabel: (path, label) => {
+    const relatedPaths = new Set(matchingInspectionPrivacyRules(state.integrationInspectionResult, path, 'remove').map((rule) => rule.path));
+    state.inspectionPrivacyRules = state.inspectionPrivacyRules.filter((rule) => !relatedPaths.has(rule.path));
+    if (label.trim()) {
+      const matchingRules = matchingInspectionPrivacyRules(state.integrationInspectionResult, path, 'label', label.trim());
+      const matchingPaths = new Set(matchingRules.map((rule) => rule.path));
+      state.inspectionPrivacyRules = state.inspectionPrivacyRules.filter((rule) => !matchingPaths.has(rule.path));
+      state.inspectionPrivacyRules.push(...matchingRules);
+    }
+    if (state.integrationActionSelectionKind === 'anchor') state.integrationActionAnchorRules[state.integrationActionAnchorRules.length - 1] = [...state.inspectionPrivacyRules];
+    else state.integrationActionExampleRules[state.integrationActionExampleRules.length - 1] = [...state.inspectionPrivacyRules];
+  },
   openIntegration: (destination) => void runBusy(`Opening ${integrationDestinationLabel(destination)}...`, async () => {
     await openIntegrationBrowser(destination);
     state.integrationVaultStatus = await loadIntegrationVaultStatus();
     state.status = `Opened ${integrationDestinationLabel(destination)}`;
   }, { preserveMountedDocument: true }),
-  controlIntegrationBrowser: (command) => void runBusy(`${command === 'close' ? 'Closing' : 'Updating'} integration browser...`, async () => {
-    await controlIntegrationBrowser(command);
-    state.status = command === 'close' ? 'Closed integration browser' : 'Updated integration browser';
+  controlIntegrationBrowser: (command) => void runBusy(command === 'inspect' ? 'Starting action inspection...' : `${command === 'close' ? 'Closing' : 'Updating'} integration browser...`, async () => {
+    await controlIntegrationBrowser(command, state.selectedIntegrationProfileId);
+    state.status = command === 'inspect' ? 'Select content in the open integration page' : command === 'close' ? 'Closed integration browser' : 'Updated integration browser';
   }, { preserveMountedDocument: true }),
   probeIntegrationStorage: () => void runBusy('Testing integration cookie storage...', async () => {
     state.integrationStorageProbeResult = await runIntegrationStorageProbe();

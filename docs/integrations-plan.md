@@ -15,11 +15,35 @@ Integrations participate in Galaxy's existing tab model. An integration tab cont
 - Profile selector
 - Back, forward, and reload
 - Provider destinations such as Gmail, Calendar, and Drive
+- User-defined web pages
 - Inspect data
 - Run extractor
 - Close tab
 
 The remote page must not replace the main Galaxy renderer or inject controls into the provider's DOM. Electron should host it in a `WebContentsView`; Tauri should use a child webview positioned within the document content area. Switching tabs hides or shows the corresponding native webview and keeps its bounds synchronized with the trusted container.
+
+### Pages and integrations
+
+An integration owns one or more pages and action scripts. Gmail and Google Calendar are bundled starting integrations, but they use the same records as pages added by a user.
+
+```ts
+interface IntegrationDefinition {
+  id: string;
+  name: string;
+  profileProviderId: string;
+  pages: IntegrationPageDefinition[];
+  actions: IntegrationActionDefinition[];
+}
+
+interface IntegrationPageDefinition {
+  id: string;
+  name: string;
+  url: string;
+  allowedOrigins: string[];
+}
+```
+
+The UI must support adding, editing, and removing user-defined pages. Adding a page requires a name and HTTPS URL. Galaxy derives the initial allowed origin from that URL and displays it for review. Additional origins require an explicit edit because authentication and content may span related domains.
 
 ### Integration profiles
 
@@ -37,6 +61,8 @@ interface IntegrationProfile {
 ```
 
 Users can create, rename, switch, reset, and delete profiles. Reset and deletion use explicit Galaxy modals and remove the complete browser store for only the selected profile.
+
+Each open profile owns an independent native webview instance. Multiple profiles for the same provider may remain open concurrently, allowing use cases such as separate personal and work Gmail accounts without switching the active login inside Google.
 
 ## Architecture
 
@@ -150,6 +176,66 @@ Extractor scripts receive DOM access only. Results must be JSON-serializable, si
 
 Inspection snapshots are inputs for authoring extractors. AI may propose a script from selected examples, but the saved artifact is deterministic, reviewable JavaScript with a schema and explicit permissions.
 
+## Action builder
+
+Each integration has its own action scripts. An action can read the current page, return structured JSON, and later map that result into an HVY document.
+
+```ts
+interface IntegrationActionDefinition {
+  id: string;
+  integrationId: string;
+  name: string;
+  description: string;
+  pageIds: string[];
+  script: string;
+  resultSchema: JsonSchema;
+  permissions: Array<'dom:read' | 'image:read'>;
+  version: number;
+}
+```
+
+Action authoring follows this workflow:
+
+1. Choose **Add action** beside one of the integration's pages. Galaxy opens that page directly in inspection mode.
+2. Select the content the action should understand. Add further examples or explicitly choose nearby anchors when one selection does not describe the intended record.
+3. Review all selected examples in a dedicated action-builder modal.
+4. Keep, replace, or remove sensitive information through a plain-language field review.
+5. Review the exact sanitized example and page context that will be sent to the LLM.
+6. Name the action and describe the structured result it should return.
+7. Ask the LLM to propose a deterministic action script and result schema.
+8. Review and test the script against the live page.
+9. Save the action under the integration only after it returns valid structured data. An unfinished authoring session may be saved explicitly as a draft.
+
+The builder should make selected text prominent rather than burying it inside raw DOM metadata. Present a focused content preview and readable information fields first. Selector, attribute, geometry, diagnostics, and raw JSON belong in collapsed technical disclosures rather than the primary workflow.
+
+A click is evidence, not the saved selector. Each selection should capture semantic ancestry, stable attribute candidates, nearby field shapes, and repeated-record structure. Surrounding structure must not include unrelated human-readable page content. Users may explicitly select anchor elements, such as a stable column label or record container, to explain the relationship they want the action to use. Action generation should combine examples and anchors and prefer relationships such as “subject link inside a message row” over a positional DOM path. Positional paths remain diagnostic fallbacks and must not be treated as durable by themselves.
+
+### Privacy transformations
+
+Raw inspection data remains local unless the user explicitly continues to script generation. Only selected examples and explicitly selected anchors may contribute human-readable page text. Incidental ancestor, sibling, and repeated-record text must be represented as structural shape rather than copied values. Every reviewable selected value supports:
+
+- **Keep**: include the value as written.
+- **Label**: replace the value with a descriptive placeholder such as `{{PERSON_NAME}}`, `{{EMAIL_ADDRESS}}`, or a user-entered label.
+- **Remove**: omit the selected property or array item from the LLM example.
+
+Labels describe the semantic role without preserving the original value. The builder stores transformations as JSON paths separately from the raw snapshot and applies them when producing the sanitized example.
+
+```ts
+interface InspectionPrivacyRule {
+  path: string;
+  action: 'label' | 'remove';
+  label?: string;
+}
+
+interface SanitizedInspectionExample {
+  selectedContent: string;
+  snapshot: unknown;
+  appliedRules: InspectionPrivacyRule[];
+}
+```
+
+Parent rules apply recursively. Removing a parent removes its entire subtree; labeling a parent replaces the subtree with one placeholder. The final LLM request must be generated only from the sanitized copy, never by mutating or serializing the raw snapshot accidentally. The user must be able to inspect the exact outbound JSON before generation.
+
 ### Result transport
 
 Tauri and Electron each provide a dedicated integration result handler. It accepts only inspection or extractor results and remains physically separate from Galaxy's general command bridges.
@@ -194,6 +280,8 @@ An integration mod may contribute:
 - HVY mappings
 - Optional image access
 
+User-defined pages and actions use the same manifest shapes as bundled and mod-provided integrations. Ownership metadata determines whether an entry is editable, but execution and security policy remain identical.
+
 Mods do not construct privileged webviews or call desktop APIs directly. The browser host enforces origins and permissions, executes scripts, validates results, and attributes results to a profile and extractor version.
 
 The mod API should not be declared stable until it has been used for Google Workspace and at least one unrelated provider.
@@ -206,6 +294,8 @@ The mod API should not be declared stable until it has been used for Google Work
 - Show the active profile and origin in trusted Galaxy controls.
 - Isolate browser storage by profile.
 - Require explicit inspection or extractor execution; do not scrape continuously in the background.
+- Keep raw inspection snapshots local and send only the user-reviewed sanitized copy to an LLM.
+- Apply privacy rules by JSON path in trusted Galaxy code, outside the remote page and outside generated scripts.
 - Bind results to native window and profile state.
 - Validate origin, payload size, JSON shape, schema, and requested permissions.
 - Provide complete per-profile reset and deletion.
@@ -231,7 +321,15 @@ The mod API should not be declared stable until it has been used for Google Work
 - Create one isolated runtime browser store per profile.
 - Make Gmail, Calendar, and Drive share the selected Google profile.
 
-### Phase 3: Extraction platform
+### Phase 3: Pages and action builder
+
+- Store bundled and user-defined pages through one integration registry.
+- Add explicit-modal flows to create, edit, and remove custom pages.
+- Add per-integration action lists and action metadata.
+- Add the inspected-content preview and interactive JSON privacy editor.
+- Generate and display the exact sanitized LLM example.
+
+### Phase 4: Extraction platform
 
 - Add dedicated native result handlers.
 - Define extractor manifests, permissions, schemas, and versioning.
@@ -239,14 +337,14 @@ The mod API should not be declared stable until it has been used for Google Work
 - Add an extractor review and testing surface.
 - Retain inspection diagnostics for integration development.
 
-### Phase 4: HVY insertion
+### Phase 5: HVY insertion
 
 - Preview extracted JSON in trusted Galaxy UI.
 - Add mappings that insert reviewed text into an active HVY document.
 - Add authenticated image-byte transfer and document attachment storage.
 - Record source provenance.
 
-### Phase 5: Provider integrations and mods
+### Phase 6: Provider integrations and mods
 
 - Package Gmail and Calendar extractors against the generic interfaces.
 - Add Drive workspace operations after read and extraction flows are stable.
@@ -261,6 +359,9 @@ Automated checks should cover:
 - Profile isolation and reset
 - Navigation and popup origin enforcement
 - Result size, origin, schema, and permission validation
+- Integration page and action registry persistence
+- JSON-path label and removal transformations, including nested objects and arrays
+- Proof that outbound generation requests contain sanitized data and not raw values
 - Selector and candidate-discovery helpers
 - Runtime compilation and existing non-authenticated tests
 
@@ -274,6 +375,8 @@ Authenticated behavior requires a manual matrix in both Tauri and Electron:
 - Normal page interaction works outside inspection mode.
 - Inspection selects leaf text, meaningful ancestors, shadow-DOM content, overlay-covered images, and ordinary images.
 - Extractor results arrive with the correct native profile and origin.
+- Custom pages obey their reviewed origin list and have their own actions.
+- The action builder emphasizes selected content and previews the exact sanitized example.
 - Image bytes can be copied into an HVY document without relying on the remote URL afterward.
 
 ## First production milestone

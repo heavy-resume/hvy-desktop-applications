@@ -3,6 +3,7 @@
 
   const ids = ['hvy-galaxy-inspector-highlight', 'hvy-galaxy-inspector-picker'];
   let active = false;
+  let inspectionKind = 'target';
   let highlighted = null;
   let lastDiagnostics = null;
 
@@ -54,6 +55,13 @@
     return Boolean(directText || accessibleName || imageFor(element) || element.matches('button,a,input,textarea,select,[role],[contenteditable="true"]'));
   };
 
+  const isAnchorCandidate = (element) => {
+    if (element.closest('#hvy-galaxy-inspector-picker, #hvy-galaxy-inspector-highlight')) return false;
+    if (element.matches('html,body,script,style,link,meta')) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width >= 4 && rect.height >= 4;
+  };
+
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
   const cssPath = (element) => {
     const parts = [];
@@ -70,25 +78,86 @@
     return parts.join(' > ');
   };
 
+  const semanticSummary = (element) => {
+    const { directText, accessibleName } = meaningfulText(element);
+    return {
+      tag: element.tagName.toLowerCase(),
+      role: element.getAttribute('role'),
+      hasAccessibleName: Boolean(accessibleName),
+      directTextLength: directText.length,
+      stableAttributes: Object.fromEntries(['id', 'name', 'type', 'data-testid', 'aria-label']
+        .filter((name) => element.hasAttribute(name))
+        .map((name) => [name, name === 'aria-label' ? '{{ACCESSIBLE_NAME}}' : (element.getAttribute(name) || '').slice(0, 200)])),
+    };
+  };
+
+  const semanticAncestry = (element) => {
+    const ancestry = [];
+    for (let node = element; node instanceof Element && ancestry.length < 8; node = node.parentElement) ancestry.push(semanticSummary(node));
+    return ancestry;
+  };
+
+  const nearbyFields = (element) => {
+    const container = element.parentElement;
+    if (!container) return [];
+    return [...container.children]
+      .filter((candidate) => candidate !== element && isMeaningful(candidate))
+      .slice(0, 12)
+      .map(semanticSummary);
+  };
+
+  const repeatedContext = (element) => {
+    for (let container = element.parentElement; container instanceof Element; container = container.parentElement) {
+      const siblings = container.parentElement ? [...container.parentElement.children].filter((candidate) => candidate.tagName === container.tagName && candidate.className === container.className) : [];
+      if (siblings.length < 2) continue;
+      return {
+        item: semanticSummary(container),
+        itemCount: siblings.length,
+        sampleItems: siblings.slice(0, 5).map((item) => ({
+          textLength: (item.innerText || '').replace(/\s+/g, ' ').trim().length,
+          fields: [...item.children].filter(isMeaningful).slice(0, 10).map(semanticSummary),
+        })),
+      };
+    }
+    return null;
+  };
+
+  const selectorCandidates = (element) => {
+    const candidates = [];
+    if (element.id) candidates.push({ kind: 'id', value: element.id });
+    for (const name of ['data-testid', 'name', 'aria-label']) {
+      if (element.hasAttribute(name)) candidates.push({ kind: 'attribute', name, value: (element.getAttribute(name) || '').slice(0, 300) });
+    }
+    const { accessibleName } = meaningfulText(element);
+    if (element.getAttribute('role') || accessibleName) candidates.push({ kind: 'semantic', role: element.getAttribute('role'), usesAccessibleName: Boolean(accessibleName) });
+    candidates.push({ kind: 'cssPath', value: cssPath(element).slice(0, 600) });
+    return candidates;
+  };
+
   const snapshot = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
     const rect = element.getBoundingClientRect();
     const usefulAttributes = ['id', 'class', 'name', 'type', 'href', 'title', 'aria-label', 'data-testid'];
     return {
       kind: 'integration-inspection',
-      page: { origin: location.origin, pathname: location.pathname, title: document.title },
+      inspectionKind,
+      page: { origin: location.origin, pathname: location.pathname, userAgent: navigator.userAgent },
       selected: {
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute('role'),
-        directText: directText.slice(0, 300),
-        accessibleName: accessibleName.slice(0, 300),
-        descendantText: (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 800),
+        directText: inspectionKind === 'anchor' ? '' : directText.slice(0, 300),
+        accessibleName: inspectionKind === 'anchor' ? '' : accessibleName.slice(0, 300),
+        descendantText: inspectionKind === 'anchor' ? '' : (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 800),
         cssPath: cssPath(element).slice(0, 600),
         attributes: Object.fromEntries(usefulAttributes
           .filter((name) => element.hasAttribute(name))
           .map((name) => [name, (element.getAttribute(name) || '').slice(0, 240)])),
         boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        image: imageFor(element),
+        image: inspectionKind === 'anchor' ? null : imageFor(element),
+        semanticAncestry: semanticAncestry(element),
+        nearbyFields: nearbyFields(element),
+        repeatedContext: repeatedContext(element),
+        selectorCandidates: selectorCandidates(element),
       },
     };
   };
@@ -146,10 +215,11 @@
     }
     const directlyRendersImage = (element) => element.matches('img') || getComputedStyle(element).backgroundImage !== 'none';
     const candidates = [...new Set([...imagesBehindTarget, ...hitStack, ...chain])]
-      .filter(isMeaningful)
+      .filter((element) => inspectionKind === 'anchor' ? isAnchorCandidate(element) : isMeaningful(element))
       .sort((left, right) => Number(directlyRendersImage(right)) - Number(directlyRendersImage(left)))
       .filter((element, index, all) => {
         const signatureFor = (candidate) => {
+          if (inspectionKind === 'anchor') return cssPath(candidate);
           const image = imageFor(candidate);
           if (image?.url) return `image|${image.url}`;
           const text = meaningfulText(candidate);
@@ -189,7 +259,7 @@
     picker.id = 'hvy-galaxy-inspector-picker';
     picker.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(event.clientX, innerWidth - 428))}px;top:${Math.max(8, Math.min(event.clientY, innerHeight - 348))}px;width:420px;max-height:340px;overflow:auto;padding:6px;border:1px solid #82958b;border-radius:8px;background:#f7f3ea;color:#152223;box-shadow:0 10px 30px #0005;font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif`;
     const heading = document.createElement('div');
-    heading.textContent = 'Choose the text, control, record, or image';
+    heading.textContent = inspectionKind === 'anchor' ? 'Choose a structural anchor' : 'Choose the text, control, record, or image';
     heading.style.cssText = 'padding:7px 8px;font-weight:700;border-bottom:1px solid #c5cec8';
     picker.append(heading);
     candidates.forEach((element) => {
@@ -197,7 +267,10 @@
       const image = imageFor(element);
       const choice = document.createElement('button');
       choice.type = 'button';
-      choice.textContent = `${image ? '🖼️ ' : ''}${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${(directText || accessibleName || (image ? image.alt || 'image' : 'control')).slice(0, 100)}`;
+      const structuralLabel = element.id ? `#${element.id}` : [...element.classList].slice(0, 2).map((name) => `.${name}`).join('') || 'container';
+      choice.textContent = inspectionKind === 'anchor'
+        ? `${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${structuralLabel}`
+        : `${image ? '🖼️ ' : ''}${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${(directText || accessibleName || (image ? image.alt || 'image' : 'control')).slice(0, 100)}`;
       choice.style.cssText = 'display:block;width:100%;padding:8px;border:0;border-bottom:1px solid #dde3df;background:transparent;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer';
       choice.addEventListener('mouseenter', () => {
         picker.querySelectorAll('button').forEach((button) => { button.style.background = 'transparent'; });
@@ -241,11 +314,15 @@
     showPicker(event);
   };
   const keydown = (event) => {
-    if (active && event.key === 'Escape') window.__hvyGalaxyInspector.stop();
+    if (active && event.key === 'Escape') {
+      window.location.href = 'hvy-integration://inspection-cancel';
+      window.__hvyGalaxyInspector.stop();
+    }
   };
 
   window.__hvyGalaxyInspector = {
-    start() {
+    start(kind = 'target') {
+      inspectionKind = kind === 'anchor' ? 'anchor' : 'target';
       active = true;
       document.addEventListener('pointermove', pointerMove, true);
       document.addEventListener('click', click, true);

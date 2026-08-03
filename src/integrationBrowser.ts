@@ -21,12 +21,16 @@ export interface IntegrationExtractionResult<T = unknown> {
   value: T;
 }
 
-export function openIntegrationBrowser(destination: IntegrationBrowserDestination, profileId = DEFAULT_INTEGRATION_PROFILE_ID): Promise<void> {
-  return integrationBrowserCommand('open', destination, profileId);
+export function openIntegrationBrowser(destination: IntegrationBrowserDestination, profileId = DEFAULT_INTEGRATION_PROFILE_ID, browserStoreId = 'default-google', actionMode = false): Promise<void> {
+  return integrationBrowserCommand('open', destination, profileId, undefined, undefined, browserStoreId, actionMode);
 }
 
-export function controlIntegrationBrowser(command: Exclude<IntegrationBrowserCommand, 'open'>): Promise<void> {
-  return integrationBrowserCommand(command);
+export function openIntegrationPage(url: string, allowedOrigins: string[], profileId = DEFAULT_INTEGRATION_PROFILE_ID, browserStoreId = 'default-google', actionMode = false): Promise<void> {
+  return integrationBrowserCommand('open', undefined, profileId, url, allowedOrigins, browserStoreId, actionMode);
+}
+
+export function controlIntegrationBrowser(command: Exclude<IntegrationBrowserCommand, 'open'>, profileId = DEFAULT_INTEGRATION_PROFILE_ID): Promise<void> {
+  return integrationBrowserCommand(command, undefined, profileId);
 }
 
 export function runIntegrationStorageProbe(): Promise<IntegrationStorageProbeResult> {

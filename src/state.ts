@@ -1,4 +1,5 @@
 import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
@@ -90,6 +91,24 @@ export interface AppState {
   integrationInspectionResult: unknown;
   integrationVaultStatus: IntegrationVaultStatus | null;
   integrationVaultResetDialogOpen: boolean;
+  integrationRegistry: IntegrationRegistry;
+  addIntegrationPageDialogOpen: boolean;
+  inspectionPrivacyRules: InspectionPrivacyRule[];
+  integrationActionBuilderOpen: boolean;
+  integrationActionExamples: unknown[];
+  integrationActionExampleRules: InspectionPrivacyRule[][];
+  integrationActionAnchors: unknown[];
+  integrationActionAnchorRules: InspectionPrivacyRule[][];
+  integrationActionSelectionKind: 'example' | 'anchor';
+  integrationActionSelectionPending: boolean;
+  integrationActionDraftIntegrationId: string | null;
+  integrationActionDraftPageId: string | null;
+  integrationActionBuilderStep: 'review' | 'instructions' | 'confirm';
+  integrationActionDraftName: string;
+  integrationActionDraftDescription: string;
+  selectedIntegrationId: string;
+  selectedIntegrationProfileId: string;
+  addIntegrationProfileDialogOpen: boolean;
   appSettingsDialogMode: 'settings' | 'plugins';
   appSettingsDraft: AppSettings | null;
   appSettingsDialogInitialJson: string | null;
@@ -280,6 +299,24 @@ export const state: AppState = {
   integrationInspectionResult: null,
   integrationVaultStatus: null,
   integrationVaultResetDialogOpen: false,
+  integrationRegistry: loadIntegrationRegistry(),
+  addIntegrationPageDialogOpen: false,
+  inspectionPrivacyRules: [],
+  integrationActionBuilderOpen: false,
+  integrationActionExamples: [],
+  integrationActionExampleRules: [],
+  integrationActionAnchors: [],
+  integrationActionAnchorRules: [],
+  integrationActionSelectionKind: 'example',
+  integrationActionSelectionPending: false,
+  integrationActionDraftIntegrationId: null,
+  integrationActionDraftPageId: null,
+  integrationActionBuilderStep: 'review',
+  integrationActionDraftName: '',
+  integrationActionDraftDescription: '',
+  selectedIntegrationId: 'google-workspace',
+  selectedIntegrationProfileId: 'default-google',
+  addIntegrationProfileDialogOpen: false,
   appSettingsDialogMode: 'settings',
   appSettingsDraft: null,
   appSettingsDialogInitialJson: null,

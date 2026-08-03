@@ -355,7 +355,7 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
-export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'close';
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-anchor' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export interface IntegrationStorageProbeResult {
   cookieName: string;
@@ -485,8 +485,12 @@ export function integrationBrowserCommand(
   command: IntegrationBrowserCommand,
   destination?: IntegrationBrowserDestination,
   profileId?: string,
+  url?: string,
+  allowedOrigins?: string[],
+  browserStoreId?: string,
+  actionMode?: boolean,
 ): Promise<void> {
-  return invokeDesktop('integration_browser_command', { command, destination, profileId });
+  return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode });
 }
 
 export function probeIntegrationCookieStorage(): Promise<IntegrationStorageProbeResult> {

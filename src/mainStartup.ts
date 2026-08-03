@@ -1,7 +1,8 @@
 import { installAiChatClient } from './aiClient';
 import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
+import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
-import { configureDebugLog, measureDebug } from './debugLog';
+import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
 import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
@@ -47,9 +48,28 @@ export async function boot(): Promise<void> {
     await onAppCloseRequest(() => {
       void handleAppCloseRequest();
     });
-    await onIntegrationInspectionResult((result) => {
+    await onIntegrationInspectionResult(async (result) => {
       state.integrationInspectionResult = result;
+      state.inspectionPrivacyRules = [];
+      state.integrationActionBuilderOpen = true;
+      state.integrationActionSelectionPending = false;
+      if (state.integrationActionSelectionKind === 'anchor') {
+        state.integrationActionAnchors.push(result);
+        state.integrationActionAnchorRules.push([]);
+      } else {
+        state.integrationActionExamples.push(result);
+        state.integrationActionExampleRules.push([]);
+      }
+      if (result && typeof result === 'object' && typeof (result as { profileId?: unknown }).profileId === 'string') {
+        const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === (result as { profileId: string }).profileId);
+        const integration = profile && state.integrationRegistry.integrations.find((candidate) => candidate.profileProviderId === profile.providerId);
+        if (profile && integration) {
+          state.selectedIntegrationProfileId = profile.id;
+          state.selectedIntegrationId = integration.id;
+        }
+      }
       rerender({ preserveMountedDocument: true });
+      await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
     });
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();
@@ -63,8 +83,8 @@ export async function boot(): Promise<void> {
       if (event === 'strikethrough') performRichTextAction('strikethrough');
       if (event === 'paste-plain-text') void pastePlainTextFromSystemClipboard();
       if (event === 'copy-document-rich-text') void copyCurrentDocumentAsRichText();
-      if (event === 'undo') performUndo();
-      if (event === 'redo') performRedo();
+      if (event === 'undo') void performUndo();
+      if (event === 'redo') void performRedo();
       if (event === 'open-guide') void openGuide();
       if (event === 'open-hvy-guide') void openHvyGuide();
       if (event === 'about') handlers.openAbout();
@@ -272,18 +292,18 @@ export function getActiveRichEditable(): HTMLElement | null {
   return target.closest<HTMLElement>('[contenteditable="true"][data-field]');
 }
 
-export function performUndo(): void {
+export async function performUndo(): Promise<void> {
   if (measureDebug('perf', 'undo:routeNativeEditCommand', undefined, () => routeNativeEditCommand('undo'))) return;
   const mounted = state.document?.mounted;
   if (!mounted) return;
-  measureDebug('perf', 'undo:mountedDocument', { path: state.document?.path }, () => undoMountedDocument(mounted));
+  await measureDebugAsync('perf', 'undo:mountedDocument', { path: state.document?.path }, () => undoMountedDocument(mounted));
 }
 
-export function performRedo(): void {
+export async function performRedo(): Promise<void> {
   if (measureDebug('perf', 'redo:routeNativeEditCommand', undefined, () => routeNativeEditCommand('redo'))) return;
   const mounted = state.document?.mounted;
   if (!mounted) return;
-  measureDebug('perf', 'redo:mountedDocument', { path: state.document?.path }, () => redoMountedDocument(mounted));
+  await measureDebugAsync('perf', 'redo:mountedDocument', { path: state.document?.path }, () => redoMountedDocument(mounted));
 }
 
 export function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {

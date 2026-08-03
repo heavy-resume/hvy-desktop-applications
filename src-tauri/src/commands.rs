@@ -118,6 +118,24 @@ const DEFAULT_INTEGRATION_DATA_STORE_ID: [u8; 16] = [
     0x59, 0x47, 0x4f, 0x4f, 0x47, 0x4c, 0x45, 0x01,
 ];
 static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+fn integration_browser_label(profile_id: &str) -> String {
+    format!("{INTEGRATION_BROWSER_LABEL}-{}", profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect::<String>())
+}
+
+#[cfg(target_os = "macos")]
+fn integration_data_store_id(browser_store_id: &str) -> AppResult<[u8; 16]> {
+    if browser_store_id == DEFAULT_INTEGRATION_PROFILE_ID { return Ok(DEFAULT_INTEGRATION_DATA_STORE_ID); }
+    let hex = browser_store_id.replace('-', "");
+    if hex.len() != 32 { return Err(AppError::Message("Invalid integration browser store ID.".into())); }
+    let mut bytes = [0_u8; 16];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(bytes)
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -306,7 +324,7 @@ fn setup_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> 
 
 #[tauri::command]
 async fn reset_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> {
-    if let Some(window) = app.get_webview_window(INTEGRATION_BROWSER_LABEL) {
+    if let Some(window) = app.get_webview_window(&integration_browser_label(DEFAULT_INTEGRATION_PROFILE_ID)) {
         window.close().map_err(|error| AppError::Message(error.to_string()))?;
     }
     #[cfg(target_os = "macos")]
@@ -345,6 +363,13 @@ fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
 }
 
 fn allowed_integration_url(url: &tauri::Url) -> bool {
+    allowed_integration_url_for_origins(url, &[])
+}
+
+fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> bool {
+    if !origins.is_empty() {
+        return url.scheme() == "https" && origins.iter().any(|origin| origin == url.origin().ascii_serialization().as_str());
+    }
     url.scheme() == "https"
         && url.host_str().is_some_and(|host| {
             host == "msn.com"
@@ -355,28 +380,47 @@ fn allowed_integration_url(url: &tauri::Url) -> bool {
 }
 
 #[tauri::command]
-fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>) -> AppResult<()> {
-    if profile_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID) != DEFAULT_INTEGRATION_PROFILE_ID {
-        return Err(AppError::Message("Unknown integration profile.".into()));
-    }
+fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>) -> AppResult<()> {
+    let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
+    let window_label = integration_browser_label(&profile_id);
+    let action_mode_pending = {
+        let mut modes = INTEGRATION_ACTION_MODES.get_or_init(|| Mutex::new(HashMap::new())).lock()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        modes.entry(profile_id.clone()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone()
+    };
     if command == "open" {
+        action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
         #[cfg(not(target_os = "macos"))]
         if !load_integration_vault_status(app.clone())?.configured {
             setup_integration_vault(app.clone())?;
         }
-        let url = integration_destination_url(destination.as_deref().unwrap_or(""))?;
+        let navigation_allowed_origins = allowed_origins.unwrap_or_default();
+        let url = if let Some(value) = url {
+            let parsed = value.parse::<tauri::Url>().map_err(|error| AppError::Message(error.to_string()))?;
+            if parsed.scheme() != "https" { return Err(AppError::Message("Integration pages must use HTTPS.".into())); }
+            if !navigation_allowed_origins.iter().any(|origin| origin == parsed.origin().ascii_serialization().as_str()) {
+                return Err(AppError::Message("The custom page origin is not allowed.".into()));
+            }
+            parsed
+        } else {
+            integration_destination_url(destination.as_deref().unwrap_or(""))?
+        };
         let blank_url = tauri::Url::parse("about:blank")
             .map_err(|error| AppError::Message(error.to_string()))?;
-        if let Some(window) = app.get_webview_window(INTEGRATION_BROWSER_LABEL) {
-            window.navigate(url).map_err(|error| AppError::Message(error.to_string()))?;
+        if let Some(window) = app.get_webview_window(&window_label) {
+            window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             window.show().map_err(|error| AppError::Message(error.to_string()))?;
             window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
             return Ok(());
         }
         let integration_app = app.clone();
+        let integration_window_label = window_label.clone();
+        let result_profile_id = profile_id.clone();
+        let page_load_action_mode = action_mode_pending.clone();
+        let navigation_action_mode = action_mode_pending.clone();
         let builder = tauri::WebviewWindowBuilder::new(
             &app,
-            INTEGRATION_BROWSER_LABEL,
+            &window_label,
             tauri::WebviewUrl::External(blank_url),
         )
         .title("HVY Galaxy Integrations")
@@ -384,12 +428,17 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         .min_inner_size(720.0, 520.0)
         .center()
         .initialization_script(INTEGRATION_INSPECTOR)
+        .on_page_load(move |window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished && page_load_action_mode.load(Ordering::SeqCst) {
+                let _ = window.eval("window.__hvyGalaxyInspector?.start()");
+            }
+        })
         .on_navigation(move |requested_url| {
             if requested_url.as_str() == "about:blank" {
                 return true;
             }
             if requested_url.as_str() == "hvy-integration://close" {
-                if let Some(window) = integration_app.get_webview_window(INTEGRATION_BROWSER_LABEL) {
+                if let Some(window) = integration_app.get_webview_window(&integration_window_label) {
                     #[cfg(not(target_os = "macos"))]
                     let _ = save_integration_cookies(&integration_app, &window);
                     let _ = window.close();
@@ -400,25 +449,38 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                 if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
                     if let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                         if let Some(object) = result.as_object_mut() {
-                            object.insert("profileId".into(), serde_json::Value::String(DEFAULT_INTEGRATION_PROFILE_ID.into()));
+                            object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
                         }
+                        navigation_action_mode.store(false, Ordering::SeqCst);
                         let _ = integration_app.emit("integration-inspection-result", result);
+                        if let Some(main_window) = integration_app.get_webview_window("main") {
+                            let _ = main_window.show();
+                            let _ = main_window.set_focus();
+                        }
                     }
                 }
                 return false;
             }
-            allowed_integration_url(requested_url)
+            if requested_url.as_str() == "hvy-integration://inspection-cancel" {
+                navigation_action_mode.store(false, Ordering::SeqCst);
+                if let Some(main_window) = integration_app.get_webview_window("main") {
+                    let _ = main_window.show();
+                    let _ = main_window.set_focus();
+                }
+                return false;
+            }
+            allowed_integration_url_for_origins(requested_url, &navigation_allowed_origins)
         });
         #[cfg(target_os = "macos")]
         let builder = builder
-            .data_store_identifier(DEFAULT_INTEGRATION_DATA_STORE_ID)
+            .data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?)
             .tabbing_identifier("hvy-galaxy-integration-window");
         #[cfg(not(target_os = "macos"))]
         let builder = builder.incognito(true);
         let window = builder.build().map_err(|error| AppError::Message(error.to_string()))?;
         #[cfg(not(target_os = "macos"))]
         restore_integration_cookies(&app, &window)?;
-        window.navigate(integration_destination_url(destination.as_deref().unwrap_or(""))?)
+        window.navigate(url)
             .map_err(|error| AppError::Message(error.to_string()))?;
         #[cfg(not(target_os = "macos"))]
         let close_started = Arc::new(AtomicBool::new(false));
@@ -441,17 +503,30 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         return Ok(());
     }
 
-    let Some(window) = app.get_webview_window(INTEGRATION_BROWSER_LABEL) else {
+    let Some(window) = app.get_webview_window(&window_label) else {
         if command == "close" {
             return Ok(());
         }
         return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
     };
+    if command == "inspect" || command == "inspect-anchor" || command == "focus-browser" {
+        window.show().map_err(|error| AppError::Message(error.to_string()))?;
+        window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    if command == "cancel-inspect" || command == "focus-main" {
+        if let Some(main_window) = app.get_webview_window("main") {
+            main_window.show().map_err(|error| AppError::Message(error.to_string()))?;
+            main_window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+        }
+    }
     match command.as_str() {
         "back" => window.eval("window.history.back()"),
         "forward" => window.eval("window.history.forward()"),
         "reload" => window.reload(),
         "inspect" => window.eval("window.__hvyGalaxyInspector?.start()"),
+        "inspect-anchor" => window.eval("window.__hvyGalaxyInspector?.start('anchor')"),
+        "cancel-inspect" => window.eval("window.__hvyGalaxyInspector?.stop()"),
+        "focus-browser" | "focus-main" => Ok(()),
         "close" => {
             #[cfg(not(target_os = "macos"))]
             save_integration_cookies(&app, &window)?;

@@ -39,9 +39,7 @@ if (handleSquirrelStartupEvent()) {
 }
 
 let mainWindow = null;
-let integrationWindow = null;
-let integrationWindowCloseReady = false;
-let integrationWindowClosePromise = null;
+const integrationBrowsers = new Map();
 let appCloseAllowed = false;
 let nativeQuitRequested = false;
 let fileMenuState = defaultFileMenuState();
@@ -481,7 +479,7 @@ async function handleCommand(command, args) {
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
-    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId);
+    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode);
     case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
     case 'load_integration_vault_status': return loadIntegrationVaultStatus();
     case 'setup_integration_vault': return setupIntegrationVault();
@@ -576,16 +574,21 @@ const INTEGRATION_URLS = {
 
 const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
 
-function integrationBrowserCommand(command, destination, profileId = 'default-google') {
-  if (profileId !== 'default-google') throw new Error('Unknown integration profile.');
+function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false) {
   if (command === 'open') {
     if (!loadIntegrationVaultStatus().configured) {
       setupIntegrationVault();
     }
-    const url = INTEGRATION_URLS[destination];
+    const url = customUrl || INTEGRATION_URLS[destination];
     if (!url) throw new Error('Unknown integration browser destination.');
-    return openIntegrationBrowser(url);
+    const customAllowedOrigins = customUrl ? new Set(allowedOrigins || []) : null;
+    if (customUrl && !customAllowedOrigins.has(new URL(customUrl).origin)) {
+      throw new Error('The custom page origin is not allowed.');
+    }
+    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode);
   }
+  const browser = integrationBrowsers.get(profileId);
+  const integrationWindow = browser?.window;
   if (!integrationWindow || integrationWindow.isDestroyed()) {
     if (command === 'close') return null;
     throw new Error('Open Gmail or Google Calendar first.');
@@ -593,7 +596,21 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'back' && integrationWindow.webContents.canGoBack()) integrationWindow.webContents.goBack();
   if (command === 'forward' && integrationWindow.webContents.canGoForward()) integrationWindow.webContents.goForward();
   if (command === 'reload') integrationWindow.webContents.reload();
+  if (command === 'inspect' || command === 'inspect-anchor' || command === 'focus-browser') {
+    integrationWindow.show();
+    integrationWindow.focus();
+  }
+  if (command === 'focus-main') {
+    mainWindow?.show();
+    mainWindow?.focus();
+  }
   if (command === 'inspect') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
+  if (command === 'inspect-anchor') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start("anchor")');
+  if (command === 'cancel-inspect') {
+    integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
+    mainWindow?.show();
+    mainWindow?.focus();
+  }
   if (command === 'close') integrationWindow.close();
   return null;
 }
@@ -611,7 +628,7 @@ function setupIntegrationVault() {
   }
   const key = crypto.randomBytes(32);
   writeFileAtomically(dataPath(INTEGRATION_VAULT_KEY_FILE), safeStorage.encryptString(key.toString('base64')));
-  writeElectronIntegrationVault(key, Buffer.from('{"cookies":[]}'));
+  writeElectronIntegrationVault(key, Buffer.from('{"profiles":{}}'));
   return loadIntegrationVaultStatus();
 }
 
@@ -650,9 +667,10 @@ function readElectronIntegrationVault(key) {
   return JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
 }
 
-async function restoreElectronIntegrationCookies(browserSession) {
+async function restoreElectronIntegrationCookies(browserSession, profileId) {
   const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
-  for (const cookie of vault.cookies) {
+  const cookies = vault.profiles?.[profileId]?.cookies ?? (profileId === 'default-google' ? vault.cookies ?? [] : []);
+  for (const cookie of cookies) {
     const hostname = String(cookie.domain || '').replace(/^\./, '');
     const hostOnly = cookie.hostOnly ?? !String(cookie.domain || '').startsWith('.');
     const details = {
@@ -670,13 +688,16 @@ async function restoreElectronIntegrationCookies(browserSession) {
   }
 }
 
-async function saveElectronIntegrationCookies(browserSession) {
+async function saveElectronIntegrationCookies(browserSession, profileId, allowedOrigins) {
+  const allowedHosts = allowedOrigins ? new Set([...allowedOrigins].map((origin) => new URL(origin).hostname)) : null;
   const cookies = (await browserSession.cookies.get({})).filter((cookie) => {
     const domain = cookie.domain.replace(/^\./, '');
+    if (allowedHosts) return [...allowedHosts].some((host) => domain === host || host.endsWith(`.${domain}`));
     return domain === 'google.com' || domain.endsWith('.google.com');
   });
-  const vault = {
-    cookies: cookies.map((cookie) => ({
+  const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
+  const profiles = vault.profiles ?? {};
+  profiles[profileId] = { cookies: cookies.map((cookie) => ({
       name: cookie.name,
       value: cookie.value,
       domain: cookie.domain,
@@ -687,18 +708,22 @@ async function saveElectronIntegrationCookies(browserSession) {
       hostOnly: cookie.hostOnly,
       session: cookie.session,
       expirationDate: cookie.expirationDate,
-    })),
-  };
+    })) };
+  delete vault.cookies;
+  vault.profiles = profiles;
   writeElectronIntegrationVault(readElectronIntegrationVaultKey(), Buffer.from(JSON.stringify(vault)));
 }
 
 async function resetIntegrationVault() {
-  if (integrationWindow && !integrationWindow.isDestroyed()) {
-    const browserSession = integrationWindow.webContents.session;
-    integrationWindowCloseReady = true;
-    integrationWindow.destroy();
-    await browserSession.clearStorageData();
+  for (const browser of integrationBrowsers.values()) {
+    if (!browser.window.isDestroyed()) {
+      browser.closeReady = true;
+      const browserSession = browser.window.webContents.session;
+      browser.window.destroy();
+      await browserSession.clearStorageData();
+    }
   }
+  integrationBrowsers.clear();
   for (const fileName of [INTEGRATION_VAULT_FILE, INTEGRATION_VAULT_KEY_FILE]) {
     const target = dataPath(fileName);
     if (fs.existsSync(target)) fs.unlinkSync(target);
@@ -750,24 +775,30 @@ async function probeIntegrationCookieStorage() {
   };
 }
 
-async function openIntegrationBrowser(url) {
-  if (integrationWindowClosePromise) await integrationWindowClosePromise;
-  if (!integrationWindow || integrationWindow.isDestroyed()) {
-    integrationWindowCloseReady = false;
-    integrationWindow = new BrowserWindow({
+async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode) {
+  let browser = integrationBrowsers.get(profileId);
+  if (browser?.closePromise) await browser.closePromise;
+  if (!browser || browser.window.isDestroyed()) {
+    const integrationWindow = new BrowserWindow({
       width: 1180,
       height: 820,
       minWidth: 720,
       minHeight: 520,
       title: 'HVY Galaxy Integrations',
       webPreferences: {
-        partition: `hvy-galaxy-integrations-${Date.now()}`,
+        partition: `hvy-galaxy-integrations-${profileId}-${Date.now()}`,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
       },
     });
+    browser = { window: integrationWindow, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false };
+    integrationBrowsers.set(profileId, browser);
+    const browserUserAgent = integrationWindow.webContents.getUserAgent()
+      .replace(/\sElectron\/[^\s]+/g, '')
+      .replace(/\sHVY(?:[\s-]Galaxy)?\/[^\s]+/gi, '');
+    integrationWindow.webContents.setUserAgent(browserUserAgent);
     integrationWindow.removeMenu();
     integrationWindow.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.alt && (input.meta || input.control) && input.key.toLowerCase() === 'i') {
@@ -776,7 +807,7 @@ async function openIntegrationBrowser(url) {
       }
     });
     integrationWindow.webContents.setWindowOpenHandler(({ url: requestedUrl }) => {
-      if (isAllowedIntegrationUrl(requestedUrl)) {
+      if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) {
         void integrationWindow.loadURL(requestedUrl);
       } else {
         void shell.openExternal(requestedUrl);
@@ -794,55 +825,69 @@ async function openIntegrationBrowser(url) {
         event.preventDefault();
         const encoded = requestedUrl.slice(inspectionPrefix.length);
         const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-        result.profileId = 'default-google';
+        result.profileId = profileId;
+        browser.actionModePending = false;
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
+        mainWindow?.show();
+        mainWindow?.focus();
         return;
       }
-      if (isAllowedIntegrationUrl(requestedUrl)) return;
+      if (requestedUrl === 'hvy-integration://inspection-cancel') {
+        event.preventDefault();
+        browser.actionModePending = false;
+        mainWindow?.show();
+        mainWindow?.focus();
+        return;
+      }
+      if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
       event.preventDefault();
       void shell.openExternal(requestedUrl);
     });
     integrationWindow.webContents.on('did-finish-load', () => {
-      void integrationWindow.webContents.executeJavaScript(INTEGRATION_INSPECTOR);
+      void integrationWindow.webContents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
+        if (browser.actionModePending) return integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
+        return null;
+      });
     });
     integrationWindow.on('closed', () => {
-      integrationWindow = null;
-      integrationWindowCloseReady = false;
+      integrationBrowsers.delete(profileId);
     });
     integrationWindow.on('close', (event) => {
-      if (integrationWindowCloseReady) return;
+      if (browser.closeReady) return;
       event.preventDefault();
-      if (integrationWindowClosePromise) return;
+      if (browser.closePromise) return;
       const closingWindow = integrationWindow;
       const browserSession = closingWindow.webContents.session;
-      integrationWindowClosePromise = saveElectronIntegrationCookies(browserSession)
+      browser.closePromise = saveElectronIntegrationCookies(browserSession, profileId, browser.allowedOrigins)
         .then(() => {
-          integrationWindowCloseReady = true;
+          browser.closeReady = true;
           closingWindow.destroy();
           return browserSession.clearStorageData();
         })
         .finally(() => {
-          integrationWindowClosePromise = null;
+          browser.closePromise = null;
         });
     });
     try {
-      await restoreElectronIntegrationCookies(integrationWindow.webContents.session);
+      await restoreElectronIntegrationCookies(integrationWindow.webContents.session, profileId);
     } catch (error) {
-      integrationWindowCloseReady = true;
+      browser.closeReady = true;
       integrationWindow.destroy();
-      integrationWindow = null;
-      integrationWindowCloseReady = false;
+      integrationBrowsers.delete(profileId);
       throw error;
     }
   }
-  await integrationWindow.loadURL(url);
-  integrationWindow.show();
-  integrationWindow.focus();
+  browser.allowedOrigins = allowedOrigins;
+  browser.actionModePending = actionMode;
+  await browser.window.loadURL(url);
+  browser.window.show();
+  browser.window.focus();
 }
 
-function isAllowedIntegrationUrl(value) {
+function isAllowedIntegrationUrl(value, allowedOrigins = null) {
   try {
     const url = new URL(value);
+    if (allowedOrigins) return url.protocol === 'https:' && allowedOrigins.has(url.origin);
     return url.protocol === 'https:' && (
       url.hostname === 'msn.com'
       || url.hostname.endsWith('.msn.com')
