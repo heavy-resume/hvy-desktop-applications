@@ -52,6 +52,14 @@ let mcpStatus = {
   lastError: null,
 };
 
+function raiseWindow(window) {
+  if (!window || window.isDestroyed()) return;
+  if (process.platform === 'darwin') app.focus({ steal: true });
+  window.show();
+  window.moveTop();
+  window.focus();
+}
+
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_IDENTIFIER);
 app.setAboutPanelOptions({
@@ -597,19 +605,16 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'forward' && integrationWindow.webContents.canGoForward()) integrationWindow.webContents.goForward();
   if (command === 'reload') integrationWindow.webContents.reload();
   if (command === 'inspect' || command === 'inspect-anchor' || command === 'focus-browser') {
-    integrationWindow.show();
-    integrationWindow.focus();
+    raiseWindow(integrationWindow);
   }
   if (command === 'focus-main') {
-    mainWindow?.show();
-    mainWindow?.focus();
+    raiseWindow(mainWindow);
   }
   if (command === 'inspect') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
   if (command === 'inspect-anchor') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start("anchor")');
   if (command === 'cancel-inspect') {
     integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
-    mainWindow?.show();
-    mainWindow?.focus();
+    raiseWindow(mainWindow);
   }
   if (command === 'close') integrationWindow.close();
   return null;
@@ -828,15 +833,13 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
         result.profileId = profileId;
         browser.actionModePending = false;
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        mainWindow?.show();
-        mainWindow?.focus();
+        raiseWindow(mainWindow);
         return;
       }
       if (requestedUrl === 'hvy-integration://inspection-cancel') {
         event.preventDefault();
         browser.actionModePending = false;
-        mainWindow?.show();
-        mainWindow?.focus();
+        raiseWindow(mainWindow);
         return;
       }
       if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
@@ -880,8 +883,7 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
   browser.allowedOrigins = allowedOrigins;
   browser.actionModePending = actionMode;
   await browser.window.loadURL(url);
-  browser.window.show();
-  browser.window.focus();
+  raiseWindow(browser.window);
 }
 
 function isAllowedIntegrationUrl(value, allowedOrigins = null) {

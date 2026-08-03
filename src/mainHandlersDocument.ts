@@ -297,6 +297,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       }
       if (workspacePath) {
         upsertWorkspace(await loadWorkspace(workspacePath));
+        await refreshSavedTemplates(workspacePath);
       } else {
         await refreshOpenWorkspaceForFile(file.path);
       }

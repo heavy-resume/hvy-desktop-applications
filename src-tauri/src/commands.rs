@@ -3,6 +3,33 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
     read_recent_state(&recent_state_path(&app)?)
 }
 
+#[cfg(target_os = "macos")]
+fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSWindow};
+
+    window.show().map_err(|error| AppError::Message(error.to_string()))?;
+    let target = window.clone();
+    window.run_on_main_thread(move || {
+        let mtm = MainThreadMarker::new().expect("window activation must run on the macOS main thread");
+        let application = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        application.activateIgnoringOtherApps(true);
+        let native_window = unsafe { &*target.ns_window().expect("native window is available").cast::<NSWindow>() };
+        native_window.makeKeyAndOrderFront(None);
+        native_window.orderFrontRegardless();
+        target.set_focus().expect("raised window accepts focus");
+    }).map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
+    window.show().map_err(|error| AppError::Message(error.to_string()))?;
+    window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn save_workspace_order(app: AppHandle, workspaces: Vec<String>) -> AppResult<RecentState> {
     let recent_path = recent_state_path(&app)?;
@@ -409,8 +436,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             .map_err(|error| AppError::Message(error.to_string()))?;
         if let Some(window) = app.get_webview_window(&window_label) {
             window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
-            window.show().map_err(|error| AppError::Message(error.to_string()))?;
-            window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+            raise_integration_window(&window)?;
             return Ok(());
         }
         let integration_app = app.clone();
@@ -454,8 +480,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                         navigation_action_mode.store(false, Ordering::SeqCst);
                         let _ = integration_app.emit("integration-inspection-result", result);
                         if let Some(main_window) = integration_app.get_webview_window("main") {
-                            let _ = main_window.show();
-                            let _ = main_window.set_focus();
+                            let _ = raise_integration_window(&main_window);
                         }
                     }
                 }
@@ -464,8 +489,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             if requested_url.as_str() == "hvy-integration://inspection-cancel" {
                 navigation_action_mode.store(false, Ordering::SeqCst);
                 if let Some(main_window) = integration_app.get_webview_window("main") {
-                    let _ = main_window.show();
-                    let _ = main_window.set_focus();
+                    let _ = raise_integration_window(&main_window);
                 }
                 return false;
             }
@@ -510,13 +534,11 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
     };
     if command == "inspect" || command == "inspect-anchor" || command == "focus-browser" {
-        window.show().map_err(|error| AppError::Message(error.to_string()))?;
-        window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+        raise_integration_window(&window)?;
     }
     if command == "cancel-inspect" || command == "focus-main" {
         if let Some(main_window) = app.get_webview_window("main") {
-            main_window.show().map_err(|error| AppError::Message(error.to_string()))?;
-            main_window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+            raise_integration_window(&main_window)?;
         }
     }
     match command.as_str() {
