@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, session, safeStorage } = require('electron');
 const { execFile, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -12,6 +12,8 @@ const RECENT_STATE = 'recent.json';
 const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const APP_SETTINGS = 'app-settings.json';
+const INTEGRATION_VAULT_FILE = 'integration-cookie-vault-electron.json';
+const INTEGRATION_VAULT_KEY_FILE = 'integration-vault-key-electron.bin';
 const MCP_SETTINGS = 'mcp-settings.json';
 const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
 const RECENT_LIMIT = 12;
@@ -37,6 +39,9 @@ if (handleSquirrelStartupEvent()) {
 }
 
 let mainWindow = null;
+let integrationWindow = null;
+let integrationWindowCloseReady = false;
+let integrationWindowClosePromise = null;
 let appCloseAllowed = false;
 let nativeQuitRequested = false;
 let fileMenuState = defaultFileMenuState();
@@ -476,6 +481,11 @@ async function handleCommand(command, args) {
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
+    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId);
+    case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
+    case 'load_integration_vault_status': return loadIntegrationVaultStatus();
+    case 'setup_integration_vault': return setupIntegrationVault();
+    case 'reset_integration_vault': return resetIntegrationVault();
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return loadMcpSettings();
@@ -555,6 +565,292 @@ async function handleCommand(command, args) {
     case 'open_external_url': return openExternalUrl(args.url);
     case 'close_app_window': return closeAppWindow();
     default: throw new Error(`Unknown Electron command: ${command}`);
+  }
+}
+
+const INTEGRATION_URLS = {
+  msn: 'https://www.msn.com/',
+  gmail: 'https://mail.google.com/',
+  calendar: 'https://calendar.google.com/',
+};
+
+const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
+
+function integrationBrowserCommand(command, destination, profileId = 'default-google') {
+  if (profileId !== 'default-google') throw new Error('Unknown integration profile.');
+  if (command === 'open') {
+    if (!loadIntegrationVaultStatus().configured) {
+      setupIntegrationVault();
+    }
+    const url = INTEGRATION_URLS[destination];
+    if (!url) throw new Error('Unknown integration browser destination.');
+    return openIntegrationBrowser(url);
+  }
+  if (!integrationWindow || integrationWindow.isDestroyed()) {
+    if (command === 'close') return null;
+    throw new Error('Open Gmail or Google Calendar first.');
+  }
+  if (command === 'back' && integrationWindow.webContents.canGoBack()) integrationWindow.webContents.goBack();
+  if (command === 'forward' && integrationWindow.webContents.canGoForward()) integrationWindow.webContents.goForward();
+  if (command === 'reload') integrationWindow.webContents.reload();
+  if (command === 'inspect') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
+  if (command === 'close') integrationWindow.close();
+  return null;
+}
+
+function loadIntegrationVaultStatus() {
+  return {
+    configured: fs.existsSync(dataPath(INTEGRATION_VAULT_KEY_FILE)),
+    hasVault: fs.existsSync(dataPath(INTEGRATION_VAULT_FILE)),
+  };
+}
+
+function setupIntegrationVault() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Operating-system encryption is unavailable.');
+  }
+  const key = crypto.randomBytes(32);
+  writeFileAtomically(dataPath(INTEGRATION_VAULT_KEY_FILE), safeStorage.encryptString(key.toString('base64')));
+  writeElectronIntegrationVault(key, Buffer.from('{"cookies":[]}'));
+  return loadIntegrationVaultStatus();
+}
+
+function writeElectronIntegrationVault(key, plaintext) {
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+  cipher.setAAD(Buffer.from('hvy-galaxy-integration-vault-v1'));
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
+  const envelope = {
+    version: 1,
+    algorithm: 'AES-256-GCM',
+    nonce: nonce.toString('base64'),
+    ciphertext: encrypted.toString('base64'),
+  };
+  writeFileAtomically(dataPath(INTEGRATION_VAULT_FILE), Buffer.from(JSON.stringify(envelope, null, 2)));
+}
+
+function readElectronIntegrationVaultKey() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
+  const encryptedKey = fs.readFileSync(dataPath(INTEGRATION_VAULT_KEY_FILE));
+  return Buffer.from(safeStorage.decryptString(encryptedKey), 'base64');
+}
+
+function readElectronIntegrationVault(key) {
+  const envelope = JSON.parse(fs.readFileSync(dataPath(INTEGRATION_VAULT_FILE), 'utf8'));
+  if (envelope.version !== 1 || envelope.algorithm !== 'AES-256-GCM') {
+    throw new Error('Unsupported integration vault format.');
+  }
+  const nonce = Buffer.from(envelope.nonce, 'base64');
+  const encrypted = Buffer.from(envelope.ciphertext, 'base64');
+  const ciphertext = encrypted.subarray(0, encrypted.length - 16);
+  const tag = encrypted.subarray(encrypted.length - 16);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+  decipher.setAAD(Buffer.from('hvy-galaxy-integration-vault-v1'));
+  decipher.setAuthTag(tag);
+  return JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
+}
+
+async function restoreElectronIntegrationCookies(browserSession) {
+  const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
+  for (const cookie of vault.cookies) {
+    const hostname = String(cookie.domain || '').replace(/^\./, '');
+    const hostOnly = cookie.hostOnly ?? !String(cookie.domain || '').startsWith('.');
+    const details = {
+      url: `https://${hostname}${cookie.path || '/'}`,
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.name.startsWith('__Host-') ? '/' : cookie.path || '/',
+      secure: cookie.name.startsWith('__Host-') || cookie.name.startsWith('__Secure-') || cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      expirationDate: cookie.session ? undefined : cookie.expirationDate,
+    };
+    if (!hostOnly && !cookie.name.startsWith('__Host-')) details.domain = cookie.domain || undefined;
+    await browserSession.cookies.set(details);
+  }
+}
+
+async function saveElectronIntegrationCookies(browserSession) {
+  const cookies = (await browserSession.cookies.get({})).filter((cookie) => {
+    const domain = cookie.domain.replace(/^\./, '');
+    return domain === 'google.com' || domain.endsWith('.google.com');
+  });
+  const vault = {
+    cookies: cookies.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      hostOnly: cookie.hostOnly,
+      session: cookie.session,
+      expirationDate: cookie.expirationDate,
+    })),
+  };
+  writeElectronIntegrationVault(readElectronIntegrationVaultKey(), Buffer.from(JSON.stringify(vault)));
+}
+
+async function resetIntegrationVault() {
+  if (integrationWindow && !integrationWindow.isDestroyed()) {
+    const browserSession = integrationWindow.webContents.session;
+    integrationWindowCloseReady = true;
+    integrationWindow.destroy();
+    await browserSession.clearStorageData();
+  }
+  for (const fileName of [INTEGRATION_VAULT_FILE, INTEGRATION_VAULT_KEY_FILE]) {
+    const target = dataPath(fileName);
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+  }
+  return loadIntegrationVaultStatus();
+}
+
+function writeFileAtomically(target, bytes) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, bytes, { mode: 0o600 });
+  fs.renameSync(temporary, target);
+}
+
+async function probeIntegrationCookieStorage() {
+  const cookieName = 'hvy_galaxy_storage_probe';
+  const cookieValue = 'round-trip';
+  const cookieUrl = 'https://www.msn.com/';
+  const probeId = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const sourceSession = session.fromPartition(`hvy-storage-probe-source-${probeId}`);
+  const restoredSession = session.fromPartition(`hvy-storage-probe-restored-${probeId}`);
+  const cookie = {
+    url: cookieUrl,
+    name: cookieName,
+    value: cookieValue,
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    sameSite: 'lax',
+  };
+  await sourceSession.cookies.set(cookie);
+  const insertedCookies = await sourceSession.cookies.get({ url: cookieUrl, name: cookieName });
+  const extracted = insertedCookies.some((cookie) => cookie.value === cookieValue);
+  const freshStoreCookies = await restoredSession.cookies.get({ url: cookieUrl, name: cookieName });
+  await restoredSession.cookies.set(cookie);
+  const restoredCookies = await restoredSession.cookies.get({ url: cookieUrl, name: cookieName });
+  const restored = restoredCookies.some((candidate) => candidate.value === cookieValue);
+  await sourceSession.cookies.remove(cookieUrl, cookieName);
+  await restoredSession.cookies.remove(cookieUrl, cookieName);
+  const remainingSourceCookies = await sourceSession.cookies.get({ url: cookieUrl, name: cookieName });
+  const remainingRestoredCookies = await restoredSession.cookies.get({ url: cookieUrl, name: cookieName });
+  return {
+    cookieName,
+    inserted: true,
+    extracted,
+    freshStoreEmpty: freshStoreCookies.length === 0,
+    restored,
+    deleted: remainingSourceCookies.length === 0 && remainingRestoredCookies.length === 0,
+  };
+}
+
+async function openIntegrationBrowser(url) {
+  if (integrationWindowClosePromise) await integrationWindowClosePromise;
+  if (!integrationWindow || integrationWindow.isDestroyed()) {
+    integrationWindowCloseReady = false;
+    integrationWindow = new BrowserWindow({
+      width: 1180,
+      height: 820,
+      minWidth: 720,
+      minHeight: 520,
+      title: 'HVY Galaxy Integrations',
+      webPreferences: {
+        partition: `hvy-galaxy-integrations-${Date.now()}`,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+      },
+    });
+    integrationWindow.removeMenu();
+    integrationWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.alt && (input.meta || input.control) && input.key.toLowerCase() === 'i') {
+        event.preventDefault();
+        integrationWindow.webContents.toggleDevTools();
+      }
+    });
+    integrationWindow.webContents.setWindowOpenHandler(({ url: requestedUrl }) => {
+      if (isAllowedIntegrationUrl(requestedUrl)) {
+        void integrationWindow.loadURL(requestedUrl);
+      } else {
+        void shell.openExternal(requestedUrl);
+      }
+      return { action: 'deny' };
+    });
+    integrationWindow.webContents.on('will-navigate', (event, requestedUrl) => {
+      if (requestedUrl === 'hvy-integration://close') {
+        event.preventDefault();
+        integrationWindow.close();
+        return;
+      }
+      const inspectionPrefix = 'hvy-integration://inspection/';
+      if (requestedUrl.startsWith(inspectionPrefix)) {
+        event.preventDefault();
+        const encoded = requestedUrl.slice(inspectionPrefix.length);
+        const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+        result.profileId = 'default-google';
+        mainWindow?.webContents.send('hvy:integration-inspection-result', result);
+        return;
+      }
+      if (isAllowedIntegrationUrl(requestedUrl)) return;
+      event.preventDefault();
+      void shell.openExternal(requestedUrl);
+    });
+    integrationWindow.webContents.on('did-finish-load', () => {
+      void integrationWindow.webContents.executeJavaScript(INTEGRATION_INSPECTOR);
+    });
+    integrationWindow.on('closed', () => {
+      integrationWindow = null;
+      integrationWindowCloseReady = false;
+    });
+    integrationWindow.on('close', (event) => {
+      if (integrationWindowCloseReady) return;
+      event.preventDefault();
+      if (integrationWindowClosePromise) return;
+      const closingWindow = integrationWindow;
+      const browserSession = closingWindow.webContents.session;
+      integrationWindowClosePromise = saveElectronIntegrationCookies(browserSession)
+        .then(() => {
+          integrationWindowCloseReady = true;
+          closingWindow.destroy();
+          return browserSession.clearStorageData();
+        })
+        .finally(() => {
+          integrationWindowClosePromise = null;
+        });
+    });
+    try {
+      await restoreElectronIntegrationCookies(integrationWindow.webContents.session);
+    } catch (error) {
+      integrationWindowCloseReady = true;
+      integrationWindow.destroy();
+      integrationWindow = null;
+      integrationWindowCloseReady = false;
+      throw error;
+    }
+  }
+  await integrationWindow.loadURL(url);
+  integrationWindow.show();
+  integrationWindow.focus();
+}
+
+function isAllowedIntegrationUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && (
+      url.hostname === 'msn.com'
+      || url.hostname.endsWith('.msn.com')
+      || url.hostname === 'google.com'
+      || url.hostname.endsWith('.google.com')
+    );
+  } catch {
+    return false;
   }
 }
 

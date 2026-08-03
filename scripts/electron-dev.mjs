@@ -12,6 +12,7 @@ const electronEnv = {
   ELECTRON_RENDERER_URL: rendererUrl,
 };
 delete electronEnv.ELECTRON_RUN_AS_NODE;
+delete electronEnv.NODE_OPTIONS;
 
 let vite = null;
 
@@ -133,6 +134,7 @@ async function ensurePackagedMacDevApp() {
     ignore: [
       /^\/\.electron-dev(?:\/|$)/,
       /^\/\.git(?:\/|$)/,
+      /^\/dist-electron(?:\/|$)/,
       /^\/src-tauri\/target(?:\/|$)/,
     ],
     extendInfo: {

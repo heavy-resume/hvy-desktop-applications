@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
@@ -85,6 +85,11 @@ export interface AppState {
   exportPdfSavePromptOpen: boolean;
   exportedPdfPath: string | null;
   appSettingsDialogOpen: boolean;
+  integrationsDialogOpen: boolean;
+  integrationStorageProbeResult: IntegrationStorageProbeResult | null;
+  integrationInspectionResult: unknown;
+  integrationVaultStatus: IntegrationVaultStatus | null;
+  integrationVaultResetDialogOpen: boolean;
   appSettingsDialogMode: 'settings' | 'plugins';
   appSettingsDraft: AppSettings | null;
   appSettingsDialogInitialJson: string | null;
@@ -270,6 +275,11 @@ export const state: AppState = {
   exportPdfSavePromptOpen: false,
   exportedPdfPath: null,
   appSettingsDialogOpen: false,
+  integrationsDialogOpen: false,
+  integrationStorageProbeResult: null,
+  integrationInspectionResult: null,
+  integrationVaultStatus: null,
+  integrationVaultResetDialogOpen: false,
   appSettingsDialogMode: 'settings',
   appSettingsDraft: null,
   appSettingsDialogInitialJson: null,

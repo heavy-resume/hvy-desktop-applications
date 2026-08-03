@@ -19,4 +19,9 @@ contextBridge.exposeInMainWorld('hvyElectron', {
     ipcRenderer.on('hvy:app-close-requested', listener);
     return () => ipcRenderer.removeListener('hvy:app-close-requested', listener);
   },
+  onIntegrationInspectionResult(callback) {
+    const listener = (_event, result) => callback(result);
+    ipcRenderer.on('hvy:integration-inspection-result', listener);
+    return () => ipcRenderer.removeListener('hvy:integration-inspection-result', listener);
+  },
 });

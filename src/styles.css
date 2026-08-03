@@ -294,6 +294,79 @@ button:disabled {
   gap: 8px;
 }
 
+.integrations-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.integration-destinations,
+.integration-browser-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.integration-storage-probe {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.integration-vault-status {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+  background: var(--hvy-surface-alt, #e8ece7);
+}
+
+.integration-vault-status button {
+  justify-self: start;
+}
+
+.integration-storage-probe pre {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--hvy-surface-alt, #e8ece7);
+}
+
+.integration-inspection-image {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  margin: 0;
+}
+
+.integration-inspection-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.integration-inspection-image figcaption {
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 12px;
+}
+
+.integration-destinations {
+  margin: 20px 0;
+}
+
+.integration-destinations button {
+  flex: 1 1 180px;
+}
+
+.integration-browser-controls {
+  padding-top: 14px;
+  border-top: 1px solid var(--hvy-border, #c5cec8);
+}
+
 .workspaces-section,
 .tree-list,
 .workspace-root {

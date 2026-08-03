@@ -88,6 +88,14 @@ export interface UiHandlers {
   submitWorkspaceFilter(): void;
   clearWorkspaceFilter(): void;
   openAbout(): void;
+  openIntegrations(): void;
+  closeIntegrations(): void;
+  openIntegration(destination: 'msn' | 'gmail' | 'calendar'): void;
+  controlIntegrationBrowser(command: 'back' | 'forward' | 'reload' | 'inspect' | 'close'): void;
+  probeIntegrationStorage(): void;
+  requestResetIntegrationVault(): void;
+  confirmResetIntegrationVault(): void;
+  cancelResetIntegrationVault(): void;
   closeAbout(): void;
   openDebugLog(): void;
   closeDebugLog(): void;
@@ -328,6 +336,7 @@ export function renderLeftPanel(state: AppState): void {
     </div>
     <div class="sidebar-actions">
       <button type="button" data-action="open-file">Open File</button>
+      <button type="button" data-action="integrations">Integrations</button>
     </div>
     <section class="workspaces-section">
       <div class="sidebar-section-heading">
@@ -444,6 +453,8 @@ export function renderModals(state: AppState): void {
     ${renderExportPdfSavePrompt(state)}
     ${renderExportedPdfDialog(state)}
     ${renderAboutDialog(state)}
+    ${renderIntegrationsDialog(state)}
+    ${renderIntegrationVaultResetDialog(state)}
     ${renderDebugLogDialog(state)}
     ${renderWorkspaceChatClosePrompt(state)}
     ${renderAppSettingsDialog(state)}
@@ -731,6 +742,18 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-new-document') handlers.cancelNewDocument();
     if (action === 'cancel-new-folder') handlers.cancelNewFolder();
     if (action === 'about') handlers.openAbout();
+    if (action === 'integrations') handlers.openIntegrations();
+    if (action === 'close-integrations') handlers.closeIntegrations();
+    if (action === 'open-integration' && (target.dataset.destination === 'msn' || target.dataset.destination === 'gmail' || target.dataset.destination === 'calendar')) {
+      handlers.openIntegration(target.dataset.destination);
+    }
+    if (action === 'integration-browser-command' && ['back', 'forward', 'reload', 'inspect', 'close'].includes(target.dataset.command ?? '')) {
+      handlers.controlIntegrationBrowser(target.dataset.command as 'back' | 'forward' | 'reload' | 'inspect' | 'close');
+    }
+    if (action === 'probe-integration-storage') handlers.probeIntegrationStorage();
+    if (action === 'request-reset-integration-vault') handlers.requestResetIntegrationVault();
+    if (action === 'confirm-reset-integration-vault') handlers.confirmResetIntegrationVault();
+    if (action === 'cancel-reset-integration-vault') handlers.cancelResetIntegrationVault();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
     if (action === 'review-scripting') handlers.openScriptingReview();
@@ -3775,6 +3798,78 @@ function renderAboutDialog(state: AppState): string {
         </div>
         <div class="dialog-actions about-actions">
           <button type="button" data-action="close-about">OK</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderIntegrationsDialog(state: AppState): string {
+  if (!state.integrationsDialogOpen) return '';
+  const inspectedImage = integrationInspectionImage(state.integrationInspectionResult);
+  return `
+    <div class="modal-backdrop" data-action="close-integrations">
+      <section class="dialog integrations-dialog" role="dialog" aria-modal="true" aria-label="Integrations" data-prevent-dismiss="true">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Prototype</p>
+            <h2>Google integrations</h2>
+          </div>
+          <button type="button" class="icon-button" data-action="close-integrations" aria-label="Close">×</button>
+        </div>
+        <p>Google opens in an isolated integration profile with no access to Galaxy files, plugins, or desktop commands.</p>
+        <div class="integration-vault-status">
+          ${state.integrationVaultStatus?.configured
+            ? `<strong>Secure storage is configured.</strong><span>${state.integrationVaultStatus.storageMode === 'webkitProfile' ? 'The Google session uses an isolated, operating-system-managed WebKit profile.' : 'The encryption key is protected by your operating system.'}</span><button type="button" data-action="request-reset-integration-vault">Reset integrations…</button>`
+            : `<strong>Secure storage is ready to initialize.</strong><span>Galaxy will automatically create an operating-system-protected encryption key when you first open an integration.</span>`}
+        </div>
+        <div class="integration-destinations">
+          <button type="button" data-action="open-integration" data-destination="msn">Open MSN image test</button>
+          <button type="button" data-action="open-integration" data-destination="gmail">Open Gmail</button>
+          <button type="button" data-action="open-integration" data-destination="calendar">Open Google Calendar</button>
+        </div>
+        <div class="integration-browser-controls" aria-label="Integration browser controls">
+          <button type="button" data-action="integration-browser-command" data-command="back">Back</button>
+          <button type="button" data-action="integration-browser-command" data-command="forward">Forward</button>
+          <button type="button" data-action="integration-browser-command" data-command="reload">Reload</button>
+          <button type="button" data-action="integration-browser-command" data-command="inspect">Inspect data</button>
+          <button type="button" data-action="integration-browser-command" data-command="close">Close browser</button>
+        </div>
+        <div class="integration-storage-probe">
+          <button type="button" data-action="probe-integration-storage">Test ephemeral cookie round trip</button>
+          ${state.integrationStorageProbeResult ? `<pre>${escapeHtml(JSON.stringify(state.integrationStorageProbeResult, null, 2))}</pre>` : ''}
+        </div>
+        ${state.integrationInspectionResult ? `<div class="integration-storage-probe"><strong>Latest inspection result</strong>${inspectedImage ? `<figure class="integration-inspection-image"><img src="${escapeAttr(inspectedImage.url)}" alt="${escapeAttr(inspectedImage.alt ?? 'Inspected image')}"><figcaption>${escapeHtml(`${inspectedImage.naturalWidth} × ${inspectedImage.naturalHeight}`)}</figcaption></figure>` : ''}<pre>${escapeHtml(JSON.stringify(state.integrationInspectionResult, null, 2))}</pre></div>` : ''}
+        <p class="field-help">Inspection returns generic text, semantic attributes, geometry, and image metadata. No Google-specific extractor is enabled yet.</p>
+      </section>
+    </div>`;
+}
+
+function integrationInspectionImage(result: unknown): { url: string; alt: string | null; naturalWidth: number; naturalHeight: number } | null {
+  if (!result || typeof result !== 'object') return null;
+  const selected = (result as { selected?: unknown }).selected;
+  if (!selected || typeof selected !== 'object') return null;
+  const image = (selected as { image?: unknown }).image;
+  if (!image || typeof image !== 'object') return null;
+  const candidate = image as Record<string, unknown>;
+  if (typeof candidate.url !== 'string' || !candidate.url.startsWith('https://')) return null;
+  return {
+    url: candidate.url,
+    alt: typeof candidate.alt === 'string' ? candidate.alt : null,
+    naturalWidth: typeof candidate.naturalWidth === 'number' ? candidate.naturalWidth : 0,
+    naturalHeight: typeof candidate.naturalHeight === 'number' ? candidate.naturalHeight : 0,
+  };
+}
+
+function renderIntegrationVaultResetDialog(state: AppState): string {
+  if (!state.integrationVaultResetDialogOpen) return '';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog" role="dialog" aria-modal="true" aria-label="Reset integrations">
+        <h2>Reset integrations?</h2>
+        <p>This deletes the encrypted integration vault, its operating-system key, and browser data. You will need to sign in again.</p>
+        <div class="dialog-actions">
+          <button type="button" data-action="cancel-reset-integration-vault">Cancel</button>
+          <button type="button" class="danger-button" data-action="confirm-reset-integration-vault">Delete and reset</button>
         </div>
       </section>
     </div>`;

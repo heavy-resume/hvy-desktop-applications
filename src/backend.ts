@@ -10,6 +10,7 @@ declare global {
       onMenuEvent(callback: (event: string) => void): () => void;
       onOpenDocumentPath(callback: (path: string) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
+      onIntegrationInspectionResult(callback: (result: unknown) => void): () => void;
     };
   }
 }
@@ -354,6 +355,22 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'close';
+export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
+export interface IntegrationStorageProbeResult {
+  cookieName: string;
+  inserted: boolean;
+  extracted: boolean;
+  freshStoreEmpty: boolean;
+  restored: boolean;
+  deleted: boolean;
+}
+export interface IntegrationVaultStatus {
+  configured: boolean;
+  hasVault: boolean;
+  storageMode?: 'encryptedVault' | 'webkitProfile';
+}
+
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -462,6 +479,30 @@ export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFil
 
 export function installPluginPackage(name: string, bytes: number[]): Promise<void> {
   return invokeDesktop('install_plugin_package', { name, bytes });
+}
+
+export function integrationBrowserCommand(
+  command: IntegrationBrowserCommand,
+  destination?: IntegrationBrowserDestination,
+  profileId?: string,
+): Promise<void> {
+  return invokeDesktop('integration_browser_command', { command, destination, profileId });
+}
+
+export function probeIntegrationCookieStorage(): Promise<IntegrationStorageProbeResult> {
+  return invokeDesktop('probe_integration_cookie_storage');
+}
+
+export function loadIntegrationVaultStatus(): Promise<IntegrationVaultStatus> {
+  return invokeDesktop('load_integration_vault_status');
+}
+
+export function setupIntegrationVault(): Promise<IntegrationVaultStatus> {
+  return invokeDesktop('setup_integration_vault');
+}
+
+export function resetIntegrationVault(): Promise<IntegrationVaultStatus> {
+  return invokeDesktop('reset_integration_vault');
 }
 
 export function loadMcpSettings(): Promise<McpSettings> {
@@ -1143,4 +1184,10 @@ export function onOpenDocumentPath(handler: (path: string) => void): Promise<() 
     return Promise.resolve(() => undefined);
   }
   return listen<string>('open-document-path', (event) => handler(event.payload));
+}
+
+export function onIntegrationInspectionResult(handler: (result: unknown) => void): Promise<() => void> {
+  if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationInspectionResult(handler));
+  if (!isTauriRuntime()) return Promise.resolve(() => undefined);
+  return listen<unknown>('integration-inspection-result', (event) => handler(event.payload));
 }

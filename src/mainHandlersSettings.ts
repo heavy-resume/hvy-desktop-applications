@@ -6,10 +6,17 @@ import { state } from './state';
 import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
+import { controlIntegrationBrowser, openIntegrationBrowser, runIntegrationStorageProbe } from './integrationBrowser';
+import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 
 interface DocumentColorTheme {
   name: string;
   colors: Record<string, string>;
+}
+
+function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'): string {
+  if (destination === 'msn') return 'MSN image test';
+  return destination === 'gmail' ? 'Gmail' : 'Google Calendar';
 }
 
 async function persistAiSettings(settings: AiSettings): Promise<void> {
@@ -79,6 +86,50 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   });
   return {
+  openIntegrations: () => {
+    state.integrationsDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+    void runBusy('Checking secure integration storage...', async () => {
+      state.integrationVaultStatus = await loadIntegrationVaultStatus();
+      state.status = 'Ready';
+    }, { preserveMountedDocument: true });
+  },
+  closeIntegrations: () => {
+    state.integrationsDialogOpen = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  openIntegration: (destination) => void runBusy(`Opening ${integrationDestinationLabel(destination)}...`, async () => {
+    await openIntegrationBrowser(destination);
+    state.integrationVaultStatus = await loadIntegrationVaultStatus();
+    state.status = `Opened ${integrationDestinationLabel(destination)}`;
+  }, { preserveMountedDocument: true }),
+  controlIntegrationBrowser: (command) => void runBusy(`${command === 'close' ? 'Closing' : 'Updating'} integration browser...`, async () => {
+    await controlIntegrationBrowser(command);
+    state.status = command === 'close' ? 'Closed integration browser' : 'Updated integration browser';
+  }, { preserveMountedDocument: true }),
+  probeIntegrationStorage: () => void runBusy('Testing integration cookie storage...', async () => {
+    state.integrationStorageProbeResult = await runIntegrationStorageProbe();
+    const result = state.integrationStorageProbeResult;
+    state.status = result.extracted && result.freshStoreEmpty && result.restored && result.deleted
+      ? 'Ephemeral integration cookie round trip passed'
+      : 'Ephemeral integration cookie round trip failed';
+  }, { preserveMountedDocument: true }),
+  requestResetIntegrationVault: () => {
+    state.integrationVaultResetDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelResetIntegrationVault: () => {
+    state.integrationVaultResetDialogOpen = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  confirmResetIntegrationVault: () => void runBusy('Resetting integrations...', async () => {
+    state.integrationVaultStatus = await resetIntegrationVault();
+    state.integrationVaultResetDialogOpen = false;
+    state.integrationStorageProbeResult = null;
+    state.status = 'Reset integrations';
+  }, { preserveMountedDocument: true }),
   openAppSettings: () => openAppSettings('settings'),
   openPluginManager: () => openAppSettings('plugins'),
   installPluginFiles: (files, settings) => void runBusy('Installing plugins...', async () => {

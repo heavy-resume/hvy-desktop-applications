@@ -106,6 +106,456 @@ fn install_plugin_package(app: AppHandle, name: String, bytes: Vec<u8>) -> AppRe
     Ok(())
 }
 
+const INTEGRATION_BROWSER_LABEL: &str = "integration-browser";
+const INTEGRATION_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.integration-vault";
+const INTEGRATION_VAULT_ACCOUNT: &str = "default";
+const INTEGRATION_VAULT_FILE: &str = "integration-cookie-vault-tauri.json";
+const INTEGRATION_VAULT_AAD: &[u8] = b"hvy-galaxy-integration-vault-v1";
+const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
+#[cfg(target_os = "macos")]
+const DEFAULT_INTEGRATION_DATA_STORE_ID: [u8; 16] = [
+    0x48, 0x56, 0x59, 0x47, 0x41, 0x4c, 0x41, 0x58,
+    0x59, 0x47, 0x4f, 0x4f, 0x47, 0x4c, 0x45, 0x01,
+];
+static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationVaultStatus {
+    configured: bool,
+    has_vault: bool,
+    storage_mode: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationVaultEnvelope {
+    version: u8,
+    algorithm: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Serialize, Deserialize)]
+struct IntegrationCookieVault {
+    cookies: Vec<IntegrationVaultCookie>,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationVaultCookie {
+    name: String,
+    value: String,
+    domain: Option<String>,
+    path: Option<String>,
+    secure: Option<bool>,
+    http_only: Option<bool>,
+    same_site: Option<String>,
+    #[serde(default)]
+    expires_unix: Option<i64>,
+}
+
+fn integration_vault_entry() -> AppResult<keyring::Entry> {
+    keyring::Entry::new(INTEGRATION_VAULT_SERVICE, INTEGRATION_VAULT_ACCOUNT)
+        .map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn integration_vault_path(app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join(INTEGRATION_VAULT_FILE))
+}
+
+fn write_integration_vault(app: &AppHandle, key: &[u8], plaintext: &[u8]) -> AppResult<()> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher.encrypt(&nonce, aes_gcm::aead::Payload { msg: plaintext, aad: INTEGRATION_VAULT_AAD })
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let envelope = IntegrationVaultEnvelope {
+        version: 1,
+        algorithm: "AES-256-GCM".into(),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(ciphertext),
+    };
+    write_json_atomically(&integration_vault_path(app)?, &envelope)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_integration_vault(app: &AppHandle, key: &[u8]) -> AppResult<IntegrationCookieVault> {
+    let envelope: IntegrationVaultEnvelope = serde_json::from_slice(&fs::read(integration_vault_path(app)?)?)?;
+    if envelope.version != 1 || envelope.algorithm != "AES-256-GCM" {
+        return Err(AppError::Message("Unsupported integration vault format.".into()));
+    }
+    let nonce = BASE64.decode(envelope.nonce).map_err(|error| AppError::Message(error.to_string()))?;
+    let ciphertext = BASE64.decode(envelope.ciphertext).map_err(|error| AppError::Message(error.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let plaintext = cipher.decrypt(aes_gcm::Nonce::from_slice(&nonce), aes_gcm::aead::Payload { msg: &ciphertext, aad: INTEGRATION_VAULT_AAD })
+        .map_err(|_| AppError::Message("Could not decrypt the integration vault.".into()))?;
+    serde_json::from_slice(&plaintext).map_err(AppError::from)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn integration_vault_key() -> AppResult<Vec<u8>> {
+    let cache = INTEGRATION_VAULT_KEY_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cached_key = cache.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    if let Some(key) = cached_key.clone() {
+        return Ok(key);
+    }
+    let key = integration_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::Message("The integration vault key is invalid.".into()));
+    }
+    *cached_key = Some(key.clone());
+    Ok(key)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restore_integration_cookies(app: &AppHandle, window: &tauri::WebviewWindow) -> AppResult<()> {
+    let key = integration_vault_key()?;
+    let vault = read_integration_vault(app, &key)?;
+    for stored in vault.cookies {
+        let host_prefixed = stored.name.starts_with("__Host-");
+        let secure_prefixed = stored.name.starts_with("__Secure-");
+        let mut cookie = tauri::webview::Cookie::build((stored.name, stored.value));
+        if !host_prefixed {
+            if let Some(domain) = stored.domain { cookie = cookie.domain(domain); }
+        }
+        if host_prefixed {
+            cookie = cookie.path("/").secure(true);
+        } else {
+            if let Some(path) = stored.path { cookie = cookie.path(path); }
+            if secure_prefixed {
+                cookie = cookie.secure(true);
+            } else if let Some(secure) = stored.secure {
+                cookie = cookie.secure(secure);
+            }
+        }
+        if let Some(http_only) = stored.http_only { cookie = cookie.http_only(http_only); }
+        cookie = match stored.same_site.as_deref() {
+            Some("strict") => cookie.same_site(tauri::webview::cookie::SameSite::Strict),
+            Some("lax") => cookie.same_site(tauri::webview::cookie::SameSite::Lax),
+            Some("none") => cookie.same_site(tauri::webview::cookie::SameSite::None),
+            _ => cookie,
+        };
+        if let Some(expires_unix) = stored.expires_unix {
+            let expires = tauri::webview::cookie::time::OffsetDateTime::from_unix_timestamp(expires_unix)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            cookie = cookie.expires(expires);
+        }
+        window.set_cookie(cookie.build()).map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn save_integration_cookies(app: &AppHandle, window: &tauri::WebviewWindow) -> AppResult<()> {
+    let key = integration_vault_key()?;
+    let cookies = window.cookies().map_err(|error| AppError::Message(error.to_string()))?
+        .into_iter()
+        .filter(|cookie| cookie.domain().is_some_and(|domain| domain == "google.com" || domain.ends_with(".google.com")))
+        .map(|cookie| IntegrationVaultCookie {
+            name: cookie.name().into(),
+            value: cookie.value().into(),
+            domain: cookie.domain().map(str::to_string),
+            path: cookie.path().map(str::to_string),
+            secure: cookie.secure(),
+            http_only: cookie.http_only(),
+            same_site: cookie.same_site().map(|value| match value {
+                tauri::webview::cookie::SameSite::Strict => "strict".into(),
+                tauri::webview::cookie::SameSite::Lax => "lax".into(),
+                tauri::webview::cookie::SameSite::None => "none".into(),
+            }),
+            expires_unix: cookie.expires_datetime().map(|value| value.unix_timestamp()),
+        })
+        .collect();
+    let plaintext = serde_json::to_vec(&IntegrationCookieVault { cookies })?;
+    write_integration_vault(app, &key, &plaintext)
+}
+
+#[tauri::command]
+fn load_integration_vault_status(_app: AppHandle) -> AppResult<IntegrationVaultStatus> {
+    #[cfg(target_os = "macos")]
+    return Ok(IntegrationVaultStatus {
+        configured: true,
+        has_vault: true,
+        storage_mode: "webkitProfile".into(),
+    });
+    #[cfg(not(target_os = "macos"))]
+    let has_vault = integration_vault_path(&_app)?.exists();
+    #[cfg(not(target_os = "macos"))]
+    Ok(IntegrationVaultStatus {
+        configured: has_vault,
+        has_vault,
+        storage_mode: "encryptedVault".into(),
+    })
+}
+
+#[tauri::command]
+fn setup_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    integration_vault_entry()?.set_secret(&key).map_err(|error| AppError::Message(error.to_string()))?;
+    *INTEGRATION_VAULT_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|error| AppError::Message(error.to_string()))? = Some(key.to_vec());
+    write_integration_vault(&app, &key, b"{\"cookies\":[]}")?;
+    load_integration_vault_status(app)
+}
+
+#[tauri::command]
+async fn reset_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> {
+    if let Some(window) = app.get_webview_window(INTEGRATION_BROWSER_LABEL) {
+        window.close().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        app.remove_data_store(DEFAULT_INTEGRATION_DATA_STORE_ID).await
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        return load_integration_vault_status(app);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+    let path = integration_vault_path(&app)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    let entry = integration_vault_entry()?;
+    if entry.get_secret().is_ok() {
+        entry.delete_credential().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    *INTEGRATION_VAULT_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|error| AppError::Message(error.to_string()))? = None;
+    load_integration_vault_status(app)
+    }
+}
+const INTEGRATION_INSPECTOR: &str = include_str!("../../src/integration-inspector.js");
+
+fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
+    let value = match destination {
+        "msn" => "https://www.msn.com/",
+        "gmail" => "https://mail.google.com/",
+        "calendar" => "https://calendar.google.com/",
+        _ => return Err(AppError::Message("Unknown integration browser destination.".into())),
+    };
+    value.parse::<tauri::Url>().map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn allowed_integration_url(url: &tauri::Url) -> bool {
+    url.scheme() == "https"
+        && url.host_str().is_some_and(|host| {
+            host == "msn.com"
+                || host.ends_with(".msn.com")
+                || host == "google.com"
+                || host.ends_with(".google.com")
+        })
+}
+
+#[tauri::command]
+fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>) -> AppResult<()> {
+    if profile_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID) != DEFAULT_INTEGRATION_PROFILE_ID {
+        return Err(AppError::Message("Unknown integration profile.".into()));
+    }
+    if command == "open" {
+        #[cfg(not(target_os = "macos"))]
+        if !load_integration_vault_status(app.clone())?.configured {
+            setup_integration_vault(app.clone())?;
+        }
+        let url = integration_destination_url(destination.as_deref().unwrap_or(""))?;
+        let blank_url = tauri::Url::parse("about:blank")
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        if let Some(window) = app.get_webview_window(INTEGRATION_BROWSER_LABEL) {
+            window.navigate(url).map_err(|error| AppError::Message(error.to_string()))?;
+            window.show().map_err(|error| AppError::Message(error.to_string()))?;
+            window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+            return Ok(());
+        }
+        let integration_app = app.clone();
+        let builder = tauri::WebviewWindowBuilder::new(
+            &app,
+            INTEGRATION_BROWSER_LABEL,
+            tauri::WebviewUrl::External(blank_url),
+        )
+        .title("HVY Galaxy Integrations")
+        .inner_size(1080.0, 700.0)
+        .min_inner_size(720.0, 520.0)
+        .center()
+        .initialization_script(INTEGRATION_INSPECTOR)
+        .on_navigation(move |requested_url| {
+            if requested_url.as_str() == "about:blank" {
+                return true;
+            }
+            if requested_url.as_str() == "hvy-integration://close" {
+                if let Some(window) = integration_app.get_webview_window(INTEGRATION_BROWSER_LABEL) {
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = save_integration_cookies(&integration_app, &window);
+                    let _ = window.close();
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://inspection/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert("profileId".into(), serde_json::Value::String(DEFAULT_INTEGRATION_PROFILE_ID.into()));
+                        }
+                        let _ = integration_app.emit("integration-inspection-result", result);
+                    }
+                }
+                return false;
+            }
+            allowed_integration_url(requested_url)
+        });
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .data_store_identifier(DEFAULT_INTEGRATION_DATA_STORE_ID)
+            .tabbing_identifier("hvy-galaxy-integration-window");
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.incognito(true);
+        let window = builder.build().map_err(|error| AppError::Message(error.to_string()))?;
+        #[cfg(not(target_os = "macos"))]
+        restore_integration_cookies(&app, &window)?;
+        window.navigate(integration_destination_url(destination.as_deref().unwrap_or(""))?)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        #[cfg(not(target_os = "macos"))]
+        let close_started = Arc::new(AtomicBool::new(false));
+        #[cfg(not(target_os = "macos"))]
+        let close_window = window.clone();
+        #[cfg(not(target_os = "macos"))]
+        let close_app = app.clone();
+        #[cfg(not(target_os = "macos"))]
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if close_started.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_close();
+                let _ = save_integration_cookies(&close_app, &close_window);
+                let _ = close_window.clear_all_browsing_data();
+                let _ = close_window.close();
+            }
+        });
+        return Ok(());
+    }
+
+    let Some(window) = app.get_webview_window(INTEGRATION_BROWSER_LABEL) else {
+        if command == "close" {
+            return Ok(());
+        }
+        return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
+    };
+    match command.as_str() {
+        "back" => window.eval("window.history.back()"),
+        "forward" => window.eval("window.history.forward()"),
+        "reload" => window.reload(),
+        "inspect" => window.eval("window.__hvyGalaxyInspector?.start()"),
+        "close" => {
+            #[cfg(not(target_os = "macos"))]
+            save_integration_cookies(&app, &window)?;
+            window.close()
+        },
+        _ => return Err(AppError::Message("Unknown integration browser command.".into())),
+    }
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationStorageProbeResult {
+    cookie_name: String,
+    inserted: bool,
+    extracted: bool,
+    fresh_store_empty: bool,
+    restored: bool,
+    deleted: bool,
+}
+
+#[tauri::command]
+fn probe_integration_cookie_storage(app: AppHandle) -> AppResult<IntegrationStorageProbeResult> {
+    let cookie_name = "hvy_galaxy_storage_probe";
+    let cookie_value = "round-trip";
+    let cookie_url = "https://www.msn.com/".parse::<tauri::Url>()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let probe_id = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .as_nanos();
+    let source_label = format!("integration-storage-probe-source-{probe_id}");
+    let restored_label = format!("integration-storage-probe-restored-{probe_id}");
+    let source_window = tauri::WebviewWindowBuilder::new(
+        &app,
+        &source_label,
+        tauri::WebviewUrl::External(cookie_url.clone()),
+    )
+    .title("HVY Galaxy Storage Probe")
+    .visible(false)
+    .incognito(true)
+    .on_navigation(allowed_integration_url)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    let restored_window = tauri::WebviewWindowBuilder::new(
+        &app,
+        &restored_label,
+        tauri::WebviewUrl::External(cookie_url.clone()),
+    )
+    .title("HVY Galaxy Storage Probe")
+    .visible(false)
+    .incognito(true)
+    .on_navigation(allowed_integration_url)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    let cookie = tauri::webview::Cookie::build((cookie_name, cookie_value))
+        .domain("www.msn.com")
+        .path("/")
+        .secure(true)
+        .http_only(true)
+        .same_site(tauri::webview::cookie::SameSite::Lax)
+        .build();
+    source_window.set_cookie(cookie.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+    let inserted_cookies = source_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let extracted = inserted_cookies.iter()
+        .any(|candidate| candidate.name() == cookie_name && candidate.value() == cookie_value);
+    let extracted_cookie = inserted_cookies.into_iter()
+        .find(|candidate| candidate.name() == cookie_name && candidate.value() == cookie_value)
+        .ok_or_else(|| AppError::Message("The ephemeral source store did not return the inserted cookie.".into()))?;
+    let fresh_store_empty = !restored_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name);
+    restored_window.set_cookie(extracted_cookie.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let restored = restored_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name && candidate.value() == cookie_value);
+    source_window.delete_cookie(extracted_cookie.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    restored_window.delete_cookie(extracted_cookie)
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let source_deleted = !source_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name);
+    let restored_deleted = !restored_window.cookies_for_url(cookie_url)
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name);
+    source_window.close().map_err(|error| AppError::Message(error.to_string()))?;
+    restored_window.close().map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(IntegrationStorageProbeResult {
+        cookie_name: cookie_name.into(),
+        inserted: true,
+        extracted,
+        fresh_store_empty,
+        restored,
+        deleted: source_deleted && restored_deleted,
+    })
+}
+
 #[tauri::command]
 fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
     let resource_path = app

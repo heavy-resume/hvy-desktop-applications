@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
+import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
@@ -46,6 +46,10 @@ export async function boot(): Promise<void> {
     installAiChatClient(state.aiSettings, state.appSettings);
     await onAppCloseRequest(() => {
       void handleAppCloseRequest();
+    });
+    await onIntegrationInspectionResult((result) => {
+      state.integrationInspectionResult = result;
+      rerender({ preserveMountedDocument: true });
     });
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();
