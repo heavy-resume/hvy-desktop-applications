@@ -2893,6 +2893,7 @@ function renderToolbar(state: AppState): string {
   const fileActions = getFileActionAvailability(state);
   const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
   const documentColorsEnabled = getDocumentColorsEnabled(state);
+  const documentColorsEditable = !document.readOnly || document.virtual === 'defaultDocument';
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
@@ -2901,10 +2902,10 @@ function renderToolbar(state: AppState): string {
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       <label class="document-color-toggle">
-        <input class="hvy-galaxy-input" type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${document.readOnly ? 'disabled' : ''}>
+        <input class="hvy-galaxy-input" type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${documentColorsEditable ? '' : 'disabled'}>
         <span>Use document colors</span>
       </label>
-      <button class="hvy-galaxy-button" type="button" data-action="open-document-colors" ${document.readOnly || !documentColorsEnabled ? 'disabled' : ''}>Document Colors...</button>
+      <button class="hvy-galaxy-button" type="button" data-action="open-document-colors" ${!documentColorsEditable || !documentColorsEnabled ? 'disabled' : ''}>Document Colors...</button>
       <button class="hvy-galaxy-button" type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
       ${showExportPdf ? `<button class="hvy-galaxy-button" type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
     </div>`;

@@ -13,7 +13,7 @@ export interface OpenDocument {
   path: string;
   name: string;
   extension: DocumentExtension;
-  virtual?: 'workspaceChat' | 'versionHistory' | 'recoveryDraft';
+  virtual?: 'workspaceChat' | 'versionHistory' | 'recoveryDraft' | 'defaultDocument';
   historySourcePath?: string;
   historySourceName?: string;
   historyVersionId?: string;

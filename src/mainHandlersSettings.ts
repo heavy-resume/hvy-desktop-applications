@@ -53,8 +53,12 @@ function updateDocumentColorTheme(nextTheme: DocumentColorTheme): void {
     colors: nextTheme.colors,
   };
   applyAppColorTheme();
-  setDocumentDirty(true);
-  state.status = 'Updated document colors';
+  if (state.document?.virtual === 'defaultDocument') {
+    state.status = 'Previewed document colors';
+  } else {
+    setDocumentDirty(true);
+    state.status = 'Updated document colors';
+  }
 }
 
 function initializeDocumentColorThemeFromCurrentTheme(): void {

@@ -35,7 +35,7 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState' | 'setThemeOverrides'> & {
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
@@ -106,6 +106,7 @@ export interface MountHvyDocumentOptions {
   imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
   chatContextProvider?: HvyChatContextProvider | null;
   initialChatState?: Parameters<HvyEmbedMount['setChatState']>[0];
+  themeOverrides?: Parameters<HvyEmbedMount['setThemeOverrides']>[0];
   powerScripts?: Parameters<HvyEmbedModule['mountHvy']>[0]['powerScripts'];
   getPowerScriptAcceptance?: Parameters<HvyEmbedModule['mountHvy']>[0]['getPowerScriptAcceptance'];
   onPowerScriptAcceptanceChanged?: Parameters<HvyEmbedModule['mountHvy']>[0]['onPowerScriptAcceptanceChanged'];
@@ -308,6 +309,7 @@ export async function mountHvyDocument(
     },
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
     initialChatState: options.initialChatState ?? null,
+    themeOverrides: options.themeOverrides ?? null,
     chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),
     chatContextProvider: options.chatContextProvider ?? null,
     embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
@@ -901,6 +903,14 @@ async function mountRawHvyDocument(
     setChatState() {
       return undefined;
     },
+    setThemeOverrides(overrides) {
+      for (const name of Array.from(root.style)) {
+        if (name.startsWith('--hvy-')) root.style.removeProperty(name);
+      }
+      for (const [name, value] of Object.entries(overrides ?? {})) {
+        root.style.setProperty(name, value);
+      }
+    },
     async buildImportPlan(importOptions) {
       const { buildImportPlanForDocument } = await import('../../heavy-file-format/src/ai-document-import');
       return buildImportPlanForDocument(parseDraft(), {
@@ -931,6 +941,7 @@ async function mountRawHvyDocument(
       return result;
     },
   };
+  mount.setThemeOverrides(options.themeOverrides ?? null);
   return { mount, get document() { return currentDocument; } };
 }
 

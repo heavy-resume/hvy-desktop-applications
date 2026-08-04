@@ -63,7 +63,7 @@ export interface DocumentSession {
   viewState: DocumentViewState | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
-  virtual?: 'recoveryDraft';
+  virtual?: 'recoveryDraft' | 'defaultDocument';
   recoveryModified: boolean;
 }
 export interface HotReloadDocumentSnapshot {
@@ -280,7 +280,7 @@ export async function openDocument(file: DocumentFile, options: { documentId?: s
   });
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(documentId);
   const viewSession = storedSession;
-  const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
+  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly ? storedSession : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
   const workspaceAccess = workspaceFileAiAccess(file.path);
@@ -330,7 +330,7 @@ export async function openDocument(file: DocumentFile, options: { documentId?: s
     mounted: null,
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
     recoveryModified: session?.recoveryModified ?? false,
-    virtual: options.historyPreview ? 'versionHistory' : options.recovered ? 'recoveryDraft' : session?.virtual,
+    virtual: options.historyPreview ? 'versionHistory' : options.defaultDocument ? 'defaultDocument' : options.recovered ? 'recoveryDraft' : session?.virtual,
     historySourcePath: options.historyPreview?.sourcePath,
     historySourceName: options.historyPreview?.sourceName,
     historyVersionId: options.historyPreview?.versionId,
@@ -432,7 +432,7 @@ export function preserveCurrentDocumentSession(): void {
     viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
-    virtual: openDocument.virtual === 'recoveryDraft' ? 'recoveryDraft' : undefined,
+    virtual: openDocument.virtual === 'recoveryDraft' || openDocument.virtual === 'defaultDocument' ? openDocument.virtual : undefined,
     recoveryModified: openDocument.recoveryModified,
   });
   measurePerf('session:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
@@ -465,7 +465,7 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
-    virtual: openDocument.virtual === 'recoveryDraft' ? 'recoveryDraft' : undefined,
+    virtual: openDocument.virtual === 'recoveryDraft' || openDocument.virtual === 'defaultDocument' ? openDocument.virtual : undefined,
     recoveryModified: openDocument.recoveryModified,
   });
   measurePerf('session:update:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
@@ -559,6 +559,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
   const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
     storageKey: documentStorageKey(currentDocument.path || currentDocument.name),
     initialChatState: storedChatState,
+    themeOverrides: readDocumentColorPreference(path) ? null : state.colorTheme.colors,
     searchSnapshot,
     hiddenFromAI: currentDocument.hiddenFromAI,
     maxContextChars: normalizeAiMaxContextChars(state.aiSettings.maxContextChars),
@@ -697,7 +698,6 @@ export function bindMountThemeReapply(root: HTMLElement): () => void {
     frame = window.requestAnimationFrame(() => {
       frame = window.requestAnimationFrame(() => {
         frame = 0;
-        applyAppColorTheme(root);
         updateDocumentStageOverlayState(root);
       });
     });

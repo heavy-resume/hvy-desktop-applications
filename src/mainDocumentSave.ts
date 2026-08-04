@@ -260,7 +260,7 @@ export async function selectDocumentTab(path: string): Promise<void> {
     return;
   }
   const session = documentSessions.get(path);
-  if (session?.dirty || session?.isNew) {
+  if (session?.dirty || session?.isNew || session?.readOnly) {
     await openDocument({
       path: session.path,
       name: session.name,

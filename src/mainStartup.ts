@@ -1,7 +1,7 @@
 import { installAiChatClient } from './aiClient';
 import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
-import { applyColorTheme, clearColorTheme, isCssVariableName, loadColorThemeSettings } from './colorTheme';
+import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state } from './state';
@@ -318,22 +318,11 @@ export function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
 
 export function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
   applyColorTheme(state.colorTheme);
-  if (!root) return;
-  applyMountedDocumentColorTheme(root);
-}
-
-function applyMountedDocumentColorTheme(root: HTMLElement): void {
-  clearColorTheme(root);
-  if (!readDocumentColorPreference(state.document?.path ?? '')) return;
-  const theme = state.document?.mounted?.document.meta.theme;
-  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return;
-  const colors = (theme as { colors?: unknown }).colors;
-  if (!colors || typeof colors !== 'object' || Array.isArray(colors)) return;
-  for (const [name, value] of Object.entries(colors)) {
-    if (isCssVariableName(name) && typeof value === 'string' && value.trim()) {
-      root.style.setProperty(name, value.trim());
-    }
-  }
+  const mounted = state.document?.mounted;
+  if (!root || !mounted) return;
+  mounted.mount.setThemeOverrides(
+    readDocumentColorPreference(state.document?.path ?? '') ? null : state.colorTheme.colors,
+  );
 }
 
 export async function refreshRecents(): Promise<void> {
