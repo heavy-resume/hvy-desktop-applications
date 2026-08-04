@@ -56,7 +56,7 @@ body {
   user-select: text;
 }
 
-button {
+.hvy-galaxy-button {
   border: 1px solid var(--hvy-border-input, #b8c2bd);
   border-radius: 6px;
   background: var(--hvy-surface, #ffffff);
@@ -65,8 +65,8 @@ button {
   padding: 7px 10px;
 }
 
-input:not([type="checkbox"]):not([type="radio"]),
-select {
+.hvy-galaxy-input:not([type="checkbox"]):not([type="radio"]),
+.hvy-galaxy-select {
   width: 100%;
   border: 1px solid var(--hvy-border-input, #aeb9b3);
   border-radius: 6px;
@@ -76,7 +76,7 @@ select {
   padding: 8px 10px;
 }
 
-input[type="color"] {
+.hvy-galaxy-input[type="color"] {
   width: 44px;
   min-width: 44px;
   height: 34px;
@@ -86,95 +86,24 @@ input[type="color"] {
   padding: 3px;
 }
 
-input[type="hidden"] {
+.hvy-galaxy-input[type="hidden"] {
   display: none;
 }
 
-input[type="checkbox"],
-input[type="radio"] {
+.hvy-galaxy-input[type="checkbox"],
+.hvy-galaxy-input[type="radio"] {
   accent-color: var(--hvy-accent-1, #477d7c);
 }
 
-.document-host .hvy-embed-layout input[type="checkbox"],
-.document-host .hvy-embed-layout input[type="radio"],
-.document-host .hvy-form-plugin input[type="radio"],
-.document-host .hvy-form-plugin input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  display: inline-grid;
-  place-content: center;
-  width: 1rem;
-  min-width: 1rem;
-  height: 1rem;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--hvy-border-input);
-  border-radius: 4px;
-  background: var(--hvy-surface);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, var(--hvy-surface-alt) 72%, white 28%),
-    0 0 0 1px color-mix(in srgb, var(--hvy-text) 24%, transparent);
-  accent-color: var(--hvy-accent-1);
-}
-
-.document-host .hvy-embed-layout input[type="radio"],
-.document-host .hvy-form-plugin input[type="radio"] {
-  border-radius: 50%;
-}
-
-.document-host .hvy-embed-layout input[type="checkbox"]::before,
-.document-host .hvy-form-plugin input[type="checkbox"]::before {
-  content: "";
-  width: 0.28rem;
-  height: 0.52rem;
-  margin-top: -0.08rem;
-  border-right: 0.13rem solid var(--hvy-accent-1-text);
-  border-bottom: 0.13rem solid var(--hvy-accent-1-text);
-  transform: rotate(45deg) scale(0);
-  transform-origin: center;
-}
-
-.document-host .hvy-embed-layout input[type="radio"]::before,
-.document-host .hvy-form-plugin input[type="radio"]::before {
-  content: "";
-  width: 0.48rem;
-  height: 0.48rem;
-  border-radius: 50%;
-  background: var(--hvy-accent-1);
-  transform: scale(0);
-  transform-origin: center;
-}
-
-.document-host .hvy-embed-layout input[type="checkbox"]:checked,
-.document-host .hvy-embed-layout input[type="radio"]:checked,
-.document-host .hvy-form-plugin input[type="radio"]:checked,
-.document-host .hvy-form-plugin input[type="checkbox"]:checked {
-  border-color: var(--hvy-accent-1-alt);
-  background: linear-gradient(180deg,
-      color-mix(in srgb, var(--hvy-accent-1) 18%, var(--hvy-surface) 82%) 0%,
-      color-mix(in srgb, var(--hvy-accent-1-alt) 22%, var(--hvy-surface-alt) 78%) 100%);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--hvy-surface) 88%, white 12%);
-}
-
-.document-host .hvy-embed-layout input[type="checkbox"]:checked::before,
-.document-host .hvy-form-plugin input[type="checkbox"]:checked::before {
-  transform: rotate(45deg) scale(1);
-}
-
-.document-host .hvy-embed-layout input[type="radio"]:checked::before,
-.document-host .hvy-form-plugin input[type="radio"]:checked::before {
-  transform: scale(1);
-}
-
-button:not(:disabled) {
+.hvy-galaxy-button:not(:disabled) {
   cursor: pointer;
 }
 
-button:hover:not(:disabled) {
+.hvy-galaxy-button:hover:not(:disabled) {
   border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
 }
 
-button:disabled {
+.hvy-galaxy-button:disabled {
   opacity: 0.45;
 }
 

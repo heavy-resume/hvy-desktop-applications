@@ -1,3 +1,6 @@
+import '../../heavy-file-format/src/default-theme.css';
+import '../../heavy-file-format/src/host-overrides.css';
+import '../../heavy-file-format/src/style.css';
 import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
 import { readDocumentFile, saveAppSettings, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';

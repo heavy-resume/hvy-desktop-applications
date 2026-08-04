@@ -355,17 +355,17 @@ export function renderLeftPanel(state: AppState): void {
         <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
         <h1>HVY Galaxy</h1>
       </div>
-      <button type="button" class="icon-button" data-action="create-file" title="New HVY document">+</button>
+      <button type="button" class="hvy-galaxy-button icon-button" data-action="create-file" title="New HVY document">+</button>
     </div>
     <div class="sidebar-actions">
-      <button type="button" data-action="open-file">Open File</button>
-      <button type="button" data-action="integrations">Integrations</button>
+      <button class="hvy-galaxy-button" type="button" data-action="open-file">Open File</button>
+      <button class="hvy-galaxy-button" type="button" data-action="integrations">Integrations</button>
     </div>
     <section class="workspaces-section">
       <div class="sidebar-section-heading">
         <h2>Workspaces</h2>
-        <button type="button" class="icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
-        <button type="button" class="icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
+        <button type="button" class="hvy-galaxy-button icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
+        <button type="button" class="hvy-galaxy-button icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
       </div>
       ${renderWorkspaces(state)}
     </section>
@@ -2099,7 +2099,7 @@ function renderWorkspaceFilterDialog(
             ${funnelIcon()}
             <span>Filter ${escapeHtml(filterTargetName)}</span>
           </div>
-          <button type="button" class="search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
+          <button type="button" class="hvy-galaxy-button search-close-button ghost remove-x" data-action="close-workspace-filter" aria-label="Close workspace filter">${closeIcon()}</button>
         </div>
         ${renderWorkspaceFilterVisibilityControls(visibility, filter.isLoading, filter.workspacePath ?? '', filter.workspacePath ? embeddingPreviews[filter.workspacePath] ?? null : null)}
         <div class="search-input-row">
@@ -2107,8 +2107,8 @@ function renderWorkspaceFilterDialog(
           <label>
             <span>Filter document</span>
             ${isSemantic || isEmbedding
-      ? `<textarea class="search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
-      : `<input class="search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
+      ? `<textarea class="hvy-galaxy-textarea search-input search-prompt-textarea" data-field="workspace-filter-query" placeholder="Describe what should stay visible" rows="4" autofocus>${escapeHtml(filter.queryDraft)}</textarea>`
+      : `<input class="hvy-galaxy-input search-input" data-field="workspace-filter-query" value="${escapeAttr(filter.queryDraft)}" placeholder="Filter document" autocomplete="off" spellcheck="false" autofocus>`
     }
           </label>
         </div>
@@ -2130,12 +2130,12 @@ function renderWorkspaceFilterDialog(
         <div class="workspace-filter-actions">
           <button
             type="submit"
-            class="secondary${applied ? ' is-active' : ''}"
+            class="hvy-galaxy-button secondary${applied ? ' is-active' : ''}"
             data-role="workspace-filter-submit"
             aria-pressed="${applied ? 'true' : 'false'}"
             ${!stopRunningFilter && (filter.isLoading || filter.queryDraft.trim().length === 0) ? 'disabled' : ''}
           >${submitLabel}</button>
-          ${activeFilter ? `<button type="button" class="ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
+          ${activeFilter ? `<button type="button" class="hvy-galaxy-button ghost" data-action="clear-workspace-filter" ${filter.isLoading ? 'disabled' : ''}>Turn off filter</button>` : ''}
         </div>
       </form>
     </section>`;
@@ -2160,22 +2160,22 @@ function renderWorkspaceChatDocument(state: AppState): string {
                       </div>`
                     : chat.messages.map(renderWorkspaceChatMessage).join('')}
                 </div>
-                <button type="button" class="workspace-chat-scroll-bottom" data-action="workspace-chat-scroll-bottom" hidden>Latest ↓</button>
+                <button type="button" class="hvy-galaxy-button workspace-chat-scroll-bottom" data-action="workspace-chat-scroll-bottom" hidden>Latest ↓</button>
               </div>
               ${renderWorkspaceChatStatus(chat)}
               <label class="workspace-chat-composer">
                 <span>Question</span>
-                <textarea data-field="workspace-chat-draft" rows="4" placeholder="${escapeAttr(chat.targetDirectory ? 'Ask about this folder...' : 'Ask about this workspace...')}" ${chat.isSending ? 'disabled' : ''}>${escapeHtml(chat.draft)}</textarea>
+                <textarea class="hvy-galaxy-textarea" data-field="workspace-chat-draft" rows="4" placeholder="${escapeAttr(chat.targetDirectory ? 'Ask about this folder...' : 'Ask about this workspace...')}" ${chat.isSending ? 'disabled' : ''}>${escapeHtml(chat.draft)}</textarea>
               </label>
               <div class="workspace-chat-actions">
                 ${chat.isSending ? '<span>Working...</span>' : ''}
-                <button type="submit" class="secondary" ${canSend ? '' : 'disabled'}>${chat.isSending ? 'Stop' : 'Send'}</button>
+                <button type="submit" class="hvy-galaxy-button secondary" ${canSend ? '' : 'disabled'}>${chat.isSending ? 'Stop' : 'Send'}</button>
               </div>
             </form>`
           : `<div class="workspace-chat-required">
               <h3>Embeddings Required</h3>
               <p>Enable embeddings before chatting across folders or workspaces.</p>
-              <button type="button" data-action="ai-settings">Open AI Settings</button>
+              <button class="hvy-galaxy-button" type="button" data-action="ai-settings">Open AI Settings</button>
             </div>`
       }
     </section>`;
@@ -2190,9 +2190,9 @@ function renderWorkspaceChatClosePrompt(state: AppState): string {
         <h2 id="workspaceChatSaveTitle">Save Chat?</h2>
         <p>Save this chat session as an HVY document before closing it.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-close-workspace-chat">Cancel</button>
-          <button type="button" data-action="discard-workspace-chat">Don't Save</button>
-          <button type="button" data-action="save-workspace-chat" ${state.busy ? 'disabled' : ''}>Save Chat</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-close-workspace-chat">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="discard-workspace-chat">Don't Save</button>
+          <button class="hvy-galaxy-button" type="button" data-action="save-workspace-chat" ${state.busy ? 'disabled' : ''}>Save Chat</button>
         </div>
       </section>
     </div>`;
@@ -2251,11 +2251,11 @@ function renderRenameFileDialog(state: AppState): string {
         <h2>Rename</h2>
         <label>
           <span>Name</span>
-          <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(displayDocumentName(state.renameFileCurrentName))}" required>
+          <input class="hvy-galaxy-input" name="fileName" type="text" autocomplete="off" value="${escapeAttr(displayDocumentName(state.renameFileCurrentName))}" required>
         </label>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-rename-file">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-rename-file">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
         </div>
       </form>
     </div>`;
@@ -2271,8 +2271,8 @@ function renderDeleteFileDialog(state: AppState): string {
         <h2 id="deleteFileTitle">Delete forever?</h2>
         <p class="dialog-note">${escapeHtml(state.deleteFileName)} will be removed from disk.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-delete-file">Cancel</button>
-          <button type="button" class="danger-button" data-action="delete-file" ${state.busy ? 'disabled' : ''}>Delete</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-delete-file">Cancel</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="delete-file" ${state.busy ? 'disabled' : ''}>Delete</button>
         </div>
       </section>
     </div>`;
@@ -2291,8 +2291,8 @@ function renderDeleteFolderDialog(state: AppState): string {
           ${state.deleteFolderArchivedFiles.map((file) => `<div role="listitem">${escapeHtml(file)}</div>`).join('')}
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-delete-folder">Cancel</button>
-          <button type="button" class="danger-button" data-action="delete-folder" ${state.busy ? 'disabled' : ''}>Delete</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-delete-folder">Cancel</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="delete-folder" ${state.busy ? 'disabled' : ''}>Delete</button>
         </div>
       </section>
     </div>`;
@@ -2306,16 +2306,16 @@ function renderNewFolderDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-folder">
         <h2>New Folder</h2>
-        <input name="workspacePath" type="hidden" value="${escapeAttr(state.newFolderWorkspacePath)}">
-        <input name="parentDirectory" type="hidden" value="${escapeAttr(state.newFolderParentDirectory)}">
+        <input class="hvy-galaxy-input" name="workspacePath" type="hidden" value="${escapeAttr(state.newFolderWorkspacePath)}">
+        <input class="hvy-galaxy-input" name="parentDirectory" type="hidden" value="${escapeAttr(state.newFolderParentDirectory)}">
         <p class="dialog-note">${escapeHtml(workspace?.manifest.name ?? 'Workspace')} / ${escapeHtml(parentLabel)}</p>
         <label>
           <span>Name</span>
-          <input name="folderName" type="text" autocomplete="off" required>
+          <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" required>
         </label>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-new-folder">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-new-folder">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </form>
     </div>`;
@@ -2347,13 +2347,13 @@ function renderWorkspaceTransferDialog(state: AppState): string {
         ${transfer.mode === 'saveCurrent' ? `
           <label>
             <span>Name</span>
-            <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(transfer.nameDraft)}" required>
+            <input class="hvy-galaxy-input" name="fileName" type="text" autocomplete="off" value="${escapeAttr(transfer.nameDraft)}" required>
           </label>
         ` : ''}
         <p class="dialog-note">${escapeHtml(transfer.fileName)}</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-workspace-transfer">Cancel</button>
-          <button type="submit" ${state.busy || workspaces.length === 0 ? 'disabled' : ''}>${escapeHtml(submitLabel)}</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-workspace-transfer">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy || workspaces.length === 0 ? 'disabled' : ''}>${escapeHtml(submitLabel)}</button>
         </div>
       </form>
     </div>`;
@@ -2361,7 +2361,7 @@ function renderWorkspaceTransferDialog(state: AppState): string {
 
 function renderWorkspaceDestinationTree(workspaces: Workspace[], selectedWorkspacePath: string | null, selectedRelativePath: string): string {
   if (workspaces.length === 0) {
-    return '<input name="workspaceDestination" type="hidden" value="">';
+    return '<input class="hvy-galaxy-input" name="workspaceDestination" type="hidden" value="">';
   }
   return `
     <div class="workspace-destination-field">
@@ -2381,7 +2381,7 @@ function renderWorkspaceDestination(workspace: Workspace, selectedWorkspacePath:
   return `
     <div class="workspace-destination-workspace">
       <label class="workspace-destination-option is-root">
-        <input
+        <input class="hvy-galaxy-input"
           type="radio"
           name="workspaceDestination"
           value="${escapeAttr(workspace.path)}"
@@ -2414,7 +2414,7 @@ function renderWorkspaceDestinationFolder(
   return `
     <div class="workspace-destination-folder">
       <label class="workspace-destination-option">
-        <input
+        <input class="hvy-galaxy-input"
           type="radio"
           name="workspaceDestination"
           value="${escapeAttr(`${workspacePath}::${relativePath}`)}"
@@ -2432,12 +2432,12 @@ function renderWorkspaceDestinationFolder(
 function renderWorkspaceFolderSelect(workspace: Workspace, selectedRelativePath: string): string {
   const folders = workspaceFolderOptions(workspace.files);
   if (folders.length === 0) {
-    return '<input name="targetDirectory" type="hidden" value="">';
+    return '<input class="hvy-galaxy-input" name="targetDirectory" type="hidden" value="">';
   }
   return `
     <label>
       <span>Folder</span>
-      <select name="targetDirectory">
+      <select class="hvy-galaxy-select" name="targetDirectory">
         <option value="">Workspace root</option>
         ${folders.map((folder) => `<option value="${escapeAttr(folder.relativePath)}" ${folder.relativePath === selectedRelativePath ? 'selected' : ''}>${escapeHtml(folder.label)}</option>`).join('')}
       </select>
@@ -2492,30 +2492,30 @@ function renderSaveAsDialog(state: AppState): string {
         <h2>Save As...</h2>
         ${renderSaveAsKindControl('document', templateDisabled)}
         <div class="segmented-control" role="tablist" aria-label="Save destination">
-          <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
-          <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
+          <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          <button type="button" class="hvy-galaxy-button ${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
         </div>
-        <input name="scope" type="hidden" value="${escapeAttr(anywhereActive ? 'anywhere' : 'workspace')}">
+        <input class="hvy-galaxy-input" name="scope" type="hidden" value="${escapeAttr(anywhereActive ? 'anywhere' : 'workspace')}">
         ${workspaceActive ? `
           <label>
             <span>Workspace</span>
-            <select name="workspacePath" required>
+            <select class="hvy-galaxy-select" name="workspacePath" required>
               ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
             </select>
           </label>
           ${selectedWorkspace ? renderWorkspaceFolderSelect(selectedWorkspace, '') : ''}
           <label>
             <span>Name</span>
-            <input name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
+            <input class="hvy-galaxy-input" name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
           </label>
         ` : `
           <p class="dialog-note">Choose a location outside HVY Galaxy.</p>
         `}
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-save-as">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-save-as">Cancel</button>
           ${workspaceActive
-      ? `<button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
-      : `<button type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
+      ? `<button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
+      : `<button class="hvy-galaxy-button" type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
         </div>
       </form>
     </div>`;
@@ -2532,28 +2532,28 @@ function renderSaveAsTemplateDialog(state: AppState): string {
         ${renderSaveAsKindControl('template', false)}
         <label>
           <span>Format</span>
-          <select name="format">
+          <select class="hvy-galaxy-select" name="format">
             <option value=".thvy" ${state.document?.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
             <option value=".phvy" ${state.document?.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
           </select>
         </label>
         <label>
           <span>Name</span>
-          <input name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
+          <input class="hvy-galaxy-input" name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
         </label>
         <div class="field-group">
           <span>Scope</span>
           <div class="segmented-control">
-            <button type="button" class="${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
-            <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+            <button type="button" class="hvy-galaxy-button ${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
+            <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
           </div>
         </div>
-        <input name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
+        <input class="hvy-galaxy-input" name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
         <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'App templates are available everywhere; workspace templates stay with this workspace.'}</p>
         ${state.error ? `<p class="dialog-note" data-state="error" role="alert">${escapeHtml(state.error)}</p>` : ''}
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-save-as">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-save-as">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
     </div>`;
@@ -2562,8 +2562,8 @@ function renderSaveAsTemplateDialog(state: AppState): string {
 function renderSaveAsKindControl(activeKind: AppState['saveAsKind'], templateDisabled: boolean): string {
   return `
     <div class="segmented-control" role="tablist" aria-label="Save as type">
-      <button type="button" class="${activeKind === 'document' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="document" aria-pressed="${activeKind === 'document' ? 'true' : 'false'}">Document</button>
-      <button type="button" class="${activeKind === 'template' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="template" aria-pressed="${activeKind === 'template' ? 'true' : 'false'}" ${templateDisabled ? 'disabled' : ''}>Template</button>
+      <button type="button" class="hvy-galaxy-button ${activeKind === 'document' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="document" aria-pressed="${activeKind === 'document' ? 'true' : 'false'}">Document</button>
+      <button type="button" class="hvy-galaxy-button ${activeKind === 'template' ? 'is-active' : ''}" data-action="set-save-as-kind" data-kind="template" aria-pressed="${activeKind === 'template' ? 'true' : 'false'}" ${templateDisabled ? 'disabled' : ''}>Template</button>
     </div>`;
 }
 
@@ -2573,7 +2573,7 @@ function renderWorkspaceFilterModeButton(mode: HvyDocumentSearchMode, label: str
   return `
     <button
       type="button"
-      class="search-tab${active ? ' is-active' : ''}"
+      class="hvy-galaxy-button search-tab${active ? ' is-active' : ''}"
       data-action="set-workspace-filter-mode"
       data-filter-mode="${escapeAttr(mode)}"
       aria-pressed="${active ? 'true' : 'false'}"
@@ -2592,7 +2592,7 @@ function renderWorkspaceFilterBehaviorButton(mode: SearchFilterMode, label: stri
   return `
     <button
       type="button"
-      class="search-filter-mode-button${active ? ' is-active' : ''}"
+      class="hvy-galaxy-button search-filter-mode-button${active ? ' is-active' : ''}"
       data-action="set-workspace-filter-behavior"
       data-filter-behavior="${escapeAttr(mode)}"
       aria-pressed="${active ? 'true' : 'false'}"
@@ -2614,23 +2614,23 @@ function renderWorkspaceFilterVisibilityControls(
       </div>
       <div class="workspace-filter-visibility-list">
         <label class="checkbox-row">
-          <input type="checkbox" name="hvyDocuments" ${visibility.hvyDocuments ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <input class="hvy-galaxy-input" type="checkbox" name="hvyDocuments" ${visibility.hvyDocuments ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>HVY</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="thvyTemplates" ${visibility.thvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <input class="hvy-galaxy-input" type="checkbox" name="thvyTemplates" ${visibility.thvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>THVY</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <input class="hvy-galaxy-input" type="checkbox" name="phvyTemplates" ${visibility.phvyTemplates ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>PHVY</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="archivedFiles" ${visibility.archivedFiles ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <input class="hvy-galaxy-input" type="checkbox" name="archivedFiles" ${visibility.archivedFiles ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
           <span>Archived</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" data-action="toggle-workspace-embedding-preview" data-workspace-path="${escapeAttr(workspacePath)}" ${previewEnabled ? 'checked' : ''} ${disabled || !workspacePath ? 'disabled' : ''}>
+          <input class="hvy-galaxy-input" type="checkbox" data-action="toggle-workspace-embedding-preview" data-workspace-path="${escapeAttr(workspacePath)}" ${previewEnabled ? 'checked' : ''} ${disabled || !workspacePath ? 'disabled' : ''}>
           <span>Embeddings</span>
         </label>
       </div>
@@ -2668,19 +2668,19 @@ function showFileContextMenu(
   menu.style.top = `${event.clientY}px`;
   const parentDirectory = parentDirectoryForRelativePath(relativePath);
   menu.innerHTML = archived ? `
-    <button type="button" data-menu-action="restore">Restore</button>
-    <button type="button" data-menu-action="delete">Delete</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="restore">Restore</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="delete">Delete</button>
   ` : `
-    <button type="button" data-menu-action="new-document">New Document</button>
-    <button type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
-    <button type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
-    <button type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
-    <button type="button" data-menu-action="rename">Rename</button>
-    <button type="button" data-menu-action="archive">Archive</button>
-    <button type="button" data-menu-action="copy">Copy</button>
-    <button type="button" data-menu-action="cut">Cut</button>
-    <button type="button" data-menu-action="paste">Paste</button>
-    ${showWorkspaceActions ? '<button type="button" data-menu-action="copy-to-workspace">Copy to...</button><button type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="rename">Rename</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="archive">Archive</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="copy">Copy</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="cut">Cut</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="paste">Paste</button>
+    ${showWorkspaceActions ? '<button class="hvy-galaxy-button" type="button" data-menu-action="copy-to-workspace">Copy to...</button><button class="hvy-galaxy-button" type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -2747,15 +2747,15 @@ function showWorkspaceContextMenu(
     ? `Folder contains ${deleteInfo.activeFileCount} active file${deleteInfo.activeFileCount === 1 ? '' : 's'}`
     : 'Delete folder';
   menu.innerHTML = `
-    <button type="button" data-menu-action="new-folder">New Folder</button>
-    <button type="button" data-menu-action="new-document">New Document</button>
-    <button type="button" data-menu-action="add-files">Add Files</button>
-    <button type="button" data-menu-action="import">Import</button>
-    <button type="button" data-menu-action="paste">Paste</button>
-    ${targetDirectory ? '<button type="button" data-menu-action="filter">Filter Folder</button>' : ''}
-    ${targetDirectory ? '<button type="button" data-menu-action="chat">Chat Folder</button>' : '<button type="button" data-menu-action="chat">Chat Workspace</button>'}
-    <button type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
-    ${targetDirectory ? `<button type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-folder">New Folder</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="add-files">Add Files</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="import">Import</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="paste">Paste</button>
+    ${targetDirectory ? '<button class="hvy-galaxy-button" type="button" data-menu-action="filter">Filter Folder</button>' : ''}
+    ${targetDirectory ? '<button class="hvy-galaxy-button" type="button" data-menu-action="chat">Chat Folder</button>' : '<button class="hvy-galaxy-button" type="button" data-menu-action="chat">Chat Workspace</button>'}
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
+    ${targetDirectory ? `<button class="hvy-galaxy-button" type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   `;
   const cleanup = () => {
     menu.remove();
@@ -2832,11 +2832,11 @@ function renderDocumentTabs(state: AppState): string {
     <nav class="document-tabs${state.documentTabs.length === 0 ? ' is-empty' : ''}" aria-label="Open documents">
       ${state.documentTabs.map((tab) => `
         <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}">
-          <button type="button" class="document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.path)}" title="${escapeAttr(tab.path)}" aria-current="${tab.active ? 'page' : 'false'}">
+          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.path)}" title="${escapeAttr(tab.path)}" aria-current="${tab.active ? 'page' : 'false'}">
             <span class="document-tab-dirty" aria-hidden="true"></span>
             <span class="document-tab-name">${escapeHtml(tab.name)}</span>
           </button>
-          <button type="button" class="document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.path)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
+          <button type="button" class="hvy-galaxy-button document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.path)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
         </div>
       `).join('')}
     </nav>`;
@@ -2850,7 +2850,7 @@ function renderTabStackPopover(state: AppState): string {
   return `
     <div class="tab-stack-popover" role="listbox" aria-label="Open documents">
       ${state.documentTabs.map((tab, index) => `
-        <button type="button" class="tab-stack-item${index === activeIndex ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}" role="option" aria-selected="${index === activeIndex ? 'true' : 'false'}" data-action="select-tab-stack-item" data-path="${escapeAttr(tab.path)}">
+        <button type="button" class="hvy-galaxy-button tab-stack-item${index === activeIndex ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}" role="option" aria-selected="${index === activeIndex ? 'true' : 'false'}" data-action="select-tab-stack-item" data-path="${escapeAttr(tab.path)}">
           <span class="tab-stack-dirty" aria-hidden="true"></span>
           <span>${escapeHtml(tab.name)}</span>
         </button>
@@ -2875,8 +2875,8 @@ function renderToolbar(state: AppState): string {
       </div>
       <div class="toolbar-actions">
         <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
-        <button type="button" data-action="save-workspace-chat" ${state.workspaceChat.messages.length === 0 || state.busy ? 'disabled' : ''}>Save Chat</button>
-        <button type="button" data-action="close-workspace-chat">Close</button>
+        <button class="hvy-galaxy-button" type="button" data-action="save-workspace-chat" ${state.workspaceChat.messages.length === 0 || state.busy ? 'disabled' : ''}>Save Chat</button>
+        <button class="hvy-galaxy-button" type="button" data-action="close-workspace-chat">Close</button>
       </div>`;
   }
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
@@ -2892,12 +2892,12 @@ function renderToolbar(state: AppState): string {
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       <label class="document-color-toggle">
-        <input type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${document.readOnly ? 'disabled' : ''}>
+        <input class="hvy-galaxy-input" type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${document.readOnly ? 'disabled' : ''}>
         <span>Use document colors</span>
       </label>
-      <button type="button" data-action="open-document-colors" ${document.readOnly || !documentColorsEnabled ? 'disabled' : ''}>Document Colors...</button>
-      <button type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
-      ${showExportPdf ? `<button type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
+      <button class="hvy-galaxy-button" type="button" data-action="open-document-colors" ${document.readOnly || !documentColorsEnabled ? 'disabled' : ''}>Document Colors...</button>
+      <button class="hvy-galaxy-button" type="button" data-action="import-into-current" ${fileActions.importCurrent ? '' : 'disabled'}>Import</button>
+      ${showExportPdf ? `<button class="hvy-galaxy-button" type="button" data-action="export-pdf" ${fileActions.exportPdf ? '' : 'disabled'}>Export PDF</button>` : ''}
     </div>`;
 }
 
@@ -2916,11 +2916,11 @@ function renderModeControls(activeMode: HvyMode, readOnly: boolean, metaOpen: bo
     const contents = mode === 'advanced' || mode === 'hvy'
       ? `<span>${escapeHtml(mode === 'advanced' ? 'ADV' : 'HVY')}</span>`
       : `${modeIcon(mode)}<span>${escapeHtml(label)}</span>`;
-    return `<button type="button" class="mode-button${active}" data-action="set-mode" data-mode="${mode}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" aria-pressed="${active ? 'true' : 'false'}"${disabled}>${contents}</button>`;
+    return `<button type="button" class="hvy-galaxy-button mode-button${active}" data-action="set-mode" data-mode="${mode}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}" aria-pressed="${active ? 'true' : 'false'}"${disabled}>${contents}</button>`;
   };
   return `
     <nav class="mode-controls${showEditorSubmodes ? ' is-editor-enabled' : ''}" aria-label="HVY editor mode">
-      ${showEditorSubmodes ? `<div class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}<button type="button" class="mode-button mode-button-meta${metaOpen ? ' is-active' : ''}" data-action="open-document-meta" title="Document Meta" aria-label="Document Meta" aria-pressed="${metaOpen ? 'true' : 'false'}"${readOnly ? ' disabled' : ''}><span>Meta</span></button></div>` : ''}
+      ${showEditorSubmodes ? `<div class="mode-editor-submodes">${buttonHtml(modes[3])}${buttonHtml(modes[4])}<button type="button" class="hvy-galaxy-button mode-button mode-button-meta${metaOpen ? ' is-active' : ''}" data-action="open-document-meta" title="Document Meta" aria-label="Document Meta" aria-pressed="${metaOpen ? 'true' : 'false'}"${readOnly ? ' disabled' : ''}><span>Meta</span></button></div>` : ''}
       <div class="mode-primary-controls">
         ${buttonHtml(modes[2])}
         ${buttonHtml(modes[1])}
@@ -2988,12 +2988,12 @@ function renderPendingWorkspace(entry: AppState['workspaceEntries'][number]): st
   const detail = loading ? 'Loading…' : entry.error ?? 'Workspace could not be loaded.';
   return `
     <section class="workspace-root workspace-root-${entry.status}" data-workspace-path="${escapeAttr(entry.path)}" aria-busy="${loading ? 'true' : 'false'}">
-      <button type="button" class="workspace-state-heading" data-action="${loading ? '' : 'retry-workspace'}" data-workspace-path="${escapeAttr(entry.path)}" title="${escapeAttr(entry.path)}" ${loading ? 'disabled' : ''}>
+      <button type="button" class="hvy-galaxy-button workspace-state-heading" data-action="${loading ? '' : 'retry-workspace'}" data-workspace-path="${escapeAttr(entry.path)}" title="${escapeAttr(entry.path)}" ${loading ? 'disabled' : ''}>
         <span>${escapeHtml(entry.displayName)}</span>
         ${loading ? '<span class="workspace-loading-indicator" aria-hidden="true"></span>' : ''}
       </button>
       <div class="workspace-state-detail" title="${escapeAttr(detail)}">${escapeHtml(detail)}</div>
-      ${loading ? '' : `<button type="button" class="workspace-retry-button" data-action="retry-workspace" data-workspace-path="${escapeAttr(entry.path)}">Retry</button>`}
+      ${loading ? '' : `<button type="button" class="hvy-galaxy-button workspace-retry-button" data-action="retry-workspace" data-workspace-path="${escapeAttr(entry.path)}">Retry</button>`}
     </section>`;
 }
 
@@ -3021,7 +3021,7 @@ function renderWorkspaceManagerDialog(state: AppState): string {
           </div>
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="close-workspace-manager">Done</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-workspace-manager">Done</button>
         </div>
       </section>
     </div>`;
@@ -3031,19 +3031,19 @@ function renderWorkspaceManagerRow(workspace: Workspace): string {
   return `
     <form class="workspace-manager-row workspace-manager-row-reorderable" data-form="workspace-manager-rename" data-workspace-path="${escapeAttr(workspace.path)}">
       <span class="workspace-reorder-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">⠿</span>
-      <input name="workspacePath" type="hidden" value="${escapeAttr(workspace.path)}">
+      <input class="hvy-galaxy-input" name="workspacePath" type="hidden" value="${escapeAttr(workspace.path)}">
       <label>
         <span>Name</span>
-        <input name="workspaceName" type="text" autocomplete="off" value="${escapeAttr(workspace.manifest.name)}" required>
+        <input class="hvy-galaxy-input" name="workspaceName" type="text" autocomplete="off" value="${escapeAttr(workspace.manifest.name)}" required>
       </label>
       <div class="workspace-manager-location">
         <span>Location</span>
         <code title="${escapeAttr(workspace.path)}">${escapeHtml(workspace.path)}</code>
       </div>
       <div class="workspace-manager-actions">
-        <button type="submit">Save</button>
-        <button type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
-        <button type="button" class="danger-button" data-action="archive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Archive</button>
+        <button class="hvy-galaxy-button" type="submit">Save</button>
+        <button class="hvy-galaxy-button" type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
+        <button type="button" class="hvy-galaxy-button danger-button" data-action="archive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Archive</button>
       </div>
     </form>`;
 }
@@ -3095,8 +3095,8 @@ function renderArchivedWorkspaceRow(workspace: ArchivedWorkspace): string {
         <code title="${escapeAttr(workspace.path)}">${escapeHtml(workspace.path)}</code>
       </div>
       <div class="workspace-manager-actions">
-        <button type="button" data-action="unarchive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Unarchive</button>
-        <button type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
+        <button class="hvy-galaxy-button" type="button" data-action="unarchive-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Unarchive</button>
+        <button class="hvy-galaxy-button" type="button" data-action="show-workspace-in-folder" data-workspace-path="${escapeAttr(workspace.path)}">${escapeHtml(revealMenuLabel())}</button>
       </div>
     </div>`;
 }
@@ -3134,19 +3134,19 @@ function renderWorkspace(
         <span>${escapeHtml(workspace.manifest.name)}</span>
         ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
       </summary>
-      <button type="button" class="workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
+      <button type="button" class="hvy-galaxy-button workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
       <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
-        <button type="button" class="${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
-        <button type="button" class="${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
+        <button type="button" class="hvy-galaxy-button ${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
+        <button type="button" class="hvy-galaxy-button ${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
       </div>
       <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
-        <button type="button" class="workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
+        <button type="button" class="hvy-galaxy-button workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
-          <button type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
-          <button type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
-          <button type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
-          <button type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
-          <button type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
+          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
+          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
+          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
+          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
+          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
         </div>
       </div>
       ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
@@ -3273,7 +3273,7 @@ function renderNode(
     const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
     const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
     const folderFilterTrigger = folderOwnsActiveFilter
-      ? `<button type="button" class="workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
+      ? `<button type="button" class="hvy-galaxy-button workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
       : '';
     const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
     if (children.length === 0) {
@@ -3316,7 +3316,7 @@ function renderNode(
     : '';
   return `
     <li>
-      <button type="button" class="tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="hvy-galaxy-button tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
@@ -3400,22 +3400,22 @@ function renderNewWorkspaceDialog(state: AppState): string {
         <div class="field-group">
           <span>Location</span>
           <div class="segmented-control">
-            <button type="button" class="${managedActive ? 'is-active' : ''}" data-action="set-new-workspace-location" data-location="managed" aria-pressed="${managedActive ? 'true' : 'false'}">App managed</button>
-            <button type="button" class="${chooseActive ? 'is-active' : ''}" data-action="set-new-workspace-location" data-location="choose" aria-pressed="${chooseActive ? 'true' : 'false'}">Choose folder</button>
+            <button type="button" class="hvy-galaxy-button ${managedActive ? 'is-active' : ''}" data-action="set-new-workspace-location" data-location="managed" aria-pressed="${managedActive ? 'true' : 'false'}">App managed</button>
+            <button type="button" class="hvy-galaxy-button ${chooseActive ? 'is-active' : ''}" data-action="set-new-workspace-location" data-location="choose" aria-pressed="${chooseActive ? 'true' : 'false'}">Choose folder</button>
           </div>
         </div>
-        <input name="workspaceLocation" type="hidden" value="${escapeAttr(state.newWorkspaceLocation)}">
+        <input class="hvy-galaxy-input" name="workspaceLocation" type="hidden" value="${escapeAttr(state.newWorkspaceLocation)}">
         ${managedActive ? `
           <label>
             <span>Name</span>
-            <input name="workspaceName" type="text" autocomplete="off" autofocus required data-field="workspace-name">
+            <input class="hvy-galaxy-input" name="workspaceName" type="text" autocomplete="off" autofocus required data-field="workspace-name">
           </label>
           <p class="dialog-note" data-role="workspace-name-note">Choose a unique name for a new app-managed workspace.</p>
         ` : ''}
         <p class="dialog-note">${chooseActive ? 'Pick any folder, including a synced Google Drive or OneDrive folder.' : 'Stored in the app data folder on this device.'}</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-new-workspace">Cancel</button>
-          <button type="submit" data-role="new-workspace-submit" ${state.busy || managedActive ? 'disabled' : ''}>${chooseActive ? 'Select' : 'Create'}</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-new-workspace">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" data-role="new-workspace-submit" ${state.busy || managedActive ? 'disabled' : ''}>${chooseActive ? 'Select' : 'Create'}</button>
         </div>
       </form>
     </div>`;
@@ -3432,8 +3432,8 @@ function renderWorkspaceInitializationDialog(state: AppState): string {
         <h2 id="workspaceInitializationTitle">Create Workspace Manifest?</h2>
         <p class="dialog-note">${escapeHtml(name)} is not a workspace yet. Create .hvyworkspace.json in this folder?</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-workspace-initialization">Cancel</button>
-          <button type="button" data-action="confirm-workspace-initialization" ${state.busy ? 'disabled' : ''}>Create</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-workspace-initialization">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="confirm-workspace-initialization" ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </section>
     </div>`;
@@ -3524,17 +3524,17 @@ function renderNewDocumentDialog(state: AppState): string {
         ${workspace ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
         <label>
           <span>Name</span>
-          <input name="documentName" type="text" autocomplete="off" autofocus required>
+          <input class="hvy-galaxy-input" name="documentName" type="text" autocomplete="off" autofocus required>
         </label>
         ${showTemplatePicker ? `<label>
           <span>Template</span>
-          <select name="templateId">
+          <select class="hvy-galaxy-select" name="templateId">
             ${templates.map(renderTemplateOption).join('')}
           </select>
         </label>` : ''}
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-new-document">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-new-document">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </form>
     </div>`;
@@ -3569,11 +3569,11 @@ function renderImportDialog(state: AppState): string {
           ${workspace ? renderWorkspaceFolderSelect(workspace, state.importDirectory) : ''}
           <label>
             <span>Name</span>
-            <input name="documentName" type="text" autocomplete="off" autofocus required>
+            <input class="hvy-galaxy-input" name="documentName" type="text" autocomplete="off" autofocus required>
           </label>
           ${showTemplatePicker ? `<label>
             <span>Template</span>
-            <select name="templateId">
+            <select class="hvy-galaxy-select" name="templateId">
               ${templates.map(renderTemplateOption).join('')}
             </select>
           </label>` : ''}
@@ -3585,12 +3585,12 @@ function renderImportDialog(state: AppState): string {
         ${outputControls}
         <label>
           <span>Instructions</span>
-          <textarea name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
+          <textarea class="hvy-galaxy-textarea" name="instructions" rows="4" placeholder="Optional import guidance"></textarea>
         </label>
         ${renderImportOptions(state)}
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-import">Cancel</button>
-          <button type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !hasValidSource ? 'disabled' : ''}>Import</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-import">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" data-role="import-submit" data-has-file-source="${source ? 'true' : 'false'}" data-base-disabled="${baseDisabled ? 'true' : 'false'}" ${baseDisabled || !hasValidSource ? 'disabled' : ''}>Import</button>
         </div>
       </form>
     </div>`;
@@ -3605,14 +3605,14 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
     <div class="field-group">
       <span>Output</span>
       <div class="segmented-control" role="tablist" aria-label="Import output">
-        <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace File</button>
-        <button type="button" class="${currentActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="current" aria-pressed="${currentActive ? 'true' : 'false'}">Current File</button>
+        <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace File</button>
+        <button type="button" class="hvy-galaxy-button ${currentActive ? 'is-active' : ''}" data-action="set-import-output-mode" data-mode="current" aria-pressed="${currentActive ? 'true' : 'false'}">Current File</button>
       </div>
-      <input name="importOutputMode" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'current')}">
+      <input class="hvy-galaxy-input" name="importOutputMode" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'current')}">
       ${workspaceActive ? `
         <label>
           <span>Name</span>
-          <input name="importOutputName" type="text" autocomplete="off" value="${escapeAttr(outputName)}" required>
+          <input class="hvy-galaxy-input" name="importOutputName" type="text" autocomplete="off" value="${escapeAttr(outputName)}" required>
         </label>
       ` : ''}
     </div>`;
@@ -3621,11 +3621,11 @@ function renderImportCurrentOutputControls(state: AppState, workspace: AppState[
 function renderImportOptions(state: AppState): string {
   const tagField = shouldShowImportExcludeTagsField(state)
     ? renderImportExcludeTagsField(state.importExcludeTags, collectImportSourceTagSuggestions(state.importSource))
-    : '<input name="excludeTags" type="hidden" value="">';
+    : '<input class="hvy-galaxy-input" name="excludeTags" type="hidden" value="">';
   return `
     ${tagField}
     <label class="checkbox-row">
-      <input name="newSectionsOnly" type="checkbox" ${state.importNewSectionsOnly ? 'checked' : ''}>
+      <input class="hvy-galaxy-input" name="newSectionsOnly" type="checkbox" ${state.importNewSectionsOnly ? 'checked' : ''}>
       <span>Only import new sections</span>
     </label>`;
 }
@@ -3635,10 +3635,10 @@ function renderImportExcludeTagsField(value: string, suggestions: string[]): str
     <label class="import-exclude-tags-field">
       <span>Filter out tags</span>
       ${renderTagEditor('search-exclude-tags', value, { placeholder: 'Add tag to filter out' }, { escapeAttr, escapeHtml })}
-      <input name="excludeTags" type="hidden" value="${escapeAttr(serializeTags(parseTags(value)))}">
+      <input class="hvy-galaxy-input" name="excludeTags" type="hidden" value="${escapeAttr(serializeTags(parseTags(value)))}">
       ${suggestions.length > 0 ? `
         <div class="import-exclude-tag-suggestions" data-role="import-exclude-tag-suggestions" hidden>
-          ${suggestions.map((tag) => `<button type="button" data-action="add-import-exclude-tag" data-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</button>`).join('')}
+          ${suggestions.map((tag) => `<button class="hvy-galaxy-button" type="button" data-action="add-import-exclude-tag" data-tag="${escapeAttr(tag)}">${escapeHtml(tag)}</button>`).join('')}
         </div>
       ` : ''}
     </label>`;
@@ -3737,8 +3737,8 @@ function renderImportCurrentSourceControls(state: AppState, workspace: AppState[
   const anywhereActive = state.importSourceTab === 'anywhere' || workspaceDisabled;
   return `
     <div class="segmented-control import-source-tabs" role="tablist" aria-label="Import source">
-      <button type="button" class="${workspaceActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
-      <button type="button" class="${anywhereActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
+      <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+      <button type="button" class="hvy-galaxy-button ${anywhereActive ? 'is-active' : ''}" data-action="set-import-source-tab" data-tab="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
     </div>
     ${workspaceActive ? renderImportCurrentWorkspaceSourcePicker(state, workspaceFiles) : renderAnywhereImportSourceControls(state.importSource, state.importSourceTextDraft)}
   `;
@@ -3753,10 +3753,10 @@ function renderAnywhereImportSourceControls(source: AppState['importSource'], so
       : 'Choose a file or paste at least 50 characters.';
   return `
     <div class="source-picker-row">
-      <button type="button" data-action="choose-import-source">Choose file</button>
+      <button class="hvy-galaxy-button" type="button" data-action="choose-import-source">Choose file</button>
       <span>${source ? escapeHtml(source.name) : 'No source selected'}</span>
     </div>
-    <textarea name="importSourceText" class="import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here">${escapeHtml(sourceText)}</textarea>
+    <textarea name="importSourceText" class="hvy-galaxy-textarea import-source-textarea" data-field="import-source-text" rows="8" placeholder="Or paste at least 50 characters of source text here">${escapeHtml(sourceText)}</textarea>
     <p class="dialog-note" data-role="import-source-note">${escapeHtml(sourceNote)}</p>`;
 }
 
@@ -3764,7 +3764,7 @@ function renderImportCurrentWorkspaceSourcePicker(state: AppState, options: Work
   return `
     <label>
       <span>Workspace HVY</span>
-      <select data-field="import-workspace-source">
+      <select class="hvy-galaxy-select" data-field="import-workspace-source">
         <option value="">Choose from current workspace</option>
         ${options.map((file) => `
           <option value="${escapeAttr(file.path)}" ${state.importSource?.path === file.path ? 'selected' : ''}>${escapeHtml(workspaceSourceLabel(file))}</option>
@@ -3808,9 +3808,9 @@ function renderDocumentTypeControl(
     <div class="field-group">
       <span>Document Type</span>
       <div class="segmented-control document-type-control">
-        <button type="button" class="${activeType === 'hvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="hvy" aria-pressed="${activeType === 'hvy' ? 'true' : 'false'}" ${hvyDisabled ? 'disabled' : ''}>HVY</button>
-        <button type="button" class="${activeType === 'thvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="thvy" aria-pressed="${activeType === 'thvy' ? 'true' : 'false'}" ${thvyDisabled ? 'disabled' : ''}>THVY</button>
-        <button type="button" class="${activeType === 'phvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="phvy" aria-pressed="${activeType === 'phvy' ? 'true' : 'false'}" ${phvyDisabled ? 'disabled' : ''}>PHVY</button>
+        <button type="button" class="hvy-galaxy-button ${activeType === 'hvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="hvy" aria-pressed="${activeType === 'hvy' ? 'true' : 'false'}" ${hvyDisabled ? 'disabled' : ''}>HVY</button>
+        <button type="button" class="hvy-galaxy-button ${activeType === 'thvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="thvy" aria-pressed="${activeType === 'thvy' ? 'true' : 'false'}" ${thvyDisabled ? 'disabled' : ''}>THVY</button>
+        <button type="button" class="hvy-galaxy-button ${activeType === 'phvy' ? 'is-active' : ''}" data-action="${action}" data-document-type="phvy" aria-pressed="${activeType === 'phvy' ? 'true' : 'false'}" ${phvyDisabled ? 'disabled' : ''}>PHVY</button>
       </div>
     </div>`;
 }
@@ -3845,8 +3845,8 @@ function renderExportPdfSavePrompt(state: AppState): string {
         <h2>Export PDF</h2>
         <p class="dialog-note">Save ${escapeHtml(state.document.name)} before exporting it to PDF.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-export-pdf-save-prompt">Cancel</button>
-          <button type="button" data-action="save-before-export-pdf" ${state.busy ? 'disabled' : ''}>${saveLabel}</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-export-pdf-save-prompt">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="save-before-export-pdf" ${state.busy ? 'disabled' : ''}>${saveLabel}</button>
         </div>
       </section>
     </div>`;
@@ -3861,9 +3861,9 @@ function renderExportedPdfDialog(state: AppState): string {
         <h2>PDF Exported</h2>
         <p class="dialog-note">${escapeHtml(name)}</p>
         <div class="dialog-actions">
-          <button type="button" data-action="open-exported-pdf">Open</button>
-          <button type="button" data-action="reveal-exported-pdf">${escapeHtml(revealMenuLabel())}</button>
-          <button type="button" data-action="close-exported-pdf-dialog">Done</button>
+          <button class="hvy-galaxy-button" type="button" data-action="open-exported-pdf">Open</button>
+          <button class="hvy-galaxy-button" type="button" data-action="reveal-exported-pdf">${escapeHtml(revealMenuLabel())}</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-exported-pdf-dialog">Done</button>
         </div>
       </section>
     </div>`;
@@ -3895,7 +3895,7 @@ function renderAboutDialog(state: AppState): string {
           <a href="https://heavyresume.com" target="_blank" rel="noreferrer">https://heavyresume.com</a>
         </div>
         <div class="dialog-actions about-actions">
-          <button type="button" data-action="close-about">OK</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-about">OK</button>
         </div>
       </section>
     </div>`;
@@ -3911,16 +3911,16 @@ function renderIntegrationsDialog(state: AppState): string {
       <section class="dialog integrations-dialog integrations-manager" role="dialog" aria-modal="true" aria-label="Integrations" data-prevent-dismiss="true">
         <div class="modal-header">
           <div><h2>Integrations</h2><p class="dialog-note">Connect web pages and turn their content into structured actions.</p></div>
-          <button type="button" class="icon-button" data-action="close-integrations" aria-label="Close">×</button>
+          <button type="button" class="hvy-galaxy-button icon-button" data-action="close-integrations" aria-label="Close">×</button>
         </div>
         <div class="integrations-manager-body">
           <nav class="integration-list" aria-label="Configured integrations">
-            ${state.integrationRegistry.integrations.map((integration) => `<button type="button" class="integration-list-item ${integration.id === selectedIntegration.id ? 'selected' : ''}" data-action="select-integration" data-integration-id="${escapeAttr(integration.id)}"><strong>${escapeHtml(integration.name)}</strong><span>${integration.pages.length} ${integration.pages.length === 1 ? 'page' : 'pages'} · ${integration.actions.length} ${integration.actions.length === 1 ? 'action' : 'actions'}</span></button>`).join('')}
-            <button type="button" class="integration-list-add" data-action="request-add-integration-page">+ Add web page</button>
+            ${state.integrationRegistry.integrations.map((integration) => `<button type="button" class="hvy-galaxy-button integration-list-item ${integration.id === selectedIntegration.id ? 'selected' : ''}" data-action="select-integration" data-integration-id="${escapeAttr(integration.id)}"><strong>${escapeHtml(integration.name)}</strong><span>${integration.pages.length} ${integration.pages.length === 1 ? 'page' : 'pages'} · ${integration.actions.length} ${integration.actions.length === 1 ? 'action' : 'actions'}</span></button>`).join('')}
+            <button type="button" class="hvy-galaxy-button integration-list-add" data-action="request-add-integration-page">+ Add web page</button>
           </nav>
           <main class="integration-detail">
-            <div class="integration-detail-header"><div><h3>${escapeHtml(selectedIntegration.name)}</h3><p>${selectedIntegration.editable ? 'Custom web integration' : 'Email and calendar'}</p></div><div class="integration-profile-controls"><label class="integration-profile-select"><select data-action="select-integration-profile" aria-label="Profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="icon-button" data-action="request-add-integration-profile" title="Add profile" aria-label="Add profile">+</button></div></div>
-            <section><div class="integration-section-heading"><div><h4>Pages</h4><p>Open a page or use it to create a reusable action.</p></div></div><div class="integration-page-grid">${selectedIntegration.pages.map((page) => `<article class="integration-page-card"><div><strong>${escapeHtml(page.name)}</strong><span>${escapeHtml(new URL(page.url).hostname)}</span></div><div class="integration-page-actions"><button type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(page.id)}">Open</button><button type="button" class="primary-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(page.id)}">Add action</button></div></article>`).join('')}</div></section>
+            <div class="integration-detail-header"><div><h3>${escapeHtml(selectedIntegration.name)}</h3><p>${selectedIntegration.editable ? 'Custom web integration' : 'Email and calendar'}</p></div><div class="integration-profile-controls"><label class="integration-profile-select"><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button icon-button" data-action="request-add-integration-profile" title="Add profile" aria-label="Add profile">+</button></div></div>
+            <section><div class="integration-section-heading"><div><h4>Pages</h4><p>Open a page or use it to create a reusable action.</p></div></div><div class="integration-page-grid">${selectedIntegration.pages.map((page) => `<article class="integration-page-card"><div><strong>${escapeHtml(page.name)}</strong><span>${escapeHtml(new URL(page.url).hostname)}</span></div><div class="integration-page-actions"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(page.id)}">Open</button><button type="button" class="hvy-galaxy-button primary-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(page.id)}">Add action</button></div></article>`).join('')}</div></section>
             <section><div class="integration-section-heading"><div><h4>Actions</h4><p>Reusable scripts that return structured data from these pages.</p></div></div>${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description)}</span></article>`).join('')}</div>` : '<div class="integration-empty-state"><strong>No actions yet</strong><span>Choose Add action beside a page to create one.</span></div>'}</section>
           </main>
         </div>
@@ -3950,24 +3950,24 @@ function friendlyInspectionLabel(key: string): string {
 function renderInspectionReviewField(field: InspectionReviewField, state: AppState): string {
   const rule = state.inspectionPrivacyRules.find((candidate) => candidate.path === field.path);
   const shownValue = rule?.action === 'remove' ? 'Not shared' : rule?.action === 'label' ? `Replaced with {{${rule.label || 'REDACTED'}}}` : field.value;
-  return `<article class="integration-review-field ${rule ? `is-${rule.action}` : ''}" data-privacy-path="${escapeAttr(field.path)}" data-original-value="${escapeAttr(field.value.slice(0, 300))}"><div><strong>${escapeHtml(field.label)}</strong><span data-review-field-value>${escapeHtml(shownValue.slice(0, 300))}</span></div><div class="integration-review-field-actions"><button type="button" data-action="set-inspection-privacy" data-privacy-action="keep" data-path="${escapeAttr(field.path)}" ${rule ? '' : 'disabled'}>Keep</button><input name="privacyLabel" aria-label="Replacement label for ${escapeAttr(field.label)}" placeholder="Type a replacement label" value="${escapeAttr(rule?.action === 'label' ? rule.label ?? '' : '')}"><button type="button" data-action="set-inspection-privacy" data-privacy-action="remove" data-path="${escapeAttr(field.path)}">Remove</button></div></article>`;
+  return `<article class="integration-review-field ${rule ? `is-${rule.action}` : ''}" data-privacy-path="${escapeAttr(field.path)}" data-original-value="${escapeAttr(field.value.slice(0, 300))}"><div><strong>${escapeHtml(field.label)}</strong><span data-review-field-value>${escapeHtml(shownValue.slice(0, 300))}</span></div><div class="integration-review-field-actions"><button class="hvy-galaxy-button" type="button" data-action="set-inspection-privacy" data-privacy-action="keep" data-path="${escapeAttr(field.path)}" ${rule ? '' : 'disabled'}>Keep</button><input class="hvy-galaxy-input" name="privacyLabel" aria-label="Replacement label for ${escapeAttr(field.label)}" placeholder="Type a replacement label" value="${escapeAttr(rule?.action === 'label' ? rule.label ?? '' : '')}"><button class="hvy-galaxy-button" type="button" data-action="set-inspection-privacy" data-privacy-action="remove" data-path="${escapeAttr(field.path)}">Remove</button></div></article>`;
 }
 
 function renderIntegrationActionBuilderDialog(state: AppState): string {
   if (!state.integrationActionBuilderOpen) return '';
   if (state.integrationActionSelectionPending) {
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for integration selection"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Select ${state.integrationActionSelectionKind === 'anchor' ? 'an anchor' : 'an example'} on the page</h2><p class="dialog-note">Selection mode is active in the integration window. This builder will update when you choose an element.</p></div><button type="button" class="icon-button" data-action="cancel-integration-action-selection" aria-label="Cancel selection and return to action">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${state.integrationActionSelectionKind === 'anchor' ? 'Choose a stable container, label, or landmark. Anchor content itself will not be collected.' : 'Choose the text, image, or record the action should return.'}</span></div></section></div>`;
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for integration selection"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Select ${state.integrationActionSelectionKind === 'anchor' ? 'an anchor' : 'an example'} on the page</h2><p class="dialog-note">Selection mode is active in the integration window. This builder will update when you choose an element.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-action-selection" aria-label="Cancel selection and return to action">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${state.integrationActionSelectionKind === 'anchor' ? 'Choose a stable container, label, or landmark. Anchor content itself will not be collected.' : 'Choose the text, image, or record the action should return.'}</span></div></section></div>`;
   }
   if (!state.integrationInspectionResult) {
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Create integration action"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Choose action examples</h2><p class="dialog-note">Select the content the action should return, then optionally add structural anchors that help locate it.</p></div><button type="button" class="icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-empty-state"><strong>No selections yet</strong><span>Examples collect target text or images. Anchors record structure only.</span></div><div class="dialog-actions"><button type="button" class="primary-button" data-action="add-another-integration-action-example">Select an example</button><button type="button" data-action="add-integration-action-anchor">Select an anchor</button></div></section></div>`;
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Create integration action"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Choose action examples</h2><p class="dialog-note">Select the content the action should return, then optionally add structural anchors that help locate it.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-empty-state"><strong>No selections yet</strong><span>Examples collect target text or images. Anchors record structure only.</span></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="add-another-integration-action-example">Select an example</button><button class="hvy-galaxy-button" type="button" data-action="add-integration-action-anchor">Select an anchor</button></div></section></div>`;
   }
   if (state.integrationActionBuilderStep === 'confirm') {
     const sharedExamples = state.integrationActionExamples.map((example, index) => applyInspectionPrivacyRules(example, state.integrationActionExampleRules[index] ?? []));
     const sharedAnchors = state.integrationActionAnchors.map((anchor, index) => applyInspectionPrivacyRules(anchor, state.integrationActionAnchorRules[index] ?? []));
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review AI request"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Review what Galaxy will send</h2><p class="dialog-note">This is the complete readable information provided to the LLM when creating the action script. Structural matching details are sent without neighboring page text.</p></div><button type="button" class="icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content integration-ai-request-review"><section><h3>Action</h3><dl><div><dt>Name</dt><dd>${escapeHtml(state.integrationActionDraftName)}</dd></div><div><dt>Requested result</dt><dd>${escapeHtml(state.integrationActionDraftDescription)}</dd></div></dl></section><section><h3>Selected examples</h3>${sharedExamples.map((example, index) => { const content = selectedInspectionContent(example); const image = integrationInspectionImage(example); return `<article><strong>Example ${index + 1}</strong>${content ? `<p>${escapeHtml(content)}</p>` : ''}${image ? `<p>Image: ${escapeHtml(image.alt || 'No description')} (${image.naturalWidth} × ${image.naturalHeight})</p>` : ''}${!content && !image ? '<p>No readable content is included.</p>' : ''}</article>`; }).join('')}</section><section><h3>Structural anchors</h3>${sharedAnchors.length ? sharedAnchors.map((anchor, index) => { const selectedAnchor = (anchor as { selected?: { tag?: string; role?: string | null } }).selected; return `<article><strong>Anchor ${index + 1}</strong><p>${escapeHtml(selectedAnchor?.role ? `${selectedAnchor.role} element` : `${selectedAnchor?.tag ?? 'Structural'} element`)} — structure only; its text and images are not sent.</p></article>`; }).join('') : '<p>No anchors selected.</p>'}</section></div><div class="dialog-actions"><button type="button" data-action="back-integration-action-builder">Back</button><button type="button" class="primary-button" data-action="save-integration-action-draft">Confirm and save draft</button></div></section></div>`;
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review AI request"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Review what Galaxy will send</h2><p class="dialog-note">This is the complete readable information provided to the LLM when creating the action script. Structural matching details are sent without neighboring page text.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content integration-ai-request-review"><section><h3>Action</h3><dl><div><dt>Name</dt><dd>${escapeHtml(state.integrationActionDraftName)}</dd></div><div><dt>Requested result</dt><dd>${escapeHtml(state.integrationActionDraftDescription)}</dd></div></dl></section><section><h3>Selected examples</h3>${sharedExamples.map((example, index) => { const content = selectedInspectionContent(example); const image = integrationInspectionImage(example); return `<article><strong>Example ${index + 1}</strong>${content ? `<p>${escapeHtml(content)}</p>` : ''}${image ? `<p>Image: ${escapeHtml(image.alt || 'No description')} (${image.naturalWidth} × ${image.naturalHeight})</p>` : ''}${!content && !image ? '<p>No readable content is included.</p>' : ''}</article>`; }).join('')}</section><section><h3>Structural anchors</h3>${sharedAnchors.length ? sharedAnchors.map((anchor, index) => { const selectedAnchor = (anchor as { selected?: { tag?: string; role?: string | null } }).selected; return `<article><strong>Anchor ${index + 1}</strong><p>${escapeHtml(selectedAnchor?.role ? `${selectedAnchor.role} element` : `${selectedAnchor?.tag ?? 'Structural'} element`)} — structure only; its text and images are not sent.</p></article>`; }).join('') : '<p>No anchors selected.</p>'}</section></div><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="back-integration-action-builder">Back</button><button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-action-draft">Confirm and save draft</button></div></section></div>`;
   }
   if (state.integrationActionBuilderStep === 'instructions') {
-    return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Describe integration action" data-form="integration-action-instructions"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Describe the result</h2><p class="dialog-note">Tell Galaxy what this action should return. The selected examples, anchors, and privacy choices stay attached to this draft.</p></div><button type="button" class="icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><label><span>Action name</span><input name="actionName" required autocomplete="off" value="${escapeAttr(state.integrationActionDraftName)}"></label><label><span>What should this action return?</span><textarea name="actionDescription" required rows="6" placeholder="Describe the fields and records the action should return.">${escapeHtml(state.integrationActionDraftDescription)}</textarea></label><p class="field-help">${state.integrationActionExamples.length} ${state.integrationActionExamples.length === 1 ? 'example' : 'examples'} and ${state.integrationActionAnchors.length} ${state.integrationActionAnchors.length === 1 ? 'anchor' : 'anchors'} will be used when generating and testing the deterministic script.</p><div class="dialog-actions"><button type="button" data-action="back-integration-action-builder">Back</button><button type="submit" class="primary-button">Review AI request</button></div></form></div>`;
+    return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Describe integration action" data-form="integration-action-instructions"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Describe the result</h2><p class="dialog-note">Tell Galaxy what this action should return. The selected examples, anchors, and privacy choices stay attached to this draft.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><label><span>Action name</span><input class="hvy-galaxy-input" name="actionName" required autocomplete="off" value="${escapeAttr(state.integrationActionDraftName)}"></label><label><span>What should this action return?</span><textarea class="hvy-galaxy-textarea" name="actionDescription" required rows="6" placeholder="Describe the fields and records the action should return.">${escapeHtml(state.integrationActionDraftDescription)}</textarea></label><p class="field-help">${state.integrationActionExamples.length} ${state.integrationActionExamples.length === 1 ? 'example' : 'examples'} and ${state.integrationActionAnchors.length} ${state.integrationActionAnchors.length === 1 ? 'anchor' : 'anchors'} will be used when generating and testing the deterministic script.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="back-integration-action-builder">Back</button><button type="submit" class="hvy-galaxy-button primary-button">Review AI request</button></div></form></div>`;
   }
   const selectedContent = selectedInspectionContent(state.integrationInspectionResult);
   const inspectedImage = integrationInspectionImage(state.integrationInspectionResult);
@@ -3988,18 +3988,18 @@ function renderIntegrationActionBuilderDialog(state: AppState): string {
       return { kind: 'anchor' as const, index, label: selectedAnchor?.role ? `${selectedAnchor.role} anchor` : `${selectedAnchor?.tag ?? 'Structural'} anchor` };
     }),
   ];
-  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Create integration action"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Review the ${state.integrationActionSelectionKind}</h2><p class="dialog-note">Only target content you explicitly select is shared as readable page text. Anchors and surrounding elements contribute structure without their text.</p></div><button type="button" class="icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content"><section class="integration-selection-collection"><h3>Selections</h3><div>${selectionItems.map((item) => `<article class="integration-selection-row"><button type="button" class="integration-selection-review" data-action="review-integration-action-selection" data-kind="${item.kind}" data-index="${item.index}"><strong>${item.kind === 'anchor' ? 'Anchor' : 'Example'} ${item.index + 1}</strong><span>${escapeHtml(item.label.slice(0, 120))}</span><small>Review selection</small></button><button type="button" class="integration-selection-remove" data-action="remove-integration-action-selection" data-kind="${item.kind}" data-index="${item.index}" aria-label="Remove ${item.kind} ${item.index + 1}">Remove</button></article>`).join('')}</div></section><p class="integration-example-count">${escapeHtml(selectionLabel)}</p>${selectedContent ? `<div class="integration-selected-content"><strong>Content you selected</strong><p>${escapeHtml(selectedContent)}</p></div>` : ''}${inspectedImage ? `<figure class="integration-inspection-image"><img src="${escapeAttr(inspectedImage.url)}" alt="${escapeAttr(inspectedImage.alt ?? 'Selected image')}"><figcaption>${escapeHtml(`${inspectedImage.naturalWidth} × ${inspectedImage.naturalHeight}`)}</figcaption></figure>` : ''}${state.integrationActionSelectionKind === 'example' ? `<section><h3>Information being shared</h3><p class="field-help">Type a replacement label or remove a value that the action does not need.</p><div class="integration-review-fields">${primaryFields.map((field) => renderInspectionReviewField(field, state)).join('')}</div></section>` : '<section class="integration-anchor-note"><strong>Structure only</strong><span>This anchor contributes its role, attributes, ancestry, and relationship to the target. Its text and images are not collected.</span></section>'}<section class="integration-structure-summary"><h3>Matching evidence</h3><p>Galaxy recorded ${selected?.semanticAncestry?.length ?? 0} levels of semantic structure, ${selected?.nearbyFields?.length ?? 0} nearby field shapes, ${selected?.selectorCandidates?.length ?? 0} selector strategies${selected?.repeatedContext?.itemCount ? `, and a repeated group of ${selected.repeatedContext.itemCount} items` : ''}. No neighboring text is included.</p></section></div><div class="dialog-actions"><button type="button" data-action="add-another-integration-action-example">Select another example</button><button type="button" data-action="add-integration-action-anchor">Select an anchor</button><button type="button" class="primary-button" data-action="continue-integration-action-builder" ${state.integrationActionExamples.length ? '' : 'disabled'}>Continue</button></div></section></div>`;
+  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Create integration action"><div class="modal-header"><div><p class="eyebrow">Create action</p><h2>Review the ${state.integrationActionSelectionKind}</h2><p class="dialog-note">Only target content you explicitly select is shared as readable page text. Anchors and surrounding elements contribute structure without their text.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content"><section class="integration-selection-collection"><h3>Selections</h3><div>${selectionItems.map((item) => `<article class="integration-selection-row"><button type="button" class="hvy-galaxy-button integration-selection-review" data-action="review-integration-action-selection" data-kind="${item.kind}" data-index="${item.index}"><strong>${item.kind === 'anchor' ? 'Anchor' : 'Example'} ${item.index + 1}</strong><span>${escapeHtml(item.label.slice(0, 120))}</span><small>Review selection</small></button><button type="button" class="hvy-galaxy-button integration-selection-remove" data-action="remove-integration-action-selection" data-kind="${item.kind}" data-index="${item.index}" aria-label="Remove ${item.kind} ${item.index + 1}">Remove</button></article>`).join('')}</div></section><p class="integration-example-count">${escapeHtml(selectionLabel)}</p>${selectedContent ? `<div class="integration-selected-content"><strong>Content you selected</strong><p>${escapeHtml(selectedContent)}</p></div>` : ''}${inspectedImage ? `<figure class="integration-inspection-image"><img src="${escapeAttr(inspectedImage.url)}" alt="${escapeAttr(inspectedImage.alt ?? 'Selected image')}"><figcaption>${escapeHtml(`${inspectedImage.naturalWidth} × ${inspectedImage.naturalHeight}`)}</figcaption></figure>` : ''}${state.integrationActionSelectionKind === 'example' ? `<section><h3>Information being shared</h3><p class="field-help">Type a replacement label or remove a value that the action does not need.</p><div class="integration-review-fields">${primaryFields.map((field) => renderInspectionReviewField(field, state)).join('')}</div></section>` : '<section class="integration-anchor-note"><strong>Structure only</strong><span>This anchor contributes its role, attributes, ancestry, and relationship to the target. Its text and images are not collected.</span></section>'}<section class="integration-structure-summary"><h3>Matching evidence</h3><p>Galaxy recorded ${selected?.semanticAncestry?.length ?? 0} levels of semantic structure, ${selected?.nearbyFields?.length ?? 0} nearby field shapes, ${selected?.selectorCandidates?.length ?? 0} selector strategies${selected?.repeatedContext?.itemCount ? `, and a repeated group of ${selected.repeatedContext.itemCount} items` : ''}. No neighboring text is included.</p></section></div><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="add-another-integration-action-example">Select another example</button><button class="hvy-galaxy-button" type="button" data-action="add-integration-action-anchor">Select an anchor</button><button type="button" class="hvy-galaxy-button primary-button" data-action="continue-integration-action-builder" ${state.integrationActionExamples.length ? '' : 'disabled'}>Continue</button></div></section></div>`;
 }
 
 function renderAddIntegrationPageDialog(state: AppState): string {
   if (!state.addIntegrationPageDialogOpen) return '';
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input name="pageName" required autocomplete="off" placeholder="Company webmail"></label><label><span>HTTPS URL</span><input name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><p class="field-help">The page's origin becomes its initial navigation boundary.</p><div class="dialog-actions"><button type="button" data-action="cancel-add-integration-page">Cancel</button><button type="submit">Add page</button></div></form></div>`;
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input class="hvy-galaxy-input" name="pageName" required autocomplete="off" placeholder="Company webmail"></label><label><span>HTTPS URL</span><input class="hvy-galaxy-input" name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><p class="field-help">The page's origin becomes its initial navigation boundary.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-page">Cancel</button><button class="hvy-galaxy-button" type="submit">Add page</button></div></form></div>`;
 }
 
 function renderAddIntegrationProfileDialog(state: AppState): string {
   if (!state.addIntegrationProfileDialogOpen) return '';
   const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration profile" data-form="add-integration-profile"><h2>Add ${escapeHtml(integration?.name ?? 'integration')} profile</h2><label><span>Name</span><input name="profileName" required autocomplete="off" placeholder="Work account"></label><p class="field-help">This profile has its own browser storage and can remain signed in alongside other profiles.</p><div class="dialog-actions"><button type="button" data-action="cancel-add-integration-profile">Cancel</button><button type="submit">Add profile</button></div></form></div>`;
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration profile" data-form="add-integration-profile"><h2>Add ${escapeHtml(integration?.name ?? 'integration')} profile</h2><label><span>Name</span><input class="hvy-galaxy-input" name="profileName" required autocomplete="off" placeholder="Work account"></label><p class="field-help">This profile has its own browser storage and can remain signed in alongside other profiles.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-profile">Cancel</button><button class="hvy-galaxy-button" type="submit">Add profile</button></div></form></div>`;
 }
 
 function integrationInspectionImage(result: unknown): { url: string; alt: string | null; naturalWidth: number; naturalHeight: number } | null {
@@ -4026,8 +4026,8 @@ function renderIntegrationVaultResetDialog(state: AppState): string {
         <h2>Reset integrations?</h2>
         <p>This deletes the encrypted integration vault, its operating-system key, and browser data. You will need to sign in again.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-reset-integration-vault">Cancel</button>
-          <button type="button" class="danger-button" data-action="confirm-reset-integration-vault">Delete and reset</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-reset-integration-vault">Cancel</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="confirm-reset-integration-vault">Delete and reset</button>
         </div>
       </section>
     </div>`;
@@ -4047,18 +4047,18 @@ function renderDebugLogDialog(state: AppState): string {
             <p class="dialog-note">Snapshot of recent load, close, LLM prompt, and performance events. Refresh to update.</p>
           </div>
           <div class="debug-log-actions">
-            <button type="button" data-action="refresh-debug-log">Refresh</button>
-            <button type="button" data-action="clear-debug-log">Clear</button>
+            <button class="hvy-galaxy-button" type="button" data-action="refresh-debug-log">Refresh</button>
+            <button class="hvy-galaxy-button" type="button" data-action="clear-debug-log">Clear</button>
           </div>
         </div>
         <div class="debug-log-settings" data-settings="debug-log">
           <label class="inline-checkbox">
-            <input name="debugSemanticSearch" type="checkbox" ${state.appSettings.debugSemanticSearch ? 'checked' : ''}>
+            <input class="hvy-galaxy-input" name="debugSemanticSearch" type="checkbox" ${state.appSettings.debugSemanticSearch ? 'checked' : ''}>
             <span>Debug semantic search</span>
           </label>
           <label>
             <span>Maximum log size (MB)</span>
-            <input name="debugLogMaxMegabytes" type="number" min="1" step="1" required value="${escapeAttr(String(debugLogMaxMegabytes(state.appSettings.debugLogMaxBytes)))}">
+            <input class="hvy-galaxy-input" name="debugLogMaxMegabytes" type="number" min="1" step="1" required value="${escapeAttr(String(debugLogMaxMegabytes(state.appSettings.debugLogMaxBytes)))}">
           </label>
         </div>
         <div class="debug-log-list">
@@ -4067,7 +4067,7 @@ function renderDebugLogDialog(state: AppState): string {
       : '<p class="debug-log-empty">No debug entries yet.</p>'}
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="close-debug-log">Done</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-debug-log">Done</button>
         </div>
       </section>
     </div>`;
@@ -4202,7 +4202,7 @@ function renderScriptingReviewDialog(state: AppState): string {
             <strong>${escapeHtml(path.split(/[\\/]/).pop() || path)}${path === currentPath ? ' (current file)' : ''}</strong>
             <div class="scripting-review-path">${escapeHtml(path)}</div>
           </div>
-          <button
+          <button class="hvy-galaxy-button"
             type="button"
             data-action="${wholeFileAllowed ? 'revoke-file-power-scripting' : 'allow-file-power-scripting'}"
             data-path="${escapeAttr(path)}"
@@ -4226,7 +4226,7 @@ function renderScriptingReviewDialog(state: AppState): string {
                       <code title="${escapeAttr(fingerprint)}">${escapeHtml(fingerprint)}</code>
                     </div>`}
                 </div>
-                <button
+                <button class="hvy-galaxy-button"
                   type="button"
                   data-action="revoke-power-script"
                   data-path="${escapeAttr(path)}"
@@ -4242,12 +4242,12 @@ function renderScriptingReviewDialog(state: AppState): string {
       <section class="dialog scripting-review-dialog" role="dialog" aria-modal="true" aria-labelledby="scriptingReviewTitle">
         <h2 id="scriptingReviewTitle">Review Power Scripting</h2>
         <p class="dialog-note">Whole-file approval trusts future script changes. Individual approvals apply only to the accepted script fingerprint.</p>
-        <input type="search" data-field="scripting-review-filter" placeholder="Filter by file or script hash" autocomplete="off">
+        <input class="hvy-galaxy-input" type="search" data-field="scripting-review-filter" placeholder="Filter by file or script hash" autocomplete="off">
         <div class="scripting-review-files">
           ${files || '<p class="dialog-note">No power scripting approvals have been saved.</p>'}
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="close-scripting-review">Done</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-scripting-review">Done</button>
         </div>
       </section>
     </div>`;
@@ -4268,14 +4268,14 @@ function renderAppSettingsDialog(state: AppState): string {
         <p class="dialog-note">${pluginManager
           ? 'Configure downloaded plugin access.'
           : 'Configure application defaults used when a document does not set its own value.'}</p>
-        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         ${pluginManager ? '' : `<fieldset class="ai-action-config image-dimension-settings">
           <legend>Attached image defaults</legend>
           <p class="dialog-note">Images are downscaled to reduce file size.</p>
           <label>
             <span>Maximum width</span>
             <span class="dimension-input">
-              <input
+              <input class="hvy-galaxy-input"
                 name="imageAttachmentMaxWidth"
                 type="number"
                 min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
@@ -4289,7 +4289,7 @@ function renderAppSettingsDialog(state: AppState): string {
           <label>
             <span>Maximum height</span>
             <span class="dimension-input">
-              <input
+              <input class="hvy-galaxy-input"
                 name="imageAttachmentMaxHeight"
                 type="number"
                 min="${MIN_IMAGE_ATTACHMENT_DIMENSION}"
@@ -4312,7 +4312,7 @@ function renderAppSettingsDialog(state: AppState): string {
                   <strong>${escapeHtml(plugin.displayName)}</strong>
                   <small>Built in · ${escapeHtml(plugin.id)} · ${escapeHtml(plugin.version)}</small>
                 </span>
-                <select name="pluginPolicy:${escapeAttr(plugin.id)}" aria-label="${escapeAttr(`${plugin.displayName} status`)}">
+                <select class="hvy-galaxy-select" name="pluginPolicy:${escapeAttr(plugin.id)}" aria-label="${escapeAttr(`${plugin.displayName} status`)}">
                   <option value="enabled" ${enabled ? 'selected' : ''}>Enabled</option>
                   <option value="disabled" ${enabled ? '' : 'selected'}>Disabled</option>
                 </select>
@@ -4325,7 +4325,7 @@ function renderAppSettingsDialog(state: AppState): string {
           <div class="plugin-install-controls">
             <p class="dialog-note">Choose a <code>.hvy.plugin</code> package or drag one here. Newly installed plugins remain disabled until you enable them.</p>
             <label class="plugin-file-picker">
-              <input data-plugin-file-picker type="file" accept=".hvy.plugin" multiple>
+              <input class="hvy-galaxy-input" data-plugin-file-picker type="file" accept=".hvy.plugin" multiple>
               <span>Add plugin…</span>
             </label>
           </div>
@@ -4347,14 +4347,14 @@ function renderAppSettingsDialog(state: AppState): string {
                   ? `Requests: ${escapeHtml(record.manifest.permissions.join(', '))}`
                   : 'Requests no package permissions'}${requiresPerFileApproval ? '; package requires per-file approval' : ''}</small>
               </span>
-              <select name="pluginPolicy:${escapeAttr(record.key)}">
+              <select class="hvy-galaxy-select" name="pluginPolicy:${escapeAttr(record.key)}">
                 <option value="disabled" ${policy === 'disabled' ? 'selected' : ''}>Disabled</option>
                 <option value="conditional" ${policy === 'conditional' ? 'selected' : ''}>Per-file approval</option>
                 <option value="enabled" ${policy === 'enabled' ? 'selected' : ''} ${requiresPerFileApproval ? 'disabled' : ''}>Enabled for all files</option>
               </select>
             </label>
             ${currentPath ? `<label class="inline-checkbox">
-              <input name="pluginAccepted:${escapeAttr(record.key)}" type="checkbox" ${acceptedForCurrentFile ? 'checked' : ''}>
+              <input class="hvy-galaxy-input" name="pluginAccepted:${escapeAttr(record.key)}" type="checkbox" ${acceptedForCurrentFile ? 'checked' : ''}>
               <span>Allow this exact version for the current file</span>
             </label>` : ''}`;
           }).join('') || '<p class="dialog-note">No custom plugins installed.</p>'}
@@ -4363,12 +4363,12 @@ function renderAppSettingsDialog(state: AppState): string {
         ${pluginManager ? '' : `<fieldset class="ai-action-config">
           <legend>Debug log</legend>
           <label class="inline-checkbox app-settings-checkbox">
-            <input name="debugSemanticSearch" type="checkbox" ${settings.debugSemanticSearch ? 'checked' : ''}>
+            <input class="hvy-galaxy-input" name="debugSemanticSearch" type="checkbox" ${settings.debugSemanticSearch ? 'checked' : ''}>
             <span>Debug semantic search</span>
           </label>
           <label>
             <span>Maximum log size (MB)</span>
-            <input
+            <input class="hvy-galaxy-input"
               name="debugLogMaxMegabytes"
               type="number"
               min="1"
@@ -4379,8 +4379,8 @@ function renderAppSettingsDialog(state: AppState): string {
         </fieldset>`}
         </div>
         <div class="dialog-actions app-settings-actions">
-          <button type="button" data-action="cancel-app-settings">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-app-settings">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
     </div>`;
@@ -4396,8 +4396,8 @@ function renderAppSettingsDiscardDialog(state: AppState): string {
         <h2 id="appSettingsDiscardTitle">Discard Settings Changes?</h2>
         <p class="dialog-note">You have unsaved settings changes.</p>
         <div class="dialog-actions">
-          <button type="button" class="danger-button" data-action="discard-app-settings-changes">Discard Changes</button>
-          <button type="button" data-action="keep-editing-app-settings">Keep Editing</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-app-settings-changes">Discard Changes</button>
+          <button class="hvy-galaxy-button" type="button" data-action="keep-editing-app-settings">Keep Editing</button>
         </div>
       </section>
     </div>`;
@@ -4418,15 +4418,15 @@ function renderAiSettingsDialog(state: AppState): string {
       <form class="dialog wide-dialog" data-form="ai-settings">
         <h2>LLM Settings</h2>
         <p class="dialog-note">Configure providers once, then choose the provider and model each action should use.</p>
-        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
-        <input name="selectedProviderId" type="hidden" value="${escapeAttr(selectedProviderId)}">
+        <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <input class="hvy-galaxy-input" name="selectedProviderId" type="hidden" value="${escapeAttr(selectedProviderId)}">
         <div class="ai-provider-picker" aria-label="Configured AI providers">
           <span>Providers</span>
           <div>
             ${aiProviderPresets.map((option) => `
               <button
                 type="button"
-                class="${option.id === selectedProviderId ? 'is-active' : ''}"
+                class="hvy-galaxy-button ${option.id === selectedProviderId ? 'is-active' : ''}"
                 data-action="select-ai-provider"
                 data-provider-id="${escapeAttr(option.id)}"
                 aria-pressed="${option.id === selectedProviderId ? 'true' : 'false'}"
@@ -4434,10 +4434,10 @@ function renderAiSettingsDialog(state: AppState): string {
             `).join('')}
           </div>
         </div>
-        <button type="button" class="provider-docs-link" data-action="provider-docs" data-provider-docs data-url="${escapeAttr(provider.docsUrl)}">Setup instructions</button>
-        <input name="activeProviderId" type="hidden" value="${escapeAttr(settings.activeProviderId)}">
+        <button type="button" class="hvy-galaxy-button provider-docs-link" data-action="provider-docs" data-provider-docs data-url="${escapeAttr(provider.docsUrl)}">Setup instructions</button>
+        <input class="hvy-galaxy-input" name="activeProviderId" type="hidden" value="${escapeAttr(settings.activeProviderId)}">
         <label class="checkbox-row ai-default-provider-row">
-          <input
+          <input class="hvy-galaxy-input"
             name="defaultProvider"
             type="checkbox"
             data-action="set-default-ai-provider"
@@ -4448,16 +4448,16 @@ function renderAiSettingsDialog(state: AppState): string {
         <div class="ai-provider-fields">
           <label>
             <span>Base URL</span>
-            <input name="baseUrl" type="url" value="${escapeAttr(providerConfig.baseUrl)}" placeholder="${escapeAttr(provider.baseUrl || 'http://127.0.0.1:8000/v1')}" required>
+            <input class="hvy-galaxy-input" name="baseUrl" type="url" value="${escapeAttr(providerConfig.baseUrl)}" placeholder="${escapeAttr(provider.baseUrl || 'http://127.0.0.1:8000/v1')}" required>
           </label>
         </div>
         <label>
           <span>API Key</span>
-          <input name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
+          <input class="hvy-galaxy-input" name="apiKey" type="password" value="${escapeAttr(providerConfig.apiKey)}" placeholder="${escapeAttr(provider.apiKeyPlaceholder)}">
         </label>
         <label class="ai-range-field">
           <span>Maximum import chunk size</span>
-          <input
+          <input class="hvy-galaxy-input"
             name="maxContextChars"
             data-field="max-context-chars"
             type="range"
@@ -4470,7 +4470,7 @@ function renderAiSettingsDialog(state: AppState): string {
         </label>
         <label>
           <span>Max concurrent semantic filters</span>
-          <input
+          <input class="hvy-galaxy-input"
             name="maxConcurrentSemanticFilters"
             type="number"
             min="${MIN_MAX_CONCURRENT_SEMANTIC_FILTERS}"
@@ -4490,8 +4490,8 @@ function renderAiSettingsDialog(state: AppState): string {
           ${renderActionConfigField('compaction', 'Compaction', settings)}
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-ai-settings">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-ai-settings">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
     </div>`;
@@ -4507,8 +4507,8 @@ function renderAiSettingsDiscardDialog(state: AppState): string {
         <h2 id="aiSettingsDiscardTitle">Discard LLM Settings Changes?</h2>
         <p class="dialog-note">Your unsaved provider and model changes will be lost.</p>
         <div class="dialog-actions">
-          <button type="button" class="danger-button" data-action="discard-ai-settings-changes">Discard Changes</button>
-          <button type="button" data-action="keep-editing-ai-settings">Keep Editing</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-ai-settings-changes">Discard Changes</button>
+          <button class="hvy-galaxy-button" type="button" data-action="keep-editing-ai-settings">Keep Editing</button>
         </div>
       </section>
     </div>`;
@@ -4526,11 +4526,11 @@ function renderMcpSettingsDialog(state: AppState): string {
       <form class="dialog wide-dialog mcp-settings-dialog" data-form="mcp-settings">
         <h2>MCP Settings</h2>
         <p class="dialog-note">Let local AI agents search workspaces and edit HVY files through the low-context HVY CLI surface.</p>
-        <textarea name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         <div class="mcp-settings-grid mcp-settings-grid--global">
           <label>
             <span>Write access</span>
-            <select name="writeAccess">
+            <select class="hvy-galaxy-select" name="writeAccess">
               <option value="searchOnly" ${settings.writeAccess === 'searchOnly' ? 'selected' : ''}>Search only</option>
               <option value="hvyCliEdits" ${settings.writeAccess === 'hvyCliEdits' ? 'selected' : ''}>CLI based editor</option>
               <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
@@ -4541,8 +4541,8 @@ function renderMcpSettingsDialog(state: AppState): string {
           <div class="mcp-config-header">
             <span>Connection config</span>
             <div class="segmented-control mcp-transport-tabs" role="tablist" aria-label="MCP transport">
-              <button type="button" class="is-active" data-action="select-mcp-transport" data-transport="stdio" data-transport-tab="stdio" role="tab" aria-selected="true">STDIO</button>
-              <button type="button" data-action="select-mcp-transport" data-transport="http" data-transport-tab="http" role="tab" aria-selected="false">Streamable HTTP</button>
+              <button type="button" class="hvy-galaxy-button is-active" data-action="select-mcp-transport" data-transport="stdio" data-transport-tab="stdio" role="tab" aria-selected="true">STDIO</button>
+              <button class="hvy-galaxy-button" type="button" data-action="select-mcp-transport" data-transport="http" data-transport-tab="http" role="tab" aria-selected="false">Streamable HTTP</button>
             </div>
           </div>
           <section class="mcp-config-panel" data-transport-panel="stdio">
@@ -4566,9 +4566,9 @@ function renderMcpSettingsDialog(state: AppState): string {
                       ${client.latestBackupLabel ? `<small>Latest backup: ${escapeHtml(client.latestBackupLabel)}</small>` : ''}
                     </div>
                     <div class="mcp-install-actions">
-                      <button type="button" data-action="install-mcp-client" data-target="${escapeAttr(client.target)}" ${installDisabled ? 'disabled' : ''}>${escapeHtml(actionLabel)}</button>
-                      <button type="button" class="ghost" data-action="remove-mcp-client" data-target="${escapeAttr(client.target)}" ${removeDisabled ? 'disabled' : ''}>Remove</button>
-                      <button type="button" class="ghost" data-action="restore-mcp-client-backup" data-target="${escapeAttr(client.target)}" ${restoreDisabled ? 'disabled' : ''}>Restore Latest</button>
+                      <button class="hvy-galaxy-button" type="button" data-action="install-mcp-client" data-target="${escapeAttr(client.target)}" ${installDisabled ? 'disabled' : ''}>${escapeHtml(actionLabel)}</button>
+                      <button type="button" class="hvy-galaxy-button ghost" data-action="remove-mcp-client" data-target="${escapeAttr(client.target)}" ${removeDisabled ? 'disabled' : ''}>Remove</button>
+                      <button type="button" class="hvy-galaxy-button ghost" data-action="restore-mcp-client-backup" data-target="${escapeAttr(client.target)}" ${restoreDisabled ? 'disabled' : ''}>Restore Latest</button>
                     </div>
                   </article>`;
   }).join('')}
@@ -4583,27 +4583,27 @@ function renderMcpSettingsDialog(state: AppState): string {
                 ${status.lastError ? `<small>${escapeHtml(status.lastError)}</small>` : ''}
               </div>
               <div class="mcp-status-actions">
-                <button type="button" data-action="start-mcp-server" ${status.running || state.busy ? 'disabled' : ''}>Start</button>
-                <button type="button" data-action="stop-mcp-server" ${!status.running || state.busy ? 'disabled' : ''}>Stop</button>
-                <button type="button" data-action="restart-mcp-server" ${state.busy ? 'disabled' : ''}>Restart</button>
+                <button class="hvy-galaxy-button" type="button" data-action="start-mcp-server" ${status.running || state.busy ? 'disabled' : ''}>Start</button>
+                <button class="hvy-galaxy-button" type="button" data-action="stop-mcp-server" ${!status.running || state.busy ? 'disabled' : ''}>Stop</button>
+                <button class="hvy-galaxy-button" type="button" data-action="restart-mcp-server" ${state.busy ? 'disabled' : ''}>Restart</button>
               </div>
             </div>
             <label class="checkbox-row">
-              <input name="startAutomatically" type="checkbox" ${settings.startAutomatically ? 'checked' : ''}>
+              <input class="hvy-galaxy-input" name="startAutomatically" type="checkbox" ${settings.startAutomatically ? 'checked' : ''}>
               <span>Start automatically with HVY Galaxy</span>
             </label>
             <div class="mcp-settings-grid">
               <label>
                 <span>Port</span>
-                <input name="port" data-field="mcp-port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
+                <input class="hvy-galaxy-input" name="port" data-field="mcp-port" type="number" min="1" max="65535" step="1" value="${escapeAttr(String(settings.port ?? 8794))}">
               </label>
               <label class="mcp-token-field">
                 <span>Bearer token</span>
                 <div class="mcp-token-control">
-                  <input name="bearerToken" data-field="mcp-token" type="password" value="${escapeAttr(settings.bearerToken)}" autocomplete="off" spellcheck="false">
-                  <button type="button" class="icon-button" data-action="toggle-mcp-token" title="Show bearer token" aria-label="Show bearer token">${eyeIcon()}</button>
-                  <button type="button" class="icon-button" data-action="copy-mcp-token" title="Copy bearer token" aria-label="Copy bearer token">${copyIcon()}</button>
-                  <button type="button" data-action="generate-mcp-token">Generate</button>
+                  <input class="hvy-galaxy-input" name="bearerToken" data-field="mcp-token" type="password" value="${escapeAttr(settings.bearerToken)}" autocomplete="off" spellcheck="false">
+                  <button type="button" class="hvy-galaxy-button icon-button" data-action="toggle-mcp-token" title="Show bearer token" aria-label="Show bearer token">${eyeIcon()}</button>
+                  <button type="button" class="hvy-galaxy-button icon-button" data-action="copy-mcp-token" title="Copy bearer token" aria-label="Copy bearer token">${copyIcon()}</button>
+                  <button class="hvy-galaxy-button" type="button" data-action="generate-mcp-token">Generate</button>
                 </div>
               </label>
             </div>
@@ -4613,8 +4613,8 @@ function renderMcpSettingsDialog(state: AppState): string {
           </section>
         </div>
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-mcp-settings">Cancel</button>
-          <button type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-mcp-settings">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
         </div>
       </form>
     </div>`;
@@ -4631,7 +4631,7 @@ function renderMcpReadonlyField(
     <div class="mcp-copy-field" data-copy-label="${escapeAttr(label)}">
       <span>${escapeHtml(label)}</span>
       <span class="mcp-copy-control">
-        <input
+        <input class="hvy-galaxy-input"
           type="text"
           readonly
           aria-label="${escapeAttr(label)}"
@@ -4640,7 +4640,7 @@ function renderMcpReadonlyField(
           ${running ? `data-running="${escapeAttr(running)}"` : ''}
           spellcheck="false"
         >
-        <button type="button" class="icon-button" data-action="${escapeAttr(copyAction)}" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
+        <button type="button" class="hvy-galaxy-button icon-button" data-action="${escapeAttr(copyAction)}" title="Copy ${escapeAttr(label)}" aria-label="Copy ${escapeAttr(label)}">${copyIcon()}</button>
       </span>
     </div>`;
 }
@@ -4655,8 +4655,8 @@ function renderMcpSettingsDiscardDialog(state: AppState): string {
         <h2 id="mcpSettingsDiscardTitle">Discard MCP Settings Changes?</h2>
         <p class="dialog-note">Your unsaved MCP server changes will be lost.</p>
         <div class="dialog-actions">
-          <button type="button" class="danger-button" data-action="discard-mcp-settings-changes">Discard Changes</button>
-          <button type="button" data-action="keep-editing-mcp-settings">Keep Editing</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-mcp-settings-changes">Discard Changes</button>
+          <button class="hvy-galaxy-button" type="button" data-action="keep-editing-mcp-settings">Keep Editing</button>
         </div>
       </section>
     </div>`;
@@ -4684,7 +4684,7 @@ function renderColorThemeDialog(state: AppState): string {
         ${renderThemePreviewPanel(true)}
         <div class="theme-filter-shell">
           <span>Filter Colors</span>
-          <input type="search" placeholder="Type a role, component, or click a preview" data-field="theme-color-filter">
+          <input class="hvy-galaxy-input" type="search" placeholder="Type a role, component, or click a preview" data-field="theme-color-filter">
         </div>
         <div class="theme-color-list">
           ${THEME_COLOR_NAMES.map((name) => renderThemeColorRow(name, colors[name] ?? '', getResolvedThemeColor(name, colors[name]), true)).join('')}
@@ -4795,8 +4795,8 @@ function renderThemeCard(theme: ThemeCard, enabled = true): string {
         <span>${escapeHtml(theme.description)}</span>
       </div>
       <div class="theme-palette-actions">
-        <button type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>${theme.selected ? 'Using' : 'Use'}</button>
-        ${theme.builtIn ? '' : `<button type="button" class="ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>Delete</button>`}
+        <button class="hvy-galaxy-button" type="button" data-action="theme-select" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>${theme.selected ? 'Using' : 'Use'}</button>
+        ${theme.builtIn ? '' : `<button type="button" class="hvy-galaxy-button ghost" data-action="theme-delete" data-theme-id="${escapeAttr(theme.id)}" ${enabled ? '' : 'disabled'}>Delete</button>`}
       </div>
     </article>`;
 }
@@ -4835,7 +4835,7 @@ function renderThemePreviewPanel(enabled: boolean): string {
             <strong>Container</strong>
             <span>Collapsed preview text</span>
           </div>
-          <button type="button" class="theme-demo-target theme-demo-ai-target" data-theme-demo-state="target" data-action="theme-filter-to-colors" data-theme-filter="--hvy-surface-tint --hvy-focus-ring --hvy-focus-glow" ${enabled ? '' : 'disabled'}>AI target</button>
+          <button type="button" class="hvy-galaxy-button theme-demo-target theme-demo-ai-target" data-theme-demo-state="target" data-action="theme-filter-to-colors" data-theme-filter="--hvy-surface-tint --hvy-focus-ring --hvy-focus-glow" ${enabled ? '' : 'disabled'}>AI target</button>
         </div>
       </div>`,
     },
@@ -4868,8 +4868,8 @@ function renderThemePreviewPanel(enabled: boolean): string {
         { id: 'ghost', label: 'Ghost', variables: ['--hvy-surface-alt', '--hvy-ghost-border', '--hvy-text-muted'] },
       ],
       html: `<div class="theme-demo-controls">
-        <button type="button" class="theme-demo-button" data-theme-demo-state="rest" ${enabled ? '' : 'disabled'}>Generate</button>
-        <button type="button" class="theme-demo-button theme-demo-button-hover" data-theme-demo-state="hover" ${enabled ? '' : 'disabled'}>Generate</button>
+        <button type="button" class="hvy-galaxy-button theme-demo-button" data-theme-demo-state="rest" ${enabled ? '' : 'disabled'}>Generate</button>
+        <button type="button" class="hvy-galaxy-button theme-demo-button theme-demo-button-hover" data-theme-demo-state="hover" ${enabled ? '' : 'disabled'}>Generate</button>
         <div class="theme-demo-ghost-input" data-theme-demo-state="ghost">Add component</div>
       </div>`,
     },
@@ -4943,7 +4943,7 @@ function renderThemePreviewPanel(enabled: boolean): string {
   ];
   return `
     <div class="theme-component-preview-picker" aria-label="Theme component preview picker">
-      ${items.map((item, index) => `<button type="button" class="theme-component-picker-button${index === 0 ? ' is-active' : ''}" data-action="theme-preview-select-component" data-theme-component="${escapeAttr(item.id)}" ${enabled ? '' : 'disabled'}>${escapeHtml(item.label)}</button>`).join('')}
+      ${items.map((item, index) => `<button type="button" class="hvy-galaxy-button theme-component-picker-button${index === 0 ? ' is-active' : ''}" data-action="theme-preview-select-component" data-theme-component="${escapeAttr(item.id)}" ${enabled ? '' : 'disabled'}>${escapeHtml(item.label)}</button>`).join('')}
     </div>
     <div class="theme-preview-grid" aria-label="Theme component preview">
       ${items.map((item, index) => renderThemePreviewCard(item, index, enabled)).join('')}
@@ -4953,7 +4953,7 @@ function renderThemePreviewPanel(enabled: boolean): string {
 function renderThemePreviewCard(item: ThemePreviewItem, index: number, enabled: boolean): string {
   const stateButtons = item.states.map((previewState, stateIndex) => `<button
     type="button"
-    class="theme-preview-state-button${stateIndex === 0 ? ' is-active' : ''}"
+    class="hvy-galaxy-button theme-preview-state-button${stateIndex === 0 ? ' is-active' : ''}"
     data-action="theme-preview-set-state"
     data-theme-state="${escapeAttr(previewState.id)}"
     data-theme-filter="${escapeAttr(previewState.variables.join(' '))}"
@@ -4972,7 +4972,7 @@ function renderThemePreviewCard(item: ThemePreviewItem, index: number, enabled: 
     ${item.html}
     <button
       type="button"
-      class="theme-preview-all"
+      class="hvy-galaxy-button theme-preview-all"
       data-action="theme-filter-to-colors"
       data-theme-filter="${escapeAttr(item.variables.join(' '))}"
       ${enabled ? '' : 'disabled'}
@@ -4993,7 +4993,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string, 
         <strong>${escapeHtml(label)}</strong><span class="theme-color-var">${escapeHtml(name)}</span>
       </div>
       <input
-        class="theme-color-picker"
+        class="hvy-galaxy-input theme-color-picker"
         type="color"
         data-field="theme-color-picker"
         data-color-name="${escapeAttr(name)}"
@@ -5002,7 +5002,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string, 
         ${enabled ? '' : 'disabled'}
       >
       <input
-        class="theme-color-value"
+        class="hvy-galaxy-input theme-color-value"
         data-field="theme-color-value"
         data-color-name="${escapeAttr(name)}"
         value="${escapeAttr(displayValue)}"
@@ -5013,7 +5013,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string, 
       >
       <label class="theme-alpha-control" title="Alpha">
         <span>A</span>
-        <input
+        <input class="hvy-galaxy-input"
           type="range"
           min="0"
           max="1"
@@ -5028,7 +5028,7 @@ function renderThemeColorRow(name: string, value: string, displayValue: string, 
       </label>
       <span class="theme-color-swatch" style="${displayValue ? `background: ${escapeAttr(displayValue)};` : ''}" aria-hidden="true"></span>
       ${overridden
-      ? `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
+      ? `<span class="theme-color-reset-group"><button type="button" class="hvy-galaxy-button ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default" ${enabled ? '' : 'disabled'}>Reset</button></span>`
       : '<span class="theme-color-action theme-color-default muted">Default</span>'}
     </div>`;
 }
@@ -5051,7 +5051,7 @@ function syncThemeOverrideAction(row: HTMLElement | null | undefined, name: stri
   if (!row) return;
   const defaultLabel = row.querySelector<HTMLElement>('.theme-color-default');
   if (overridden && defaultLabel) {
-    defaultLabel.outerHTML = `<span class="theme-color-reset-group"><button type="button" class="ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default">Reset</button></span>`;
+    defaultLabel.outerHTML = `<span class="theme-color-reset-group"><button type="button" class="hvy-galaxy-button ghost theme-color-action" data-action="theme-reset-color" data-color-name="${escapeAttr(name)}" title="Reset to default">Reset</button></span>`;
     return;
   }
   const resetGroup = row.querySelector<HTMLElement>('.theme-color-reset-group');
@@ -5110,15 +5110,15 @@ function renderRecoveryDialog(state: AppState): string {
                       ${backup.documentPath ? `<small>${escapeHtml(backup.documentPath)}</small>` : '<small>Unsaved document</small>'}
                     </div>
                     <div class="recovery-item-actions">
-                      <button type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
-                      <button type="button" class="danger-button" data-action="discard-backup" data-backup-id="${escapeAttr(backup.id)}">Discard</button>
+                      <button class="hvy-galaxy-button" type="button" data-action="restore-backup" data-backup-id="${escapeAttr(backup.id)}">Restore Edits</button>
+                      <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-backup" data-backup-id="${escapeAttr(backup.id)}">Discard</button>
                     </div>
                   </article>
                 `).join('')}
               </div>`
     }
         <div class="dialog-actions">
-          <button type="button" data-action="cancel-recovery">Close</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-recovery">Close</button>
         </div>
       </section>
     </div>`;
@@ -5137,7 +5137,7 @@ function renderVersionHistoryDialog(state: AppState): string {
       : `<div class="recovery-list">
           ${versions.map((version, index) => `
             <article class="recovery-item${version.id === state.selectedSavedVersionId ? ' is-selected' : ''}">
-              <button type="button" class="version-history-select" data-action="select-saved-version" data-version-id="${escapeAttr(version.id)}" aria-current="${version.id === state.selectedSavedVersionId ? 'true' : 'false'}">
+              <button type="button" class="hvy-galaxy-button version-history-select" data-action="select-saved-version" data-version-id="${escapeAttr(version.id)}" aria-current="${version.id === state.selectedSavedVersionId ? 'true' : 'false'}">
                 <strong>${index === 0 ? 'Latest saved version' : 'Saved version'}</strong>
                 <span>${escapeHtml(formatBackupTimestamp(version.createdAt))}</span>
                 <small>${escapeHtml(version.displayName)}</small>
@@ -5145,7 +5145,7 @@ function renderVersionHistoryDialog(state: AppState): string {
             </article>`).join('')}
         </div>`}
         <div class="dialog-actions">
-          <button type="button" data-action="close-version-history">Close</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-version-history">Close</button>
         </div>
       </section>
     </div>`;
@@ -5164,9 +5164,9 @@ function renderCloseDocumentDialog(state: AppState): string {
         <h2 id="closeDocumentTitle">Save Changes Before Closing?</h2>
         <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="save-and-close-document">Save and Close</button>
-          <button type="button" data-action="close-document-without-saving">Don't Save</button>
-          <button type="button" data-action="cancel-close-document">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="save-and-close-document">Save and Close</button>
+          <button class="hvy-galaxy-button" type="button" data-action="close-document-without-saving">Don't Save</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-close-document">Cancel</button>
         </div>
       </section>
     </div>`;
@@ -5185,9 +5185,9 @@ function renderCloseDocumentDraftDialog(state: AppState): string {
         <h2 id="closeDocumentDraftTitle">Keep Recovery Draft?</h2>
         <p class="dialog-note">You can discard the unsaved edits in ${escapeHtml(documentName)} or keep the recovery draft to review later.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="review-close-document-later">Review Later</button>
-          <button type="button" class="danger-button" data-action="discard-close-document-draft">Discard Draft</button>
-          <button type="button" data-action="cancel-close-document">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="review-close-document-later">Review Later</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-close-document-draft">Discard Draft</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-close-document">Cancel</button>
         </div>
       </section>
     </div>`;
@@ -5204,9 +5204,9 @@ function renderAppCloseDialog(state: AppState): string {
         <h2 id="appCloseTitle">Save Changes Before Closing?</h2>
         <p class="dialog-note">There are unsaved edits in ${escapeHtml(documentName)}.</p>
         <div class="dialog-actions">
-          <button type="button" data-action="save-and-close-app">Save and Close</button>
-          <button type="button" class="danger-button" data-action="close-app-without-saving">Close Without Saving</button>
-          <button type="button" data-action="cancel-app-close">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="save-and-close-app">Save and Close</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="close-app-without-saving">Close Without Saving</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-app-close">Cancel</button>
         </div>
       </section>
     </div>`;
@@ -5288,17 +5288,17 @@ function renderActionConfigField(action: AiActionKey, label: string, settings: A
   return `
     <fieldset class="ai-action-config">
       <legend>${escapeHtml(label)}</legend>
-      <textarea name="${action}ModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
+      <textarea class="hvy-galaxy-textarea" name="${action}ModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
       <label>
         <span>Provider</span>
-        <select name="${action}ProviderId" data-field="ai-action-provider" data-action-key="${escapeAttr(action)}" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
+        <select class="hvy-galaxy-select" name="${action}ProviderId" data-field="ai-action-provider" data-action-key="${escapeAttr(action)}" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
           <option value="default" ${config.providerId === 'default' ? 'selected' : ''}>Default (${escapeHtml(provider.name)})</option>
           ${aiProviderPresets.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === config.providerId ? 'selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}
         </select>
       </label>
       <label>
         <span>Model</span>
-        <input name="${action}Model" type="text" value="${escapeAttr(model)}" placeholder="${escapeAttr(provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
+        <input class="hvy-galaxy-input" name="${action}Model" type="text" value="${escapeAttr(model)}" placeholder="${escapeAttr(provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
       </label>
     </fieldset>`;
 }
@@ -5324,7 +5324,7 @@ function renderEmbeddingSettingsField(settings: AiSettings): string {
           ${(['cloud', 'local'] as const).map((option) => `
             <button
               type="button"
-              class="${option === mode ? 'is-active' : ''}"
+              class="hvy-galaxy-button ${option === mode ? 'is-active' : ''}"
               data-action="select-embedding-mode"
               data-embedding-mode="${escapeAttr(option)}"
               aria-pressed="${option === mode ? 'true' : 'false'}"
@@ -5334,42 +5334,42 @@ function renderEmbeddingSettingsField(settings: AiSettings): string {
       </div>
       <label>
         <span>Provider</span>
-        <select name="embeddingProviderId" data-field="ai-embedding-provider" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
+        <select class="hvy-galaxy-select" name="embeddingProviderId" data-field="ai-embedding-provider" data-effective-provider-id="${escapeAttr(effectiveProviderId)}">
           ${providerOptions.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === effectiveProviderId ? 'selected' : ''}>${escapeHtml(aiProviderPreset(option.id).name)}</option>`).join('')}
         </select>
       </label>
       <p class="ai-embedding-warning${effectiveProviderId === 'openai' ? ' is-hidden' : ''}">Untested</p>
       <label>
         <span>Model</span>
-        <select name="embeddingModelPreset" data-field="ai-embedding-model-preset">
+        <select class="hvy-galaxy-select" name="embeddingModelPreset" data-field="ai-embedding-model-preset">
           ${embeddingProvider.models.map((option) => `<option value="${escapeAttr(option.id)}" ${option.id === model ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}
           <option value="custom" ${isCustomModel ? 'selected' : ''}>Custom</option>
         </select>
       </label>
       <label class="ai-embedding-custom-model${isCustomModel ? '' : ' is-hidden'}">
         <span>Custom model</span>
-        <input name="embeddingModel" type="text" value="${escapeAttr(isCustomModel ? model : '')}" placeholder="${escapeAttr(embeddingProvider.modelPlaceholder || provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
+        <input class="hvy-galaxy-input" name="embeddingModel" type="text" value="${escapeAttr(isCustomModel ? model : '')}" placeholder="${escapeAttr(embeddingProvider.modelPlaceholder || provider.modelPlaceholder)}" autocomplete="off" spellcheck="false">
       </label>
       <details class="ai-embedding-advanced">
         <summary>Advanced</summary>
         ${showCustomDimensions ? `
           <label>
             <span>Custom dimensions</span>
-            <input name="embeddingDimensions" type="number" min="1" step="1" value="${escapeAttr(config.dimensions ? String(config.dimensions) : '')}" placeholder="model default">
+            <input class="hvy-galaxy-input" name="embeddingDimensions" type="number" min="1" step="1" value="${escapeAttr(config.dimensions ? String(config.dimensions) : '')}" placeholder="model default">
           </label>
         ` : ''}
         <label>
           <span>Batch size</span>
-          <input name="embeddingBatchSize" type="number" min="1" max="256" step="1" value="${escapeAttr(String(config.batchSize || 8))}">
+          <input class="hvy-galaxy-input" name="embeddingBatchSize" type="number" min="1" max="256" step="1" value="${escapeAttr(String(config.batchSize || 8))}">
         </label>
       </details>
   ` : '';
   return `
     <fieldset class="ai-action-config ai-embedding-config">
       <legend>Embeddings</legend>
-      <textarea name="embeddingModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
+      <textarea class="hvy-galaxy-textarea" name="embeddingModelsByProvider" hidden>${escapeHtml(JSON.stringify(modelsByProvider))}</textarea>
       <label class="checkbox-row">
-        <input name="embeddingsEnabled" data-field="embeddings-enabled" type="checkbox" ${config.enabled ? 'checked' : ''}>
+        <input class="hvy-galaxy-input" name="embeddingsEnabled" data-field="embeddings-enabled" type="checkbox" ${config.enabled ? 'checked' : ''}>
         <span>Use embeddings</span>
       </label>
       ${controls}
