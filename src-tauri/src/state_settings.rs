@@ -13,16 +13,6 @@ fn document_backup_matches_saved_file(snapshot: &DocumentBackupSnapshot, snapsho
     if snapshot.document_path.is_empty() {
         return false;
     }
-    if let (Ok(metadata), Ok(created_at)) = (
-        fs::metadata(&snapshot.document_path),
-        DateTime::parse_from_rfc3339(&snapshot.created_at),
-    ) {
-        if let Ok(modified) = metadata.modified() {
-            if DateTime::<Utc>::from(modified) >= created_at.with_timezone(&Utc) {
-                return true;
-            }
-        }
-    }
     let Ok(saved_bytes) = fs::read(&snapshot.document_path) else {
         return false;
     };

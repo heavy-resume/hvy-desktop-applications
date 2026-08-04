@@ -20,8 +20,10 @@ import { currentWorkspaceChatDocumentName, currentWorkspaceChatDocumentPath, isW
 import { initializeDocumentHistory } from './documentHistory';
 import { recordDocumentNavigation } from './documentNavigationHistory';
 import { captureDocumentViewState, restoreDocumentViewState, type DocumentViewState } from './documentViewState';
+import { mountedDocumentDirtyAfterMount, recoveryDocumentTabName } from './recoveryDocuments';
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
-export { backupDocumentKey, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
+export { backupDocumentKey, cancelSaveConflict, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, confirmSaveConflict, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
+export { recoveryDocumentId } from './recoveryDocuments';
 export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, workspaceDisplayNameFromPath, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, upsertWorkspace, sortWorkspaces, reorderedWorkspaceEntries, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed } from './mainWorkspaceUtils';
 export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder } from './mainUtilities';
 import { render, renderAllAroundDocument as renderUiAroundDocument, renderModals, type UiHandlers } from './ui';
@@ -45,6 +47,7 @@ export interface MountScrollRatio {
   leftPosition: number;
 }
 export interface DocumentSession {
+  documentId: string;
   path: string;
   name: string;
   extension: DocumentFile['extension'];
@@ -60,6 +63,8 @@ export interface DocumentSession {
   viewState: DocumentViewState | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
+  virtual?: 'recoveryDraft';
+  recoveryModified: boolean;
 }
 export interface HotReloadDocumentSnapshot {
   path: string;
@@ -178,9 +183,9 @@ export function defaultDocumentMode(extension: DocumentFile['extension'], option
 export function syncDocumentTabs(): void {
   const tabs = new Map<string, { path: string; name: string; dirty: boolean; readOnly: boolean; hiddenFromAI: boolean; active: boolean }>();
   if (state.document) {
-    tabs.set(state.document.path, {
-      path: state.document.path,
-      name: state.document.name,
+    tabs.set(state.document.documentId, {
+      path: state.document.documentId,
+      name: state.document.virtual === 'recoveryDraft' ? recoveryDocumentTabName(state.document.name) : state.document.name,
       dirty: state.document.dirty,
       readOnly: state.document.readOnly,
       hiddenFromAI: state.document.hiddenFromAI,
@@ -195,15 +200,15 @@ export function syncDocumentTabs(): void {
       dirty: state.workspaceChat.dirty,
       readOnly: false,
       hiddenFromAI: false,
-      active: state.document?.path === workspaceChatPath,
+      active: state.document?.documentId === workspaceChatPath,
     });
   }
   for (const session of documentSessions.values()) {
-    if (session.readOnly || (!openedDocumentTabOrder.includes(session.path) && !session.dirty && !session.isNew)) continue;
-    const active = session.path === state.document?.path;
-    tabs.set(session.path, {
-      path: session.path,
-      name: session.name,
+    if (session.readOnly || (!openedDocumentTabOrder.includes(session.documentId) && !session.dirty && !session.isNew)) continue;
+    const active = session.documentId === state.document?.documentId;
+    tabs.set(session.documentId, {
+      path: session.documentId,
+      name: session.virtual === 'recoveryDraft' ? recoveryDocumentTabName(session.name) : session.name,
       dirty: active ? state.document?.dirty ?? session.dirty : session.dirty,
       readOnly: session.readOnly,
       hiddenFromAI: session.hiddenFromAI,
@@ -241,6 +246,7 @@ export function activateWorkspaceChatDocument(): void {
   resetMountLifecycleState();
   state.document?.mounted?.mount.destroy();
   state.document = {
+    documentId: path,
     path,
     name: currentWorkspaceChatDocumentName(),
     extension: '.hvy',
@@ -253,10 +259,12 @@ export function activateWorkspaceChatDocument(): void {
     metaOpen: false,
     mounted: null,
     recoveryBackupId: null,
+    recoveryModified: false,
   };
   state.selectedFilePath = null;
 }
-export async function openDocument(file: DocumentFile, options: { defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
+export async function openDocument(file: DocumentFile, options: { documentId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
+  const documentId = options.documentId ?? file.path;
   const loadStartedAt = performance.now();
   logDebugEvent('load', 'openDocument:start', {
     path: file.path,
@@ -266,11 +274,11 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     deferMount: options.deferMount === true,
   });
   preserveCurrentDocumentSession();
-  markDocumentTabOpened(file.path);
+  markDocumentTabOpened(documentId);
   measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, () => {
     state.document?.mounted?.mount.destroy();
   });
-  const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(file.path);
+  const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(documentId);
   const viewSession = storedSession;
   const session = storedSession?.dirty || storedSession?.isNew ? storedSession : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
@@ -309,6 +317,7 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     ?? readDocumentModePreference(file.path)
     ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI });
   state.document = {
+    documentId: session?.documentId ?? documentId,
     path: session?.path ?? file.path,
     name: session?.name ?? file.name,
     extension: session?.extension ?? file.extension,
@@ -320,7 +329,8 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     metaOpen: viewSession?.metaOpen ?? false,
     mounted: null,
     recoveryBackupId: session?.recoveryBackupId ?? options.recoveryBackupId ?? null,
-    virtual: options.historyPreview ? 'versionHistory' : undefined,
+    recoveryModified: session?.recoveryModified ?? false,
+    virtual: options.historyPreview ? 'versionHistory' : options.recovered ? 'recoveryDraft' : session?.virtual,
     historySourcePath: options.historyPreview?.sourcePath,
     historySourceName: options.historyPreview?.sourceName,
     historyVersionId: options.historyPreview?.versionId,
@@ -355,7 +365,7 @@ export async function openDocument(file: DocumentFile, options: { defaultDocumen
     : options.isNew
     ? 'Created blank HVY document'
     : `Opened ${file.name}`;
-  recordDocumentNavigation(file.path);
+  recordDocumentNavigation(documentId);
   if (options.deferMount) {
     pendingMountDocument = document;
     pendingMountRecoveryState = recoveryState;
@@ -405,7 +415,8 @@ export function preserveCurrentDocumentSession(): void {
   const recoveryStateValue = openDocument.mounted
     ? measurePerf('session:getRecoveryState', { path: openDocument.path }, () => getMountedRecoveryState(openDocument.mounted!))
     : null;
-  documentSessions.set(openDocument.path, {
+  documentSessions.set(openDocument.documentId, {
+    documentId: openDocument.documentId,
     path: openDocument.path,
     name: openDocument.name,
     extension: openDocument.extension,
@@ -421,6 +432,8 @@ export function preserveCurrentDocumentSession(): void {
     viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
+    virtual: openDocument.virtual === 'recoveryDraft' ? 'recoveryDraft' : undefined,
+    recoveryModified: openDocument.recoveryModified,
   });
   measurePerf('session:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
 }
@@ -435,7 +448,8 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
   const recoveryStateValue = openDocument.mounted
     ? measurePerf('session:update:getRecoveryState', { path: openDocument.path }, () => getMountedRecoveryState(openDocument.mounted!))
     : null;
-  documentSessions.set(openDocument.path, {
+  documentSessions.set(openDocument.documentId, {
+    documentId: openDocument.documentId,
     path: openDocument.path,
     name: openDocument.name,
     extension: openDocument.extension,
@@ -446,11 +460,13 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     isNew: openDocument.isNew,
     metaOpen: openDocument.metaOpen,
     document,
-    chatState: openDocument.mounted?.mount.getChatState() ?? documentSessions.get(openDocument.path)?.chatState ?? null,
+    chatState: openDocument.mounted?.mount.getChatState() ?? documentSessions.get(openDocument.documentId)?.chatState ?? null,
     scrollRatio: scrollRatioValue,
     viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
+    virtual: openDocument.virtual === 'recoveryDraft' ? 'recoveryDraft' : undefined,
+    recoveryModified: openDocument.recoveryModified,
   });
   measurePerf('session:update:writeHotReloadSessionSnapshot', { path: openDocument.path }, () => writeHotReloadSessionSnapshot());
 }
@@ -462,12 +478,14 @@ export function adoptSavedAsDocument(
   previousPath: string,
   previousUseDocumentColors: boolean,
 ): void {
-  if (previousPath && previousPath !== file.path) {
-    documentSessions.delete(previousPath);
-    removeDocumentTabPath(previousPath);
+  const previousDocumentId = state.document?.documentId ?? previousPath;
+  if (previousDocumentId && previousDocumentId !== file.path) {
+    documentSessions.delete(previousDocumentId);
+    removeDocumentTabPath(previousDocumentId);
   }
   markDocumentTabOpened(file.path);
   state.document = {
+    documentId: file.path,
     path: file.path,
     name: file.name,
     extension: file.extension,
@@ -479,6 +497,7 @@ export function adoptSavedAsDocument(
     metaOpen: false,
     mounted,
     recoveryBackupId: null,
+    recoveryModified: false,
   };
   writeDocumentColorPreference(file.path, previousUseDocumentColors);
   markMountedDocumentSaved(mounted);
@@ -522,6 +541,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
   });
   mountThemeReapplyCleanup = null;
   const currentDocument = state.document;
+  const mountStartedDirty = currentDocument.dirty;
   const mountShouldStartSaved = !currentDocument.dirty && !currentDocument.isNew;
   logDebugEvent('load', 'mountCurrentDocument:baselineBeforeMount', {
     path,
@@ -532,7 +552,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     shouldStartSaved: mountShouldStartSaved,
   });
   mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
-  const storedChatState = documentSessions.get(currentDocument.path)?.chatState ?? null;
+  const storedChatState = documentSessions.get(currentDocument.documentId)?.chatState ?? null;
   const powerScripts = state.appSettings.powerScriptingAllowedFiles.includes(currentDocument.path)
     ? 'enabled'
     : 'prompt';
@@ -652,7 +672,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
       state.document!.dirty = false;
     }
     const mountedDirtyAfterBaseline = isMountedDocumentDirty(mounted);
-    const nextDirty = state.document!.dirty || state.document!.isNew ? true : mountedDirtyAfterBaseline;
+    const nextDirty = mountedDocumentDirtyAfterMount(mountStartedDirty, state.document!.isNew, mountedDirtyAfterBaseline);
     logDebugEvent('load', 'mountCurrentDocument:baselineAfterMount', {
       path,
       shouldStartSaved: mountShouldStartSaved,
@@ -662,7 +682,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
       nextDirty,
       isNew: state.document!.isNew,
     });
-    setDocumentDirty(nextDirty, { preserveStatus: true });
+    setDocumentDirty(nextDirty, { preserveStatus: true, recoveryBaseline: true });
   });
 }
 export async function ensureCurrentDocumentMounted(): Promise<void> {
@@ -755,13 +775,16 @@ export function restoreMountScrollRatio(root: HTMLElement | null, ratio: MountSc
     window.requestAnimationFrame(restore);
   });
 }
-export function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean } = {}): void {
+export function setDocumentDirty(dirty: boolean, options: { preserveStatus?: boolean; recoveryBaseline?: boolean } = {}): void {
   if (!state.document || state.document.readOnly) return;
   const path = state.document.path;
   measurePerf('dirty:setDocumentDirty', { path, dirty, preserveStatus: options.preserveStatus === true }, () => {
     const changed = state.document!.dirty !== dirty;
     const previousDirty = state.document!.dirty;
     state.document!.dirty = dirty;
+    if (dirty && state.document!.virtual === 'recoveryDraft' && options.recoveryBaseline !== true) {
+      state.document!.recoveryModified = true;
+    }
     if (changed) {
       logDebugEvent('perf', 'dirty:stateChanged', {
         path,
@@ -1053,13 +1076,13 @@ export function writeHotReloadSessionSnapshot(): void {
       if (readOnly || tabPaths.includes(path)) return;
       tabPaths.push(path);
     };
-    if (state.document && state.document.virtual !== 'workspaceChat') {
-      addTabPath(state.document.path, state.document.readOnly);
+    if (state.document && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft') {
+      addTabPath(state.document.documentId, state.document.readOnly);
     }
     for (const session of documentSessions.values()) {
-      if (session.readOnly) continue;
-      addTabPath(session.path, false);
-      documents.set(session.path, {
+      if (session.readOnly || session.virtual === 'recoveryDraft') continue;
+      addTabPath(session.documentId, false);
+      documents.set(session.documentId, {
         path: session.path,
         mode: session.mode,
         metaOpen: session.metaOpen,
@@ -1070,6 +1093,7 @@ export function writeHotReloadSessionSnapshot(): void {
     for (const path of openedDocumentTabOrder) {
       if (isWorkspaceChatDocumentPath(path)) continue;
       const session = documentSessions.get(path);
+      if (session?.virtual === 'recoveryDraft') continue;
       addTabPath(path, session?.readOnly ?? state.documentTabs.find((tab) => tab.path === path)?.readOnly ?? false);
     }
     if (tabPaths.length === 0) {
@@ -1082,8 +1106,8 @@ export function writeHotReloadSessionSnapshot(): void {
       sessionStorage.setItem(HOT_RELOAD_SESSION_STORAGE_KEY, serialized);
       return;
     }
-    if (state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat') {
-      documents.set(state.document.path, {
+    if (state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft') {
+      documents.set(state.document.documentId, {
         path: state.document.path,
         mode: state.document.mode,
         metaOpen: state.document.metaOpen,
@@ -1092,7 +1116,7 @@ export function writeHotReloadSessionSnapshot(): void {
       });
     }
     const snapshot: HotReloadSessionSnapshot = {
-      activePath: state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' ? state.document.path : tabPaths[0] ?? null,
+      activePath: state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft' ? state.document.documentId : tabPaths[0] ?? null,
       tabPaths,
       documents: Array.from(documents.values()).filter((entry) => tabPaths.includes(entry.path)),
     };

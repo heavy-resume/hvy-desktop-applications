@@ -178,6 +178,8 @@ export interface UiHandlers {
   selectSavedVersion(id: string): void;
   closeVersionHistory(): void;
   cancelCloseDocument(): void;
+  confirmSaveConflict(): void;
+  cancelSaveConflict(): void;
   closeDocumentWithoutSaving(): void;
   discardCloseDocumentDraft(): void;
   reviewCloseDocumentLater(): void;
@@ -496,6 +498,7 @@ export function renderModals(state: AppState): void {
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
     ${renderCloseDocumentDraftDialog(state)}
+    ${renderSaveConflictDialog(state)}
     ${renderAppCloseDialog(state)}
     ${renderRenameFileDialog(state)}
     ${renderDeleteFileDialog(state)}
@@ -660,6 +663,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
         }
         if (backdrop.querySelector('.close-document-dialog')) {
           handlers.cancelCloseDocument();
+          return;
+        }
+        if (backdrop.querySelector('.save-conflict-dialog')) {
+          handlers.cancelSaveConflict();
           return;
         }
         if (backdrop.querySelector('.app-close-dialog')) {
@@ -1004,6 +1011,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'discard-close-document-draft') handlers.discardCloseDocumentDraft();
     if (action === 'review-close-document-later') handlers.reviewCloseDocumentLater();
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
+    if (action === 'confirm-save-conflict') handlers.confirmSaveConflict();
+    if (action === 'cancel-save-conflict') handlers.cancelSaveConflict();
     if (action === 'save-and-close-app') handlers.saveAndCloseApp();
     if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
     if (action === 'cancel-app-close') handlers.cancelAppClose();
@@ -2887,7 +2896,7 @@ function renderToolbar(state: AppState): string {
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
-      <span>${document.readOnly ? 'Read-only document' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
+      <span>${document.readOnly ? 'Read-only document' : document.virtual === 'recoveryDraft' ? 'Recovered unsaved copy' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
@@ -5098,7 +5107,7 @@ function renderRecoveryDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="recoveryTitle">
         <h2 id="recoveryTitle">Recover Unsaved Edits</h2>
-        <p class="dialog-note">Recoverable edits are kept for seven days and refreshed while a document has edits.</p>
+        <p class="dialog-note">Recoverable edits are kept for seven days. Restoring opens a separate Unsaved copy beside the saved file so you can compare them; its timestamp may be older or newer than the saved file.</p>
         ${backups.length === 0
       ? '<div class="empty-panel compact">No recoverable edits are available yet.</div>'
       : `<div class="recovery-list">
@@ -5188,6 +5197,38 @@ function renderCloseDocumentDraftDialog(state: AppState): string {
           <button class="hvy-galaxy-button" type="button" data-action="review-close-document-later">Review Later</button>
           <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-close-document-draft">Discard Draft</button>
           <button class="hvy-galaxy-button" type="button" data-action="cancel-close-document">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderSaveConflictDialog(state: AppState): string {
+  if (!state.saveConflictDialogOpen || !state.saveConflictKind) return '';
+  const content = state.saveConflictKind === 'discardRecoveryDraft'
+    ? {
+        title: 'Discard Unsaved Draft?',
+        note: 'Saving the original file will discard the Unsaved copy and close its tab.',
+        action: 'Save Original and Discard Draft',
+      }
+    : state.saveConflictKind === 'overwriteRecoveryChanges'
+    ? {
+        title: 'Overwrite Changes to Unsaved Draft?',
+        note: 'The Unsaved copy was also changed. Saving the original file will discard those changes and close its tab.',
+        action: 'Overwrite Unsaved Draft',
+      }
+    : {
+        title: 'Overwrite Changes to Original File?',
+        note: 'The original file also has unsaved changes. Saving the Unsaved copy will overwrite those changes and make this copy the primary document.',
+        action: 'Overwrite Original File',
+      };
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog save-conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="saveConflictTitle">
+        <h2 id="saveConflictTitle">${escapeHtml(content.title)}</h2>
+        <p class="dialog-note">${escapeHtml(content.note)}</p>
+        <div class="dialog-actions">
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="confirm-save-conflict">${escapeHtml(content.action)}</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-save-conflict">Cancel</button>
         </div>
       </section>
     </div>`;

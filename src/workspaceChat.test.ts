@@ -48,6 +48,7 @@ describe('workspace chat helpers', () => {
 
   it('resolves relative workspace links against the current document folder', () => {
     state.document = {
+      documentId: '/tmp/work/Projects/Chat.hvy',
       path: '/tmp/work/Projects/Chat.hvy',
       name: 'Chat.hvy',
       extension: '.hvy',
@@ -59,6 +60,7 @@ describe('workspace chat helpers', () => {
       metaOpen: false,
       mounted: null,
       recoveryBackupId: null,
+      recoveryModified: false,
     };
 
     expect(resolveWorkspaceHref('../Notes.hvy')).toBe('/tmp/work/Notes.hvy');

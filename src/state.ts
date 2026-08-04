@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
 import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
@@ -6,12 +6,14 @@ import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
+export { findFileInWorkspace, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces } from './workspaceFiles';
 
 export interface OpenDocument {
+  documentId: string;
   path: string;
   name: string;
   extension: DocumentExtension;
-  virtual?: 'workspaceChat' | 'versionHistory';
+  virtual?: 'workspaceChat' | 'versionHistory' | 'recoveryDraft';
   historySourcePath?: string;
   historySourceName?: string;
   historyVersionId?: string;
@@ -23,6 +25,7 @@ export interface OpenDocument {
   metaOpen: boolean;
   mounted: MountedDocument | null;
   recoveryBackupId: string | null;
+  recoveryModified: boolean;
 }
 
 export interface OpenDocumentTab {
@@ -135,6 +138,11 @@ export interface AppState {
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
   closeDocumentDraftDialogOpen: boolean;
+  saveConflictDialogOpen: boolean;
+  saveConflictKind: import('./recoveryDocuments').SaveConflictKind | null;
+  saveConflictSavingDocumentId: string | null;
+  saveConflictOtherDocumentId: string | null;
+  saveConflictContinuation: 'save' | 'saveAndCloseDocument' | 'saveBeforeExportPdf' | 'saveAndCloseApp';
   tabStackOpen: boolean;
   tabStackIndex: number;
   appCloseDialogOpen: boolean;
@@ -343,6 +351,11 @@ export const state: AppState = {
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
   closeDocumentDraftDialogOpen: false,
+  saveConflictDialogOpen: false,
+  saveConflictKind: null,
+  saveConflictSavingDocumentId: null,
+  saveConflictOtherDocumentId: null,
+  saveConflictContinuation: 'save',
   tabStackOpen: false,
   tabStackIndex: 0,
   appCloseDialogOpen: false,
@@ -389,45 +402,3 @@ export const state: AppState = {
   appZoom: 1,
   documentZoom: 1,
 };
-
-export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {
-  const visit = (nodes: WorkspaceTreeNode[]): WorkspaceFileNode | null => {
-    for (const node of nodes) {
-      if (node.kind === 'file' && node.path === path) {
-        return node;
-      }
-      if (node.kind === 'folder') {
-        const match = visit(node.children);
-        if (match) {
-          return match;
-        }
-      }
-    }
-    return null;
-  };
-  return visit(workspace.files);
-}
-
-export function workspacePathForFileInWorkspaces(workspaces: Workspace[], path: string): string | null {
-  return workspaces.find((workspace) => findFileInWorkspace(workspace, path))?.path ?? null;
-}
-
-export function workspaceFileAccessInWorkspaces(
-  workspaces: Workspace[],
-  path: string,
-): { archived: boolean; locked: boolean; hiddenFromAI: boolean; readOnly: boolean } {
-  for (const workspace of workspaces) {
-    const file = findFileInWorkspace(workspace, path);
-    if (file) {
-      const archived = file.archived === true;
-      const locked = file.locked === true;
-      return {
-        archived,
-        locked,
-        hiddenFromAI: file.hiddenFromAI === true,
-        readOnly: archived || locked,
-      };
-    }
-  }
-  return { archived: false, locked: false, hiddenFromAI: false, readOnly: false };
-}

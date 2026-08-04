@@ -9,6 +9,7 @@ import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFro
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
+import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
 
 let findShortcutBound = false;
@@ -369,6 +370,9 @@ export async function loadStartupWorkspacesInBackground(): Promise<void> {
   try {
     await loadRecentWorkspaces();
     await refreshSavedTemplates(state.selectedWorkspacePath);
+    if (state.recoveryDialogOpen) {
+      state.recoveryBackups = availableRecoveryBackups(state.recoveryBackups, state.workspaces);
+    }
     renderAllAroundDocument();
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error);
@@ -453,6 +457,7 @@ export async function readSnapshotDocumentFile(path: string): Promise<DocumentFi
 export async function createSessionFromHotReloadSnapshot(file: DocumentFile, stored: HotReloadDocumentSnapshot | undefined): Promise<DocumentSession> {
   const workspaceAccess = workspaceFileAiAccess(file.path);
   return {
+    documentId: file.path,
     path: file.path,
     name: file.name,
     extension: file.extension,
@@ -468,6 +473,7 @@ export async function createSessionFromHotReloadSnapshot(file: DocumentFile, sto
     viewState: null,
     recoveryState: stored?.recoveryState ?? null,
     recoveryBackupId: null,
+    recoveryModified: false,
   };
 }
 

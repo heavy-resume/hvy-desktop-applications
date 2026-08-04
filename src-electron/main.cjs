@@ -1718,9 +1718,6 @@ function discardDocumentBackup(id) {
 
 function documentBackupMatchesSavedFile(snapshot) {
   if (!snapshot.documentPath || !fs.existsSync(snapshot.documentPath)) return false;
-  const savedAt = fs.statSync(snapshot.documentPath).mtimeMs;
-  const createdAt = Date.parse(snapshot.createdAt);
-  if (Number.isFinite(createdAt) && savedAt >= createdAt) return true;
   const savedBytes = fs.readFileSync(snapshot.documentPath);
   try {
     return Buffer.compare(savedBytes, readDocumentBackupBytes(snapshot)) === 0;

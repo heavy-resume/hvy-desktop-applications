@@ -460,8 +460,8 @@ export function syncOpenDocumentWorkspaceAccess(path: string, access: { locked?:
   const hiddenFromAI = typeof access.hiddenFromAI === 'boolean'
     ? access.hiddenFromAI
     : workspaceAccess.hiddenFromAI;
-  const session = documentSessions.get(path);
-  if (session) {
+  for (const session of documentSessions.values()) {
+    if (session.path !== path) continue;
     session.readOnly = readOnly;
     session.hiddenFromAI = hiddenFromAI;
     if (session.hiddenFromAI && session.mode === 'ai') session.mode = 'viewer';

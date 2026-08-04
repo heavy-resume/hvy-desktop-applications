@@ -4,6 +4,31 @@
     use zip::write::FileOptions;
 
     #[test]
+    fn recovery_draft_is_hidden_only_when_saved_bytes_match() {
+        let dir = tempdir().unwrap();
+        let document_path = dir.path().join("Notes.hvy");
+        let backup_bytes_path = dir.path().join("draft.bytes");
+        let snapshot_path = dir.path().join("draft.json");
+        fs::write(&document_path, b"newer saved revision").unwrap();
+        fs::write(&backup_bytes_path, b"older unsaved revision").unwrap();
+        let snapshot = DocumentBackupSnapshot {
+            id: "draft".into(),
+            document_path: path_to_string(&document_path),
+            name: "Notes.hvy".into(),
+            extension: ".hvy".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            bytes: Vec::new(),
+            bytes_path: Some("draft.bytes".into()),
+            recovery_state: None,
+        };
+
+        assert!(!document_backup_matches_saved_file(&snapshot, &snapshot_path));
+
+        fs::write(&backup_bytes_path, b"newer saved revision").unwrap();
+        assert!(document_backup_matches_saved_file(&snapshot, &snapshot_path));
+    }
+
+    #[test]
     fn initializes_and_loads_workspace_manifest() {
         let dir = tempdir().unwrap();
         let workspace = initialize_workspace(dir.path()).unwrap();
