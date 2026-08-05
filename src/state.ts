@@ -102,6 +102,7 @@ export interface AppState {
   integrationActionExamples: unknown[];
   integrationActionExampleRules: InspectionPrivacyRule[][];
   integrationActionTargetLabels: string[];
+  integrationActionTargetIds: string[];
   integrationActionTargetCardinalities: Array<'single' | 'list'>;
   integrationActionTargetOptional: boolean[];
   integrationActionTargetParentIndexes: number[];
@@ -118,23 +119,34 @@ export interface AppState {
   integrationActionSelectionPending: boolean;
   integrationActionDraftIntegrationId: string | null;
   integrationActionDraftPageId: string | null;
+  integrationActionDraftActionId: string | null;
   integrationActionBuilderStep: 'define' | 'preview' | 'save';
   integrationActionDraftName: string;
   integrationActionDraftDescription: string;
   integrationActionPreviewRecords: unknown[];
   integrationActionPreviewDiagnostics: unknown;
+  integrationActionPreviewPending: boolean;
+  integrationActionEditPageLoading: boolean;
   integrationActionResultOpen: boolean;
   integrationActionResultName: string;
   integrationActionResultRecords: unknown[];
   integrationActionResultActionId: string | null;
+  integrationActionFetchPendingId: string | null;
+  integrationActionFetchError: string | null;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
   integrationCommandDraftActionId: string | null;
+  integrationCommandDraftPageId: string | null;
   integrationCommandDraftName: string;
   integrationCommandDraftScope: 'page' | 'record';
   integrationCommandDraftGesture: 'click' | 'right-click';
   integrationCommandDraftTarget: unknown;
+  integrationCommandDraftRecord: unknown;
+  integrationCommandSelectionStage: 'record' | 'target';
+  integrationRecordDeleteDialogOpen: boolean;
+  integrationRecordDeleteIntegrationId: string | null;
+  integrationRecordDeleteActionId: string | null;
   selectedIntegrationId: string;
   selectedIntegrationProfileId: string;
   addIntegrationProfileDialogOpen: boolean;
@@ -341,6 +353,7 @@ export const state: AppState = {
   integrationActionExamples: [],
   integrationActionExampleRules: [],
   integrationActionTargetLabels: [],
+  integrationActionTargetIds: [],
   integrationActionTargetCardinalities: [],
   integrationActionTargetOptional: [],
   integrationActionTargetParentIndexes: [],
@@ -357,23 +370,34 @@ export const state: AppState = {
   integrationActionSelectionPending: false,
   integrationActionDraftIntegrationId: null,
   integrationActionDraftPageId: null,
+  integrationActionDraftActionId: null,
   integrationActionBuilderStep: 'define',
   integrationActionDraftName: '',
   integrationActionDraftDescription: '',
   integrationActionPreviewRecords: [],
   integrationActionPreviewDiagnostics: null,
+  integrationActionPreviewPending: false,
+  integrationActionEditPageLoading: false,
   integrationActionResultOpen: false,
   integrationActionResultName: '',
   integrationActionResultRecords: [],
   integrationActionResultActionId: null,
+  integrationActionFetchPendingId: null,
+  integrationActionFetchError: null,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
   integrationCommandDraftIntegrationId: null,
   integrationCommandDraftActionId: null,
+  integrationCommandDraftPageId: null,
   integrationCommandDraftName: '',
   integrationCommandDraftScope: 'record',
   integrationCommandDraftGesture: 'click',
   integrationCommandDraftTarget: null,
+  integrationCommandDraftRecord: null,
+  integrationCommandSelectionStage: 'target',
+  integrationRecordDeleteDialogOpen: false,
+  integrationRecordDeleteIntegrationId: null,
+  integrationRecordDeleteActionId: null,
   selectedIntegrationId: 'google-workspace',
   selectedIntegrationProfileId: 'default-google',
   addIntegrationProfileDialogOpen: false,

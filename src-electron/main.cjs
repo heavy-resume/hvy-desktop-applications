@@ -303,6 +303,18 @@ function buildMenu() {
       ],
     },
     {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { label: APP_NAME, click: () => raiseWindow(mainWindow) },
+        ...[...integrationBrowsers.values()]
+          .filter((browser) => browser.window && !browser.window.isDestroyed())
+          .map((browser) => ({ label: `Integrations — ${browser.name}`, click: () => raiseWindow(browser.window) })),
+      ],
+    },
+    {
       label: 'Help',
       submenu: [
         menuItem('HVY Galaxy Guide', 'open-guide', 'F1'),
@@ -487,7 +499,7 @@ async function handleCommand(command, args) {
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
-    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload);
+    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName);
     case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
     case 'load_integration_vault_status': return loadIntegrationVaultStatus();
     case 'setup_integration_vault': return setupIntegrationVault();
@@ -582,7 +594,7 @@ const INTEGRATION_URLS = {
 
 const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
 
-function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload) {
+function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload, foreground = true, windowName) {
   if (command === 'open') {
     if (!loadIntegrationVaultStatus().configured) {
       setupIntegrationVault();
@@ -593,7 +605,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
     if (customUrl && !customAllowedOrigins.has(new URL(customUrl).origin)) {
       throw new Error('The custom page origin is not allowed.');
     }
-    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode, payload);
+    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode, payload, foreground, windowName);
   }
   const browser = integrationBrowsers.get(profileId);
   const integrationWindow = browser?.window;
@@ -604,7 +616,9 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'back' && integrationWindow.webContents.canGoBack()) integrationWindow.webContents.goBack();
   if (command === 'forward' && integrationWindow.webContents.canGoForward()) integrationWindow.webContents.goForward();
   if (command === 'reload') integrationWindow.webContents.reload();
-  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target' || command === 'test-pattern' || command === 'extract-pattern' || command === 'focus-browser') {
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target') browser.actionModePending = true;
+  if (command === 'cancel-inspect') browser.actionModePending = false;
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target' || command === 'test-pattern' || (command === 'extract-pattern' && payload?.foreground !== false) || command === 'execute-command' || command === 'focus-browser') {
     raiseWindow(integrationWindow);
   }
   if (command === 'focus-main') {
@@ -784,16 +798,17 @@ async function probeIntegrationCookieStorage() {
   };
 }
 
-async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pendingExtraction) {
+async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName) {
   let browser = integrationBrowsers.get(profileId);
   if (browser?.closePromise) await browser.closePromise;
   if (!browser || browser.window.isDestroyed()) {
     const integrationWindow = new BrowserWindow({
+      show: foreground,
       width: 1180,
       height: 820,
       minWidth: 720,
       minHeight: 520,
-      title: 'HVY Galaxy Integrations',
+      title: `HVY Galaxy Integrations — ${windowName || profileId}`,
       webPreferences: {
         partition: `hvy-galaxy-integrations-${profileId}-${Date.now()}`,
         contextIsolation: true,
@@ -802,8 +817,9 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
         webSecurity: true,
       },
     });
-    browser = { window: integrationWindow, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
+    browser = { window: integrationWindow, name: windowName || profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
     integrationBrowsers.set(profileId, browser);
+    buildMenu();
     const browserUserAgent = integrationWindow.webContents.getUserAgent()
       .replace(/\sElectron\/[^\s]+/g, '')
       .replace(/\sHVY(?:[\s-]Galaxy)?\/[^\s]+/gi, '');
@@ -858,7 +874,10 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
           if (extraction.context?.expectedOrigin && new URL(integrationWindow.webContents.getURL()).origin !== extraction.context.expectedOrigin) return null;
           browser.pendingExtraction = null;
           if (extraction.kind === 'command-target') {
-            return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start("target", ${JSON.stringify(extraction.options || {})})`);
+            return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(extraction.options || {})})`);
+          }
+          if (extraction.kind === 'command-execution') {
+            return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
           }
           return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
         }
@@ -866,7 +885,13 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
       });
     });
     integrationWindow.on('closed', () => {
+      if (browser.actionModePending) {
+        browser.actionModePending = false;
+        mainWindow?.webContents.send('hvy:integration-inspection-result', { kind: 'integration-browser-closed', profileId });
+        raiseWindow(mainWindow);
+      }
       integrationBrowsers.delete(profileId);
+      buildMenu();
     });
     integrationWindow.on('close', (event) => {
       if (browser.closeReady) return;
@@ -893,11 +918,14 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
       throw error;
     }
   }
+  browser.name = windowName || browser.name || profileId;
+  browser.window.setTitle(`HVY Galaxy Integrations — ${browser.name}`);
+  buildMenu();
   browser.allowedOrigins = allowedOrigins;
   browser.actionModePending = actionMode;
   browser.pendingExtraction = pendingExtraction || null;
   await browser.window.loadURL(url);
-  raiseWindow(browser.window);
+  if (foreground) raiseWindow(browser.window);
 }
 
 function isAllowedIntegrationUrl(value, allowedOrigins = null) {

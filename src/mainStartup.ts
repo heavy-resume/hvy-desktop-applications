@@ -59,9 +59,12 @@ export async function boot(): Promise<void> {
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-extraction') {
+        state.integrationActionFetchPendingId = null;
+        state.integrationActionFetchError = null;
         const extraction = result as { context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
         if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, extraction.minimumConfidence));
         if (extraction.context?.mode === 'builder') {
+          state.integrationActionPreviewPending = false;
           state.integrationActionPreviewRecords = extraction.records ?? [];
           state.integrationActionPreviewDiagnostics = extraction.diagnostics ?? null;
           state.integrationActionBuilderStep = 'preview';
@@ -77,7 +80,49 @@ export async function boot(): Promise<void> {
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;
       }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {
+        state.integrationActionSelectionPending = false;
+        state.integrationActionPreviewPending = false;
+        state.integrationActionBuilderOpen = true;
+        state.status = 'Integration browser closed';
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-target-collection') {
+        const items = Array.isArray((result as { items?: unknown }).items) ? (result as { items: unknown[] }).items : [];
+        const parentIndex = state.integrationActionTargetSelectionParentIndex;
+        items.forEach((item) => {
+          state.integrationActionExamples.push(item);
+          state.integrationActionTargetIds.push(`field-${crypto.randomUUID()}`);
+          state.integrationActionExampleRules.push([]);
+          state.integrationActionTargetLabels.push('');
+          state.integrationActionTargetCardinalities.push('single');
+          state.integrationActionTargetOptional.push(true);
+          state.integrationActionTargetParentIndexes.push(parentIndex);
+          const variants = Array(state.integrationActionAnchors.length).fill(null);
+          variants[parentIndex] = item;
+          state.integrationActionTargetVariants.push(variants);
+          state.integrationActionTargetNegativeVariants.push(Array(state.integrationActionAnchors.length).fill(null));
+          state.integrationActionTargetAbsentExamples.push(Array(state.integrationActionAnchors.length).fill(false));
+        });
+        state.integrationActionSelectionPending = false;
+        state.integrationActionBuilderOpen = true;
+        state.integrationActionTargetSelectionFieldIndex = null;
+        state.status = `Selected ${items.length} ${items.length === 1 ? 'field' : 'fields'}`;
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
       if (state.integrationCommandSelectionPending) {
+        if (state.integrationCommandSelectionStage === 'record') {
+          const parentCssPath = (result as { selected: { cssPath: string } }).selected.cssPath;
+          state.integrationCommandDraftRecord = result;
+          state.integrationCommandSelectionStage = 'target';
+          state.status = `Select the control inside this matching record for ${state.integrationCommandDraftName}`;
+          rerender({ preserveMountedDocument: true });
+          await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result });
+          return;
+        }
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftTarget = result;
         state.integrationCommandBuilderOpen = true;
@@ -90,6 +135,7 @@ export async function boot(): Promise<void> {
       state.inspectionPrivacyRules = [];
       state.integrationActionBuilderOpen = true;
       state.integrationActionSelectionPending = false;
+      let collectInitialFields = false;
       if (state.integrationActionSelectionKind === 'parent' || state.integrationActionSelectionKind === 'example') {
         const parentIndex = state.integrationActionAnchors.length;
         state.integrationActionAnchors.push(result);
@@ -103,11 +149,19 @@ export async function boot(): Promise<void> {
           state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = null;
           state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
         });
+        if (state.integrationActionSelectionKind === 'parent' && state.integrationActionExamples.length === 0) {
+          state.integrationActionSelectionKind = 'target';
+          state.integrationActionTargetSelectionParentIndex = parentIndex;
+          state.integrationActionTargetSelectionFieldIndex = null;
+          state.integrationActionSelectionPending = true;
+          collectInitialFields = true;
+        }
       } else {
         const fieldIndex = state.integrationActionTargetSelectionFieldIndex;
         const parentIndex = state.integrationActionTargetSelectionParentIndex;
         if (fieldIndex === null) {
           state.integrationActionExamples.push(result);
+          state.integrationActionTargetIds.push(`field-${crypto.randomUUID()}`);
           state.integrationActionExampleRules.push([]);
           state.integrationActionTargetLabels.push('');
           state.integrationActionTargetCardinalities.push('single');
@@ -135,6 +189,11 @@ export async function boot(): Promise<void> {
         }
       }
       rerender({ preserveMountedDocument: true });
+      if (collectInitialFields) {
+        const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true });
+        return;
+      }
       await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
     });
     await onMenuEvent((event) => {

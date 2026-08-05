@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, defaultIntegrationRegistry, jsonPathFor, matcherSnapshot, matchingInspectionPrivacyRules, selectedInspectionContent } from './integrationRegistry';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, defaultIntegrationRegistry, jsonPathFor, loadIntegrationRegistry, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, selectedInspectionContent } from './integrationRegistry';
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('integration registry', () => {
   it('names the default Google profile Personal', () => {
@@ -39,6 +41,32 @@ describe('integration registry', () => {
       command,
       recordParent: 'main > article:nth-of-type(2)',
     });
+  });
+
+  it('packages page commands without coupling them to a record definition', () => {
+    const snapshot = { selected: { shape: { tag: 'button' }, relativePath: [{ tag: 'button' }] } };
+    const command = { id: 'compose', name: 'Compose', scope: 'page' as const, steps: [{ gesture: 'click' as const, target: snapshot }] };
+
+    expect(pageCommandExecutionPayload(command)).toEqual({
+      pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+      command,
+    });
+  });
+
+  it('moves legacy page-scoped commands from records onto their owning page', () => {
+    const saved = defaultIntegrationRegistry();
+    saved.integrations[0].actions.push({
+      id: 'messages', integrationId: 'google-workspace', name: 'Messages', description: '', pageIds: ['gmail'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read'], version: 1,
+      commands: [
+        { id: 'refresh-inbox', name: 'Refresh inbox', scope: 'page', steps: [{ gesture: 'click', target: {} }] },
+        { id: 'open-message', name: 'Open message', scope: 'record', steps: [{ gesture: 'click', target: {} }] },
+      ],
+    });
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify(saved) });
+
+    const loaded = loadIntegrationRegistry();
+    expect(loaded.integrations[0].pages.find((page) => page.id === 'gmail')?.commands?.map((command) => command.id)).toEqual(['refresh-inbox']);
+    expect(loaded.integrations[0].actions[0].commands?.map((command) => command.id)).toEqual(['open-message']);
   });
 });
 

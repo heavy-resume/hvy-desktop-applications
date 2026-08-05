@@ -490,8 +490,10 @@ export function integrationBrowserCommand(
   browserStoreId?: string,
   actionMode?: boolean,
   payload?: unknown,
+  foreground?: boolean,
+  windowName?: string,
 ): Promise<void> {
-  return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode, payload });
+  return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode, payload, foreground, windowName });
 }
 
 export function probeIntegrationCookieStorage(): Promise<IntegrationStorageProbeResult> {

@@ -224,7 +224,9 @@ body {
 }
 
 .dialog.integrations-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
   width: min(1080px, calc(100vw - 40px));
+  height: min(820px, calc(100vh - 32px));
   max-height: min(820px, calc(100vh - 32px));
   overflow: hidden;
 }
@@ -239,7 +241,7 @@ body {
 
 .integrations-manager-body {
   display: grid;
-  min-height: 540px;
+  min-height: 0;
   grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
   border: 1px solid var(--hvy-border, #c5cec8);
   border-radius: 10px;
@@ -248,11 +250,13 @@ body {
 
 .integration-list {
   display: flex;
+  min-height: 0;
   flex-direction: column;
   gap: 4px;
   padding: 10px;
   border-right: 1px solid var(--hvy-border, #c5cec8);
   background: var(--hvy-surface-alt, #e8ece7);
+  overflow-y: auto;
 }
 
 .integration-list-item,
@@ -287,6 +291,7 @@ body {
 .integration-detail {
   display: grid;
   min-width: 0;
+  min-height: 0;
   align-content: start;
   gap: 22px;
   padding: 22px;
@@ -364,6 +369,24 @@ body {
 .integration-record-actions {
   display: flex !important;
   gap: 8px !important;
+}
+
+.integration-fetch-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 12px;
+}
+
+.integration-fetch-error {
+  display: grid;
+  gap: 3px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--hvy-danger, #8c291d);
+  border-radius: 8px;
+  color: var(--hvy-danger, #8c291d);
 }
 
 .integration-command-list {
@@ -492,6 +515,15 @@ body {
   box-shadow: 0 0 0 5px color-mix(in srgb, var(--hvy-accent, #e0563f) 18%, transparent);
 }
 
+.integration-background-operation {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 10px;
+  margin-right: auto;
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
 .integration-selection-collection {
   display: grid;
   gap: 8px;
@@ -612,6 +644,17 @@ body {
 .integration-pattern-section {
   display: grid;
   gap: 10px;
+}
+
+.integration-record-type-details {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(240px, 1.3fr);
+  gap: 12px;
+}
+
+.integration-record-type-details label {
+  display: grid;
+  gap: 6px;
 }
 
 .integration-pattern-section + .integration-pattern-section {
@@ -860,6 +903,10 @@ body {
 }
 
 @media (max-width: 720px) {
+  .integration-record-type-details {
+    grid-template-columns: 1fr;
+  }
+
   .integration-example-field-row {
     grid-template-columns: 1fr;
   }
@@ -877,11 +924,13 @@ body {
 @media (max-width: 720px) {
   .integrations-manager-body {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .integration-list {
     flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     border-right: 0;
     border-bottom: 1px solid var(--hvy-border, #c5cec8);
   }

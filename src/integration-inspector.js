@@ -14,6 +14,7 @@
   let liveMinimumConfidence = null;
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
+  let targetCollection = null;
 
   const removeUi = () => {
     matchOverlayCleanup?.();
@@ -516,8 +517,10 @@
     if (!box) {
       box = document.createElement('div');
       box.id = 'hvy-galaxy-inspector-highlight';
-      box.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;border:3px solid #e0563f;background:#e0563f1f;box-sizing:border-box;color:#fff;font:11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
-      document.documentElement.append(box);
+      box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:3px solid #e0563f;background:#e0563f2b;box-sizing:border-box;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 0 0 1px #fff8 inset';
+      const inspectorStatus = document.getElementById('hvy-galaxy-inspector-status');
+      if (inspectorStatus) inspectorStatus.before(box);
+      else document.documentElement.append(box);
     }
     const rect = element.getBoundingClientRect();
     const left = Math.max(2, rect.left);
@@ -530,7 +533,7 @@
       width: `${Math.max(2, right - left)}px`,
       height: `${Math.max(2, bottom - top)}px`,
     });
-    box.textContent = element.tagName.toLowerCase();
+    box.textContent = `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`;
     box.style.padding = '3px 5px';
   };
 
@@ -663,6 +666,11 @@
         const result = snapshot(element);
         if (inspectionKind === 'parent' && inspectionPattern) {
           result.suggestedTargets = suggestTargetsForParent(element, inspectionPattern);
+        }
+        if (inspectionKind === 'target' && targetCollection) {
+          targetCollection.add(element, result);
+          picker.remove();
+          return;
         }
         publish(result);
         window.__hvyGalaxyInspector.stop();
@@ -1026,8 +1034,10 @@
     const originalTop = scroller?.scrollTop || 0;
     const records = new Map();
     const settle = async () => {
-      await new Promise(requestAnimationFrame);
-      await new Promise(requestAnimationFrame);
+      if (document.visibilityState === 'visible') {
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+      }
       await new Promise((resolve) => setTimeout(resolve, 40));
     };
     const collect = () => {
@@ -1094,6 +1104,7 @@
         scroller.scrollLeft += event.deltaX;
       }, { passive: false });
       const trackedBoxes = [];
+      targetCollection = null;
       if (inspectionPattern) {
         const existingLayer = document.createElement('div');
         existingLayer.id = 'hvy-galaxy-existing-matches';
@@ -1186,6 +1197,7 @@
         document.removeEventListener('scroll', scheduleSelectionUpdate, true);
         window.removeEventListener('resize', scheduleSelectionUpdate);
         if (selectionFrame) cancelAnimationFrame(selectionFrame);
+        document.querySelectorAll('[data-collection-selection="true"]').forEach((element) => element.remove());
       };
       const status = document.createElement('div');
       status.id = 'hvy-galaxy-inspector-status';
@@ -1216,6 +1228,63 @@
         }
       });
       status.append(statusText, navigationButton);
+      if (inspectionKind === 'target' && options.multiSelect) {
+        const selectedItems = [];
+        const selectedElements = new Set();
+        const doneButton = document.createElement('button');
+        doneButton.type = 'button';
+        doneButton.textContent = 'Done';
+        doneButton.disabled = true;
+        doneButton.style.cssText = 'padding:5px 9px;border:0;border-radius:999px;background:#fff;color:#8b2d20;font:700 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+        const undoButton = document.createElement('button');
+        undoButton.type = 'button';
+        undoButton.textContent = 'Undo last';
+        undoButton.disabled = true;
+        undoButton.style.cssText = doneButton.style.cssText;
+        const updateCollectionStatus = () => {
+          statusText.textContent = selectedItems.length
+            ? `Galaxy: ${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
+            : 'Galaxy: select all fields, then choose Done';
+          doneButton.disabled = selectedItems.length === 0;
+          undoButton.disabled = selectedItems.length === 0;
+        };
+        targetCollection = {
+          add(element, result) {
+            if (selectedElements.has(element)) return;
+            selectedElements.add(element);
+            const box = document.createElement('div');
+            box.dataset.collectionSelection = 'true';
+            box.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;border:3px solid #27865f;background:#27865f1f;box-sizing:border-box;color:#fff;font:11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
+            box.textContent = `${selectedItems.length + 1}`;
+            box.style.padding = '3px 5px';
+            document.documentElement.append(box);
+            const tracked = { element, box };
+            trackedBoxes.push(tracked);
+            selectedItems.push({ element, result, tracked });
+            updateSelectionBoxes();
+            updateCollectionStatus();
+          },
+        };
+        undoButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const removed = selectedItems.pop();
+          if (!removed) return;
+          selectedElements.delete(removed.element);
+          removed.tracked.box.remove();
+          const trackedIndex = trackedBoxes.indexOf(removed.tracked);
+          if (trackedIndex >= 0) trackedBoxes.splice(trackedIndex, 1);
+          updateCollectionStatus();
+        });
+        doneButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          publish({ kind: 'integration-target-collection', items: selectedItems.map((item) => item.result) });
+          window.__hvyGalaxyInspector.stop();
+        });
+        status.append(undoButton, doneButton);
+        updateCollectionStatus();
+      }
       document.documentElement.append(status);
       document.addEventListener('pointermove', pointerMove, true);
       document.addEventListener('click', click, true);
@@ -1224,6 +1293,7 @@
     stop() {
       active = false;
       inspectionPattern = null;
+      targetCollection = null;
       document.removeEventListener('pointermove', pointerMove, true);
       document.removeEventListener('click', click, true);
       document.removeEventListener('keydown', keydown, true);

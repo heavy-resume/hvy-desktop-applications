@@ -52,6 +52,7 @@ interface InspectorApi {
     parentCssPath?: string;
     parentSnapshot?: InspectorSnapshot;
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
+    multiSelect?: boolean;
   }): void;
   snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target'): InspectorSnapshot;
   suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
@@ -265,6 +266,39 @@ describe('integration structural inspector', () => {
     await page.getByRole('button', { name: 'Resume picking' }).click();
     await movePointerTo(page, '.time');
     expect(await page.locator('.actions').evaluate((element) => getComputedStyle(element).display)).toBe('none');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('collects several target fields before returning to Galaxy', async () => {
+    const parentSnapshot = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      return window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent');
+    });
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+    }), parentSnapshot);
+
+    await movePointerTo(page, '[data-record="first"] .sender');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('Add field · span');
+    await clickPointerAt(page, '[data-record="first"] .sender');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'span' }).first().click();
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
+
+    await movePointerTo(page, '[data-record="first"] .subject');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('Add field · a');
+    await clickPointerAt(page, '[data-record="first"] .subject');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'a — Project update' }).click();
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 2 fields selected');
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(2);
+
+    await page.getByRole('button', { name: 'Undo last' }).click();
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
+    expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
     expect(pageErrors).toEqual([]);
   });
 
@@ -793,6 +827,30 @@ describe('integration structural inspector', () => {
     expect(result.scrollEvents).toBeGreaterThan(1);
     expect(result.decoyScrollEvents).toBe(0);
     expect(result.finalTop).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('extracts across a hidden page without waiting for suspended animation frames', async () => {
+    await page.setContent(`<main class="records" style="height:80px;overflow:auto">${Array.from({ length: 8 }, (_, index) => `<article class="record" style="height:40px"><span>Record ${index + 1}</span></article>`).join('')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      const visibleRequestAnimationFrame = window.requestAnimationFrame;
+      window.requestAnimationFrame = (() => { throw new Error('hidden extraction requested an animation frame'); }) as typeof requestAnimationFrame;
+      const parent = document.querySelector('.record')!;
+      try {
+        return await window.__hvyGalaxyInspector.extractAcrossPage({
+          minimumConfidence: 0.8,
+          parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+          targets: [{ label: 'VALUE', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
+        });
+      } finally {
+        window.requestAnimationFrame = visibleRequestAnimationFrame;
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+      }
+    });
+
+    expect(result.matches).toBe(8);
     expect(pageErrors).toEqual([]);
   });
 

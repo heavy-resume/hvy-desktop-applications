@@ -408,7 +408,7 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
 }
 
 #[tauri::command]
-fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>) -> AppResult<()> {
+fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>) -> AppResult<()> {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
     let window_label = integration_browser_label(&profile_id);
     let action_mode_pending = {
@@ -422,6 +422,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         extractions.entry(profile_id.clone()).or_insert_with(|| Arc::new(Mutex::new(None))).clone()
     };
     if command == "open" {
+        let foreground = foreground.unwrap_or(true);
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
         *pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))? = payload.clone();
         #[cfg(not(target_os = "macos"))]
@@ -442,8 +443,14 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         let blank_url = tauri::Url::parse("about:blank")
             .map_err(|error| AppError::Message(error.to_string()))?;
         if let Some(window) = app.get_webview_window(&window_label) {
+            window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
+                .map_err(|error| AppError::Message(error.to_string()))?;
             window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
-            raise_integration_window(&window)?;
+            if foreground {
+                raise_integration_window(&window)?;
+            }
+            app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
+                .map_err(|error| AppError::Message(error.to_string()))?;
             return Ok(());
         }
         let integration_app = app.clone();
@@ -457,7 +464,8 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             &window_label,
             tauri::WebviewUrl::External(blank_url),
         )
-        .title("HVY Galaxy Integrations")
+        .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
+        .visible(foreground)
         .inner_size(1080.0, 700.0)
         .min_inner_size(720.0, 520.0)
         .center()
@@ -475,7 +483,10 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
                         let script = if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.start('target', ({}).options || {{}});", INTEGRATION_INSPECTOR, extraction)
+                            let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
+                            format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', ({}).options || {{}});", INTEGRATION_INSPECTOR, inspection_kind, extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
                         } else {
                             format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
                         };
@@ -528,6 +539,27 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         #[cfg(not(target_os = "macos"))]
         let builder = builder.incognito(true);
         let window = builder.build().map_err(|error| AppError::Message(error.to_string()))?;
+        app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        let menu_app = app.clone();
+        let destroyed_action_mode = action_mode_pending.clone();
+        let destroyed_profile_id = profile_id.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if destroyed_action_mode.swap(false, Ordering::SeqCst) {
+                    let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
+                        "kind": "integration-browser-closed",
+                        "profileId": destroyed_profile_id,
+                    }));
+                    if let Some(main_window) = menu_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window);
+                    }
+                }
+                if let Ok(menu) = build_menu(&menu_app) {
+                    let _ = menu_app.set_menu(menu);
+                }
+            }
+        });
         #[cfg(not(target_os = "macos"))]
         restore_integration_cookies(&app, &window)?;
         window.navigate(url)
@@ -559,7 +591,13 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         }
         return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
     };
-    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || command == "extract-pattern" || command == "focus-browser" {
+    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" {
+        action_mode_pending.store(true, Ordering::SeqCst);
+    } else if command == "cancel-inspect" {
+        action_mode_pending.store(false, Ordering::SeqCst);
+    }
+    let foreground_extraction = command == "extract-pattern" && payload.as_ref().and_then(|value| value.get("foreground")).and_then(serde_json::Value::as_bool) != Some(false);
+    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || foreground_extraction || command == "execute-command" || command == "focus-browser" {
         raise_integration_window(&window)?;
     }
     if command == "cancel-inspect" || command == "focus-main" {

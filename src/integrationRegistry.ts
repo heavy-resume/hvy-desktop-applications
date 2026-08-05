@@ -4,6 +4,7 @@ export interface IntegrationPageDefinition {
   url: string;
   allowedOrigins: string[];
   editable: boolean;
+  commands?: IntegrationCommandDefinition[];
 }
 
 export interface IntegrationActionDefinition {
@@ -45,6 +46,8 @@ export interface IntegrationActionFieldDefinition {
   snapshot: unknown;
   snapshots?: unknown[];
   negativeSnapshots?: unknown[];
+  exampleSnapshots?: Array<unknown | null>;
+  absentExampleIndexes?: number[];
 }
 
 export interface IntegrationActionPatternDefinition {
@@ -112,9 +115,33 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
   const value = localStorage.getItem(STORAGE_KEY);
   if (!value) return fallback;
   const saved = JSON.parse(value) as IntegrationRegistry;
-  const custom = saved.integrations.filter((integration) => integration.editable);
+  const custom = saved.integrations.filter((integration) => integration.editable).map((integration) => ({
+    ...integration,
+    pages: integration.pages.map((page) => ({
+      ...page,
+      commands: [
+        ...(page.commands ?? []),
+        ...integration.actions.filter((action) => action.pageIds[0] === page.id).flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
+      ],
+    })),
+    actions: integration.actions.map((action) => ({
+      ...action,
+      commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
+    })),
+  }));
   const savedGoogle = saved.integrations.find((integration) => integration.id === 'google-workspace');
-  fallback.integrations[0].actions = savedGoogle?.actions ?? [];
+  const savedGoogleActions = savedGoogle?.actions ?? [];
+  fallback.integrations[0].actions = savedGoogleActions.map((action) => ({
+    ...action,
+    commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
+  }));
+  fallback.integrations[0].pages = fallback.integrations[0].pages.map((page) => ({
+    ...page,
+    commands: [
+      ...(savedGoogle?.pages.find((savedPage) => savedPage.id === page.id)?.commands ?? []),
+      ...savedGoogleActions.filter((action) => action.pageIds[0] === page.id).flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
+    ],
+  }));
   const profiles = (saved.profiles ?? fallback.profiles).map((profile) => (
     profile.id === 'default-google' && profile.name === 'Google account'
       ? { ...profile, name: 'Personal' }
@@ -151,6 +178,11 @@ export function commandExecutionPayload(action: IntegrationActionDefinition, com
   const pattern = actionPatternPayload(action);
   if (!pattern || command.steps.length !== 1) return null;
   return { pattern, command, ...(recordParent ? { recordParent } : {}) };
+}
+
+export function pageCommandExecutionPayload(command: IntegrationCommandDefinition): { pattern: { minimumConfidence: number; parents: never[]; targets: never[] }; command: IntegrationCommandDefinition } | null {
+  if (command.scope !== 'page' || command.steps.length !== 1) return null;
+  return { pattern: { minimumConfidence: 0.8, parents: [], targets: [] }, command };
 }
 
 export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {

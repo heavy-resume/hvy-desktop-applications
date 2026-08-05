@@ -16,7 +16,14 @@ pub fn run() {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
-                let _ = app.emit("menu-event", event.id().as_ref().to_string());
+                let id = event.id().as_ref();
+                if let Some(window_label) = id.strip_prefix("show-window:") {
+                    if let Some(window) = app.get_webview_window(window_label) {
+                        let _ = raise_integration_window(&window);
+                    }
+                } else {
+                    let _ = app.emit("menu-event", id.to_string());
+                }
             });
             Ok(())
         })
@@ -293,6 +300,20 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::fullscreen(app, Some("Toggle Full Screen"))?)
         .build()?;
+    let mut window_builder = SubmenuBuilder::with_id(app, "window-menu", "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .item(&MenuItemBuilder::new("HVY Galaxy").id("show-window:main").build(app)?);
+    let mut integration_windows = app.webview_windows().into_iter()
+        .filter(|(label, _window)| label.starts_with(INTEGRATION_BROWSER_LABEL))
+        .collect::<Vec<_>>();
+    integration_windows.sort_by(|left, right| left.0.cmp(&right.0));
+    for (label, window) in integration_windows {
+        let title = window.title().unwrap_or_else(|_| "HVY Galaxy Integrations".into());
+        window_builder = window_builder.item(&MenuItemBuilder::new(title).id(format!("show-window:{label}")).build(app)?);
+    }
+    let window_menu = window_builder.build()?;
     let help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
             &MenuItemBuilder::new("HVY Galaxy Guide")
@@ -312,7 +333,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let builder = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
-    builder.item(&file).item(&edit).item(&view).item(&ai).item(&help).build()
+    builder.item(&file).item(&edit).item(&view).item(&ai).item(&window_menu).item(&help).build()
 }
 
 fn app_shortcut_menu_item(

@@ -42,6 +42,7 @@ interface IntegrationPageDefinition {
   name: string;
   url: string;
   allowedOrigins: string[];
+  commands: IntegrationCommandDefinition[];
 }
 ```
 
@@ -74,7 +75,7 @@ The frontend uses one runtime-independent interface:
 
 ```ts
 interface IntegrationBrowserHost {
-  open(profileId: string, destination: IntegrationDestination): Promise<void>;
+  open(profileId: string, destination: IntegrationDestination, foreground?: boolean): Promise<void>;
   navigate(profileId: string, command: 'back' | 'forward' | 'reload'): Promise<void>;
   beginInspection(profileId: string): Promise<void>;
   executeExtractor(request: ExtractorExecutionRequest): Promise<ExtractionResult>;
@@ -84,6 +85,10 @@ interface IntegrationBrowserHost {
 ```
 
 The shared frontend must not branch on Tauri versus Electron. Runtime adapters own webview construction, profile storage, navigation policy, script execution, and result transport.
+
+Opening for login, inspection, or an interactive command is foregrounded. Running a saved record extraction opens or navigates the same isolated profile webview in the background, leaving the Galaxy window in place until the reviewed results are ready. A background fetch must not hide an already visible integration window; it simply does not show or raise it.
+
+Galaxy keeps the fetch visibly pending until the extraction result or launch error arrives, preserves the integrations manager's scroll position, and does not use animation-frame waits while the integration document is hidden. Both desktop runtimes provide a Window menu containing Galaxy and every open integration profile window.
 
 ### Runtime profile storage
 
@@ -178,12 +183,12 @@ Extractor scripts receive DOM access only. Results must be JSON-serializable, si
 
 Inspection snapshots are inputs for authoring extractors. AI may propose a script from selected examples, but the saved artifact is deterministic, reviewable JavaScript with a schema and explicit permissions.
 
-## Record builder
+## Record type builder
 
-The current structural extraction artifact is a record definition, not an interaction action. It describes repeated page items and their fields, returns structured JSON, and may later map those results into an HVY document.
+The current structural extraction artifact is a record type, not an interaction action. It describes repeated page items and their fields, returns structured JSON, and may later map those results into an HVY document.
 
 ```ts
-interface IntegrationRecordDefinition {
+interface IntegrationRecordTypeDefinition {
   id: string;
   integrationId: string;
   name: string;
@@ -197,18 +202,21 @@ interface IntegrationRecordDefinition {
 }
 ```
 
-Action authoring follows this workflow:
+Record type authoring follows this workflow:
 
-1. Choose **Add action** beside one of the integration's pages. Galaxy opens that page directly in inspection mode.
+1. Choose **Define records** beside one of the integration's pages. Galaxy opens that page directly in inspection mode.
 2. Select the smallest parent containing one complete item and all data that belongs to it.
-3. Set the action's minimum confidence, then expand the primary example and define its named fields.
-4. Choose additional instances of the same parent when the record shape varies. Already accepted records and their passing subfields remain marked in green; below-threshold records and failed or overlapping subfields are identified separately so a new example can target a concrete variation.
-5. Show the same named field rows inside every expandable example. Prepopulate each row with its best structural match and let the user replace a weak or missing selection for only that example. These selections become alternate structural signatures for one output field, not duplicate fields.
-6. Fields are optional by default. Use compact list and required controls where needed. Within an example, **Doesn't exist** explicitly marks an absent field; a mistaken automatic match becomes negative structural evidence for that field, and missing optional structures return an empty value without rejecting the record.
-7. Run the matcher and adjust confidence from the live page overlay. Highlights update without changing window focus. The integration browser retains that value for example selection and extraction, then extraction returns it to the builder when focus is intentionally restored.
-8. Review ordinary grouped records rather than raw JSON.
-9. Name and save the action after the preview groups every field with the correct parent.
-10. Run the saved record definition later through the selected page and browser profile.
+3. While the primary example remains boxed, select all desired fields in one inspection session and choose **Done**. Galaxy then returns to the builder so the collected fields can be named together. Additional fields may be collected in another batch; replacing one existing field remains a focused single-field selection.
+4. Set the record type's minimum confidence, then review the named fields in the primary example.
+5. Choose additional instances of the same parent when the record shape varies. Already accepted records and their passing subfields remain marked in green; below-threshold records and failed or overlapping subfields are identified separately so a new example can target a concrete variation.
+6. Show the same named field rows inside every expandable example. Prepopulate each row with its best structural match and let the user replace a weak or missing selection for only that example. These selections become alternate structural signatures for one output field, not duplicate fields.
+7. Fields are optional by default. Use compact list and required controls where needed. Within an example, **Doesn't exist** explicitly marks an absent field; a mistaken automatic match becomes negative structural evidence for that field, and missing optional structures return an empty value without rejecting the record.
+8. Run the matcher and adjust confidence from the live page overlay. Highlights update without changing window focus. The integration browser retains that value for example selection and extraction, then extraction returns it to the builder when focus is intentionally restored.
+9. Review ordinary grouped records rather than raw JSON.
+10. Name and save the record type after the preview groups every field with the correct parent.
+11. Run the saved record type later through the selected page and browser profile.
+
+Saved record types remain editable. Edit rehydrates the same builder with the stored name, description, confidence, parent examples, field examples, labels, cardinality, optional/required settings, and negative or explicit-absence examples. Saving replaces the existing definition in place, retaining its stable ID and item commands. Positional example snapshots are stored alongside the aggregate matcher variants so fields can be mapped back to the correct example during later edits.
 
 The first deterministic action format does not require an LLM. A later script-generation layer may add repeatable page-preparation steps, transformations, or provider-specific behavior, but it consumes the same reviewed record examples and must not replace the structural action contract.
 
@@ -220,13 +228,13 @@ A click made while teaching a record is evidence, not the saved selector. A cont
 
 ### Commands and interaction steps
 
-A record definition may own page commands and record commands. Page commands resolve their target against the current page. Record commands first resolve one extracted record and then resolve their target only inside that record.
+A page owns whole-page commands, while a record type owns item commands. This ownership is visible in the integrations manager: page commands are created and run with their page; item commands are created with a record type and appear on fetched items. There is no scope dropdown that moves a command between the two concepts.
 
 ```ts
 interface IntegrationCommandDefinition {
   id: string;
   name: string;
-  scope: 'page' | 'record';
+  scope: 'page' | 'record'; // fixed by its owning page or record
   steps: IntegrationInteractionStep[];
 }
 
@@ -238,13 +246,13 @@ interface IntegrationInteractionStep {
 }
 ```
 
-The first command builder creates exactly one step, but persists an array so the format can grow into workflows. The user chooses the scope and gesture in trusted Galaxy UI, then uses the existing structural picker to select the live target. Selection itself remains a normal left click; `right-click` describes the saved command.
+The first command builder creates exactly one step, but persists an array so the format can grow into workflows. The user chooses the gesture in trusted Galaxy UI; scope is already fixed by choosing **Add page command** or **Add item command**. For an item command, Galaxy first shows current record matches and requires the user to choose one, then limits target selection to that live record. This prevents command authoring from silently depending on an old example that has disappeared or diverged. Selection itself remains a normal left click; `right-click` describes the saved command.
 
 Execution always resolves the current record and target again. Saved commands do not retain DOM nodes or screen coordinates. A command returns `no_match` when its record or target does not clear the confidence threshold and `ambiguous` when multiple targets are effectively tied. It must not interact with the closest element after either result.
 
-DOM-level click and context-menu events may run while an integration window is hidden. A site that requires genuine pointer movement, CSS hover, or trusted input returns `requires_foreground`; Galaxy then shows the integration window rather than pretending the hidden interaction succeeded.
+Interactive click and context-menu commands show and focus the integration window before execution so navigation and other visible consequences are not hidden from the user. Future background-safe commands may opt into hidden execution explicitly.
 
-Named page states are reserved for the next workflow iteration. A state is a structural precondition or postcondition such as `inbox`, `message-open`, or `context-menu-open`. Multi-step execution re-resolves every target after each state transition rather than retaining elements from the previous DOM.
+Named page states remain reserved for the next workflow iteration; they are not exposed by the current one-step builder. A state is a structural precondition or postcondition such as `inbox`, `message-open`, or `context-menu-open`. Multi-step execution will re-resolve every target after each state transition rather than retaining elements from the previous DOM.
 
 ### Events and refresh policies
 
