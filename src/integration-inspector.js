@@ -914,6 +914,70 @@
     return image ? { imageUrl: image.url, alt: image.alt } : '';
   };
 
+  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence) => {
+    const expected = snapshotValue?.selected;
+    if (!expected?.shape) return { status: 'no_match', reason: 'target_pattern_missing' };
+    const candidates = deepElements(scope)
+      .filter(isStructuralTargetCandidate)
+      .map((element) => {
+        const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
+        const relativePathScore = scope instanceof Element && expected.relativePath
+          ? pathSimilarity(expected.relativePath, pathWithin(element, scope))
+          : 1;
+        const score = scope instanceof Element ? shapeScore * 0.74 + relativePathScore * 0.26 : shapeScore;
+        return { element, shapeScore, relativePathScore, score };
+      })
+      .sort((left, right) => right.score - left.score);
+    const best = candidates[0];
+    if (!best || best.score < minimumConfidence) return { status: 'no_match', reason: 'target_not_found', score: best?.score || 0 };
+    const tied = candidates[1] && best.score - candidates[1].score < 0.01;
+    if (tied) return { status: 'ambiguous', reason: 'target_tied', score: best.score };
+    return { status: 'matched', ...best };
+  };
+
+  const dispatchInteraction = (element, gesture) => {
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (gesture === 'right-click') {
+      const options = { bubbles: true, cancelable: true, composed: true, view: window, button: 2, buttons: 2 };
+      if (typeof PointerEvent === 'function') element.dispatchEvent(new PointerEvent('pointerdown', { ...options, pointerType: 'mouse' }));
+      element.dispatchEvent(new MouseEvent('mousedown', options));
+      if (typeof PointerEvent === 'function') element.dispatchEvent(new PointerEvent('pointerup', { ...options, pointerType: 'mouse', buttons: 0 }));
+      element.dispatchEvent(new MouseEvent('mouseup', { ...options, buttons: 0 }));
+      return element.dispatchEvent(new MouseEvent('contextmenu', options));
+    }
+    element.click();
+    return true;
+  };
+
+  const executeCommand = (payload = {}) => {
+    window.__hvyGalaxyInspector.stop();
+    const command = payload.command;
+    const step = command?.steps?.[0];
+    if (!command || !step || !['click', 'right-click'].includes(step.gesture)) return { status: 'no_match', reason: 'command_invalid' };
+    const { minimumTargetConfidence } = patternThresholds(payload.pattern);
+    let scope = document;
+    let record = null;
+    if (command.scope === 'record') {
+      const records = findPatternMatches(payload.pattern);
+      record = payload.recordParent
+        ? records.find((candidate) => cssPath(candidate.element) === payload.recordParent)
+        : records[0];
+      if (!record) return { status: 'no_match', reason: 'record_not_found' };
+      scope = record.element;
+    }
+    const resolved = resolveInteractionTarget(scope, step.target, minimumTargetConfidence);
+    if (resolved.status !== 'matched') return resolved;
+    dispatchInteraction(resolved.element, step.gesture);
+    return {
+      status: 'executed',
+      commandId: command.id,
+      gesture: step.gesture,
+      record: record ? cssPath(record.element) : null,
+      target: cssPath(resolved.element),
+      score: resolved.score,
+    };
+  };
+
   const serializeMatches = (matches, includeValues = false) => ({
     matches: matches.length,
     records: matches.map((match) => ({
@@ -949,7 +1013,16 @@
     const scrollables = deepElements(document)
       .filter((element) => element.scrollHeight > element.clientHeight + 40 && element.clientHeight > 120)
       .sort((left, right) => ((right.scrollHeight - right.clientHeight) * right.clientWidth) - ((left.scrollHeight - left.clientHeight) * left.clientWidth));
-    const scroller = scrollables[0] || document.scrollingElement;
+    const initialCandidates = evaluatePatternCandidates(effectivePattern)
+      .sort((left, right) => Number(right.accepted) - Number(left.accepted) || right.score - left.score || right.parentScore - left.parentScore);
+    let owningScroller = null;
+    for (let node = initialCandidates[0]?.element?.parentElement; node instanceof Element; node = node.parentElement) {
+      if (scrollables.includes(node)) {
+        owningScroller = node;
+        break;
+      }
+    }
+    const scroller = owningScroller || scrollables[0] || document.scrollingElement;
     const originalTop = scroller?.scrollTop || 0;
     const records = new Map();
     const settle = async () => {
@@ -1171,6 +1244,14 @@
     },
     extractPattern(pattern = {}) {
       return serializeMatches(findPatternMatches(pattern), true);
+    },
+    executeCommand(payload = {}) {
+      return executeCommand(payload);
+    },
+    executeCommandAndReport(payload = {}) {
+      const result = executeCommand(payload);
+      if (result.status !== 'executed') publish({ kind: 'integration-command-result', commandId: payload.command?.id, ...result });
+      return result;
     },
     async extractAndPublish(pattern = {}, context = {}) {
       const extraction = await extractAcrossPage(pattern);

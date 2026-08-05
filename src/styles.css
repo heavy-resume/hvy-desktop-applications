@@ -357,6 +357,44 @@ body {
   gap: 3px;
 }
 
+.integration-record-definition {
+  align-items: start;
+}
+
+.integration-record-actions {
+  display: flex !important;
+  gap: 8px !important;
+}
+
+.integration-command-list {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 6px !important;
+  margin-top: 7px;
+}
+
+.integration-command-list > span {
+  display: grid;
+  gap: 1px;
+  padding: 5px 8px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 6px;
+}
+
+.integration-command-target-review {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+}
+
+.integration-result-commands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .integration-page-actions,
 .integration-review-field-actions {
   display: flex;

@@ -126,6 +126,15 @@ export interface AppState {
   integrationActionResultOpen: boolean;
   integrationActionResultName: string;
   integrationActionResultRecords: unknown[];
+  integrationActionResultActionId: string | null;
+  integrationCommandBuilderOpen: boolean;
+  integrationCommandSelectionPending: boolean;
+  integrationCommandDraftIntegrationId: string | null;
+  integrationCommandDraftActionId: string | null;
+  integrationCommandDraftName: string;
+  integrationCommandDraftScope: 'page' | 'record';
+  integrationCommandDraftGesture: 'click' | 'right-click';
+  integrationCommandDraftTarget: unknown;
   selectedIntegrationId: string;
   selectedIntegrationProfileId: string;
   addIntegrationProfileDialogOpen: boolean;
@@ -356,6 +365,15 @@ export const state: AppState = {
   integrationActionResultOpen: false,
   integrationActionResultName: '',
   integrationActionResultRecords: [],
+  integrationActionResultActionId: null,
+  integrationCommandBuilderOpen: false,
+  integrationCommandSelectionPending: false,
+  integrationCommandDraftIntegrationId: null,
+  integrationCommandDraftActionId: null,
+  integrationCommandDraftName: '',
+  integrationCommandDraftScope: 'record',
+  integrationCommandDraftGesture: 'click',
+  integrationCommandDraftTarget: null,
   selectedIntegrationId: 'google-workspace',
   selectedIntegrationProfileId: 'default-google',
   addIntegrationProfileDialogOpen: false,

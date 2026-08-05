@@ -20,6 +20,21 @@ export interface IntegrationActionDefinition {
   examples?: unknown[];
   anchors?: unknown[];
   pattern?: IntegrationActionPatternDefinition;
+  commands?: IntegrationCommandDefinition[];
+}
+
+export interface IntegrationCommandDefinition {
+  id: string;
+  name: string;
+  scope: 'page' | 'record';
+  steps: IntegrationInteractionStepDefinition[];
+}
+
+export interface IntegrationInteractionStepDefinition {
+  gesture: 'click' | 'right-click';
+  target: unknown;
+  fromState?: string;
+  toState?: string;
 }
 
 export interface IntegrationActionFieldDefinition {
@@ -130,6 +145,12 @@ export function actionPatternPayload(action: IntegrationActionDefinition): { min
     parents: action.pattern.parents,
     targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [] })),
   };
+}
+
+export function commandExecutionPayload(action: IntegrationActionDefinition, command: IntegrationCommandDefinition, recordParent?: string): { pattern: NonNullable<ReturnType<typeof actionPatternPayload>>; command: IntegrationCommandDefinition; recordParent?: string } | null {
+  const pattern = actionPatternPayload(action);
+  if (!pattern || command.steps.length !== 1) return null;
+  return { pattern, command, ...(recordParent ? { recordParent } : {}) };
 }
 
 export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {

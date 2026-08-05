@@ -474,7 +474,11 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                     let at_expected_origin = expected_origin.is_none_or(|origin| payload.url().origin().ascii_serialization() == origin);
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
-                        let script = format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction);
+                        let script = if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.start('target', ({}).options || {{}});", INTEGRATION_INSPECTOR, extraction)
+                        } else {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+                        };
                         let _ = window.eval(&script);
                       }
                     }
@@ -572,6 +576,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "cancel-inspect" => window.eval("window.__hvyGalaxyInspector?.stop()"),
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {

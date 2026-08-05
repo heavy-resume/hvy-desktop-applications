@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionPatternPayload, applyInspectionPrivacyRules, defaultIntegrationRegistry, jsonPathFor, matcherSnapshot, matchingInspectionPrivacyRules, selectedInspectionContent } from './integrationRegistry';
+import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, defaultIntegrationRegistry, jsonPathFor, matcherSnapshot, matchingInspectionPrivacyRules, selectedInspectionContent } from './integrationRegistry';
 
 describe('integration registry', () => {
   it('names the default Google profile Personal', () => {
@@ -24,6 +24,21 @@ describe('integration registry', () => {
       id: 'action-1', integrationId: 'custom', name: 'Projects', description: '', pageIds: ['page'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read'], version: 1,
       pattern: { recordLabel: 'Project', minimumConfidence: 0.8, parents: [stored], fields: [{ id: 'skills', label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored }] },
     })).toEqual({ minimumConfidence: 0.8, parents: [stored], targets: [{ label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored, snapshots: [stored], negativeSnapshots: [] }] });
+  });
+
+  it('packages one-step commands with the record pattern and selected record identity', () => {
+    const snapshot = { selected: { shape: { tag: 'button' }, relativePath: [{ tag: 'button' }] } };
+    const action = {
+      id: 'action-1', integrationId: 'custom', name: 'Messages', description: '', pageIds: ['page'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read' as const], version: 1,
+      pattern: { recordLabel: 'Message', minimumConfidence: 0.8, parents: [snapshot], fields: [{ id: 'subject', label: 'SUBJECT', cardinality: 'single' as const, optional: false, snapshot }] },
+    };
+    const command = { id: 'open', name: 'Open', scope: 'record' as const, steps: [{ gesture: 'click' as const, target: snapshot }] };
+
+    expect(commandExecutionPayload(action, command, 'main > article:nth-of-type(2)')).toEqual({
+      pattern: actionPatternPayload(action),
+      command,
+      recordParent: 'main > article:nth-of-type(2)',
+    });
   });
 });
 

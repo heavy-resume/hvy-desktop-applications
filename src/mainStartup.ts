@@ -50,8 +50,16 @@ export async function boot(): Promise<void> {
       void handleAppCloseRequest();
     });
     await onIntegrationInspectionResult(async (result) => {
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-result') {
+        const commandResult = result as { status?: unknown; reason?: unknown };
+        state.status = commandResult.status === 'ambiguous'
+          ? 'Command not run: more than one control matched'
+          : `Command not run: ${String(commandResult.reason || 'target not found').replaceAll('_', ' ')}`;
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-extraction') {
-        const extraction = result as { context?: { mode?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
+        const extraction = result as { context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
         if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, extraction.minimumConfidence));
         if (extraction.context?.mode === 'builder') {
           state.integrationActionPreviewRecords = extraction.records ?? [];
@@ -61,9 +69,19 @@ export async function boot(): Promise<void> {
         } else {
           state.integrationActionResultName = extraction.context?.actionName ?? 'Action results';
           state.integrationActionResultRecords = extraction.records ?? [];
+          state.integrationActionResultActionId = extraction.context?.actionId ?? null;
           state.integrationActionResultOpen = true;
         }
         state.status = `Extracted ${(extraction.records ?? []).length} matching items`;
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
+      if (state.integrationCommandSelectionPending) {
+        state.integrationCommandSelectionPending = false;
+        state.integrationCommandDraftTarget = result;
+        state.integrationCommandBuilderOpen = true;
+        state.status = `Selected target for ${state.integrationCommandDraftName}`;
         rerender({ preserveMountedDocument: true });
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;

@@ -8,7 +8,7 @@ import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
-import { actionPatternPayload, createCustomPageIntegration, createIntegrationProfile, matcherSnapshot, matchingInspectionPrivacyRules, saveIntegrationRegistry, type IntegrationActionDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, matcherSnapshot, matchingInspectionPrivacyRules, saveIntegrationRegistry, type IntegrationActionDefinition } from './integrationRegistry';
 
 interface DocumentColorTheme {
   name: string;
@@ -349,7 +349,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         state.integrationActionTargetOptional.splice(fieldIndex, 1);
         state.integrationActionTargetParentIndexes.splice(fieldIndex, 1);
       }
-      state.integrationActionSelectedParentIndex = Math.min(state.integrationActionSelectedParentIndex, state.integrationActionAnchors.length - 1);
+      state.integrationActionSelectedParentIndex = Math.max(0, Math.min(state.integrationActionSelectedParentIndex, state.integrationActionAnchors.length - 1));
     } else {
       state.integrationActionExamples.splice(index, 1);
       state.integrationActionExampleRules.splice(index, 1);
@@ -364,7 +364,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const useParent = state.integrationActionAnchors.length > 0;
     const nextItems = useParent ? state.integrationActionAnchors : state.integrationActionExamples;
     const nextRules = useParent ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
-    state.integrationActionSelectionKind = useParent ? 'example' : 'target';
+    state.integrationActionSelectionKind = useParent ? 'example' : state.integrationActionExamples.length ? 'target' : 'parent';
     state.integrationInspectionResult = nextItems.at(-1) ?? null;
     state.inspectionPrivacyRules = nextRules.at(-1) ? [...nextRules.at(-1)!] : [];
     rerender({ preserveMountedDocument: true });
@@ -467,7 +467,83 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   closeIntegrationActionResult: () => {
     state.integrationActionResultOpen = false;
     state.integrationActionResultRecords = [];
+    state.integrationActionResultActionId = null;
     rerender({ preserveMountedDocument: true });
+  },
+  addCommandForIntegrationAction: (integrationId, actionId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const action = integration?.actions.find((candidate) => candidate.id === actionId);
+    if (!integration || !action?.pattern) throw new Error('Define the record before adding a command.');
+    state.integrationCommandBuilderOpen = true;
+    state.integrationCommandSelectionPending = false;
+    state.integrationCommandDraftIntegrationId = integrationId;
+    state.integrationCommandDraftActionId = actionId;
+    state.integrationCommandDraftName = '';
+    state.integrationCommandDraftScope = 'record';
+    state.integrationCommandDraftGesture = 'click';
+    state.integrationCommandDraftTarget = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  beginIntegrationCommandSelection: (name, scope, gesture) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
+    const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
+    const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!integration || !action?.pattern || !page || !profile) throw new Error('The command record or page was not found.');
+    if (!name.trim()) throw new Error('Give the command a name.');
+    state.integrationCommandDraftName = name.trim();
+    state.integrationCommandDraftScope = scope;
+    state.integrationCommandDraftGesture = gesture;
+    state.integrationCommandDraftTarget = null;
+    state.integrationCommandSelectionPending = true;
+    const pendingSelection = {
+      kind: 'command-target',
+      context: { expectedOrigin: new URL(page.url).origin },
+      options: scope === 'record' ? { parentSnapshot: action.pattern.parents[0] } : {},
+    };
+    void runBusy(`Opening ${page.name} to select the command target...`, async () => {
+      if (page.id === 'gmail' || page.id === 'google-calendar') {
+        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingSelection);
+      } else {
+        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection);
+      }
+      state.status = `Select the control for ${state.integrationCommandDraftName}`;
+    }, { preserveMountedDocument: true });
+  },
+  cancelIntegrationCommandBuilder: () => {
+    if (state.integrationCommandSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    state.integrationCommandBuilderOpen = false;
+    state.integrationCommandSelectionPending = false;
+    state.integrationCommandDraftTarget = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  saveIntegrationCommand: () => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
+    const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
+    if (!integration || !action || !state.integrationCommandDraftTarget) throw new Error('Select a command target before saving.');
+    action.commands ??= [];
+    action.commands.push({
+      id: `command-${crypto.randomUUID()}`,
+      name: state.integrationCommandDraftName,
+      scope: state.integrationCommandDraftScope,
+      steps: [{ gesture: state.integrationCommandDraftGesture, target: matcherSnapshot(state.integrationCommandDraftTarget) }],
+    });
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.integrationCommandBuilderOpen = false;
+    state.integrationCommandDraftTarget = null;
+    state.status = `Saved ${state.integrationCommandDraftName}`;
+    rerender({ preserveMountedDocument: true });
+  },
+  runIntegrationCommand: (integrationId, actionId, commandId, recordParent) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const action = integration?.actions.find((candidate) => candidate.id === actionId);
+    const command = action?.commands?.find((candidate) => candidate.id === commandId);
+    const payload = action && command ? commandExecutionPayload(action, command, recordParent) : null;
+    if (!integration || !action || !command || !payload) throw new Error('The saved command is incomplete.');
+    void runBusy(`Running ${command.name}...`, async () => {
+      await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, payload);
+      state.status = `Ran ${command.name}`;
+    }, { preserveMountedDocument: true });
   },
   setInspectionPrivacyRule: (path, action, label) => {
     const relatedPaths = new Set(matchingInspectionPrivacyRules(state.integrationInspectionResult, path, 'remove').map((rule) => rule.path));

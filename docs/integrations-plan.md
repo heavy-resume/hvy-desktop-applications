@@ -8,9 +8,11 @@ Google Workspace is the first provider, initially covering Gmail and Google Cale
 
 ## Product experience
 
-### Integration tabs
+### Integration windows
 
-Integrations participate in Galaxy's existing tab model. An integration tab contains trusted Galaxy controls around an isolated native webview:
+An integration profile owns an isolated native browser window. Galaxy may keep that window alive but hidden for extraction and DOM-driven commands, then show and focus it for login, inspection, trusted pointer input, or troubleshooting. Hiding is distinct from closing: it preserves the live page and its memory, while closing destroys the webview but retains the profile's persistent browser store.
+
+Trusted Galaxy controls expose:
 
 - Profile selector
 - Back, forward, and reload
@@ -20,7 +22,7 @@ Integrations participate in Galaxy's existing tab model. An integration tab cont
 - Run extractor
 - Close tab
 
-The remote page must not replace the main Galaxy renderer or inject controls into the provider's DOM. Electron should host it in a `WebContentsView`; Tauri should use a child webview positioned within the document content area. Switching tabs hides or shows the corresponding native webview and keeps its bounds synchronized with the trusted container.
+The remote page must not replace the main Galaxy renderer or receive Galaxy's privileged bridge. A later browser-chrome window may place a trusted local toolbar above the remote content using an Electron `WebContentsView` and Tauri child webview. Until then, the main Galaxy window remains the trusted command center and the remote integration window appears only when the user needs to interact with it.
 
 ### Pages and integrations
 
@@ -32,7 +34,7 @@ interface IntegrationDefinition {
   name: string;
   profileProviderId: string;
   pages: IntegrationPageDefinition[];
-  actions: IntegrationActionDefinition[];
+  recordDefinitions: IntegrationRecordDefinition[];
 }
 
 interface IntegrationPageDefinition {
@@ -176,12 +178,12 @@ Extractor scripts receive DOM access only. Results must be JSON-serializable, si
 
 Inspection snapshots are inputs for authoring extractors. AI may propose a script from selected examples, but the saved artifact is deterministic, reviewable JavaScript with a schema and explicit permissions.
 
-## Action builder
+## Record builder
 
-Each integration has its own action scripts. An action can read the current page, return structured JSON, and later map that result into an HVY document.
+The current structural extraction artifact is a record definition, not an interaction action. It describes repeated page items and their fields, returns structured JSON, and may later map those results into an HVY document.
 
 ```ts
-interface IntegrationActionDefinition {
+interface IntegrationRecordDefinition {
   id: string;
   integrationId: string;
   name: string;
@@ -191,6 +193,7 @@ interface IntegrationActionDefinition {
   resultSchema: JsonSchema;
   permissions: Array<'dom:read' | 'image:read'>;
   version: number;
+  commands: IntegrationCommandDefinition[];
 }
 ```
 
@@ -205,7 +208,7 @@ Action authoring follows this workflow:
 7. Run the matcher and adjust confidence from the live page overlay. Highlights update without changing window focus. The integration browser retains that value for example selection and extraction, then extraction returns it to the builder when focus is intentionally restored.
 8. Review ordinary grouped records rather than raw JSON.
 9. Name and save the action after the preview groups every field with the correct parent.
-10. Run the saved action later through the selected page and browser profile.
+10. Run the saved record definition later through the selected page and browser profile.
 
 The first deterministic action format does not require an LLM. A later script-generation layer may add repeatable page-preparation steps, transformations, or provider-specific behavior, but it consumes the same reviewed record examples and must not replace the structural action contract.
 
@@ -213,7 +216,41 @@ The builder should make selected text prominent rather than burying it inside ra
 
 While selection is active, wheel input must continue to scroll the page. A temporary **Navigate page** mode releases pointer input to the site so the user can expand, paginate, or otherwise prepare dynamic content, then **Resume picking** without losing the action draft.
 
-A click is evidence, not the saved selector. A content pattern records parent samples, labeled targets, negative examples, and their structural relationships. Each structural signature should include nesting, element roles, child and descendant shapes, relative target paths, normalized geometry, and normalized container treatment such as border presence, radius, padding, background presence, and shadow presence without storing literal colors or private text values. Matching ranks all field/element pairs together and assigns the strongest fits first. The same element cannot serve two fields. Ancestor/descendant matches may coexist only when the examples teach that those fields are nested; otherwise a missing field cannot borrow a region claimed by another field. The matcher then verifies that the complete labeled target set fits inside the proposed parent. Positional paths remain diagnostic and fast-path evidence, not durable identity. Optional anchors may be reconsidered after parent/target matching demonstrates a concrete ambiguity they solve.
+A click made while teaching a record is evidence, not the saved selector. A content pattern records parent samples, labeled targets, negative examples, and their structural relationships. Each structural signature should include nesting, element roles, child and descendant shapes, relative target paths, normalized geometry, and normalized container treatment such as border presence, radius, padding, background presence, and shadow presence without storing literal colors or private text values. Matching ranks all field/element pairs together and assigns the strongest fits first. The same element cannot serve two fields. Ancestor/descendant matches may coexist only when the examples teach that those fields are nested; otherwise a missing field cannot borrow a region claimed by another field. The matcher then verifies that the complete labeled target set fits inside the proposed parent. Positional paths remain diagnostic and fast-path evidence, not durable identity. Optional anchors may be reconsidered after parent/target matching demonstrates a concrete ambiguity they solve.
+
+### Commands and interaction steps
+
+A record definition may own page commands and record commands. Page commands resolve their target against the current page. Record commands first resolve one extracted record and then resolve their target only inside that record.
+
+```ts
+interface IntegrationCommandDefinition {
+  id: string;
+  name: string;
+  scope: 'page' | 'record';
+  steps: IntegrationInteractionStep[];
+}
+
+interface IntegrationInteractionStep {
+  gesture: 'click' | 'right-click';
+  target: unknown;
+  fromState?: string;
+  toState?: string;
+}
+```
+
+The first command builder creates exactly one step, but persists an array so the format can grow into workflows. The user chooses the scope and gesture in trusted Galaxy UI, then uses the existing structural picker to select the live target. Selection itself remains a normal left click; `right-click` describes the saved command.
+
+Execution always resolves the current record and target again. Saved commands do not retain DOM nodes or screen coordinates. A command returns `no_match` when its record or target does not clear the confidence threshold and `ambiguous` when multiple targets are effectively tied. It must not interact with the closest element after either result.
+
+DOM-level click and context-menu events may run while an integration window is hidden. A site that requires genuine pointer movement, CSS hover, or trusted input returns `requires_foreground`; Galaxy then shows the integration window rather than pretending the hidden interaction succeeded.
+
+Named page states are reserved for the next workflow iteration. A state is a structural precondition or postcondition such as `inbox`, `message-open`, or `context-menu-open`. Multi-step execution re-resolves every target after each state transition rather than retaining elements from the previous DOM.
+
+### Events and refresh policies
+
+Generic web integrations use successful extraction snapshots to produce `record.added`, `record.changed`, and `record.removed` events. DOM mutation is only a hint to rerun extraction; periodic native-host reconciliation is authoritative. A failed, ambiguous, or partial extraction never replaces the last successful baseline and therefore cannot emit false removals.
+
+Event-source preference is provider push, WebSub, RSS/Atom/JSON Feed, live DOM hints, then periodic DOM extraction. Feed discovery checks advertised alternate links and may offer **An RSS feed is available** in trusted UI. Conditional requests should use `ETag` and `Last-Modified`. Monitoring runs only while Galaxy is open until a separate background agent is explicitly designed.
 
 ### Privacy and stored patterns
 
@@ -302,7 +339,7 @@ The mod API should not be declared stable until it has been used for Google Work
 - Enforce provider navigation and popup allowlists in the native host.
 - Show the active profile and origin in trusted Galaxy controls.
 - Isolate browser storage by profile.
-- Require explicit inspection or extractor execution; do not scrape continuously in the background.
+- Require explicit inspection, execution, or a user-configured refresh policy; do not create continuous background scraping implicitly.
 - Keep raw inspection snapshots local and send only the user-reviewed sanitized copy to an LLM.
 - Apply privacy rules by JSON path in trusted Galaxy code, outside the remote page and outside generated scripts.
 - Bind results to native window and profile state.
@@ -314,12 +351,11 @@ The mod API should not be declared stable until it has been used for Google Work
 
 ## Delivery plan
 
-### Phase 1: Integration tabs
+### Phase 1: Integration browser windows
 
-- Add integration tabs to the existing Galaxy tab model.
-- Add trusted browser controls outside the remote DOM.
-- Embed isolated Electron and Tauri webviews within the selected tab.
-- Synchronize webview visibility, focus, and bounds with tab state.
+- Keep isolated profile browser windows alive independently from their visibility.
+- Add trusted browser controls outside the remote DOM when browser chrome becomes necessary.
+- Support explicit show, focus, hide, close, and later sleep lifecycle states.
 - Preserve runtime-specific session behavior behind the shared profile interface.
 - Move diagnostic controls out of the normal user interface.
 
@@ -330,18 +366,28 @@ The mod API should not be declared stable until it has been used for Google Work
 - Create one isolated runtime browser store per profile.
 - Make Gmail, Calendar, and Drive share the selected Google profile.
 
-### Phase 3: Pages and action builder
+### Phase 3: Pages, records, and commands
 
 - Store bundled and user-defined pages through one integration registry.
 - Add explicit-modal flows to create, edit, and remove custom pages.
-- Add per-integration action lists and action metadata.
-- Build structural actions from parent examples and labeled single/list target fields.
-- Let each action persist a reviewable minimum-confidence threshold, starting at 80%.
+- Add per-integration record-definition lists and metadata.
+- Build structural records from parent examples and labeled single/list target fields.
+- Let each record definition persist a reviewable minimum-confidence threshold, starting at 80%.
 - Preview grouped records in a nontechnical review surface.
-- Persist content-free matcher snapshots and rerun saved actions through the selected profile.
+- Persist content-free matcher snapshots and rerun saved record definitions through the selected profile.
+- Add one-step page and record commands using structurally resolved Click and Right click targets.
+- Extend one-step commands into state-verified workflows only after basic interaction works in both runtimes.
 - Keep sanitized LLM script generation as a separate follow-up workflow.
 
-### Phase 4: Extraction platform
+### Phase 4: Refresh and events
+
+- Discover advertised RSS, Atom, and JSON Feed links.
+- Add user-configured native-host polling while Galaxy is open.
+- Use DOM mutations as debounced extraction hints and successful snapshots as the authoritative baseline.
+- Diff successful snapshots into added, changed, and removed record events.
+- Add provider push adapters without changing the generic event contract.
+
+### Phase 5: Extraction platform
 
 - Add dedicated native result handlers.
 - Define extractor manifests, permissions, schemas, and versioning.
@@ -349,14 +395,14 @@ The mod API should not be declared stable until it has been used for Google Work
 - Add an extractor review and testing surface.
 - Retain inspection diagnostics for integration development.
 
-### Phase 5: HVY insertion
+### Phase 6: HVY insertion
 
 - Preview extracted JSON in trusted Galaxy UI.
 - Add mappings that insert reviewed text into an active HVY document.
 - Add authenticated image-byte transfer and document attachment storage.
 - Record source provenance.
 
-### Phase 6: Provider integrations and mods
+### Phase 7: Provider integrations and mods
 
 - Package Gmail and Calendar extractors against the generic interfaces.
 - Add Drive workspace operations after read and extraction flows are stable.

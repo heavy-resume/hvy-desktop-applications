@@ -615,6 +615,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'inspect-target') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(payload || {})})`);
   if (command === 'test-pattern') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
   if (command === 'extract-pattern') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'execute-command') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
   if (command === 'cancel-inspect') {
     integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
     raiseWindow(mainWindow);
@@ -856,6 +857,9 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
           const extraction = browser.pendingExtraction;
           if (extraction.context?.expectedOrigin && new URL(integrationWindow.webContents.getURL()).origin !== extraction.context.expectedOrigin) return null;
           browser.pendingExtraction = null;
+          if (extraction.kind === 'command-target') {
+            return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start("target", ${JSON.stringify(extraction.options || {})})`);
+          }
           return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
         }
         return null;

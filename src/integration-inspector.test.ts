@@ -70,6 +70,7 @@ interface InspectorApi {
   };
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
+  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; steps: Array<{ gesture: 'click' | 'right-click'; target: InspectorSnapshot }> }; recordParent?: string }): { status: string; reason?: string; record?: string; target?: string; score?: number };
 }
 
 declare global {
@@ -696,24 +697,101 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('executes a click only inside the requested matched record', async () => {
+    await page.setContent(`<main>
+      <article class="message"><span class="subject">First</span><button class="open-control">Open</button></article>
+      <article class="message"><span class="subject">Second</span><button class="open-control">Open</button></article>
+    </main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parents = [...document.querySelectorAll('.message')];
+      const clicked: number[] = [];
+      parents.forEach((parent, index) => parent.querySelector('button')!.addEventListener('click', () => clicked.push(index)));
+      const pattern = {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parents[0], null, 'parent')],
+        targets: [{ label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.subject')!, parents[0], 'target') }],
+      };
+      const records = window.__hvyGalaxyInspector.extractPattern(pattern).records;
+      const target = window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.open-control')!, parents[0], 'target');
+      const execution = window.__hvyGalaxyInspector.executeCommand({
+        pattern,
+        command: { id: 'open', scope: 'record', steps: [{ gesture: 'click', target }] },
+        recordParent: records[1].parent,
+      });
+      return { execution, clicked };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.clicked).toEqual([1]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('dispatches a right-click command to a structurally resolved page target', async () => {
+    await page.setContent('<main><button class="menu-control">Options</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const target = document.querySelector('.menu-control')!;
+      let contextMenus = 0;
+      target.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        contextMenus += 1;
+      });
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      const execution = window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'options', scope: 'page', steps: [{ gesture: 'right-click', target: snapshot }] },
+      });
+      return { execution, contextMenus };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.contextMenus).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not execute a page command when two targets are structurally tied', async () => {
+    await page.setContent('<main><button class="menu-control">First</button><button class="menu-control">Second</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const targets = [...document.querySelectorAll('.menu-control')];
+      let clicks = 0;
+      targets.forEach((target) => target.addEventListener('click', () => { clicks += 1; }));
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(targets[0], null, 'target');
+      const execution = window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'ambiguous', scope: 'page', steps: [{ gesture: 'click', target: snapshot }] },
+      });
+      return { execution, clicks };
+    });
+
+    expect(result.execution.status).toBe('ambiguous');
+    expect(result.clicks).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('scrolls the page during across-page extraction and restores its original position', async () => {
-    await page.setContent(`<main class="events" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
+    await page.setContent(`<aside class="decoy" style="height:200px;width:2000px;overflow:auto"><div style="height:4000px">Unrelated navigation</div></aside><main class="events" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
     await page.addScriptTag({ content: inspectorSource });
     const result = await page.evaluate(async () => {
       const scroller = document.querySelector<HTMLElement>('.events')!;
+      const decoy = document.querySelector<HTMLElement>('.decoy')!;
       const parent = scroller.querySelector('.event')!;
       let scrollEvents = 0;
+      let decoyScrollEvents = 0;
       scroller.addEventListener('scroll', () => { scrollEvents += 1; });
+      decoy.addEventListener('scroll', () => { decoyScrollEvents += 1; });
       const extraction = await window.__hvyGalaxyInspector.extractAcrossPage({
         minimumConfidence: 0.8,
         parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
         targets: [{ label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
       });
-      return { matches: extraction.matches, scrollEvents, finalTop: scroller.scrollTop };
+      return { matches: extraction.matches, scrollEvents, decoyScrollEvents, finalTop: scroller.scrollTop };
     });
 
     expect(result.matches).toBe(30);
     expect(result.scrollEvents).toBeGreaterThan(1);
+    expect(result.decoyScrollEvents).toBe(0);
     expect(result.finalTop).toBe(0);
     expect(pageErrors).toEqual([]);
   });
