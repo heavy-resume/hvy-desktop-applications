@@ -95,15 +95,25 @@ export interface UiHandlers {
   openIntegrationPage(integrationId: string, pageId: string): void;
   addActionForIntegrationPage(integrationId: string, pageId: string): void;
   closeIntegrationActionBuilder(): void;
+  cancelDiscardIntegrationAction(): void;
+  confirmDiscardIntegrationAction(): void;
   cancelIntegrationActionSelection(): void;
-  addAnotherIntegrationActionExample(): void;
+  addAnotherIntegrationActionExample(parentIndex?: number, fieldIndex?: number | null): void;
   addIntegrationActionAnchor(): void;
   testIntegrationActionPattern(): void;
+  previewIntegrationAction(): void;
   updateIntegrationTargetLabel(index: number, label: string): void;
+  updateIntegrationTargetCardinality(index: number, cardinality: 'single' | 'list'): void;
+  updateIntegrationTargetOptional(index: number, optional: boolean): void;
+  setIntegrationTargetAbsent(fieldIndex: number, parentIndex: number, absent: boolean): void;
+  selectIntegrationActionExample(index: number): void;
+  updateIntegrationActionMinimumConfidence(value: number): void;
   continueIntegrationActionBuilder(): void;
   backIntegrationActionBuilder(): void;
   reviewIntegrationActionRequest(name: string, description: string): void;
   saveIntegrationActionDraft(): void;
+  runIntegrationAction(integrationId: string, actionId: string): void;
+  closeIntegrationActionResult(): void;
   reviewIntegrationActionSelection(kind: 'target' | 'example', index: number): void;
   removeIntegrationActionSelection(kind: 'target' | 'example', index: number): void;
   selectIntegration(integrationId: string): void;
@@ -484,6 +494,8 @@ export function renderModals(state: AppState): void {
     ${renderAddIntegrationPageDialog(state)}
     ${renderAddIntegrationProfileDialog(state)}
     ${renderIntegrationActionBuilderDialog(state)}
+    ${renderIntegrationActionDiscardDialog(state)}
+    ${renderIntegrationActionResultDialog(state)}
     ${renderIntegrationVaultResetDialog(state)}
     ${renderDebugLogDialog(state)}
     ${renderWorkspaceChatClosePrompt(state)}
@@ -789,13 +801,21 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.addActionForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
     }
     if (action === 'close-integration-action-builder') handlers.closeIntegrationActionBuilder();
+    if (action === 'cancel-discard-integration-action') handlers.cancelDiscardIntegrationAction();
+    if (action === 'confirm-discard-integration-action') handlers.confirmDiscardIntegrationAction();
     if (action === 'cancel-integration-action-selection') handlers.cancelIntegrationActionSelection();
-    if (action === 'add-another-integration-action-example') handlers.addAnotherIntegrationActionExample();
+    if (action === 'add-another-integration-action-example') handlers.addAnotherIntegrationActionExample(Number(target.dataset.parentIndex ?? 0), target.dataset.fieldIndex === undefined ? null : Number(target.dataset.fieldIndex));
+    if (action === 'select-integration-action-example') handlers.selectIntegrationActionExample(Number(target.dataset.index));
+    if (action === 'set-integration-target-absent') handlers.setIntegrationTargetAbsent(Number(target.dataset.fieldIndex), Number(target.dataset.parentIndex), true);
+    if (action === 'clear-integration-target-absent') handlers.setIntegrationTargetAbsent(Number(target.dataset.fieldIndex), Number(target.dataset.parentIndex), false);
     if (action === 'add-integration-action-anchor') handlers.addIntegrationActionAnchor();
     if (action === 'test-integration-action-pattern') handlers.testIntegrationActionPattern();
+    if (action === 'preview-integration-action') handlers.previewIntegrationAction();
     if (action === 'continue-integration-action-builder') handlers.continueIntegrationActionBuilder();
     if (action === 'back-integration-action-builder') handlers.backIntegrationActionBuilder();
     if (action === 'save-integration-action-draft') handlers.saveIntegrationActionDraft();
+    if (action === 'run-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.runIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
+    if (action === 'close-integration-action-result') handlers.closeIntegrationActionResult();
     if (action === 'review-integration-action-selection' && (target.dataset.kind === 'example' || target.dataset.kind === 'target')) {
       handlers.reviewIntegrationActionSelection(target.dataset.kind, Number(target.dataset.index));
     }
@@ -1164,6 +1184,18 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (field === 'integration-target-label' && target instanceof HTMLInputElement) {
       handlers.updateIntegrationTargetLabel(Number(target.dataset.index), target.value);
+      const builder = target.closest<HTMLElement>('.integration-action-builder-dialog');
+      const complete = builder
+        ? [...builder.querySelectorAll<HTMLInputElement>('input[data-field="integration-target-label"]')].every((input) => input.value.trim())
+        : false;
+      builder?.querySelectorAll<HTMLButtonElement>('[data-action="test-integration-action-pattern"], [data-action="preview-integration-action"]')
+        .forEach((button) => { button.disabled = !complete; });
+      return;
+    }
+    if (field === 'integration-action-confidence' && target instanceof HTMLInputElement) {
+      handlers.updateIntegrationActionMinimumConfidence(Number(target.value) / 100);
+      const output = target.closest('label')?.querySelector<HTMLOutputElement>('output');
+      if (output) output.value = `${target.value}%`;
       return;
     }
     if (field === 'scripting-review-filter') {
@@ -1281,6 +1313,22 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (!target || target.closest('#hvyMount')) return;
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-integration-profile') {
       handlers.selectIntegrationProfile(target.value);
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'integration-target-cardinality') {
+      handlers.updateIntegrationTargetCardinality(Number(target.dataset.index), target.value === 'list' ? 'list' : 'single');
+      return;
+    }
+    if (target instanceof HTMLSelectElement && target.dataset.field === 'integration-target-optional') {
+      handlers.updateIntegrationTargetOptional(Number(target.dataset.index), target.value === 'optional');
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.field === 'integration-target-cardinality-checkbox') {
+      handlers.updateIntegrationTargetCardinality(Number(target.dataset.index), target.checked ? 'list' : 'single');
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.field === 'integration-target-required-checkbox') {
+      handlers.updateIntegrationTargetOptional(Number(target.dataset.index), !target.checked);
       return;
     }
     const debugLogSettings = target.closest<HTMLElement>('[data-settings="debug-log"]');
@@ -3938,24 +3986,81 @@ function renderIntegrationsDialog(state: AppState): string {
           <main class="integration-detail">
             <div class="integration-detail-header"><div><h3>${escapeHtml(selectedIntegration.name)}</h3><p>${selectedIntegration.editable ? 'Custom web integration' : 'Email and calendar'}</p></div><div class="integration-profile-controls"><label class="integration-profile-select"><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button icon-button" data-action="request-add-integration-profile" title="Add profile" aria-label="Add profile">+</button></div></div>
             <section><div class="integration-section-heading"><div><h4>Pages</h4><p>Open a page or use it to create a reusable action.</p></div></div><div class="integration-page-grid">${selectedIntegration.pages.map((page) => `<article class="integration-page-card"><div><strong>${escapeHtml(page.name)}</strong><span>${escapeHtml(new URL(page.url).hostname)}</span></div><div class="integration-page-actions"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(page.id)}">Open</button><button type="button" class="hvy-galaxy-button primary-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(page.id)}">Add action</button></div></article>`).join('')}</div></section>
-            <section><div class="integration-section-heading"><div><h4>Actions</h4><p>Reusable scripts that return structured data from these pages.</p></div></div>${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description)}</span></article>`).join('')}</div>` : '<div class="integration-empty-state"><strong>No actions yet</strong><span>Choose Add action beside a page to create one.</span></div>'}</section>
+            <section><div class="integration-section-heading"><div><h4>Actions</h4><p>Reusable structured extractions from these pages.</p></div></div>${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article><div><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description || action.pattern?.fields.map((field) => field.label).join(', ') || '')}</span></div><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}" ${action.pattern ? '' : 'disabled'}>Run</button></article>`).join('')}</div>` : '<div class="integration-empty-state"><strong>No actions yet</strong><span>Choose Add action beside a page to create one.</span></div>'}</section>
           </main>
         </div>
       </section>
     </div>`;
 }
 
+function renderExtractedValue(value: unknown): string {
+  if (Array.isArray(value)) return value.length ? `<ul>${value.map((item) => `<li>${renderExtractedValue(item)}</li>`).join('')}</ul>` : '<span class="integration-empty-value">No values</span>';
+  if (value && typeof value === 'object' && typeof (value as { imageUrl?: unknown }).imageUrl === 'string') {
+    const image = value as { imageUrl: string; alt?: unknown };
+    return `<figure class="integration-result-image"><img src="${escapeAttr(image.imageUrl)}" alt="${escapeAttr(typeof image.alt === 'string' ? image.alt : '')}"><figcaption>${escapeHtml(typeof image.alt === 'string' && image.alt ? image.alt : 'Image')}</figcaption></figure>`;
+  }
+  return `<span>${escapeHtml(String(value ?? ''))}</span>`;
+}
+
+function renderExtractionRecords(records: unknown[]): string {
+  if (!records.length) return '<div class="integration-empty-state"><strong>No matching records</strong><span>Go back and add another example or adjust the selected parent and targets.</span></div>';
+  return `<div class="integration-result-records">${records.map((record, index) => {
+    const targets = record && typeof record === 'object' && Array.isArray((record as { targets?: unknown }).targets)
+      ? (record as { targets: Array<{ label?: unknown; value?: unknown }> }).targets
+      : [];
+    return `<article class="integration-result-record"><strong>Item ${index + 1}</strong><dl>${targets.map((target) => `<div><dt>${escapeHtml(String(target.label ?? 'Value'))}</dt><dd>${renderExtractedValue(target.value)}</dd></div>`).join('')}</dl></article>`;
+  }).join('')}</div>`;
+}
+
+function renderPatternDiagnostics(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const diagnostics = value as { inspectedElements?: unknown; bestParentScore?: unknown; aggregateScore?: unknown; relationshipScore?: unknown; distinctTargets?: unknown; fields?: Array<{ label?: unknown; score?: unknown }> };
+  const parentScore = typeof diagnostics.bestParentScore === 'number' ? Math.round(diagnostics.bestParentScore * 100) : 0;
+  const aggregateScore = typeof diagnostics.aggregateScore === 'number' ? Math.round(diagnostics.aggregateScore * 100) : 0;
+  const relationshipScore = typeof diagnostics.relationshipScore === 'number' ? Math.round(diagnostics.relationshipScore * 100) : 0;
+  const fields = Array.isArray(diagnostics.fields) ? diagnostics.fields : [];
+  return `<div class="integration-match-diagnostics"><strong>Why nothing matched</strong><p>The closest parent scored ${parentScore}% and the complete record scored ${aggregateScore}%. ${fields.length ? `Closest fields: ${fields.map((field) => `${escapeHtml(String(field.label || 'Field'))} ${typeof field.score === 'number' ? Math.round(field.score * 100) : 0}%`).join(', ')}.` : ''}</p><small>Relationship ${relationshipScore}% · ${diagnostics.distinctTargets === false ? 'Two or more fields resolved to the same element · ' : ''}Galaxy inspected ${typeof diagnostics.inspectedElements === 'number' ? diagnostics.inspectedElements : 0} visible elements. These scores contain no page text.</small></div>`;
+}
+
 function renderIntegrationActionBuilderDialog(state: AppState): string {
   if (!state.integrationActionBuilderOpen) return '';
   if (state.integrationActionSelectionPending) {
-    const selectionName = state.integrationActionSelectionKind === 'parent' ? 'the parent element' : state.integrationActionSelectionKind === 'example' ? 'another parent example' : 'a target inside the parent';
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for integration selection"><div class="modal-header"><div><p class="eyebrow">Structural matching spike</p><h2>Select ${selectionName}</h2><p class="dialog-note">Selection is active in the integration browser. Galaxy will return here after you choose an element.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-action-selection" aria-label="Cancel selection">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${state.integrationActionSelectionKind === 'target' ? 'Choose one text, image, or value contained by the selected parent.' : 'Choose the smallest parent that contains one complete item and all of its desired data.'}</span></div></section></div>`;
+    const selectionName = state.integrationActionSelectionKind === 'parent' ? 'a parent item' : state.integrationActionSelectionKind === 'example' ? 'another example item' : 'target data';
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for integration selection"><div class="modal-header"><div><p class="eyebrow">Build action</p><h2>Select ${selectionName}</h2><p class="dialog-note">Galaxy has switched to the integration browser. It will return here after you make a selection.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-action-selection" aria-label="Cancel selection">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${state.integrationActionSelectionKind === 'target' ? 'Choose one text, image, or value inside the selected item.' : 'Choose the smallest parent containing one complete item and all of the data you want.'}</span></div></section></div>`;
+  }
+  if (state.integrationActionBuilderStep === 'preview') {
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review extraction"><div class="modal-header"><div><p class="eyebrow">Build action</p><h2>Review extraction</h2><p class="dialog-note">Galaxy found ${state.integrationActionPreviewRecords.length} matching ${state.integrationActionPreviewRecords.length === 1 ? 'item' : 'items'}. Confirm that the fields stay grouped with the correct parent item.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content">${renderPatternDiagnostics(state.integrationActionPreviewDiagnostics)}${renderExtractionRecords(state.integrationActionPreviewRecords)}</div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="back-integration-action-builder">Back</button><button type="button" class="hvy-galaxy-button primary-button" data-action="continue-integration-action-builder" ${state.integrationActionPreviewRecords.length ? '' : 'disabled'}>Save action</button></div></section></div>`;
+  }
+  if (state.integrationActionBuilderStep === 'save') {
+    return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Save action" data-form="integration-action-instructions"><div class="modal-header"><div><p class="eyebrow">Build action</p><h2>Save action</h2><p class="dialog-note">The action stores structural signatures and field labels. Selected page text is not stored with it.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><label><span>Action name</span><input class="hvy-galaxy-input" name="actionName" required autocomplete="off" value="${escapeAttr(state.integrationActionDraftName)}"></label><label><span>Description <small>Optional</small></span><textarea class="hvy-galaxy-input" name="actionDescription">${escapeHtml(state.integrationActionDraftDescription)}</textarea></label><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="back-integration-action-builder">Back</button><button type="submit" class="hvy-galaxy-button primary-button">Save</button></div></form></div>`;
   }
   const parents = state.integrationActionAnchors;
   const targets = state.integrationActionExamples;
-  const selectedContent = state.integrationActionSelectionKind === 'target' ? selectedInspectionContent(state.integrationInspectionResult) : '';
   const labelsComplete = targets.length > 0 && targets.every((_, index) => state.integrationActionTargetLabels[index]?.trim());
-  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Build structural pattern"><div class="modal-header"><div><p class="eyebrow">Structural matching spike</p><h2>Define the data inside one parent</h2><p class="dialog-note">The matcher uses nesting, element roles, child shapes, and paths relative to the parent. It does not compare the selected text.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content"><section class="integration-pattern-section"><div class="integration-section-heading"><div><h3>Parent examples</h3><p>The first parent defines one complete item. More examples help describe acceptable variations.</p></div><button type="button" class="hvy-galaxy-button" data-action="add-integration-action-anchor">Choose another example</button></div>${parents.length ? `<div class="integration-selection-collection">${parents.map((parent, index) => { const selected = (parent as { selected?: { tag?: string; role?: string | null } }).selected; return `<article class="integration-selection-row"><button type="button" class="hvy-galaxy-button integration-selection-review" data-action="review-integration-action-selection" data-kind="example" data-index="${index}"><strong>${index === 0 ? 'Primary parent' : `Example ${index + 1}`}</strong><span>${escapeHtml(selected?.role ? `${selected.role} element` : `${selected?.tag ?? 'Structural'} element`)}</span><small>Review structure</small></button><button type="button" class="hvy-galaxy-button integration-selection-remove" data-action="remove-integration-action-selection" data-kind="example" data-index="${index}">Remove</button></article>`; }).join('')}</div>` : '<div class="integration-empty-state"><strong>No parent selected</strong><span>Restart Add action to choose the parent element.</span></div>'}</section><section class="integration-pattern-section"><div class="integration-section-heading"><div><h3>Labeled targets</h3><p>Select each value inside the primary parent and give it the output label you want.</p></div><button type="button" class="hvy-galaxy-button" data-action="add-another-integration-action-example" ${parents.length ? '' : 'disabled'}>Add target</button></div>${targets.length ? `<div class="integration-pattern-targets">${targets.map((target, index) => `<article><div><strong>Target ${index + 1}</strong><span>${escapeHtml(selectedInspectionContent(target) || 'Image or structural value')}</span></div><label><span>Data label</span><input class="hvy-galaxy-input" data-field="integration-target-label" data-index="${index}" value="${escapeAttr(state.integrationActionTargetLabels[index] ?? '')}" placeholder="Subject"></label><div><button type="button" class="hvy-galaxy-button" data-action="review-integration-action-selection" data-kind="target" data-index="${index}">Review</button><button type="button" class="hvy-galaxy-button" data-action="remove-integration-action-selection" data-kind="target" data-index="${index}">Remove</button></div></article>`).join('')}</div>` : '<div class="integration-empty-state"><strong>No targets selected</strong><span>Add the text, image, or value fields you want Galaxy to match.</span></div>'}</section>${selectedContent ? `<div class="integration-selected-content"><strong>Currently reviewed target</strong><p>${escapeHtml(selectedContent)}</p></div>` : ''}<section class="integration-structure-summary"><h3>Test the structural signature</h3><p>Galaxy will search the current page for parent shapes like your examples, verify that all labeled target shapes fit inside them, and highlight accepted matches.</p></section></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="test-integration-action-pattern" ${labelsComplete && parents.length ? '' : 'disabled'}>Highlight matching data</button></div></section></div>`;
+  const selectedParentIndex = Math.max(0, Math.min(state.integrationActionSelectedParentIndex, parents.length - 1));
+  const exampleList = parents.map((parent, parentIndex) => {
+    const selected = (parent as { selected?: { tag?: string; role?: string | null } }).selected;
+    const expanded = parentIndex === selectedParentIndex;
+    const matchedCount = state.integrationActionTargetVariants.filter((variants) => variants[parentIndex]).length;
+    const fieldRows = targets.map((_, fieldIndex) => {
+      const picked = state.integrationActionTargetVariants[fieldIndex]?.[parentIndex] ?? null;
+      const absent = state.integrationActionTargetAbsentExamples[fieldIndex]?.[parentIndex] ?? false;
+      const pickedText = absent ? "Doesn't exist in this example" : picked ? selectedInspectionContent(picked) || 'Structural element selected' : 'No matching element selected';
+      return `<article class="integration-example-field-row ${picked ? '' : 'missing'} ${absent ? 'absent' : ''}"><label class="integration-example-field-name"><span>Field name</span><input class="hvy-galaxy-input" data-field="integration-target-label" data-index="${fieldIndex}" value="${escapeAttr(state.integrationActionTargetLabels[fieldIndex] ?? '')}"></label><div class="integration-example-field-pick"><span>Picked in this example</span><strong>${escapeHtml(pickedText)}</strong><div><button type="button" class="hvy-galaxy-button" data-action="add-another-integration-action-example" data-parent-index="${parentIndex}" data-field-index="${fieldIndex}">${absent ? 'Pick instead' : picked ? 'Replace' : 'Pick field'}</button>${absent ? `<button type="button" class="hvy-galaxy-button" data-action="clear-integration-target-absent" data-parent-index="${parentIndex}" data-field-index="${fieldIndex}">Undo</button>` : `<button type="button" class="hvy-galaxy-button" data-action="set-integration-target-absent" data-parent-index="${parentIndex}" data-field-index="${fieldIndex}">Doesn't exist</button>`}</div></div><div class="integration-example-field-options"><label><input type="checkbox" data-field="integration-target-cardinality-checkbox" data-index="${fieldIndex}" ${state.integrationActionTargetCardinalities[fieldIndex] === 'list' ? 'checked' : ''}> List</label><label><input type="checkbox" data-field="integration-target-required-checkbox" data-index="${fieldIndex}" ${state.integrationActionTargetOptional[fieldIndex] ? '' : 'checked'}> Required</label><button type="button" class="hvy-galaxy-button integration-selection-remove" data-action="remove-integration-action-selection" data-kind="target" data-index="${fieldIndex}">Remove</button></div></article>`;
+    }).join('');
+    return `<article class="integration-example-card ${expanded ? 'expanded' : ''}"><button type="button" class="integration-example-summary" data-action="select-integration-action-example" data-index="${parentIndex}" aria-expanded="${expanded}"><span><strong>${parentIndex === 0 ? 'Primary example' : `Example ${parentIndex + 1}`}</strong><small>${escapeHtml(selected?.role ? `${selected.role} element` : `${selected?.tag ?? 'Structural'} element`)} · ${matchedCount}/${targets.length} fields matched</small></span><span aria-hidden="true">${expanded ? '▾' : '▸'}</span></button>${expanded ? `<div class="integration-example-fields">${fieldRows || '<div class="integration-empty-state"><strong>No fields yet</strong><span>Add the first field from this example.</span></div>'}<div class="integration-example-actions"><button type="button" class="hvy-galaxy-button" data-action="add-another-integration-action-example" data-parent-index="${parentIndex}">Add field</button>${parentIndex ? `<button type="button" class="hvy-galaxy-button integration-selection-remove" data-action="remove-integration-action-selection" data-kind="example" data-index="${parentIndex}">Remove example</button>` : ''}</div></div>` : ''}</article>`;
+  }).join('');
+  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Build web action"><div class="modal-header"><div><p class="eyebrow">Build action</p><h2>Choose the item and its data</h2><p class="dialog-note">Each example represents one result item. Fields may use a different structural selection in each example.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close">×</button></div><div class="integration-action-builder-content"><section class="integration-pattern-section integration-confidence-first"><label class="integration-confidence-control"><span><strong>Minimum match confidence</strong><output>${Math.round(state.integrationActionMinimumConfidence * 100)}%</output></span><input type="range" min="70" max="95" step="1" value="${Math.round(state.integrationActionMinimumConfidence * 100)}" data-field="integration-action-confidence"><small>Lower values accept more structural variation. Review the highlighted matches before saving.</small></label></section><section class="integration-pattern-section"><div class="integration-section-heading"><div><h3>Examples and fields</h3><p>Select an example to review or replace how each field maps inside it.</p></div><button type="button" class="hvy-galaxy-button" data-action="add-integration-action-anchor">Add example</button></div><div class="integration-example-list">${exampleList}</div></section></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="test-integration-action-pattern" ${labelsComplete && parents.length ? '' : 'disabled'}>Highlight matches</button><button type="button" class="hvy-galaxy-button primary-button" data-action="preview-integration-action" ${labelsComplete && parents.length ? '' : 'disabled'}>Review extraction</button></div></section></div>`;
+}
+
+function renderIntegrationActionResultDialog(state: AppState): string {
+  if (!state.integrationActionResultOpen) return '';
+  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Action results"><div class="modal-header"><div><p class="eyebrow">Action results</p><h2>${escapeHtml(state.integrationActionResultName)}</h2><p class="dialog-note">Extracted ${state.integrationActionResultRecords.length} matching ${state.integrationActionResultRecords.length === 1 ? 'item' : 'items'} from the current page.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-result" aria-label="Close">×</button></div><div class="integration-action-builder-content">${renderExtractionRecords(state.integrationActionResultRecords)}</div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="close-integration-action-result">Done</button></div></section></div>`;
+}
+
+function renderIntegrationActionDiscardDialog(state: AppState): string {
+  if (!state.integrationActionDiscardDialogOpen) return '';
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog" role="dialog" aria-modal="true" aria-label="Discard action"><h2>Discard this action?</h2><p>Your selected examples, target fields, and extraction preview will be lost.</p><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-discard-integration-action">Keep editing</button><button type="button" class="hvy-galaxy-button danger-button" data-action="confirm-discard-integration-action">Discard action</button></div></section></div>`;
 }
 
 function renderAddIntegrationPageDialog(state: AppState): string {

@@ -50,17 +50,63 @@ export async function boot(): Promise<void> {
       void handleAppCloseRequest();
     });
     await onIntegrationInspectionResult(async (result) => {
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-extraction') {
+        const extraction = result as { context?: { mode?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
+        if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, extraction.minimumConfidence));
+        if (extraction.context?.mode === 'builder') {
+          state.integrationActionPreviewRecords = extraction.records ?? [];
+          state.integrationActionPreviewDiagnostics = extraction.diagnostics ?? null;
+          state.integrationActionBuilderStep = 'preview';
+          state.integrationActionBuilderOpen = true;
+        } else {
+          state.integrationActionResultName = extraction.context?.actionName ?? 'Action results';
+          state.integrationActionResultRecords = extraction.records ?? [];
+          state.integrationActionResultOpen = true;
+        }
+        state.status = `Extracted ${(extraction.records ?? []).length} matching items`;
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
       state.integrationInspectionResult = result;
       state.inspectionPrivacyRules = [];
       state.integrationActionBuilderOpen = true;
       state.integrationActionSelectionPending = false;
       if (state.integrationActionSelectionKind === 'parent' || state.integrationActionSelectionKind === 'example') {
+        const parentIndex = state.integrationActionAnchors.length;
         state.integrationActionAnchors.push(result);
         state.integrationActionAnchorRules.push([]);
+        state.integrationActionSelectedParentIndex = parentIndex;
+        const suggestions = result && typeof result === 'object' && Array.isArray((result as { suggestedTargets?: unknown }).suggestedTargets)
+          ? (result as { suggestedTargets: Array<{ snapshot?: unknown }> }).suggestedTargets
+          : [];
+        state.integrationActionTargetVariants.forEach((variants, fieldIndex) => {
+          variants[parentIndex] = suggestions[fieldIndex]?.snapshot ?? null;
+          state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = null;
+          state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
+        });
       } else {
-        state.integrationActionExamples.push(result);
-        state.integrationActionExampleRules.push([]);
-        state.integrationActionTargetLabels.push('');
+        const fieldIndex = state.integrationActionTargetSelectionFieldIndex;
+        const parentIndex = state.integrationActionTargetSelectionParentIndex;
+        if (fieldIndex === null) {
+          state.integrationActionExamples.push(result);
+          state.integrationActionExampleRules.push([]);
+          state.integrationActionTargetLabels.push('');
+          state.integrationActionTargetCardinalities.push('single');
+          state.integrationActionTargetOptional.push(true);
+          state.integrationActionTargetParentIndexes.push(parentIndex);
+          const variants = Array(state.integrationActionAnchors.length).fill(null);
+          variants[parentIndex] = result;
+          state.integrationActionTargetVariants.push(variants);
+          state.integrationActionTargetNegativeVariants.push(Array(state.integrationActionAnchors.length).fill(null));
+          state.integrationActionTargetAbsentExamples.push(Array(state.integrationActionAnchors.length).fill(false));
+        } else {
+          state.integrationActionTargetVariants[fieldIndex][parentIndex] = result;
+          state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = null;
+          state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
+          state.integrationActionExamples[fieldIndex] = state.integrationActionTargetVariants[fieldIndex].find(Boolean) ?? result;
+        }
+        state.integrationActionTargetSelectionFieldIndex = null;
       }
       if (result && typeof result === 'object' && typeof (result as { profileId?: unknown }).profileId === 'string') {
         const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === (result as { profileId: string }).profileId);

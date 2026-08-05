@@ -198,22 +198,28 @@ Action authoring follows this workflow:
 
 1. Choose **Add action** beside one of the integration's pages. Galaxy opens that page directly in inspection mode.
 2. Select the smallest parent containing one complete item and all data that belongs to it.
-3. Select targets inside that parent and give each target an output label.
-4. Choose additional instances of the same parent on the current page when the record shape varies.
-5. Test the structural pattern against the live page and review every parent and labeled target Galaxy considers a match.
-6. Define whether the result is one value, one record, or a list of repeated records.
-7. Keep, replace, or remove sensitive sample values through a plain-language field review.
-8. Review the exact sanitized pattern and page context that will be sent to the LLM.
-9. Name the action and describe the structured result it should return.
-10. Ask the LLM to propose a deterministic action script and result schema.
-11. Review and test the script against the live page.
-12. Save the action under the integration only after it returns valid structured data. An unfinished authoring session may be saved explicitly as a draft.
+3. Set the action's minimum confidence, then expand the primary example and define its named fields.
+4. Choose additional instances of the same parent when the record shape varies. Already accepted records and their passing subfields remain marked in green; below-threshold records and failed or overlapping subfields are identified separately so a new example can target a concrete variation.
+5. Show the same named field rows inside every expandable example. Prepopulate each row with its best structural match and let the user replace a weak or missing selection for only that example. These selections become alternate structural signatures for one output field, not duplicate fields.
+6. Fields are optional by default. Use compact list and required controls where needed. Within an example, **Doesn't exist** explicitly marks an absent field; a mistaken automatic match becomes negative structural evidence for that field, and missing optional structures return an empty value without rejecting the record.
+7. Run the matcher and adjust confidence from the live page overlay. Highlights update without changing window focus. The integration browser retains that value for example selection and extraction, then extraction returns it to the builder when focus is intentionally restored.
+8. Review ordinary grouped records rather than raw JSON.
+9. Name and save the action after the preview groups every field with the correct parent.
+10. Run the saved action later through the selected page and browser profile.
+
+The first deterministic action format does not require an LLM. A later script-generation layer may add repeatable page-preparation steps, transformations, or provider-specific behavior, but it consumes the same reviewed record examples and must not replace the structural action contract.
 
 The builder should make selected text prominent rather than burying it inside raw DOM metadata. Present a focused content preview and readable information fields first. Selector, attribute, geometry, diagnostics, and raw JSON belong in collapsed technical disclosures rather than the primary workflow.
 
-A click is evidence, not the saved selector. A content pattern records parent samples, labeled targets, and their structural relationships. Each structural signature should include nesting, element roles, child and descendant shapes, relative target paths, and repeated-record evidence without incorporating private text values. Matching first ranks candidates by structural similarity and then verifies that the complete labeled target set fits inside the proposed parent. Positional paths remain diagnostic and fast-path evidence, not durable identity. Optional anchors may be reconsidered after parent/target matching demonstrates a concrete ambiguity they solve.
+While selection is active, wheel input must continue to scroll the page. A temporary **Navigate page** mode releases pointer input to the site so the user can expand, paginate, or otherwise prepare dynamic content, then **Resume picking** without losing the action draft.
 
-### Privacy transformations
+A click is evidence, not the saved selector. A content pattern records parent samples, labeled targets, negative examples, and their structural relationships. Each structural signature should include nesting, element roles, child and descendant shapes, relative target paths, normalized geometry, and normalized container treatment such as border presence, radius, padding, background presence, and shadow presence without storing literal colors or private text values. Matching ranks all field/element pairs together and assigns the strongest fits first. The same element cannot serve two fields. Ancestor/descendant matches may coexist only when the examples teach that those fields are nested; otherwise a missing field cannot borrow a region claimed by another field. The matcher then verifies that the complete labeled target set fits inside the proposed parent. Positional paths remain diagnostic and fast-path evidence, not durable identity. Optional anchors may be reconsidered after parent/target matching demonstrates a concrete ambiguity they solve.
+
+### Privacy and stored patterns
+
+Extraction previews remain local to Galaxy and are not sent to an LLM. Saved actions retain field labels, cardinality, structural signatures, and relative paths. They do not retain the selected text, accessible name, surrounding page content, image URL, or diagnostic attribute values.
+
+Privacy transformations apply only when a future script-generation workflow explicitly prepares an LLM request.
 
 Raw inspection data remains local unless the user explicitly continues to script generation. Only explicitly selected targets and samples may contribute human-readable page text. Parent samples, ancestors, siblings, and repeated-record context must be represented as structural shape rather than copied values. Every reviewable selected value supports:
 
@@ -329,8 +335,11 @@ The mod API should not be declared stable until it has been used for Google Work
 - Store bundled and user-defined pages through one integration registry.
 - Add explicit-modal flows to create, edit, and remove custom pages.
 - Add per-integration action lists and action metadata.
-- Add the inspected-content preview and interactive JSON privacy editor.
-- Generate and display the exact sanitized LLM example.
+- Build structural actions from parent examples and labeled single/list target fields.
+- Let each action persist a reviewable minimum-confidence threshold, starting at 80%.
+- Preview grouped records in a nontechnical review surface.
+- Persist content-free matcher snapshots and rerun saved actions through the selected profile.
+- Keep sanitized LLM script generation as a separate follow-up workflow.
 
 ### Phase 4: Extraction platform
 

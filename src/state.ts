@@ -98,18 +98,34 @@ export interface AppState {
   addIntegrationPageDialogOpen: boolean;
   inspectionPrivacyRules: InspectionPrivacyRule[];
   integrationActionBuilderOpen: boolean;
+  integrationActionDiscardDialogOpen: boolean;
   integrationActionExamples: unknown[];
   integrationActionExampleRules: InspectionPrivacyRule[][];
   integrationActionTargetLabels: string[];
+  integrationActionTargetCardinalities: Array<'single' | 'list'>;
+  integrationActionTargetOptional: boolean[];
+  integrationActionTargetParentIndexes: number[];
+  integrationActionTargetSelectionParentIndex: number;
+  integrationActionTargetSelectionFieldIndex: number | null;
+  integrationActionTargetVariants: unknown[][];
+  integrationActionTargetNegativeVariants: unknown[][];
+  integrationActionTargetAbsentExamples: boolean[][];
+  integrationActionSelectedParentIndex: number;
+  integrationActionMinimumConfidence: number;
   integrationActionAnchors: unknown[];
   integrationActionAnchorRules: InspectionPrivacyRule[][];
   integrationActionSelectionKind: 'parent' | 'target' | 'example';
   integrationActionSelectionPending: boolean;
   integrationActionDraftIntegrationId: string | null;
   integrationActionDraftPageId: string | null;
-  integrationActionBuilderStep: 'review' | 'instructions' | 'confirm';
+  integrationActionBuilderStep: 'define' | 'preview' | 'save';
   integrationActionDraftName: string;
   integrationActionDraftDescription: string;
+  integrationActionPreviewRecords: unknown[];
+  integrationActionPreviewDiagnostics: unknown;
+  integrationActionResultOpen: boolean;
+  integrationActionResultName: string;
+  integrationActionResultRecords: unknown[];
   selectedIntegrationId: string;
   selectedIntegrationProfileId: string;
   addIntegrationProfileDialogOpen: boolean;
@@ -312,18 +328,34 @@ export const state: AppState = {
   addIntegrationPageDialogOpen: false,
   inspectionPrivacyRules: [],
   integrationActionBuilderOpen: false,
+  integrationActionDiscardDialogOpen: false,
   integrationActionExamples: [],
   integrationActionExampleRules: [],
   integrationActionTargetLabels: [],
+  integrationActionTargetCardinalities: [],
+  integrationActionTargetOptional: [],
+  integrationActionTargetParentIndexes: [],
+  integrationActionTargetSelectionParentIndex: 0,
+  integrationActionTargetSelectionFieldIndex: null,
+  integrationActionTargetVariants: [],
+  integrationActionTargetNegativeVariants: [],
+  integrationActionTargetAbsentExamples: [],
+  integrationActionSelectedParentIndex: 0,
+  integrationActionMinimumConfidence: 0.8,
   integrationActionAnchors: [],
   integrationActionAnchorRules: [],
   integrationActionSelectionKind: 'parent',
   integrationActionSelectionPending: false,
   integrationActionDraftIntegrationId: null,
   integrationActionDraftPageId: null,
-  integrationActionBuilderStep: 'review',
+  integrationActionBuilderStep: 'define',
   integrationActionDraftName: '',
   integrationActionDraftDescription: '',
+  integrationActionPreviewRecords: [],
+  integrationActionPreviewDiagnostics: null,
+  integrationActionResultOpen: false,
+  integrationActionResultName: '',
+  integrationActionResultRecords: [],
   selectedIntegrationId: 'google-workspace',
   selectedIntegrationProfileId: 'default-google',
   addIntegrationProfileDialogOpen: false,

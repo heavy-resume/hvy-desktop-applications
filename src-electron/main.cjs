@@ -593,7 +593,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
     if (customUrl && !customAllowedOrigins.has(new URL(customUrl).origin)) {
       throw new Error('The custom page origin is not allowed.');
     }
-    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode);
+    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode, payload);
   }
   const browser = integrationBrowsers.get(profileId);
   const integrationWindow = browser?.window;
@@ -604,16 +604,17 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'back' && integrationWindow.webContents.canGoBack()) integrationWindow.webContents.goBack();
   if (command === 'forward' && integrationWindow.webContents.canGoForward()) integrationWindow.webContents.goForward();
   if (command === 'reload') integrationWindow.webContents.reload();
-  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target' || command === 'test-pattern' || command === 'focus-browser') {
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target' || command === 'test-pattern' || command === 'extract-pattern' || command === 'focus-browser') {
     raiseWindow(integrationWindow);
   }
   if (command === 'focus-main') {
     raiseWindow(mainWindow);
   }
-  if (command === 'inspect') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
-  if (command === 'inspect-parent') integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start("parent", ${JSON.stringify(payload || {})})`);
-  if (command === 'inspect-target') integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start("target", ${JSON.stringify(payload || {})})`);
-  if (command === 'test-pattern') integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(payload || {})})`);
+  if (command === 'inspect') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start()`);
+  if (command === 'inspect-parent') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(payload || {})})`);
+  if (command === 'inspect-target') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(payload || {})})`);
+  if (command === 'test-pattern') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
+  if (command === 'extract-pattern') return integrationWindow.webContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
   if (command === 'cancel-inspect') {
     integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
     raiseWindow(mainWindow);
@@ -782,7 +783,7 @@ async function probeIntegrationCookieStorage() {
   };
 }
 
-async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode) {
+async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pendingExtraction) {
   let browser = integrationBrowsers.get(profileId);
   if (browser?.closePromise) await browser.closePromise;
   if (!browser || browser.window.isDestroyed()) {
@@ -800,7 +801,7 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
         webSecurity: true,
       },
     });
-    browser = { window: integrationWindow, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false };
+    browser = { window: integrationWindow, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
     integrationBrowsers.set(profileId, browser);
     const browserUserAgent = integrationWindow.webContents.getUserAgent()
       .replace(/\sElectron\/[^\s]+/g, '')
@@ -851,6 +852,12 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
     integrationWindow.webContents.on('did-finish-load', () => {
       void integrationWindow.webContents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
         if (browser.actionModePending) return integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true })');
+        if (browser.pendingExtraction) {
+          const extraction = browser.pendingExtraction;
+          if (extraction.context?.expectedOrigin && new URL(integrationWindow.webContents.getURL()).origin !== extraction.context.expectedOrigin) return null;
+          browser.pendingExtraction = null;
+          return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
+        }
         return null;
       });
     });
@@ -884,6 +891,7 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
   }
   browser.allowedOrigins = allowedOrigins;
   browser.actionModePending = actionMode;
+  browser.pendingExtraction = pendingExtraction || null;
   await browser.window.loadURL(url);
   raiseWindow(browser.window);
 }

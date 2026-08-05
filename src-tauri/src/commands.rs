@@ -146,6 +146,7 @@ const DEFAULT_INTEGRATION_DATA_STORE_ID: [u8; 16] = [
 ];
 static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
 
 fn integration_browser_label(profile_id: &str) -> String {
     format!("{INTEGRATION_BROWSER_LABEL}-{}", profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect::<String>())
@@ -415,8 +416,14 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             .map_err(|error| AppError::Message(error.to_string()))?;
         modes.entry(profile_id.clone()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone()
     };
+    let pending_extraction = {
+        let mut extractions = INTEGRATION_PENDING_EXTRACTIONS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        extractions.entry(profile_id.clone()).or_insert_with(|| Arc::new(Mutex::new(None))).clone()
+    };
     if command == "open" {
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
+        *pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))? = payload.clone();
         #[cfg(not(target_os = "macos"))]
         if !load_integration_vault_status(app.clone())?.configured {
             setup_integration_vault(app.clone())?;
@@ -443,6 +450,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         let integration_window_label = window_label.clone();
         let result_profile_id = profile_id.clone();
         let page_load_action_mode = action_mode_pending.clone();
+        let page_load_extraction = pending_extraction.clone();
         let navigation_action_mode = action_mode_pending.clone();
         let builder = tauri::WebviewWindowBuilder::new(
             &app,
@@ -455,9 +463,22 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         .center()
         .initialization_script(INTEGRATION_INSPECTOR)
         .on_page_load(move |window, payload| {
-            if payload.event() == tauri::webview::PageLoadEvent::Finished && page_load_action_mode.load(Ordering::SeqCst) {
-                let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true }});", INTEGRATION_INSPECTOR);
-                let _ = window.eval(&script);
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                if page_load_action_mode.load(Ordering::SeqCst) {
+                    let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true }});", INTEGRATION_INSPECTOR);
+                    let _ = window.eval(&script);
+                } else if let Ok(mut pending) = page_load_extraction.lock() {
+                    let expected_origin = pending.as_ref()
+                        .and_then(|value| value.pointer("/context/expectedOrigin"))
+                        .and_then(serde_json::Value::as_str);
+                    let at_expected_origin = expected_origin.is_none_or(|origin| payload.url().origin().ascii_serialization() == origin);
+                    if at_expected_origin {
+                      if let Some(extraction) = pending.take() {
+                        let script = format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction);
+                        let _ = window.eval(&script);
+                      }
+                    }
+                }
             }
         })
         .on_navigation(move |requested_url| {
@@ -534,7 +555,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         }
         return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
     };
-    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || command == "focus-browser" {
+    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || command == "extract-pattern" || command == "focus-browser" {
         raise_integration_window(&window)?;
     }
     if command == "cancel-inspect" || command == "focus-main" {
@@ -546,10 +567,11 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         "back" => window.eval("window.history.back()"),
         "forward" => window.eval("window.history.forward()"),
         "reload" => window.reload(),
-        "inspect" => window.eval("window.__hvyGalaxyInspector?.start()"),
-        "inspect-parent" => window.eval(&format!("window.__hvyGalaxyInspector?.start('parent', {})", payload.unwrap_or_default())),
-        "inspect-target" => window.eval(&format!("window.__hvyGalaxyInspector?.start('target', {})", payload.unwrap_or_default())),
-        "test-pattern" => window.eval(&format!("window.__hvyGalaxyInspector?.matchAndHighlight({})", payload.unwrap_or_default())),
+        "inspect" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR)),
+        "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', {})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "cancel-inspect" => window.eval("window.__hvyGalaxyInspector?.stop()"),
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {

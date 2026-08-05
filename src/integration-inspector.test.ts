@@ -10,6 +10,18 @@ const resumeSource = fs.readFileSync('/Users/jameshutchison/git/heavy-file-forma
 const guideTitles = ['Text', 'Image', 'Carousel', 'Table', 'Reference', 'Container', 'List', 'Grid', 'Expandable', 'Plugin', 'Custom'];
 const projectSkills = ['Reverse Engineering', 'Library Development', 'LLM Prompt Engineering', 'Project Management'];
 
+async function movePointerTo(page: Page, selector: string): Promise<void> {
+  const box = await page.locator(selector).boundingBox();
+  if (!box) throw new Error(`Element is not visible: ${selector}`);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+async function clickPointerAt(page: Page, selector: string): Promise<void> {
+  await movePointerTo(page, selector);
+  await page.mouse.down();
+  await page.mouse.up();
+}
+
 interface InspectorSnapshot {
   selected: {
     directText: string;
@@ -35,20 +47,28 @@ interface InspectorSnapshot {
 }
 
 interface InspectorApi {
-  start(kind: 'parent' | 'target', options?: { primary?: boolean; parentCssPath?: string }): void;
+  start(kind: 'parent' | 'target', options?: {
+    primary?: boolean;
+    parentCssPath?: string;
+    parentSnapshot?: InspectorSnapshot;
+    existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
+  }): void;
   snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target'): InspectorSnapshot;
-  matchAndHighlight(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; snapshot: InspectorSnapshot }> }): {
+  suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
+  matchAndHighlight(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
     matches: number;
     details: Array<{ parent: string; score: number; relationshipScore: number }>;
+    diagnostics?: unknown;
   };
-  extractPattern(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; snapshot: InspectorSnapshot }> }): {
+  extractPattern(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
     matches: number;
     records: Array<{
       parent: string;
       score: number;
-      targets: Array<{ label: string; element: string; value: string }>;
+      targets: Array<{ label: string; element: string; score: number; value: unknown }>;
     }>;
   };
+  extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
 }
 
@@ -161,16 +181,160 @@ describe('integration structural inspector', () => {
 
   it('highlights on hover and completes a parent choice without an exception', async () => {
     await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
-    await page.locator('[data-record="first"] .subject').hover();
+    await movePointerTo(page, '[data-record="first"] .subject');
 
-    expect(await page.locator('#hvy-galaxy-inspector-status').textContent()).toBe('Galaxy: select a parent');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: select a parent');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
 
-    await page.locator('[data-record="first"] .subject').click();
+    await clickPointerAt(page, '[data-record="first"] .subject');
     expect(await page.locator('#hvy-galaxy-inspector-picker').textContent()).toContain('Choose the parent containing one complete item');
     await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'article' }).click();
 
     expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('restarts parent highlighting when another record example is requested', async () => {
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
+    await clickPointerAt(page, '[data-record="first"] .subject');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'article' }).click();
+
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent'));
+    await movePointerTo(page, '[data-record="second"] .subject');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: select a parent');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
+    await clickPointerAt(page, '[data-record="second"] .subject');
+    expect(await page.locator('#hvy-galaxy-inspector-picker').textContent()).toContain('Choose the parent containing one complete item');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('recovers the primary parent structurally when the page replaces its DOM node', async () => {
+    const parentSnapshot = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      return window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent');
+    });
+    await page.evaluate(() => {
+      const original = document.querySelector('[data-record="first"]')!;
+      const replacement = original.cloneNode(true);
+      const wrapper = document.createElement('section');
+      wrapper.className = 'virtualized-row-shell';
+      wrapper.append(replacement);
+      original.replaceWith(wrapper);
+      document.querySelectorAll('[data-record]:not([data-record="first"])').forEach((element) => element.remove());
+    });
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '#no-longer-present', parentSnapshot: snapshot }), parentSnapshot);
+    await movePointerTo(page, '[data-record="first"] .subject');
+
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: select target data');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
+    await clickPointerAt(page, '[data-record="first"] .subject');
+    expect(await page.locator('#hvy-galaxy-inspector-picker').textContent()).toContain('Choose data inside the selected parent');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('suppresses page hover actions and boxes the selected parent while choosing a target', async () => {
+    await page.setContent(`
+      <style>
+        .message { position: relative; width: 500px; padding: 20px; }
+        .actions { display: none; position: absolute; inset: 0 0 auto auto; }
+        .message:hover .actions { display: flex; }
+      </style>
+      <article class="message"><span class="time">10:42 AM</span><div class="actions"><button>Archive</button><button>Delete</button></div></article>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    await movePointerTo(page, '.time');
+    expect(await page.locator('.actions').evaluate((element) => getComputedStyle(element).display)).toBe('flex');
+    await page.mouse.move(700, 500);
+
+    const parentSnapshot = await page.evaluate(() => {
+      const parent = document.querySelector('.message')!;
+      return window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent');
+    });
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '.message', parentSnapshot: snapshot }), parentSnapshot);
+    await movePointerTo(page, '.time');
+
+    expect(await page.locator('.actions').evaluate((element) => getComputedStyle(element).display)).toBe('none');
+    expect(await page.locator('#hvy-galaxy-inspector-scope').textContent()).toBe('Selected parent');
+    expect((await page.locator('#hvy-galaxy-inspector-scope').boundingBox())?.y).toBeCloseTo((await page.locator('.message').boundingBox())!.y, 0);
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('span');
+
+    await page.getByRole('button', { name: 'Navigate page' }).click();
+    await page.locator('.time').hover();
+    expect(await page.locator('.actions').evaluate((element) => getComputedStyle(element).display)).toBe('flex');
+    await page.getByRole('button', { name: 'Resume picking' }).click();
+    await movePointerTo(page, '.time');
+    expect(await page.locator('.actions').evaluate((element) => getComputedStyle(element).display)).toBe('none');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('relays wheel scrolling to the page beneath the inspection shield', async () => {
+    await page.setContent('<main class="scroll-box" style="height:100px;overflow:auto"><div style="height:800px"><span>Top</span></div></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
+    const box = await page.locator('.scroll-box').boundingBox();
+    await page.mouse.move(box!.x + 30, box!.y + 30);
+    await page.mouse.wheel(0, 180);
+    expect(await page.locator('.scroll-box').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('extracts all visible nested text from the selected element', async () => {
+    await page.setContent('<article class="event"><span class="date">Aug <span>3</span></span></article>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.event')!;
+      const date = parent.querySelector('.date')!;
+      return window.__hvyGalaxyInspector.extractPattern({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'DATE', snapshot: window.__hvyGalaxyInspector.snapshotElement(date, parent, 'target') }],
+      });
+    });
+
+    expect(result.records[0].targets[0].value).toBe('Aug 3');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('shows already-matched records while another parent example is selected', async () => {
+    const pattern = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      return {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') },
+          { label: 'PREVIEW', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.preview')!, parent, 'target') },
+        ],
+      };
+    });
+    await page.evaluate((existingPattern) => window.__hvyGalaxyInspector.start('parent', { existingPattern }), pattern);
+
+    expect(await page.locator('[data-existing-match-kind="parent"][data-existing-match-status="pass"]').count()).toBe(2);
+    expect(await page.locator('[data-existing-match-kind="target"][data-existing-match-status="pass"]').count()).toBe(4);
+    expect(await page.locator('[data-existing-match-kind="parent"][data-existing-match-status="fail"]').count()).toBeGreaterThan(0);
+    expect(await page.locator('[data-existing-match-kind="target"][data-existing-match-status="fail"]').count()).toBe(0);
+    expect(await page.locator('#hvy-galaxy-existing-matches').textContent()).toContain('Needs example');
+    await movePointerTo(page, '[data-record="missing-preview"] .subject');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('prepopulates existing field selections for a newly chosen parent example', async () => {
+    const suggestions = await page.evaluate(() => {
+      const primary = document.querySelector('[data-record="first"]')!;
+      const next = document.querySelector('[data-record="second"]')!;
+      return window.__hvyGalaxyInspector.suggestTargets(next, {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(primary, null, 'parent')],
+        targets: [
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(primary.querySelector('.subject')!, primary, 'target') },
+          { label: 'PREVIEW', snapshot: window.__hvyGalaxyInspector.snapshotElement(primary.querySelector('.preview')!, primary, 'target') },
+        ],
+      });
+    });
+
+    expect(suggestions.map((suggestion) => [suggestion.label, suggestion.snapshot?.selected.directText])).toEqual([
+      ['SUBJECT', 'Dinner plans'],
+      ['PREVIEW', 'How does Friday sound?'],
+    ]);
+    expect(suggestions.every((suggestion) => suggestion.snapshot?.selected.relativePath?.length)).toBe(true);
     expect(pageErrors).toEqual([]);
   });
 
@@ -209,6 +373,22 @@ describe('integration structural inspector', () => {
     expect(JSON.stringify(subject.selected.shape)).not.toContain('Project update');
   });
 
+  it('encodes normalized container treatment such as borders, radius, background, and padding', async () => {
+    await page.setContent('<main><span class="plain">Subject</span><span class="chip" style="display:inline-block;border:1px solid;padding:4px 10px;border-radius:12px;background:rgb(230,230,230)">report.pdf</span></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const visual = await page.evaluate(() => ({
+      plain: window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.plain')!, null, 'target').selected.shape.visual,
+      chip: window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.chip')!, null, 'target').selected.shape.visual,
+    }));
+
+    expect((visual.chip as typeof visual.chip & { bordered: boolean }).bordered).toBe(true);
+    expect((visual.chip as typeof visual.chip & { borderRadiusRatio: number }).borderRadiusRatio).toBeGreaterThan(0);
+    expect((visual.chip as typeof visual.chip & { paddingXRatio: number }).paddingXRatio).toBeGreaterThan(0);
+    expect((visual.chip as typeof visual.chip & { hasBackground: boolean }).hasBackground).toBe(true);
+    expect((visual.plain as typeof visual.plain & { bordered: boolean }).bordered).toBe(false);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('scores through changed container tags, inserted wrappers, and modest parent mutations', async () => {
     await page.setContent(changingInbox);
     await page.addScriptTag({ content: inspectorSource });
@@ -227,6 +407,119 @@ describe('integration structural inspector', () => {
     expect(await page.locator('#hvy-galaxy-pattern-matches span', { hasText: 'SUBJECT' }).count()).toBe(5);
     expect(await page.locator('#hvy-galaxy-pattern-matches span', { hasText: 'PREVIEW' }).count()).toBe(5);
     expect(pageErrors).toEqual([]);
+  });
+
+  it('uses the action confidence threshold to admit or reject borderline structural variants', async () => {
+    await page.setContent(changingInbox);
+    await page.addScriptTag({ content: inspectorSource });
+    const counts = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="reference"]')!;
+      const basePattern = {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') },
+          { label: 'PREVIEW', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.preview')!, parent, 'target') },
+        ],
+      };
+      return {
+        strict: window.__hvyGalaxyInspector.extractPattern({ ...basePattern, minimumConfidence: 0.85 }).matches,
+        tolerant: window.__hvyGalaxyInspector.extractPattern({ ...basePattern, minimumConfidence: 0.8 }).matches,
+      };
+    });
+
+    expect(counts.strict).toBe(5);
+    expect(counts.tolerant).toBeGreaterThan(counts.strict);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('updates highlighted matches live from the in-page confidence slider', async () => {
+    await page.setContent(changingInbox);
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="reference"]')!;
+      window.__hvyGalaxyInspector.matchAndHighlight({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') },
+          { label: 'PREVIEW', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.preview')!, parent, 'target') },
+        ],
+      });
+    });
+
+    expect(await page.locator('[data-match-kind="parent"]').count()).toBe(6);
+    await page.getByRole('slider', { name: 'Minimum match confidence' }).evaluate((element) => {
+      const input = element as HTMLInputElement;
+      input.value = '85';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(await page.locator('[data-match-kind="parent"]').count()).toBe(5);
+    expect(await page.locator('#hvy-galaxy-inspector-status output').textContent()).toBe('85%');
+    const pageUrl = page.url();
+    await page.getByRole('slider', { name: 'Minimum match confidence' }).dispatchEvent('change');
+    expect(page.url()).toBe(pageUrl);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('uses the live confidence threshold consistently when adding an example', async () => {
+    await page.setContent(changingInbox);
+    await page.addScriptTag({ content: inspectorSource });
+    const pattern = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="reference"]')!;
+      const value = {
+        minimumConfidence: 0.85,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') },
+          { label: 'PREVIEW', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.preview')!, parent, 'target') },
+        ],
+      };
+      window.__hvyGalaxyInspector.matchAndHighlight(value);
+      return value;
+    });
+    await page.getByRole('slider', { name: 'Minimum match confidence' }).evaluate((element) => {
+      const input = element as HTMLInputElement;
+      input.value = '80';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(await page.locator('[data-match-kind="parent"]').count()).toBe(6);
+
+    await page.evaluate((existingPattern) => window.__hvyGalaxyInspector.start('parent', { existingPattern }), pattern);
+
+    expect(await page.locator('[data-existing-match-kind="parent"][data-existing-match-status="pass"]').count()).toBe(6);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('restores parent hover picking after live match highlighting', async () => {
+    const pattern = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      return {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') }],
+      };
+    });
+    await page.evaluate((value) => window.__hvyGalaxyInspector.matchAndHighlight(value), pattern);
+    await page.evaluate((existingPattern) => window.__hvyGalaxyInspector.start('parent', { existingPattern }), pattern);
+    await movePointerTo(page, '[data-record="second"] .subject');
+
+    expect(await page.locator('#hvy-galaxy-pattern-matches').count()).toBe(0);
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not discard accepted records through a second confidence-cluster heuristic', async () => {
+    const selected = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      const base = window.__hvyGalaxyInspector.extractPattern({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') }],
+      }).records[0];
+      const accepted = Array.from({ length: 49 }, (_, index) => ({ ...base, parent: `record-${index}`, score: 0.99 - index * 0.002 }));
+      return window.__hvyGalaxyInspector.selectBestRecords(accepted);
+    });
+
+    expect(selected.matches).toBe(49);
+    expect(selected.records).toHaveLength(49);
   });
 
   it('matches repeated parent shapes and highlights each labeled target', async () => {
@@ -266,6 +559,251 @@ describe('integration structural inspector', () => {
     const captions = await page.locator('#hvy-galaxy-pattern-matches span').allTextContents();
     expect(captions.filter((caption) => caption === 'PREVIEW')).toHaveLength(2);
     expect(captions).not.toContain('Sponsored offer');
+  });
+
+  it('returns grouped records with a list-valued target', async () => {
+    await page.setContent(`
+      <main>
+        <article class="project"><h2>Desktop client</h2><div class="skills"><strong>TypeScript</strong><strong>Electron</strong></div></article>
+        <article class="project"><h2>Web service</h2><div class="skills"><strong>Python</strong><strong>PostgreSQL</strong><strong>Redis</strong></div></article>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.project')!;
+      return window.__hvyGalaxyInspector.extractPattern({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'TITLE', cardinality: 'single', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('h2')!, parent, 'target') },
+          { label: 'SKILLS', cardinality: 'list', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('strong')!, parent, 'target') },
+        ],
+      });
+    });
+
+    expect(result.records.map((record) => Object.fromEntries(record.targets.map((target) => [target.label, target.value])))).toEqual([
+      { TITLE: 'Desktop client', SKILLS: ['TypeScript', 'Electron'] },
+      { TITLE: 'Web service', SKILLS: ['Python', 'PostgreSQL', 'Redis'] },
+    ]);
+  });
+
+  it('learns an optional target from a later parent example without dropping records where it is absent', async () => {
+    await page.setContent(`
+      <main>
+        <article class="message"><span class="sender">Ada</span><a class="subject">No files</a></article>
+        <article class="message has-attachment"><span class="sender">Grace</span><a class="subject">Files attached</a><button class="attachment">report.pdf</button></article>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parents = [...document.querySelectorAll('.message')];
+      return window.__hvyGalaxyInspector.extractPattern({
+        minimumConfidence: 0.8,
+        parents: parents.map((parent) => window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')),
+        targets: [
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.subject')!, parents[0], 'target') },
+          { label: 'ATTACHMENT', optional: true, snapshot: window.__hvyGalaxyInspector.snapshotElement(parents[1].querySelector('.attachment')!, parents[1], 'target') },
+        ],
+      });
+    });
+
+    const values = result.records.map((record) => Object.fromEntries(record.targets.map((target) => [target.label, target.value])));
+    expect(Object.fromEntries(values.map((record) => [record.SUBJECT, record.ATTACHMENT]))).toEqual({
+      'No files': null,
+      'Files attached': 'report.pdf',
+    });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('uses an explicit absent example as negative evidence for an optional field', async () => {
+    await page.setContent(`
+      <main>
+        <article class="message"><span class="subject">Files attached</span><span class="attachment" style="border:1px solid;padding:3px 8px;border-radius:8px">report.pdf</span></article>
+        <article class="message"><span class="subject">No attachment</span></article>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parents = [...document.querySelectorAll('.message')];
+      const attachment = window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.attachment')!, parents[0], 'target');
+      const mistakenSubject = window.__hvyGalaxyInspector.snapshotElement(parents[1].querySelector('.subject')!, parents[1], 'target');
+      return window.__hvyGalaxyInspector.extractPattern({
+        minimumConfidence: 0.8,
+        parents: parents.map((parent) => window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')),
+        targets: [{ label: 'ATTACHMENT', optional: true, snapshot: attachment, negativeSnapshots: [mistakenSubject] }],
+      });
+    });
+
+    expect(result.records.map((record) => record.targets[0].value).sort((left, right) => String(left).localeCompare(String(right)))).toEqual([null, 'report.pdf']);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('allocates the best field matches first and prevents ancestor-descendant overlap', async () => {
+    await page.setContent(`
+      <main>
+        <article class="event"><div class="title"><span>Planning session</span></div><div class="attachment" style="border:1px solid;padding:3px"><span>agenda.pdf</span></div></article>
+        <article class="event"><div class="title"><span>Calendar event</span></div></article>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const records = await page.evaluate(() => {
+      const parents = [...document.querySelectorAll('.event')];
+      return window.__hvyGalaxyInspector.extractPattern({
+        minimumConfidence: 0.8,
+        parents: parents.map((parent) => window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')),
+        targets: [
+          { label: 'TITLE', snapshot: window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.title span')!, parents[0], 'target') },
+          { label: 'ATTACHMENT', optional: true, snapshot: window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.attachment')!, parents[0], 'target') },
+        ],
+      }).records;
+    });
+
+    const values = records.map((record) => Object.fromEntries(record.targets.map((target) => [target.label, target.value])));
+    expect(Object.fromEntries(values.map((record) => [record.TITLE, record.ATTACHMENT]))).toEqual({
+      'Planning session': 'agenda.pdf',
+      'Calendar event': null,
+    });
+    for (const record of records) {
+      const elements = record.targets.map((target) => target.element).filter(Boolean);
+      expect(new Set(elements).size).toBe(elements.length);
+    }
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('keeps near-exact learned nested fields while rejecting materially weaker overlap', async () => {
+    await page.setContent(`<main>
+      <article class="event"><div class="event-title">Calendar event <span class="sender">Ada</span></div></article>
+      <article class="event"><div class="event-title">Planning session <strong class="sender">Grace</strong></div></article>
+    </main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.event')!;
+      return window.__hvyGalaxyInspector.extractPattern({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.event-title')!, parent, 'target') },
+          { label: 'SENDER', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.sender')!, parent, 'target') },
+        ],
+      });
+    });
+
+    expect(result.matches).toBe(2);
+    expect(result.records.map((record) => Object.fromEntries(record.targets.map((target) => [target.label, target.value])))).toEqual([
+      { EVENT: 'Calendar event Ada', SENDER: 'Ada' },
+      { EVENT: 'Planning session Grace', SENDER: 'Grace' },
+    ]);
+    expect(result.records[1].targets[1].score).toBeGreaterThan(result.records[1].targets[0].score + 0.025);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('scrolls the page during across-page extraction and restores its original position', async () => {
+    await page.setContent(`<main class="events" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const scroller = document.querySelector<HTMLElement>('.events')!;
+      const parent = scroller.querySelector('.event')!;
+      let scrollEvents = 0;
+      scroller.addEventListener('scroll', () => { scrollEvents += 1; });
+      const extraction = await window.__hvyGalaxyInspector.extractAcrossPage({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
+      });
+      return { matches: extraction.matches, scrollEvents, finalTop: scroller.scrollTop };
+    });
+
+    expect(result.matches).toBe(30);
+    expect(result.scrollEvents).toBeGreaterThan(1);
+    expect(result.finalTop).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('matches a field against structural variants learned from different examples', async () => {
+    await page.setContent(`
+      <main>
+        <article class="record"><span class="value">Alpha</span></article>
+        <section class="record"><button class="value" role="link">Beta</button></section>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parents = [...document.querySelectorAll('.record')];
+      const first = window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.value')!, parents[0], 'target');
+      const second = window.__hvyGalaxyInspector.snapshotElement(parents[1].querySelector('.value')!, parents[1], 'target');
+      const base = {
+        minimumConfidence: 0.9,
+        parents: parents.map((parent) => window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')),
+      };
+      return {
+        singleShape: window.__hvyGalaxyInspector.extractPattern({ ...base, targets: [{ label: 'VALUE', snapshot: first }] }).matches,
+        learnedShapes: window.__hvyGalaxyInspector.extractPattern({ ...base, targets: [{ label: 'VALUE', snapshot: first, snapshots: [first, second] }] }).matches,
+      };
+    });
+
+    expect(result.singleShape).toBe(1);
+    expect(result.learnedShapes).toBe(2);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not let changed wrapper relationships veto perfect parent and field matches', async () => {
+    await page.setContent(`
+      <main><article class="message">
+        <div class="field"><span>Ada</span></div>
+        <div class="field"><a>Project update</a></div>
+        <div class="field"><em>The build is ready.</em></div>
+      </article></main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.message')!;
+      const snapshot = (selector: string) => window.__hvyGalaxyInspector.snapshotElement(parent.querySelector(selector)!, parent, 'target');
+      return window.__hvyGalaxyInspector.matchAndHighlight({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'SENDER', snapshot: snapshot('span') },
+          { label: 'SUBJECT', snapshot: snapshot('a') },
+          { label: 'PREVIEW', snapshot: snapshot('em') },
+        ],
+      });
+    });
+
+    expect(result.matches, JSON.stringify(result, null, 2)).toBe(1);
+    expect(result.details[0].relationshipScore).toBeCloseTo(0.2);
+    expect(result.details[0].score).toBeGreaterThan(0.9);
+  });
+
+  it('numbers matches in page order and keeps overlays attached while a nested page scrolls', async () => {
+    await page.setContent(`
+      <style>
+        .scroller { height: 110px; overflow: auto; }
+        .message { display: grid; min-height: 90px; margin-bottom: 30px; }
+      </style>
+      <main class="scroller">
+        <section class="message" data-row="first"><span>First sender</span><a>First subject</a></section>
+        <article class="message" data-row="second"><span>Second sender</span><a>Second subject</a></article>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => {
+      const parent = document.querySelector('[data-row="second"]')!;
+      window.__hvyGalaxyInspector.matchAndHighlight({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'SENDER', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') },
+          { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('a')!, parent, 'target') },
+        ],
+      });
+    });
+
+    const firstRow = page.locator('[data-row="first"]');
+    const firstOverlay = page.locator('#hvy-galaxy-pattern-matches [data-match-kind="parent"][data-match-index="1"]');
+    expect(await firstOverlay.textContent()).toMatch(/^Match 1/);
+    expect((await firstOverlay.boundingBox())?.y).toBeCloseTo((await firstRow.boundingBox())!.y, 0);
+
+    await page.locator('.scroller').evaluate((element) => { element.scrollTop = 80; });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    expect((await firstOverlay.boundingBox())?.y).toBeCloseTo((await firstRow.boundingBox())!.y, 0);
+    expect(pageErrors).toEqual([]);
   });
 
   it('learns a component-title vector from the virtualized Guide and finds and scrolls to every title', async () => {
@@ -467,7 +1005,7 @@ describe('integration structural inspector', () => {
       const title = parent.querySelector('strong')!;
       const parentSnapshot = window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent');
       const titleSnapshot = window.__hvyGalaxyInspector.snapshotElement(title, parent, 'target');
-      const pattern = { parents: [parentSnapshot], targets: [{ label: 'SKILL', snapshot: titleSnapshot }] };
+      const pattern = { minimumConfidence: 0.95, parents: [parentSnapshot], targets: [{ label: 'SKILL', snapshot: titleSnapshot }] };
       window.__guideTitlePattern = pattern;
       return { parentSnapshot, titleSnapshot };
     });

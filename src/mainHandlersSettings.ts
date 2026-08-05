@@ -8,7 +8,7 @@ import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
-import { applyInspectionPrivacyRules, createCustomPageIntegration, createIntegrationProfile, matchingInspectionPrivacyRules, saveIntegrationRegistry } from './integrationRegistry';
+import { actionPatternPayload, createCustomPageIntegration, createIntegrationProfile, matcherSnapshot, matchingInspectionPrivacyRules, saveIntegrationRegistry, type IntegrationActionDefinition } from './integrationRegistry';
 
 interface DocumentColorTheme {
   name: string;
@@ -90,6 +90,46 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   });
+  const persistIntegrationAction = () => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationActionDraftIntegrationId);
+    if (!integration || !state.integrationActionDraftPageId) throw new Error('Action integration was not found.');
+    const name = state.integrationActionDraftName.trim();
+    if (!name) throw new Error('Give the action a name.');
+    const fields = state.integrationActionExamples.map((snapshot, index) => ({
+      id: `field-${crypto.randomUUID()}`,
+      label: state.integrationActionTargetLabels[index].trim(),
+      cardinality: state.integrationActionTargetCardinalities[index] ?? 'single',
+      optional: state.integrationActionTargetOptional[index] ?? true,
+      snapshot: matcherSnapshot(snapshot),
+      snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean).map(matcherSnapshot),
+      negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean).map(matcherSnapshot),
+    }));
+    integration.actions.push({
+      id: `action-${crypto.randomUUID()}`,
+      integrationId: integration.id,
+      name,
+      description: state.integrationActionDraftDescription.trim(),
+      pageIds: [state.integrationActionDraftPageId],
+      script: 'structural-pattern-v1',
+      resultSchema: {
+        type: 'array',
+        items: { type: 'object', properties: Object.fromEntries(fields.map((field) => [field.label, { type: field.cardinality === 'list' ? 'array' : 'string' }])) },
+      },
+      permissions: ['dom:read'],
+      version: 1,
+      status: 'ready',
+      pattern: {
+        recordLabel: name,
+        minimumConfidence: state.integrationActionMinimumConfidence,
+        parents: state.integrationActionAnchors.map(matcherSnapshot),
+        fields,
+      },
+    });
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.integrationActionBuilderOpen = false;
+    state.status = `Saved ${name}`;
+    rerender({ preserveMountedDocument: true });
+  };
   return {
   openIntegrations: () => {
     state.integrationsDialogOpen = true;
@@ -190,13 +230,25 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionExamples = [];
     state.integrationActionExampleRules = [];
     state.integrationActionTargetLabels = [];
+    state.integrationActionTargetCardinalities = [];
+    state.integrationActionTargetOptional = [];
+    state.integrationActionTargetParentIndexes = [];
+    state.integrationActionTargetSelectionParentIndex = 0;
+    state.integrationActionTargetSelectionFieldIndex = null;
+    state.integrationActionTargetVariants = [];
+    state.integrationActionTargetNegativeVariants = [];
+    state.integrationActionTargetAbsentExamples = [];
+    state.integrationActionSelectedParentIndex = 0;
+    state.integrationActionMinimumConfidence = 0.8;
     state.integrationActionAnchors = [];
     state.integrationActionAnchorRules = [];
     state.integrationActionSelectionKind = 'parent';
     state.integrationActionSelectionPending = true;
-    state.integrationActionBuilderStep = 'review';
+    state.integrationActionBuilderStep = 'define';
     state.integrationActionDraftName = '';
     state.integrationActionDraftDescription = '';
+    state.integrationActionPreviewRecords = [];
+    state.integrationActionPreviewDiagnostics = null;
     state.integrationActionBuilderOpen = true;
     state.integrationInspectionResult = null;
     void runBusy(`Opening ${page.name} for action selection...`, async () => {
@@ -212,6 +264,20 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (state.integrationActionSelectionPending) {
       void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
     }
+    if (state.integrationActionAnchors.length || state.integrationActionExamples.length) {
+      state.integrationActionDiscardDialogOpen = true;
+    } else {
+      state.integrationActionSelectionPending = false;
+      state.integrationActionBuilderOpen = false;
+    }
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelDiscardIntegrationAction: () => {
+    state.integrationActionDiscardDialogOpen = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  confirmDiscardIntegrationAction: () => {
+    state.integrationActionDiscardDialogOpen = false;
     state.integrationActionSelectionPending = false;
     state.integrationActionBuilderOpen = false;
     rerender({ preserveMountedDocument: true });
@@ -222,24 +288,39 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Canceled page selection';
     rerender({ preserveMountedDocument: true });
   },
-  addAnotherIntegrationActionExample: () => {
+  addAnotherIntegrationActionExample: (parentIndex = 0, fieldIndex = null) => {
     state.integrationActionBuilderOpen = true;
-    state.integrationActionBuilderStep = 'review';
+    state.integrationActionBuilderStep = 'define';
     state.integrationActionSelectionKind = 'target';
+    state.integrationActionTargetSelectionParentIndex = parentIndex;
+    state.integrationActionTargetSelectionFieldIndex = fieldIndex;
+    state.integrationActionSelectedParentIndex = parentIndex;
     state.integrationActionSelectionPending = true;
     void runBusy('Starting another selection...', async () => {
-      const parentCssPath = (state.integrationActionAnchors[0] as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
-      await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath });
+      const parentSnapshot = state.integrationActionAnchors[parentIndex];
+      const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
+      await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot });
       state.status = 'Select data inside the parent';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
   addIntegrationActionAnchor: () => {
     state.integrationActionBuilderOpen = true;
-    state.integrationActionBuilderStep = 'review';
+    state.integrationActionBuilderStep = 'define';
     state.integrationActionSelectionKind = 'example';
     state.integrationActionSelectionPending = true;
     void runBusy('Starting anchor selection...', async () => {
-      await controlIntegrationBrowser('inspect-parent', state.selectedIntegrationProfileId);
+      const targets = state.integrationActionExamples.map((snapshot, index) => ({
+        label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`,
+        cardinality: state.integrationActionTargetCardinalities[index] ?? 'single',
+        optional: state.integrationActionTargetOptional[index] ?? true,
+        snapshot,
+        snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean),
+        negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean),
+      }));
+      const existingPattern = targets.length
+        ? { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets }
+        : null;
+      await controlIntegrationBrowser('inspect-parent', state.selectedIntegrationProfileId, { existingPattern });
       state.status = 'Select another parent containing the same kind of data';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
@@ -247,10 +328,38 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (kind === 'example') {
       state.integrationActionAnchors.splice(index, 1);
       state.integrationActionAnchorRules.splice(index, 1);
+      state.integrationActionTargetVariants.forEach((variants) => variants.splice(index, 1));
+      state.integrationActionTargetNegativeVariants.forEach((variants) => variants.splice(index, 1));
+      state.integrationActionTargetAbsentExamples.forEach((examples) => examples.splice(index, 1));
+      state.integrationActionTargetParentIndexes = state.integrationActionTargetParentIndexes.map((parentIndex) => parentIndex > index ? parentIndex - 1 : parentIndex);
+      for (let fieldIndex = state.integrationActionTargetVariants.length - 1; fieldIndex >= 0; fieldIndex -= 1) {
+        const replacement = state.integrationActionTargetVariants[fieldIndex].find(Boolean);
+        if (replacement) {
+          state.integrationActionExamples[fieldIndex] = replacement;
+          state.integrationActionTargetParentIndexes[fieldIndex] = state.integrationActionTargetVariants[fieldIndex].findIndex(Boolean);
+          continue;
+        }
+        state.integrationActionTargetVariants.splice(fieldIndex, 1);
+        state.integrationActionTargetNegativeVariants.splice(fieldIndex, 1);
+        state.integrationActionTargetAbsentExamples.splice(fieldIndex, 1);
+        state.integrationActionExamples.splice(fieldIndex, 1);
+        state.integrationActionExampleRules.splice(fieldIndex, 1);
+        state.integrationActionTargetLabels.splice(fieldIndex, 1);
+        state.integrationActionTargetCardinalities.splice(fieldIndex, 1);
+        state.integrationActionTargetOptional.splice(fieldIndex, 1);
+        state.integrationActionTargetParentIndexes.splice(fieldIndex, 1);
+      }
+      state.integrationActionSelectedParentIndex = Math.min(state.integrationActionSelectedParentIndex, state.integrationActionAnchors.length - 1);
     } else {
       state.integrationActionExamples.splice(index, 1);
       state.integrationActionExampleRules.splice(index, 1);
       state.integrationActionTargetLabels.splice(index, 1);
+      state.integrationActionTargetCardinalities.splice(index, 1);
+      state.integrationActionTargetOptional.splice(index, 1);
+      state.integrationActionTargetParentIndexes.splice(index, 1);
+      state.integrationActionTargetVariants.splice(index, 1);
+      state.integrationActionTargetNegativeVariants.splice(index, 1);
+      state.integrationActionTargetAbsentExamples.splice(index, 1);
     }
     const useParent = state.integrationActionAnchors.length > 0;
     const nextItems = useParent ? state.integrationActionAnchors : state.integrationActionExamples;
@@ -266,54 +375,98 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionSelectionKind = kind;
     state.integrationInspectionResult = items[index] ?? null;
     state.inspectionPrivacyRules = [...(rules[index] ?? [])];
-    state.integrationActionBuilderStep = 'review';
+    state.integrationActionBuilderStep = 'define';
     rerender({ preserveMountedDocument: true });
   },
   updateIntegrationTargetLabel: (index, label) => {
     state.integrationActionTargetLabels[index] = label;
   },
+  updateIntegrationTargetCardinality: (index, cardinality) => {
+    state.integrationActionTargetCardinalities[index] = cardinality;
+  },
+  updateIntegrationTargetOptional: (index, optional) => {
+    state.integrationActionTargetOptional[index] = optional;
+  },
+  setIntegrationTargetAbsent: (fieldIndex, parentIndex, absent) => {
+    if (absent) {
+      state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = state.integrationActionTargetVariants[fieldIndex][parentIndex] ?? null;
+      state.integrationActionTargetVariants[fieldIndex][parentIndex] = null;
+      state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = true;
+      state.integrationActionTargetOptional[fieldIndex] = true;
+    } else {
+      state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
+      state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = null;
+    }
+    const replacement = state.integrationActionTargetVariants[fieldIndex].find(Boolean);
+    if (replacement) state.integrationActionExamples[fieldIndex] = replacement;
+    rerender({ preserveMountedDocument: true });
+  },
+  selectIntegrationActionExample: (index) => {
+    state.integrationActionSelectedParentIndex = index;
+    rerender({ preserveMountedDocument: true });
+  },
+  updateIntegrationActionMinimumConfidence: (value) => {
+    state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, value));
+  },
   testIntegrationActionPattern: () => {
-    const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, snapshot }));
-    void controlIntegrationBrowser('test-pattern', state.selectedIntegrationProfileId, { parents: state.integrationActionAnchors, targets }).then(() => {
+    const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, cardinality: state.integrationActionTargetCardinalities[index] ?? 'single', optional: state.integrationActionTargetOptional[index] ?? true, snapshot, snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean), negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean) }));
+    void controlIntegrationBrowser('test-pattern', state.selectedIntegrationProfileId, { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets }).then(() => {
       state.status = 'Highlighted structural pattern matches';
     });
   },
+  previewIntegrationAction: () => {
+    const targets = state.integrationActionExamples.map((snapshot, index) => ({
+      label: state.integrationActionTargetLabels[index],
+      cardinality: state.integrationActionTargetCardinalities[index] ?? 'single',
+      optional: state.integrationActionTargetOptional[index] ?? true,
+      snapshot,
+      snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean),
+      negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean),
+    }));
+    state.integrationActionPreviewDiagnostics = null;
+    state.integrationActionBuilderOpen = false;
+    void runBusy('Extracting page data...', async () => {
+      await controlIntegrationBrowser('extract-pattern', state.selectedIntegrationProfileId, {
+        pattern: { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets },
+        context: { mode: 'builder' },
+      });
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
   continueIntegrationActionBuilder: () => {
-    state.integrationActionBuilderStep = 'instructions';
+    state.integrationActionBuilderStep = 'save';
     rerender({ preserveMountedDocument: true });
   },
   backIntegrationActionBuilder: () => {
-    state.integrationActionBuilderStep = state.integrationActionBuilderStep === 'confirm' ? 'instructions' : 'review';
+    state.integrationActionBuilderStep = state.integrationActionBuilderStep === 'save' ? 'preview' : 'define';
     rerender({ preserveMountedDocument: true });
   },
   reviewIntegrationActionRequest: (name, description) => {
     state.integrationActionDraftName = name.trim();
     state.integrationActionDraftDescription = description.trim();
-    state.integrationActionBuilderStep = 'confirm';
-    rerender({ preserveMountedDocument: true });
+    persistIntegrationAction();
   },
   saveIntegrationActionDraft: () => {
-    const name = state.integrationActionDraftName;
-    const description = state.integrationActionDraftDescription;
-    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationActionDraftIntegrationId);
-    if (!integration || !state.integrationActionDraftPageId) throw new Error('Action integration was not found.');
-    integration.actions.push({
-      id: `action-${crypto.randomUUID()}`,
-      integrationId: integration.id,
-      name: name.trim(),
-      description: description.trim(),
-      pageIds: [state.integrationActionDraftPageId],
-      script: '',
-      resultSchema: {},
-      permissions: ['dom:read'],
-      version: 1,
-      status: 'draft',
-      examples: state.integrationActionExamples.map((example, index) => applyInspectionPrivacyRules(example, state.integrationActionExampleRules[index] ?? [])),
-      anchors: state.integrationActionAnchors.map((anchor, index) => applyInspectionPrivacyRules(anchor, state.integrationActionAnchorRules[index] ?? [])),
-    });
-    saveIntegrationRegistry(state.integrationRegistry);
-    state.integrationActionBuilderOpen = false;
-    state.status = `Saved ${name.trim()} as an action draft`;
+    persistIntegrationAction();
+  },
+  runIntegrationAction: (integrationId, actionId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const action = integration?.actions.find((candidate) => candidate.id === actionId) as IntegrationActionDefinition | undefined;
+    const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
+    const pattern = action && actionPatternPayload(action);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!integration || !action || !page || !pattern || !profile) throw new Error('The saved action is incomplete.');
+    void runBusy(`Running ${action.name}...`, async () => {
+      const extraction = { pattern, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin } };
+      if (page.id === 'gmail' || page.id === 'google-calendar') {
+        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, extraction);
+      } else {
+        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, extraction);
+      }
+    }, { preserveMountedDocument: true });
+  },
+  closeIntegrationActionResult: () => {
+    state.integrationActionResultOpen = false;
+    state.integrationActionResultRecords = [];
     rerender({ preserveMountedDocument: true });
   },
   setInspectionPrivacyRule: (path, action, label) => {

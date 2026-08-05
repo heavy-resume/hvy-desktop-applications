@@ -1,9 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { applyInspectionPrivacyRules, defaultIntegrationRegistry, jsonPathFor, matchingInspectionPrivacyRules, selectedInspectionContent } from './integrationRegistry';
+import { actionPatternPayload, applyInspectionPrivacyRules, defaultIntegrationRegistry, jsonPathFor, matcherSnapshot, matchingInspectionPrivacyRules, selectedInspectionContent } from './integrationRegistry';
 
 describe('integration registry', () => {
   it('names the default Google profile Personal', () => {
     expect(defaultIntegrationRegistry().profiles[0].name).toBe('Personal');
+  });
+
+  it('stores only matcher structure and reconstructs an executable pattern', () => {
+    const snapshot = {
+      selected: {
+        directText: 'Private subject',
+        accessibleName: 'Private subject',
+        attributes: { title: 'Private subject' },
+        shape: { tag: 'strong', semanticLineage: ['abc'] },
+        relativePath: [{ tag: 'strong' }, { tag: 'div' }],
+      },
+    };
+    const stored = matcherSnapshot(snapshot);
+    expect(JSON.stringify(stored)).not.toContain('Private subject');
+    expect(stored).toEqual({ selected: { shape: snapshot.selected.shape, relativePath: snapshot.selected.relativePath } });
+
+    expect(actionPatternPayload({
+      id: 'action-1', integrationId: 'custom', name: 'Projects', description: '', pageIds: ['page'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read'], version: 1,
+      pattern: { recordLabel: 'Project', minimumConfidence: 0.8, parents: [stored], fields: [{ id: 'skills', label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored }] },
+    })).toEqual({ minimumConfidence: 0.8, parents: [stored], targets: [{ label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored, snapshots: [stored], negativeSnapshots: [] }] });
   });
 });
 

@@ -19,6 +19,24 @@ export interface IntegrationActionDefinition {
   status?: 'draft' | 'ready';
   examples?: unknown[];
   anchors?: unknown[];
+  pattern?: IntegrationActionPatternDefinition;
+}
+
+export interface IntegrationActionFieldDefinition {
+  id: string;
+  label: string;
+  cardinality: 'single' | 'list';
+  optional: boolean;
+  snapshot: unknown;
+  snapshots?: unknown[];
+  negativeSnapshots?: unknown[];
+}
+
+export interface IntegrationActionPatternDefinition {
+  recordLabel: string;
+  minimumConfidence: number;
+  parents: unknown[];
+  fields: IntegrationActionFieldDefinition[];
 }
 
 export interface IntegrationDefinition {
@@ -92,6 +110,26 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
 
 export function saveIntegrationRegistry(registry: IntegrationRegistry): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(registry));
+}
+
+export function matcherSnapshot(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown } }).selected;
+  return {
+    selected: {
+      shape: selected?.shape,
+      relativePath: selected?.relativePath ?? null,
+    },
+  };
+}
+
+export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[] }> } | null {
+  if (!action.pattern) return null;
+  return {
+    minimumConfidence: action.pattern.minimumConfidence ?? 0.85,
+    parents: action.pattern.parents,
+    targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [] })),
+  };
 }
 
 export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {
