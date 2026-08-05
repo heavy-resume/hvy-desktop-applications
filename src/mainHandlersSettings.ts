@@ -189,9 +189,10 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionDraftPageId = pageId;
     state.integrationActionExamples = [];
     state.integrationActionExampleRules = [];
+    state.integrationActionTargetLabels = [];
     state.integrationActionAnchors = [];
     state.integrationActionAnchorRules = [];
-    state.integrationActionSelectionKind = 'example';
+    state.integrationActionSelectionKind = 'parent';
     state.integrationActionSelectionPending = true;
     state.integrationActionBuilderStep = 'review';
     state.integrationActionDraftName = '';
@@ -224,47 +225,58 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   addAnotherIntegrationActionExample: () => {
     state.integrationActionBuilderOpen = true;
     state.integrationActionBuilderStep = 'review';
-    state.integrationActionSelectionKind = 'example';
+    state.integrationActionSelectionKind = 'target';
     state.integrationActionSelectionPending = true;
     void runBusy('Starting another selection...', async () => {
-      await controlIntegrationBrowser('inspect', state.selectedIntegrationProfileId);
-      state.status = 'Select another field or example in the open page';
+      const parentCssPath = (state.integrationActionAnchors[0] as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
+      await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath });
+      state.status = 'Select data inside the parent';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
   addIntegrationActionAnchor: () => {
     state.integrationActionBuilderOpen = true;
     state.integrationActionBuilderStep = 'review';
-    state.integrationActionSelectionKind = 'anchor';
+    state.integrationActionSelectionKind = 'example';
     state.integrationActionSelectionPending = true;
     void runBusy('Starting anchor selection...', async () => {
-      await controlIntegrationBrowser('inspect-anchor', state.selectedIntegrationProfileId);
-      state.status = 'Select a stable label, container, or other anchor in the open page';
+      await controlIntegrationBrowser('inspect-parent', state.selectedIntegrationProfileId);
+      state.status = 'Select another parent containing the same kind of data';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
   removeIntegrationActionSelection: (kind, index) => {
-    if (kind === 'anchor') {
+    if (kind === 'example') {
       state.integrationActionAnchors.splice(index, 1);
       state.integrationActionAnchorRules.splice(index, 1);
     } else {
       state.integrationActionExamples.splice(index, 1);
       state.integrationActionExampleRules.splice(index, 1);
+      state.integrationActionTargetLabels.splice(index, 1);
     }
-    const useAnchor = state.integrationActionAnchors.length > 0;
-    const nextItems = useAnchor ? state.integrationActionAnchors : state.integrationActionExamples;
-    const nextRules = useAnchor ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
-    state.integrationActionSelectionKind = useAnchor ? 'anchor' : 'example';
+    const useParent = state.integrationActionAnchors.length > 0;
+    const nextItems = useParent ? state.integrationActionAnchors : state.integrationActionExamples;
+    const nextRules = useParent ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
+    state.integrationActionSelectionKind = useParent ? 'example' : 'target';
     state.integrationInspectionResult = nextItems.at(-1) ?? null;
     state.inspectionPrivacyRules = nextRules.at(-1) ? [...nextRules.at(-1)!] : [];
     rerender({ preserveMountedDocument: true });
   },
   reviewIntegrationActionSelection: (kind, index) => {
-    const items = kind === 'anchor' ? state.integrationActionAnchors : state.integrationActionExamples;
-    const rules = kind === 'anchor' ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
+    const items = kind === 'example' ? state.integrationActionAnchors : state.integrationActionExamples;
+    const rules = kind === 'example' ? state.integrationActionAnchorRules : state.integrationActionExampleRules;
     state.integrationActionSelectionKind = kind;
     state.integrationInspectionResult = items[index] ?? null;
     state.inspectionPrivacyRules = [...(rules[index] ?? [])];
     state.integrationActionBuilderStep = 'review';
     rerender({ preserveMountedDocument: true });
+  },
+  updateIntegrationTargetLabel: (index, label) => {
+    state.integrationActionTargetLabels[index] = label;
+  },
+  testIntegrationActionPattern: () => {
+    const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, snapshot }));
+    void controlIntegrationBrowser('test-pattern', state.selectedIntegrationProfileId, { parents: state.integrationActionAnchors, targets }).then(() => {
+      state.status = 'Highlighted structural pattern matches';
+    });
   },
   continueIntegrationActionBuilder: () => {
     state.integrationActionBuilderStep = 'instructions';
@@ -313,7 +325,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.inspectionPrivacyRules = state.inspectionPrivacyRules.filter((rule) => !matchingPaths.has(rule.path));
       state.inspectionPrivacyRules.push(...matchingRules);
     }
-    if (state.integrationActionSelectionKind === 'anchor') state.integrationActionAnchorRules[state.integrationActionAnchorRules.length - 1] = [...state.inspectionPrivacyRules];
+    if (state.integrationActionSelectionKind === 'example') state.integrationActionAnchorRules[state.integrationActionAnchorRules.length - 1] = [...state.inspectionPrivacyRules];
     else state.integrationActionExampleRules[state.integrationActionExampleRules.length - 1] = [...state.inspectionPrivacyRules];
   },
   updateInspectionPrivacyLabel: (path, label) => {
@@ -325,7 +337,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.inspectionPrivacyRules = state.inspectionPrivacyRules.filter((rule) => !matchingPaths.has(rule.path));
       state.inspectionPrivacyRules.push(...matchingRules);
     }
-    if (state.integrationActionSelectionKind === 'anchor') state.integrationActionAnchorRules[state.integrationActionAnchorRules.length - 1] = [...state.inspectionPrivacyRules];
+    if (state.integrationActionSelectionKind === 'example') state.integrationActionAnchorRules[state.integrationActionAnchorRules.length - 1] = [...state.inspectionPrivacyRules];
     else state.integrationActionExampleRules[state.integrationActionExampleRules.length - 1] = [...state.inspectionPrivacyRules];
   },
   openIntegration: (destination) => void runBusy(`Opening ${integrationDestinationLabel(destination)}...`, async () => {

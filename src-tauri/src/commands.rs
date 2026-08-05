@@ -407,7 +407,7 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
 }
 
 #[tauri::command]
-fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>) -> AppResult<()> {
+fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>) -> AppResult<()> {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
     let window_label = integration_browser_label(&profile_id);
     let action_mode_pending = {
@@ -456,7 +456,8 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         .initialization_script(INTEGRATION_INSPECTOR)
         .on_page_load(move |window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished && page_load_action_mode.load(Ordering::SeqCst) {
-                let _ = window.eval("window.__hvyGalaxyInspector?.start()");
+                let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true }});", INTEGRATION_INSPECTOR);
+                let _ = window.eval(&script);
             }
         })
         .on_navigation(move |requested_url| {
@@ -533,7 +534,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         }
         return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
     };
-    if command == "inspect" || command == "inspect-anchor" || command == "focus-browser" {
+    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || command == "focus-browser" {
         raise_integration_window(&window)?;
     }
     if command == "cancel-inspect" || command == "focus-main" {
@@ -546,7 +547,9 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         "forward" => window.eval("window.history.forward()"),
         "reload" => window.reload(),
         "inspect" => window.eval("window.__hvyGalaxyInspector?.start()"),
-        "inspect-anchor" => window.eval("window.__hvyGalaxyInspector?.start('anchor')"),
+        "inspect-parent" => window.eval(&format!("window.__hvyGalaxyInspector?.start('parent', {})", payload.unwrap_or_default())),
+        "inspect-target" => window.eval(&format!("window.__hvyGalaxyInspector?.start('target', {})", payload.unwrap_or_default())),
+        "test-pattern" => window.eval(&format!("window.__hvyGalaxyInspector?.matchAndHighlight({})", payload.unwrap_or_default())),
         "cancel-inspect" => window.eval("window.__hvyGalaxyInspector?.stop()"),
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {

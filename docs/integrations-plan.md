@@ -197,22 +197,25 @@ interface IntegrationActionDefinition {
 Action authoring follows this workflow:
 
 1. Choose **Add action** beside one of the integration's pages. Galaxy opens that page directly in inspection mode.
-2. Select the content the action should understand. Add further examples or explicitly choose nearby anchors when one selection does not describe the intended record.
-3. Review all selected examples in a dedicated action-builder modal.
-4. Keep, replace, or remove sensitive information through a plain-language field review.
-5. Review the exact sanitized example and page context that will be sent to the LLM.
-6. Name the action and describe the structured result it should return.
-7. Ask the LLM to propose a deterministic action script and result schema.
-8. Review and test the script against the live page.
-9. Save the action under the integration only after it returns valid structured data. An unfinished authoring session may be saved explicitly as a draft.
+2. Select the smallest parent containing one complete item and all data that belongs to it.
+3. Select targets inside that parent and give each target an output label.
+4. Choose additional instances of the same parent on the current page when the record shape varies.
+5. Test the structural pattern against the live page and review every parent and labeled target Galaxy considers a match.
+6. Define whether the result is one value, one record, or a list of repeated records.
+7. Keep, replace, or remove sensitive sample values through a plain-language field review.
+8. Review the exact sanitized pattern and page context that will be sent to the LLM.
+9. Name the action and describe the structured result it should return.
+10. Ask the LLM to propose a deterministic action script and result schema.
+11. Review and test the script against the live page.
+12. Save the action under the integration only after it returns valid structured data. An unfinished authoring session may be saved explicitly as a draft.
 
 The builder should make selected text prominent rather than burying it inside raw DOM metadata. Present a focused content preview and readable information fields first. Selector, attribute, geometry, diagnostics, and raw JSON belong in collapsed technical disclosures rather than the primary workflow.
 
-A click is evidence, not the saved selector. Each selection should capture semantic ancestry, stable attribute candidates, nearby field shapes, and repeated-record structure. Surrounding structure must not include unrelated human-readable page content. Users may explicitly select anchor elements, such as a stable column label or record container, to explain the relationship they want the action to use. Action generation should combine examples and anchors and prefer relationships such as “subject link inside a message row” over a positional DOM path. Positional paths remain diagnostic fallbacks and must not be treated as durable by themselves.
+A click is evidence, not the saved selector. A content pattern records parent samples, labeled targets, and their structural relationships. Each structural signature should include nesting, element roles, child and descendant shapes, relative target paths, and repeated-record evidence without incorporating private text values. Matching first ranks candidates by structural similarity and then verifies that the complete labeled target set fits inside the proposed parent. Positional paths remain diagnostic and fast-path evidence, not durable identity. Optional anchors may be reconsidered after parent/target matching demonstrates a concrete ambiguity they solve.
 
 ### Privacy transformations
 
-Raw inspection data remains local unless the user explicitly continues to script generation. Only selected examples and explicitly selected anchors may contribute human-readable page text. Incidental ancestor, sibling, and repeated-record text must be represented as structural shape rather than copied values. Every reviewable selected value supports:
+Raw inspection data remains local unless the user explicitly continues to script generation. Only explicitly selected targets and samples may contribute human-readable page text. Parent samples, ancestors, siblings, and repeated-record context must be represented as structural shape rather than copied values. Every reviewable selected value supports:
 
 - **Keep**: include the value as written.
 - **Label**: replace the value with a descriptive placeholder such as `{{PERSON_NAME}}`, `{{EMAIL_ADDRESS}}`, or a user-entered label.

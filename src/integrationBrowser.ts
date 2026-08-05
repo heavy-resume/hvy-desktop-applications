@@ -29,8 +29,8 @@ export function openIntegrationPage(url: string, allowedOrigins: string[], profi
   return integrationBrowserCommand('open', undefined, profileId, url, allowedOrigins, browserStoreId, actionMode);
 }
 
-export function controlIntegrationBrowser(command: Exclude<IntegrationBrowserCommand, 'open'>, profileId = DEFAULT_INTEGRATION_PROFILE_ID): Promise<void> {
-  return integrationBrowserCommand(command, undefined, profileId);
+export function controlIntegrationBrowser(command: Exclude<IntegrationBrowserCommand, 'open'>, profileId = DEFAULT_INTEGRATION_PROFILE_ID, payload?: unknown): Promise<void> {
+  return integrationBrowserCommand(command, undefined, profileId, undefined, undefined, undefined, undefined, payload);
 }
 
 export function runIntegrationStorageProbe(): Promise<IntegrationStorageProbeResult> {

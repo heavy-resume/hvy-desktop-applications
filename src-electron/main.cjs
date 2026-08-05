@@ -487,7 +487,7 @@ async function handleCommand(command, args) {
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
-    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode);
+    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload);
     case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
     case 'load_integration_vault_status': return loadIntegrationVaultStatus();
     case 'setup_integration_vault': return setupIntegrationVault();
@@ -582,7 +582,7 @@ const INTEGRATION_URLS = {
 
 const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
 
-function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false) {
+function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload) {
   if (command === 'open') {
     if (!loadIntegrationVaultStatus().configured) {
       setupIntegrationVault();
@@ -604,14 +604,16 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'back' && integrationWindow.webContents.canGoBack()) integrationWindow.webContents.goBack();
   if (command === 'forward' && integrationWindow.webContents.canGoForward()) integrationWindow.webContents.goForward();
   if (command === 'reload') integrationWindow.webContents.reload();
-  if (command === 'inspect' || command === 'inspect-anchor' || command === 'focus-browser') {
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target' || command === 'test-pattern' || command === 'focus-browser') {
     raiseWindow(integrationWindow);
   }
   if (command === 'focus-main') {
     raiseWindow(mainWindow);
   }
   if (command === 'inspect') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
-  if (command === 'inspect-anchor') integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start("anchor")');
+  if (command === 'inspect-parent') integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start("parent", ${JSON.stringify(payload || {})})`);
+  if (command === 'inspect-target') integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.start("target", ${JSON.stringify(payload || {})})`);
+  if (command === 'test-pattern') integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(payload || {})})`);
   if (command === 'cancel-inspect') {
     integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
     raiseWindow(mainWindow);
@@ -848,7 +850,7 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
     });
     integrationWindow.webContents.on('did-finish-load', () => {
       void integrationWindow.webContents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
-        if (browser.actionModePending) return integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start()');
+        if (browser.actionModePending) return integrationWindow.webContents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true })');
         return null;
       });
     });

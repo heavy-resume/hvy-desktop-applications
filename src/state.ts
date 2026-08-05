@@ -100,9 +100,10 @@ export interface AppState {
   integrationActionBuilderOpen: boolean;
   integrationActionExamples: unknown[];
   integrationActionExampleRules: InspectionPrivacyRule[][];
+  integrationActionTargetLabels: string[];
   integrationActionAnchors: unknown[];
   integrationActionAnchorRules: InspectionPrivacyRule[][];
-  integrationActionSelectionKind: 'example' | 'anchor';
+  integrationActionSelectionKind: 'parent' | 'target' | 'example';
   integrationActionSelectionPending: boolean;
   integrationActionDraftIntegrationId: string | null;
   integrationActionDraftPageId: string | null;
@@ -313,9 +314,10 @@ export const state: AppState = {
   integrationActionBuilderOpen: false,
   integrationActionExamples: [],
   integrationActionExampleRules: [],
+  integrationActionTargetLabels: [],
   integrationActionAnchors: [],
   integrationActionAnchorRules: [],
-  integrationActionSelectionKind: 'example',
+  integrationActionSelectionKind: 'parent',
   integrationActionSelectionPending: false,
   integrationActionDraftIntegrationId: null,
   integrationActionDraftPageId: null,

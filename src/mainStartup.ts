@@ -54,12 +54,13 @@ export async function boot(): Promise<void> {
       state.inspectionPrivacyRules = [];
       state.integrationActionBuilderOpen = true;
       state.integrationActionSelectionPending = false;
-      if (state.integrationActionSelectionKind === 'anchor') {
+      if (state.integrationActionSelectionKind === 'parent' || state.integrationActionSelectionKind === 'example') {
         state.integrationActionAnchors.push(result);
         state.integrationActionAnchorRules.push([]);
       } else {
         state.integrationActionExamples.push(result);
         state.integrationActionExampleRules.push([]);
+        state.integrationActionTargetLabels.push('');
       }
       if (result && typeof result === 'object' && typeof (result as { profileId?: unknown }).profileId === 'string') {
         const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === (result as { profileId: string }).profileId);
