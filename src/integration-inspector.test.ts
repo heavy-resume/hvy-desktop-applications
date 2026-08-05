@@ -70,8 +70,9 @@ interface InspectorApi {
     }>;
   };
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
+  extractLiveExamples(pattern: Parameters<InspectorApi['extractPattern']>[0] & { targets: Array<{ label: string; snapshot: InspectorSnapshot; exampleSnapshots: Array<InspectorSnapshot | null> }> }): Promise<{ matches: number; records: Array<ReturnType<InspectorApi['extractPattern']>['records'][number] | null> }>;
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
-  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; steps: Array<{ gesture: 'click' | 'right-click'; target: InspectorSnapshot }> }; recordParent?: string }): { status: string; reason?: string; record?: string; target?: string; score?: number };
+  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click'; target: InspectorSnapshot }> }; recordParent?: string }): { status: string; reason?: string; record?: string; target?: string; score?: number };
 }
 
 declare global {
@@ -326,6 +327,37 @@ describe('integration structural inspector', () => {
     });
 
     expect(result.records[0].targets[0].value).toBe('Aug 3');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('assigns each saved example its best unused live record', async () => {
+    await page.setContent(`
+      <main>
+        <article class="message-card"><span class="value">Alpha</span></article>
+        <article class="message-card"><span class="value">Alpha decoy</span></article>
+        <ul><li class="compact-row" role="listitem"><button class="value">Beta</button></li></ul>
+        <ul><li class="compact-row" role="listitem"><button class="value">Beta decoy</button></li></ul>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const records = await page.evaluate(async () => {
+      const firstParent = document.querySelector('.message-card')!;
+      const secondParent = document.querySelector('.compact-row')!;
+      const firstTarget = firstParent.querySelector('.value')!;
+      const secondTarget = secondParent.querySelector('.value')!;
+      const firstSnapshot = window.__hvyGalaxyInspector.snapshotElement(firstTarget, firstParent, 'target');
+      const secondSnapshot = window.__hvyGalaxyInspector.snapshotElement(secondTarget, secondParent, 'target');
+      return (await window.__hvyGalaxyInspector.extractLiveExamples({
+        parents: [
+          window.__hvyGalaxyInspector.snapshotElement(firstParent, null, 'parent'),
+          window.__hvyGalaxyInspector.snapshotElement(secondParent, null, 'parent'),
+        ],
+        targets: [{ label: 'VALUE', snapshot: firstSnapshot, exampleSnapshots: [firstSnapshot, secondSnapshot] }],
+      })).records;
+    });
+
+    expect(records.map((record) => record?.targets[0].value)).toEqual(['Alpha', 'Beta']);
+    expect(new Set(records.map((record) => record?.parent)).size).toBe(2);
     expect(pageErrors).toEqual([]);
   });
 
@@ -784,6 +816,26 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('dispatches a double-click command to a structurally resolved page target', async () => {
+    await page.setContent('<main><button class="open-control">Open</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const target = document.querySelector('.open-control')!;
+      let doubleClicks = 0;
+      target.addEventListener('dblclick', () => { doubleClicks += 1; });
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      const execution = window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'open', scope: 'page', steps: [{ gesture: 'double-click', target: snapshot }] },
+      });
+      return { execution, doubleClicks };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.doubleClicks).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('does not execute a page command when two targets are structurally tied', async () => {
     await page.setContent('<main><button class="menu-control">First</button><button class="menu-control">Second</button></main>');
     await page.addScriptTag({ content: inspectorSource });
@@ -827,6 +879,35 @@ describe('integration structural inspector', () => {
     expect(result.scrollEvents).toBeGreaterThan(1);
     expect(result.decoyScrollEvents).toBe(0);
     expect(result.finalTop).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('waits for virtualized row content to stabilize before collecting records', async () => {
+    await page.setContent(`<main class="messages" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="message" style="height:42px"><span>Message ${index + 1}</span></article>`).join('')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const values = await page.evaluate(async () => {
+      const scroller = document.querySelector<HTMLElement>('.messages')!;
+      const rows = [...scroller.querySelectorAll<HTMLElement>('.message')];
+      let pendingUpdate: ReturnType<typeof setTimeout> | null = null;
+      scroller.addEventListener('scroll', () => {
+        if (pendingUpdate) clearTimeout(pendingUpdate);
+        const row = rows[Math.min(rows.length - 1, Math.floor(scroller.scrollTop / 42))];
+        const value = row.querySelector('span')!;
+        const stableValue = `Message ${rows.indexOf(row) + 1}`;
+        value.textContent = 'Loading recycled row';
+        pendingUpdate = setTimeout(() => { value.textContent = stableValue; }, 90);
+      });
+      const parent = rows[0];
+      const extraction = await window.__hvyGalaxyInspector.extractAcrossPage({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'MESSAGE', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
+      });
+      return extraction.records.flatMap((record) => record.targets.map((target) => target.value));
+    });
+
+    expect(values).toHaveLength(30);
+    expect(values).not.toContain('Loading recycled row');
     expect(pageErrors).toEqual([]);
   });
 

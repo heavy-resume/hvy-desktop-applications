@@ -74,7 +74,13 @@
     if (element.closest('#hvy-galaxy-inspector-picker, #hvy-galaxy-inspector-highlight, #hvy-galaxy-inspector-status, #hvy-galaxy-inspector-shield, #hvy-galaxy-inspector-scope')) return false;
     if (element.matches('html,body,script,style,link,meta')) return false;
     const rect = element.getBoundingClientRect();
-    return rect.width >= 4 && rect.height >= 4;
+    const style = getComputedStyle(element);
+    return rect.width >= 4
+      && rect.height >= 4
+      && style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.contentVisibility !== 'hidden'
+      && !element.closest('[hidden],[inert],[aria-hidden="true"]');
   };
 
   const countTags = (elements) => elements.reduce((counts, element) => {
@@ -250,8 +256,8 @@
   const tagSimilarity = (left, right) => left === right ? 1 : tagFamily(left) === tagFamily(right) ? 0.72 : 0;
   const enumSimilarity = (left, right) => left === right ? 1 : 0;
   const tokenSimilarity = (left = [], right = []) => {
-    const leftSet = new Set(left);
-    const rightSet = new Set(right);
+    const leftSet = new Set(Array.isArray(left) ? left : []);
+    const rightSet = new Set(Array.isArray(right) ? right : []);
     const union = new Set([...leftSet, ...rightSet]);
     if (!union.size) return 1;
     return [...leftSet].filter((value) => rightSet.has(value)).length / union.size;
@@ -336,6 +342,8 @@
     return replacement;
   };
   const pathSimilarity = (left = [], right = []) => {
+    left = Array.isArray(left) ? left : [];
+    right = Array.isArray(right) ? right : [];
     if (!left.length && !right.length) return 1;
     const scores = Array.from({ length: left.length + 1 }, () => Array(right.length + 1).fill(0));
     for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
@@ -718,7 +726,13 @@
     if (element.closest('#hvy-galaxy-inspector-picker, #hvy-galaxy-inspector-highlight, #hvy-galaxy-inspector-status, #hvy-galaxy-inspector-shield, #hvy-galaxy-inspector-scope, #hvy-galaxy-pattern-matches')) return false;
     if (element.matches('script,style,link,meta,template')) return false;
     const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden';
+    const style = getComputedStyle(element);
+    return rect.width > 0
+      && rect.height > 0
+      && style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.contentVisibility !== 'hidden'
+      && !element.closest('[hidden],[inert],[aria-hidden="true"]');
   };
 
   const elementsOverlap = (left, right) => left === right || left.contains(right) || right.contains(left);
@@ -953,6 +967,11 @@
       element.dispatchEvent(new MouseEvent('mouseup', { ...options, buttons: 0 }));
       return element.dispatchEvent(new MouseEvent('contextmenu', options));
     }
+    if (gesture === 'double-click') {
+      element.click();
+      element.click();
+      return element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, composed: true, view: window, button: 0, detail: 2 }));
+    }
     element.click();
     return true;
   };
@@ -961,7 +980,7 @@
     window.__hvyGalaxyInspector.stop();
     const command = payload.command;
     const step = command?.steps?.[0];
-    if (!command || !step || !['click', 'right-click'].includes(step.gesture)) return { status: 'no_match', reason: 'command_invalid' };
+    if (!command || !step || !['click', 'double-click', 'right-click'].includes(step.gesture)) return { status: 'no_match', reason: 'command_invalid' };
     const { minimumTargetConfidence } = patternThresholds(payload.pattern);
     let scope = document;
     let record = null;
@@ -1033,18 +1052,66 @@
     const scroller = owningScroller || scrollables[0] || document.scrollingElement;
     const originalTop = scroller?.scrollTop || 0;
     const records = new Map();
+    const structuralRecords = [];
+    const viewportSignature = () => {
+      const bounds = scroller instanceof Element
+        ? scroller.getBoundingClientRect()
+        : { top: 0, bottom: window.innerHeight };
+      const root = scroller instanceof Element ? scroller : document;
+      return deepElements(root)
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && rect.bottom >= bounds.top && rect.top <= bounds.bottom;
+        })
+        .slice(0, 240)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return `${element.tagName}:${Math.round(rect.top)}:${Math.round(rect.height)}:${tokenHash(visibleText(element).slice(0, 256))}`;
+        })
+        .join('|');
+    };
     const settle = async () => {
       if (document.visibilityState === 'visible') {
         await new Promise(requestAnimationFrame);
         await new Promise(requestAnimationFrame);
       }
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      let previous = '';
+      let stableSamples = 0;
+      for (let sample = 0; sample < 10 && stableSamples < 2; sample += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        const current = viewportSignature();
+        stableSamples = current === previous ? stableSamples + 1 : 0;
+        previous = current;
+      }
     };
     const collect = () => {
-      for (const record of serializeMatches(findPatternMatches(effectivePattern), true).records) {
+      const matches = findPatternMatches(effectivePattern);
+      const serialized = serializeMatches(matches, true).records;
+      for (let index = 0; index < serialized.length; index += 1) {
+        const record = serialized[index];
+        const element = matches[index].element;
         const key = JSON.stringify(record.targets.map((target) => [target.label, target.value]));
         const previous = records.get(key);
-        if (!previous || record.score > previous.score) records.set(key, record);
+        if (previous && previous.record.score >= record.score) continue;
+        const overlapping = structuralRecords.find((entry) => entry.element !== element
+          && (entry.element.contains(element) || element.contains(entry.element)));
+        if (overlapping && overlapping.record.score >= record.score) continue;
+        if (overlapping) {
+          records.delete(overlapping.key);
+          structuralRecords.splice(structuralRecords.indexOf(overlapping), 1);
+        }
+        if (previous && previous !== overlapping) structuralRecords.splice(structuralRecords.indexOf(previous), 1);
+        const rect = element.getBoundingClientRect();
+        const scrollBounds = scroller instanceof Element ? scroller.getBoundingClientRect() : { top: 0, left: 0 };
+        const entry = {
+          key,
+          element,
+          record,
+          pageTop: (scroller ? scroller.scrollTop : window.scrollY) + rect.top - scrollBounds.top,
+          pageLeft: rect.left - scrollBounds.left,
+        };
+        records.set(key, entry);
+        structuralRecords.push(entry);
       }
     };
     if (scroller) {
@@ -1063,13 +1130,46 @@
     } else {
       collect();
     }
-    const selected = [...records.values()].sort((left, right) => right.score - left.score).slice(0, 100);
+    const selected = [...records.values()]
+      .sort((left, right) => left.pageTop - right.pageTop || left.pageLeft - right.pageLeft || right.record.score - left.record.score)
+      .slice(0, 100)
+      .map((entry) => entry.record);
     return {
       matches: selected.length,
       records: selected,
       diagnostics: selected.length ? null : diagnosePattern(effectivePattern),
       minimumConfidence: patternThresholds(effectivePattern).minimumConfidence,
     };
+  };
+
+  const extractLiveExamples = async (pattern = {}) => {
+    const usedRecords = new Set();
+    const records = [];
+    for (let exampleIndex = 0; exampleIndex < (pattern.parents || []).length; exampleIndex += 1) {
+      const targets = (pattern.targets || []).map((target) => {
+        const hasPositionalSnapshot = Array.isArray(target.exampleSnapshots) && exampleIndex < target.exampleSnapshots.length;
+        const exampleSnapshot = hasPositionalSnapshot
+          ? target.exampleSnapshots[exampleIndex]
+          : target.snapshots?.[exampleIndex] ?? target.snapshot ?? null;
+        return {
+          ...target,
+          snapshot: exampleSnapshot,
+          snapshots: exampleSnapshot ? [exampleSnapshot] : [],
+        };
+      });
+      const extraction = await extractAcrossPage({ ...pattern, parents: [pattern.parents[exampleIndex]], targets });
+      const available = extraction.records.find((record) => {
+        const identity = JSON.stringify(record.targets.map((target) => [target.label, target.value]));
+        return !usedRecords.has(identity);
+      });
+      if (!available) {
+        records.push(null);
+        continue;
+      }
+      usedRecords.add(JSON.stringify(available.targets.map((target) => [target.label, target.value])));
+      records.push(available);
+    }
+    return { matches: records.filter(Boolean).length, records, diagnostics: null, minimumConfidence: patternThresholds(pattern).minimumConfidence };
   };
 
   window.__hvyGalaxyInspector = {
@@ -1324,7 +1424,9 @@
       return result;
     },
     async extractAndPublish(pattern = {}, context = {}) {
-      const extraction = await extractAcrossPage(pattern);
+      const extraction = context.mode === 'examples'
+        ? await extractLiveExamples(pattern)
+        : await extractAcrossPage(pattern);
       publish({
         kind: 'integration-extraction',
         context,
@@ -1335,6 +1437,9 @@
     },
     extractAcrossPage(pattern = {}) {
       return extractAcrossPage(pattern);
+    },
+    extractLiveExamples(pattern = {}) {
+      return extractLiveExamples(pattern);
     },
     selectBestRecords(records = []) {
       const selected = [...records].sort((left, right) => right.score - left.score).slice(0, 100);

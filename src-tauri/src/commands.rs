@@ -8,6 +8,9 @@ fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSWindow};
 
+    if window.outer_position().map(|position| position.x < -5000).unwrap_or(false) {
+        window.center().map_err(|error| AppError::Message(error.to_string()))?;
+    }
     window.show().map_err(|error| AppError::Message(error.to_string()))?;
     let target = window.clone();
     window.run_on_main_thread(move || {
@@ -25,6 +28,9 @@ fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
 
 #[cfg(not(target_os = "macos"))]
 fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
+    if window.outer_position().map(|position| position.x < -5000).unwrap_or(false) {
+        window.center().map_err(|error| AppError::Message(error.to_string()))?;
+    }
     window.show().map_err(|error| AppError::Message(error.to_string()))?;
     window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
     Ok(())
@@ -448,6 +454,12 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             if foreground {
                 raise_integration_window(&window)?;
+            } else if !window.is_visible().unwrap_or(false) {
+                window.center().map_err(|error| AppError::Message(error.to_string()))?;
+                window.show().map_err(|error| AppError::Message(error.to_string()))?;
+                if let Some(main_window) = app.get_webview_window("main") {
+                    raise_integration_window(&main_window)?;
+                }
             }
             app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
                 .map_err(|error| AppError::Message(error.to_string()))?;
@@ -465,10 +477,9 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             tauri::WebviewUrl::External(blank_url),
         )
         .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
-        .visible(foreground)
+        .visible(true)
         .inner_size(1080.0, 700.0)
         .min_inner_size(720.0, 520.0)
-        .center()
         .initialization_script(INTEGRATION_INSPECTOR)
         .on_page_load(move |window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
@@ -487,6 +498,8 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                             format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', ({}).options || {{}});", INTEGRATION_INSPECTOR, inspection_kind, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
                             format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
                         } else {
                             format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
                         };
@@ -514,10 +527,21 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                         if let Some(object) = result.as_object_mut() {
                             object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
                         }
+                        let is_background_example_validation = result
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("integration-extraction")
+                            && result
+                                .get("context")
+                                .and_then(|context| context.get("mode"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("examples");
                         navigation_action_mode.store(false, Ordering::SeqCst);
                         let _ = integration_app.emit("integration-inspection-result", result);
-                        if let Some(main_window) = integration_app.get_webview_window("main") {
-                            let _ = raise_integration_window(&main_window);
+                        if !is_background_example_validation {
+                            if let Some(main_window) = integration_app.get_webview_window("main") {
+                                let _ = raise_integration_window(&main_window);
+                            }
                         }
                     }
                 }
@@ -532,6 +556,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             }
             allowed_integration_url_for_origins(requested_url, &navigation_allowed_origins)
         });
+        let builder = builder.center();
         #[cfg(target_os = "macos")]
         let builder = builder
             .data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?)
@@ -539,6 +564,11 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         #[cfg(not(target_os = "macos"))]
         let builder = builder.incognito(true);
         let window = builder.build().map_err(|error| AppError::Message(error.to_string()))?;
+        if !foreground {
+            if let Some(main_window) = app.get_webview_window("main") {
+                raise_integration_window(&main_window)?;
+            }
+        }
         app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
             .map_err(|error| AppError::Message(error.to_string()))?;
         let menu_app = app.clone();
@@ -626,6 +656,12 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
     }
     .map_err(|error| AppError::Message(error.to_string()))?;
     Ok(())
+}
+
+#[tauri::command]
+fn integration_browser_is_open(app: AppHandle, profile_id: Option<String>) -> bool {
+    let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
+    app.get_webview_window(&integration_browser_label(&profile_id)).is_some()
 }
 
 #[derive(Serialize)]

@@ -206,17 +206,19 @@ Record type authoring follows this workflow:
 
 1. Choose **Define records** beside one of the integration's pages. Galaxy opens that page directly in inspection mode.
 2. Select the smallest parent containing one complete item and all data that belongs to it.
-3. While the primary example remains boxed, select all desired fields in one inspection session and choose **Done**. Galaxy then returns to the builder so the collected fields can be named together. Additional fields may be collected in another batch; replacing one existing field remains a focused single-field selection.
-4. Set the record type's minimum confidence, then review the named fields in the primary example.
-5. Choose additional instances of the same parent when the record shape varies. Already accepted records and their passing subfields remain marked in green; below-threshold records and failed or overlapping subfields are identified separately so a new example can target a concrete variation.
-6. Show the same named field rows inside every expandable example. Prepopulate each row with its best structural match and let the user replace a weak or missing selection for only that example. These selections become alternate structural signatures for one output field, not duplicate fields.
-7. Fields are optional by default. Use compact list and required controls where needed. Within an example, **Doesn't exist** explicitly marks an absent field; a mistaken automatic match becomes negative structural evidence for that field, and missing optional structures return an empty value without rejecting the record.
+3. While the primary example remains boxed, select all desired fields in one inspection session and choose **Done**. Galaxy then returns to a table where fields are columns and examples are rows. Name fields in the column headers; example values are truncated in cells.
+4. Configure column-level behavior independently from examples. **Many** marks a field as multi-valued, while required fields are selected in their own field settings area. Completed examples are immutable structural evidence and may only be removed.
+5. Set the record type's minimum confidence, then review the named fields in the primary example.
+6. Add another table row when the record shape varies. Already accepted records and their passing subfields remain marked in green; below-threshold records are identified separately so the user can add a concrete structural variation.
+7. Fields are optional by default. Missing optional structures return an empty value without rejecting the record.
 8. Run the matcher and adjust confidence from the live page overlay. Highlights update without changing window focus. The integration browser retains that value for example selection and extraction, then extraction returns it to the builder when focus is intentionally restored.
-9. Review ordinary grouped records rather than raw JSON.
-10. Name and save the record type after the preview groups every field with the correct parent.
+9. **Preview** is optional and does not gate saving. It uses the same tabular columns, with expandable result rows that reveal full values and images. Image columns show a compact yes/no value while collapsed.
+10. Save the record type directly from the builder or its preview.
 11. Run the saved record type later through the selected page and browser profile.
 
 Saved record types remain editable. Edit rehydrates the same builder with the stored name, description, confidence, parent examples, field examples, labels, cardinality, optional/required settings, and negative or explicit-absence examples. Saving replaces the existing definition in place, retaining its stable ID and item commands. Positional example snapshots are stored alongside the aggregate matcher variants so fields can be mapped back to the correct example during later edits.
+
+When edit mode displays live representative values, it matches each saved example against that example's own parent and positional field signatures. Examples are processed in order: each row receives its highest-scoring live fit that has not already been assigned to an earlier row. The UI displays the resulting score and never presents one live record as the representative for two saved examples.
 
 The first deterministic action format does not require an LLM. A later script-generation layer may add repeatable page-preparation steps, transformations, or provider-specific behavior, but it consumes the same reviewed record examples and must not replace the structural action contract.
 
@@ -229,6 +231,8 @@ A click made while teaching a record is evidence, not the saved selector. A cont
 ### Commands and interaction steps
 
 A page owns whole-page commands, while a record type owns item commands. This ownership is visible in the integrations manager: page commands are created and run with their page; item commands are created with a record type and appear on fetched items. There is no scope dropdown that moves a command between the two concepts.
+
+Record type cards show an explicit **Item commands** pill group. Each pill contains only the command name and its interaction—click, double click, or right click—and can be removed through a dedicated confirmation modal.
 
 ```ts
 interface IntegrationCommandDefinition {

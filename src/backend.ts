@@ -496,6 +496,10 @@ export function integrationBrowserCommand(
   return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode, payload, foreground, windowName });
 }
 
+export function integrationBrowserIsOpen(profileId?: string): Promise<boolean> {
+  return invokeDesktop('integration_browser_is_open', { profileId });
+}
+
 export function probeIntegrationCookieStorage(): Promise<IntegrationStorageProbeResult> {
   return invokeDesktop('probe_integration_cookie_storage');
 }

@@ -1,4 +1,4 @@
-import { integrationBrowserCommand, probeIntegrationCookieStorage, type IntegrationBrowserCommand, type IntegrationStorageProbeResult } from './backend';
+import { integrationBrowserCommand, integrationBrowserIsOpen, probeIntegrationCookieStorage, type IntegrationBrowserCommand, type IntegrationStorageProbeResult } from './backend';
 
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export const DEFAULT_INTEGRATION_PROFILE_ID = 'default-google';
@@ -31,6 +31,10 @@ export function openIntegrationPage(url: string, allowedOrigins: string[], profi
 
 export function controlIntegrationBrowser(command: Exclude<IntegrationBrowserCommand, 'open'>, profileId = DEFAULT_INTEGRATION_PROFILE_ID, payload?: unknown): Promise<void> {
   return integrationBrowserCommand(command, undefined, profileId, undefined, undefined, undefined, undefined, payload);
+}
+
+export function isIntegrationBrowserOpen(profileId = DEFAULT_INTEGRATION_PROFILE_ID): Promise<boolean> {
+  return integrationBrowserIsOpen(profileId);
 }
 
 export function runIntegrationStorageProbe(): Promise<IntegrationStorageProbeResult> {

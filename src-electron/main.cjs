@@ -6,6 +6,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { promisify } = require('node:util');
 
+for (const stream of [process.stdout, process.stderr]) {
+  stream?.on('error', (error) => {
+    if (error?.code === 'EIO' || error?.code === 'EPIPE') return;
+    throw error;
+  });
+}
+
 const WORKSPACE_MANIFEST = '.hvyworkspace.json';
 const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
 const RECENT_STATE = 'recent.json';
@@ -68,6 +75,19 @@ app.setAboutPanelOptions({
   iconPath: iconPath(appIconFileName()),
 });
 app.setPath('userData', electronProfileDir());
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+
+app.on('second-instance', (_event, argv, workingDirectory) => {
+  for (const value of argv) {
+    const candidate = path.isAbsolute(value) ? value : path.resolve(workingDirectory, value);
+    enqueueOpenDocumentPath(candidate);
+  }
+  raiseWindow(mainWindow);
+});
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
@@ -500,6 +520,10 @@ async function handleCommand(command, args) {
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
     case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName);
+    case 'integration_browser_is_open': {
+      const browser = integrationBrowsers.get(args.profileId || 'default-google');
+      return Boolean(browser?.window && !browser.window.isDestroyed() && !browser.closePromise);
+    }
     case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
     case 'load_integration_vault_status': return loadIntegrationVaultStatus();
     case 'setup_integration_vault': return setupIntegrationVault();
@@ -815,6 +839,7 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
+        backgroundThrottling: false,
       },
     });
     browser = { window: integrationWindow, name: windowName || profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
@@ -853,7 +878,8 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
         result.profileId = profileId;
         browser.actionModePending = false;
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        raiseWindow(mainWindow);
+        const isBackgroundExampleValidation = result?.kind === 'integration-extraction' && result?.context?.mode === 'examples';
+        if (!isBackgroundExampleValidation) raiseWindow(mainWindow);
         return;
       }
       if (requestedUrl === 'hvy-integration://inspection-cancel') {
@@ -878,6 +904,9 @@ async function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode
           }
           if (extraction.kind === 'command-execution') {
             return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
+          }
+          if (extraction.kind === 'pattern-highlight') {
+            return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
           }
           return integrationWindow.webContents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
         }

@@ -63,7 +63,12 @@ export async function boot(): Promise<void> {
         state.integrationActionFetchError = null;
         const extraction = result as { context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
         if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, extraction.minimumConfidence));
-        if (extraction.context?.mode === 'builder') {
+        const isBackgroundExampleValidation = extraction.context?.mode === 'examples';
+        if (isBackgroundExampleValidation) {
+          state.integrationActionLiveExampleRecords = extraction.records ?? [];
+          state.integrationActionEditPageLoading = false;
+          state.status = `Validated ${(extraction.records ?? []).filter(Boolean).length} live examples`;
+        } else if (extraction.context?.mode === 'builder') {
           state.integrationActionPreviewPending = false;
           state.integrationActionPreviewRecords = extraction.records ?? [];
           state.integrationActionPreviewDiagnostics = extraction.diagnostics ?? null;
@@ -77,7 +82,7 @@ export async function boot(): Promise<void> {
         }
         state.status = `Extracted ${(extraction.records ?? []).length} matching items`;
         rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        if (!isBackgroundExampleValidation) await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {

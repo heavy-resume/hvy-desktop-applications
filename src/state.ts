@@ -123,7 +123,9 @@ export interface AppState {
   integrationActionBuilderStep: 'define' | 'preview' | 'save';
   integrationActionDraftName: string;
   integrationActionDraftDescription: string;
+  integrationActionBuilderInitialJson: string;
   integrationActionPreviewRecords: unknown[];
+  integrationActionLiveExampleRecords: unknown[];
   integrationActionPreviewDiagnostics: unknown;
   integrationActionPreviewPending: boolean;
   integrationActionEditPageLoading: boolean;
@@ -140,10 +142,14 @@ export interface AppState {
   integrationCommandDraftPageId: string | null;
   integrationCommandDraftName: string;
   integrationCommandDraftScope: 'page' | 'record';
-  integrationCommandDraftGesture: 'click' | 'right-click';
+  integrationCommandDraftGesture: 'click' | 'double-click' | 'right-click';
   integrationCommandDraftTarget: unknown;
   integrationCommandDraftRecord: unknown;
   integrationCommandSelectionStage: 'record' | 'target';
+  integrationCommandDeleteDialogOpen: boolean;
+  integrationCommandDeleteIntegrationId: string | null;
+  integrationCommandDeleteActionId: string | null;
+  integrationCommandDeleteCommandId: string | null;
   integrationRecordDeleteDialogOpen: boolean;
   integrationRecordDeleteIntegrationId: string | null;
   integrationRecordDeleteActionId: string | null;
@@ -374,7 +380,9 @@ export const state: AppState = {
   integrationActionBuilderStep: 'define',
   integrationActionDraftName: '',
   integrationActionDraftDescription: '',
+  integrationActionBuilderInitialJson: '',
   integrationActionPreviewRecords: [],
+  integrationActionLiveExampleRecords: [],
   integrationActionPreviewDiagnostics: null,
   integrationActionPreviewPending: false,
   integrationActionEditPageLoading: false,
@@ -395,6 +403,10 @@ export const state: AppState = {
   integrationCommandDraftTarget: null,
   integrationCommandDraftRecord: null,
   integrationCommandSelectionStage: 'target',
+  integrationCommandDeleteDialogOpen: false,
+  integrationCommandDeleteIntegrationId: null,
+  integrationCommandDeleteActionId: null,
+  integrationCommandDeleteCommandId: null,
   integrationRecordDeleteDialogOpen: false,
   integrationRecordDeleteIntegrationId: null,
   integrationRecordDeleteActionId: null,

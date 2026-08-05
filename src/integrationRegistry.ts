@@ -32,7 +32,7 @@ export interface IntegrationCommandDefinition {
 }
 
 export interface IntegrationInteractionStepDefinition {
-  gesture: 'click' | 'right-click';
+  gesture: 'click' | 'double-click' | 'right-click';
   target: unknown;
   fromState?: string;
   toState?: string;
@@ -165,12 +165,12 @@ export function matcherSnapshot(value: unknown): unknown {
   };
 }
 
-export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[] }> } | null {
+export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[]; exampleSnapshots: Array<unknown | null> }> } | null {
   if (!action.pattern) return null;
   return {
     minimumConfidence: action.pattern.minimumConfidence ?? 0.85,
     parents: action.pattern.parents,
-    targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [] })),
+    targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [], exampleSnapshots: field.exampleSnapshots ?? [] })),
   };
 }
 

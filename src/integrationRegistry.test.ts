@@ -25,7 +25,7 @@ describe('integration registry', () => {
     expect(actionPatternPayload({
       id: 'action-1', integrationId: 'custom', name: 'Projects', description: '', pageIds: ['page'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read'], version: 1,
       pattern: { recordLabel: 'Project', minimumConfidence: 0.8, parents: [stored], fields: [{ id: 'skills', label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored }] },
-    })).toEqual({ minimumConfidence: 0.8, parents: [stored], targets: [{ label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored, snapshots: [stored], negativeSnapshots: [] }] });
+    })).toEqual({ minimumConfidence: 0.8, parents: [stored], targets: [{ label: 'SKILLS', cardinality: 'list', optional: false, snapshot: stored, snapshots: [stored], negativeSnapshots: [], exampleSnapshots: [] }] });
   });
 
   it('packages one-step commands with the record pattern and selected record identity', () => {

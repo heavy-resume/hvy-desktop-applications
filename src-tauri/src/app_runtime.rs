@@ -39,6 +39,7 @@ pub fn run() {
             load_installed_plugin_packages,
             install_plugin_package,
             integration_browser_command,
+            integration_browser_is_open,
             probe_integration_cookie_storage,
             load_integration_vault_status,
             setup_integration_vault,
