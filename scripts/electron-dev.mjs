@@ -15,6 +15,9 @@ delete electronEnv.ELECTRON_RUN_AS_NODE;
 delete electronEnv.NODE_OPTIONS;
 
 let vite = null;
+let cargo = null;
+let electron = null;
+let shutdownSignal = null;
 
 if (!(await canConnect(rendererUrl))) {
   vite = spawn(process.execPath, [path.resolve('node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', '1420'], {
@@ -23,39 +26,47 @@ if (!(await canConnect(rendererUrl))) {
   });
 }
 
-const stopVite = () => {
-  if (vite && !vite.killed) {
-    vite.kill();
-  }
-};
-
-process.on('exit', stopVite);
-process.on('SIGINT', () => {
-  stopVite();
-  process.exit(130);
-});
-process.on('SIGTERM', () => {
-  stopVite();
-  process.exit(143);
-});
+process.on('SIGINT', () => stopChildren('SIGINT'));
+process.on('SIGTERM', () => stopChildren('SIGTERM'));
 
 await waitForRenderer(rendererUrl);
 await buildRustHelper();
 
 const electronLaunch = await electronLaunchCommand();
-const electron = spawn(electronLaunch.command, electronLaunch.args, {
+electron = spawn(electronLaunch.command, electronLaunch.args, {
   stdio: 'inherit',
   env: electronEnv,
 });
 
 electron.on('exit', (code, signal) => {
-  stopVite();
+  electron = null;
+  stopChild(vite, shutdownSignal || 'SIGTERM');
   if (signal) {
-    process.kill(process.pid, signal);
-    return;
+    process.exit(signalExitCode(signal));
   }
   process.exit(code ?? 0);
 });
+
+function stopChildren(signal) {
+  shutdownSignal = signal;
+  stopChild(electron, signal);
+  stopChild(cargo, signal);
+  stopChild(vite, signal);
+
+  if (!electron && !cargo) {
+    process.exit(signalExitCode(signal));
+  }
+}
+
+function stopChild(child, signal) {
+  if (child && child.exitCode === null && child.signalCode === null) {
+    child.kill(signal);
+  }
+}
+
+function signalExitCode(signal) {
+  return signal === 'SIGINT' ? 130 : 143;
+}
 
 async function waitForRenderer(url) {
   const deadline = Date.now() + 30_000;
@@ -84,13 +95,17 @@ function canConnect(url) {
 
 function buildRustHelper() {
   return new Promise((resolve, reject) => {
-    const cargo = spawn('cargo', ['build'], {
+    cargo = spawn('cargo', ['build'], {
       cwd: path.resolve('src-tauri'),
       stdio: 'inherit',
       env: process.env,
     });
     cargo.on('error', reject);
     cargo.on('exit', (code, signal) => {
+      cargo = null;
+      if (shutdownSignal) {
+        process.exit(signalExitCode(shutdownSignal));
+      }
       if (signal) {
         reject(new Error(`cargo build exited with signal ${signal}`));
         return;

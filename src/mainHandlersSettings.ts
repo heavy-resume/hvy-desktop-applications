@@ -115,6 +115,20 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     && (error.message.includes('Open Gmail or Google Calendar first')
       || error.message.includes('Script failed to execute')
       || error.message.includes('destroyed'));
+  const startIntegrationActionInspection = async (inspectionKind: 'parent' | 'target', options: unknown) => {
+    const command = inspectionKind === 'parent' ? 'inspect-parent' : 'inspect-target';
+    const reopen = () => reopenIntegrationActionPage({ kind: 'command-target', inspectionKind, options }, true);
+    if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
+      await reopen();
+      return;
+    }
+    try {
+      await controlIntegrationBrowser(command, state.selectedIntegrationProfileId, options);
+    } catch (error) {
+      if (!integrationBrowserUnavailable(error)) throw error;
+      await reopen();
+    }
+  };
   const openAppSettings = (mode: 'settings' | 'plugins') => void runBusy('Scanning plugins...', async () => {
     await refreshInstalledPlugins();
     closeUiBeforeAppSettings();
@@ -175,6 +189,12 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   };
   return {
   openIntegrations: () => {
+    if (!state.integrationRegistry.integrations.some((integration) => integration.id === state.selectedIntegrationId)) {
+      state.selectedIntegrationId = state.integrationRegistry.integrations[0]?.id ?? '';
+    }
+    if (!state.integrationRegistry.profiles.some((profile) => profile.id === state.selectedIntegrationProfileId)) {
+      state.selectedIntegrationProfileId = state.integrationRegistry.profiles[0]?.id ?? '';
+    }
     state.integrationsDialogOpen = true;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -198,14 +218,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   addIntegrationPage: (name, url) => {
     const integration = createCustomPageIntegration(name, url);
-    const profile = createIntegrationProfile(integration.profileProviderId, `${integration.name} profile`);
     state.integrationRegistry = {
       ...state.integrationRegistry,
       integrations: [...state.integrationRegistry.integrations, integration],
-      profiles: [...state.integrationRegistry.profiles, profile],
     };
     state.selectedIntegrationId = integration.id;
-    state.selectedIntegrationProfileId = profile.id;
     saveIntegrationRegistry(state.integrationRegistry);
     state.addIntegrationPageDialogOpen = false;
     state.status = `Added ${integration.name}`;
@@ -215,7 +232,9 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     if (!integration) throw new Error('Integration was not found.');
     state.selectedIntegrationId = integration.id;
-    state.selectedIntegrationProfileId = state.integrationRegistry.profiles.find((profile) => profile.providerId === integration.profileProviderId)?.id ?? '';
+    if (!state.integrationRegistry.profiles.some((profile) => profile.id === state.selectedIntegrationProfileId)) {
+      state.selectedIntegrationProfileId = state.integrationRegistry.profiles[0]?.id ?? '';
+    }
     rerender({ preserveMountedDocument: true });
   },
   selectIntegrationProfile: (profileId) => {
@@ -233,7 +252,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   addIntegrationProfile: (name) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
     if (!integration) throw new Error('Integration was not found.');
-    const profile = createIntegrationProfile(integration.profileProviderId, name);
+    const profile = createIntegrationProfile('browser', name);
     state.integrationRegistry = { ...state.integrationRegistry, profiles: [...state.integrationRegistry.profiles, profile] };
     saveIntegrationRegistry(state.integrationRegistry);
     state.selectedIntegrationProfileId = profile.id;
@@ -246,7 +265,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     if (!page) throw new Error('Integration page was not found.');
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-    if (!profile || profile.providerId !== integration?.profileProviderId) throw new Error('Choose an integration profile.');
+    if (!profile) throw new Error('Choose an integration profile.');
     if (page.id === 'gmail' || page.id === 'google-calendar') {
       const destination = page.id === 'gmail' ? 'gmail' : 'calendar';
       void runBusy(`Opening ${page.name}...`, async () => {
@@ -267,7 +286,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     if (!page) throw new Error('Integration page was not found.');
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-    if (!profile || profile.providerId !== integration?.profileProviderId) throw new Error('Choose an integration profile.');
+    if (!profile) throw new Error('Choose an integration profile.');
     state.integrationActionDraftIntegrationId = integrationId;
     state.integrationActionDraftPageId = pageId;
     state.integrationActionDraftActionId = null;
@@ -419,7 +438,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     void runBusy('Starting another selection...', async () => {
       const parentSnapshot = state.integrationActionAnchors[parentIndex];
       const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
-      await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot, multiSelect: fieldIndex === null });
+      const options = { parentCssPath, parentSnapshot, multiSelect: fieldIndex === null };
+      await startIntegrationActionInspection('target', options);
       state.status = fieldIndex === null ? 'Select fields inside the parent, then choose Done' : 'Select replacement data inside the parent';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
@@ -440,7 +460,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const existingPattern = targets.length
         ? { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets }
         : null;
-      await controlIntegrationBrowser('inspect-parent', state.selectedIntegrationProfileId, { existingPattern });
+      const options = { existingPattern };
+      await startIntegrationActionInspection('parent', options);
       state.status = 'Select another parent containing the same kind of data';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
@@ -535,7 +556,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   updateIntegrationActionMinimumConfidence: (value) => {
-    state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, value));
+    state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, value));
   },
   testIntegrationActionPattern: () => {
     const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, cardinality: state.integrationActionTargetCardinalities[index] ?? 'single', optional: state.integrationActionTargetOptional[index] ?? true, snapshot, snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean), negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean) }));

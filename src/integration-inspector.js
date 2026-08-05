@@ -15,6 +15,21 @@
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
   let targetCollection = null;
+  let captureSequence = 0;
+  const capturedElements = new Map();
+
+  const composedParent = (element) => {
+    if (element?.parentElement) return element.parentElement;
+    const root = element?.getRootNode?.();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+
+  const composedContains = (ancestor, element) => {
+    for (let node = element; node instanceof Element; node = composedParent(node)) {
+      if (node === ancestor) return true;
+    }
+    return false;
+  };
 
   const removeUi = () => {
     matchOverlayCleanup?.();
@@ -25,13 +40,35 @@
     highlighted = null;
   };
 
+  const pseudoEvidence = (element, pseudo) => {
+    const style = getComputedStyle(element, pseudo);
+    const content = style.content || '';
+    const rendered = style.display !== 'none' && style.visibility !== 'hidden' && !['none', 'normal'].includes(content);
+    const text = rendered && content !== '""' && content !== "''"
+      ? content.replace(/^(['"])(.*)\1$/, '$2').replace(/\\(["'])/g, '$1').trim()
+      : '';
+    return {
+      rendered,
+      text,
+      display: style.display,
+      position: style.position,
+      fontSize: Number.parseFloat(style.fontSize) || 0,
+      fontWeight: Number.parseInt(style.fontWeight, 10) || 400,
+      hasBackground: style.backgroundColor !== 'transparent' || style.backgroundImage !== 'none',
+    };
+  };
+
+  const pseudoElements = (element) => ({ before: pseudoEvidence(element, '::before'), after: pseudoEvidence(element, '::after') });
+
   const meaningfulText = (element) => {
-    const directText = [...element.childNodes]
+    const nodeText = [...element.childNodes]
       .filter((node) => node.nodeType === Node.TEXT_NODE)
       .map((node) => node.textContent || '')
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();
+    const pseudo = pseudoElements(element);
+    const directText = nodeText || [pseudo.before.text, pseudo.after.text].filter(Boolean).join(' ');
     const accessibleName = element.getAttribute('aria-label')
       || element.getAttribute('alt')
       || (element instanceof HTMLInputElement ? element.value : '')
@@ -39,7 +76,12 @@
     return { directText, accessibleName: accessibleName.trim() };
   };
 
-  const visibleText = (element) => (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+  const visibleText = (element) => {
+    const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text) return text;
+    const pseudo = pseudoElements(element);
+    return [pseudo.before.text, pseudo.after.text].filter(Boolean).join(' ');
+  };
 
   const imageFor = (element) => {
     const image = element.matches('img') ? element : element.querySelector('img');
@@ -67,7 +109,8 @@
     const rect = element.getBoundingClientRect();
     if (!rect.width || !rect.height) return false;
     const { directText, accessibleName } = meaningfulText(element);
-    return Boolean(directText || accessibleName || imageFor(element) || element.matches('button,a,input,textarea,select,[role],[contenteditable="true"]'));
+    const pseudo = pseudoElements(element);
+    return Boolean(directText || accessibleName || pseudo.before.rendered || pseudo.after.rendered || imageFor(element) || element.matches('button,a,input,textarea,select,[role],[contenteditable="true"]'));
   };
 
   const isParentCandidate = (element) => {
@@ -80,7 +123,7 @@
       && style.display !== 'none'
       && style.visibility !== 'hidden'
       && style.contentVisibility !== 'hidden'
-      && !element.closest('[hidden],[inert],[aria-hidden="true"]');
+      && !element.closest('[hidden]');
   };
 
   const countTags = (elements) => elements.reduce((counts, element) => {
@@ -120,7 +163,7 @@
 
   const semanticLineageTokens = (element) => {
     const tokens = [];
-    for (let node = element.parentElement; node && tokens.length < 8; node = node.parentElement) {
+    for (let node = composedParent(element); node && tokens.length < 8; node = composedParent(node)) {
       const role = node.getAttribute('role');
       const component = node.getAttribute('data-component');
       if (role) tokens.push(`role:${role}`);
@@ -141,10 +184,30 @@
     return tokens.sort().map(tokenHash);
   };
 
+  const colorSignature = (value = '') => {
+    const channels = value.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)/i);
+    if (!channels) return { hue: 0, saturation: 0, lightness: 0, alpha: value === 'transparent' ? 0 : 1 };
+    const [red, green, blue] = channels.slice(1, 4).map((channel) => Number.parseFloat(channel) / 255);
+    const alpha = channels[4]?.endsWith('%') ? Number.parseFloat(channels[4]) / 100 : Number.parseFloat(channels[4] ?? '1');
+    const maximum = Math.max(red, green, blue);
+    const minimum = Math.min(red, green, blue);
+    const delta = maximum - minimum;
+    const lightness = (maximum + minimum) / 2;
+    const saturation = delta ? delta / (1 - Math.abs(2 * lightness - 1)) : 0;
+    let hue = 0;
+    if (delta) {
+      if (maximum === red) hue = ((green - blue) / delta) % 6;
+      else if (maximum === green) hue = (blue - red) / delta + 2;
+      else hue = (red - green) / delta + 4;
+      hue = ((hue * 60 + 360) % 360) / 360;
+    }
+    return { hue, saturation, lightness, alpha };
+  };
+
   const visualSignature = (element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
-    const parentRect = element.parentElement?.getBoundingClientRect();
+    const parentRect = composedParent(element)?.getBoundingClientRect();
     const fontSize = Number.parseFloat(style.fontSize) || 0;
     const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.2 || 1;
     const fontWeight = Number.parseInt(style.fontWeight, 10) || ({ normal: 400, bold: 700 }[style.fontWeight] || 400);
@@ -155,6 +218,7 @@
     const backgroundAlpha = style.backgroundColor === 'transparent'
       ? 0
       : Number.parseFloat(style.backgroundColor.match(/rgba?\([^,]+,[^,]+,[^,]+(?:,\s*([\d.]+))?\)/)?.[1] ?? '1');
+    const pseudo = pseudoElements(element);
     return {
       display: style.display.replace(/^inline-/, ''),
       position: style.position,
@@ -179,6 +243,11 @@
       borderWidth,
       borderRadiusRatio: Math.min(1, radius / Math.max(1, Math.min(rect.width, rect.height))),
       hasBackground: backgroundAlpha > 0.05 || style.backgroundImage !== 'none',
+      backgroundColor: colorSignature(style.backgroundColor),
+      borderColor: colorSignature(style.borderTopColor),
+      textColor: colorSignature(style.color),
+      pseudoBefore: pseudo.before,
+      pseudoAfter: pseudo.after,
       hasShadow: style.boxShadow !== 'none',
       paddingXRatio: ((Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0)) / Math.max(1, rect.width),
       paddingYRatio: ((Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0)) / Math.max(1, rect.height),
@@ -186,7 +255,9 @@
   };
 
   const deepElements = (root, limit = Infinity) => {
-    const initial = root instanceof Document ? [root.documentElement] : [...root.children];
+    const initial = root instanceof Document
+      ? [root.documentElement]
+      : [...root.children, ...(root.shadowRoot ? [...root.shadowRoot.children] : [])];
     const pending = [...initial].reverse();
     const elements = [];
     while (pending.length && elements.length < limit) {
@@ -204,13 +275,13 @@
     const descendants = deepElements(element, 300);
     const children = [...element.children];
     const ancestors = [];
-    for (let node = element.parentElement; node && ancestors.length < 5; node = node.parentElement) {
+    for (let node = composedParent(element); node && ancestors.length < 5; node = composedParent(node)) {
       const tag = node.tagName.toLowerCase();
       const role = node.getAttribute('role');
       ancestors.push({ tag, role, family: tagFamily(tag, role), tokens: structuralTokens(node) });
     }
     let fullDepth = 0;
-    for (let node = element.parentElement; node; node = node.parentElement) fullDepth += 1;
+    for (let node = composedParent(element); node; node = composedParent(node)) fullDepth += 1;
     return {
       tag: element.tagName.toLowerCase(),
       role: element.getAttribute('role'),
@@ -234,8 +305,9 @@
 
   const pathWithin = (element, parent) => {
     const path = [];
-    for (let node = element; node instanceof Element && node !== parent; node = node.parentElement) {
-      const siblings = node.parentElement ? [...node.parentElement.children].filter((candidate) => candidate.tagName === node.tagName) : [];
+    for (let node = element; node instanceof Element && node !== parent; node = composedParent(node)) {
+      const root = node.parentElement || (node.getRootNode() instanceof ShadowRoot ? node.getRootNode() : null);
+      const siblings = root ? [...root.children].filter((candidate) => candidate.tagName === node.tagName) : [];
       const tag = node.tagName.toLowerCase();
       const role = node.getAttribute('role');
       path.push({ tag, role, family: tagFamily(tag, role), sameTagIndex: siblings.indexOf(node), sameTagCount: siblings.length });
@@ -246,7 +318,7 @@
   const ratio = (left, right) => left === right ? 1 : Math.min(left, right) / Math.max(1, left, right);
   const histogramSimilarity = (left = {}, right = {}) => {
     const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])];
-    if (!keys.length) return 1;
+    if (!keys.length) return null;
     const dot = keys.reduce((sum, key) => sum + (left[key] || 0) * (right[key] || 0), 0);
     const leftLength = Math.sqrt(keys.reduce((sum, key) => sum + (left[key] || 0) ** 2, 0));
     const rightLength = Math.sqrt(keys.reduce((sum, key) => sum + (right[key] || 0) ** 2, 0));
@@ -254,17 +326,45 @@
   };
   const proximity = (left = 0, right = 0, scale = 1) => Math.max(0, 1 - Math.abs(left - right) / scale);
   const tagSimilarity = (left, right) => left === right ? 1 : tagFamily(left) === tagFamily(right) ? 0.72 : 0;
-  const enumSimilarity = (left, right) => left === right ? 1 : 0;
+  const enumSimilarity = (left, right) => left === null || left === undefined || left === '' || right === null || right === undefined || right === ''
+    ? null
+    : left === right ? 1 : 0;
   const tokenSimilarity = (left = [], right = []) => {
     const leftSet = new Set(Array.isArray(left) ? left : []);
     const rightSet = new Set(Array.isArray(right) ? right : []);
     const union = new Set([...leftSet, ...rightSet]);
-    if (!union.size) return 1;
+    if (!union.size) return null;
     return [...leftSet].filter((value) => rightSet.has(value)).length / union.size;
   };
   const weightedSimilarity = (parts) => {
-    const weight = parts.reduce((sum, part) => sum + part[1], 0);
-    return weight ? parts.reduce((sum, part) => sum + part[0] * part[1], 0) / weight : 0;
+    const evidence = parts.filter((part) => typeof part[0] === 'number' && Number.isFinite(part[0]));
+    const weight = evidence.reduce((sum, part) => sum + part[1], 0);
+    return weight ? evidence.reduce((sum, part) => sum + part[0] * part[1], 0) / weight : 0;
+  };
+  const colorSimilarity = (left = {}, right = {}) => {
+    if ((left.alpha ?? 0) <= 0.05 && (right.alpha ?? 0) <= 0.05) return 1;
+    if ((left.alpha ?? 0) <= 0.05 || (right.alpha ?? 0) <= 0.05) return 0;
+    const hueDistance = Math.abs((left.hue ?? 0) - (right.hue ?? 0));
+    const hueSimilarity = (left.saturation ?? 0) > 0.08 && (right.saturation ?? 0) > 0.08
+      ? Math.max(0, 1 - Math.min(hueDistance, 1 - hueDistance) / 0.25)
+      : 1;
+    return weightedSimilarity([
+      [hueSimilarity, 0.45],
+      [proximity(left.saturation, right.saturation, 0.6), 0.2],
+      [proximity(left.lightness, right.lightness, 0.6), 0.25],
+      [proximity(left.alpha, right.alpha, 1), 0.1],
+    ]);
+  };
+  const pseudoSimilarity = (left = {}, right = {}) => {
+    if (!left.rendered && !right.rendered) return null;
+    if (!left.rendered || !right.rendered) return 0;
+    return weightedSimilarity([
+      [enumSimilarity(left.display, right.display), 0.2],
+      [enumSimilarity(left.position, right.position), 0.2],
+      [proximity(left.fontSize, right.fontSize, 8), 0.2],
+      [proximity(left.fontWeight, right.fontWeight, 500), 0.15],
+      [enumSimilarity(left.hasBackground, right.hasBackground), 0.25],
+    ]);
   };
   const visualSimilarity = (left = {}, right = {}) => weightedSimilarity([
     [enumSimilarity(left.display, right.display), 0.12],
@@ -289,22 +389,30 @@
     [proximity(left.borderWidth, right.borderWidth, 3), 0.035],
     [proximity(left.borderRadiusRatio, right.borderRadiusRatio, 0.6), 0.07],
     [enumSimilarity(left.hasBackground, right.hasBackground), 0.06],
+    [colorSimilarity(left.backgroundColor, right.backgroundColor), 0.10],
+    [colorSimilarity(left.borderColor, right.borderColor), 0.04],
+    [colorSimilarity(left.textColor, right.textColor), 0.03],
+    [pseudoSimilarity(left.pseudoBefore, right.pseudoBefore), 0.06],
+    [pseudoSimilarity(left.pseudoAfter, right.pseudoAfter), 0.04],
     [enumSimilarity(left.hasShadow, right.hasShadow), 0.035],
     [proximity(left.paddingXRatio, right.paddingXRatio, 0.5), 0.06],
     [proximity(left.paddingYRatio, right.paddingYRatio, 0.5), 0.06],
   ]);
   const shapeSimilarity = (left, right) => {
     if (!left || !right) return 0;
-    const ancestorMatches = (left.ancestors || []).slice(0, 5).reduce((score, item, index) => {
+    const ancestorEvidence = (left.ancestors || []).slice(0, 5).flatMap((item, index) => {
       const other = right.ancestors?.[index];
-      if (!other) return score;
-      return score + weightedSimilarity([
+      if (!other) return [];
+      return [weightedSimilarity([
         [tagSimilarity(item.tag, other.tag), 0.2],
         [enumSimilarity(item.family, other.family), 0.15],
         [enumSimilarity(item.role, other.role), 0.1],
         [tokenSimilarity(item.tokens, other.tokens), 0.55],
-      ]);
-    }, 0) / 5;
+      ])];
+    });
+    const ancestorMatches = ancestorEvidence.length
+      ? ancestorEvidence.reduce((sum, score) => sum + score, 0) / ancestorEvidence.length
+      : null;
     return weightedSimilarity([
       [tagSimilarity(left.tag, right.tag), 0.06],
       [enumSimilarity(left.family, right.family), 0.05],
@@ -380,7 +488,7 @@
   const sharedElementAncestorDepth = (elements, parent) => {
     const ancestry = elements.map((element) => {
       const ancestors = [];
-      for (let node = element.parentElement; node && node !== parent; node = node.parentElement) ancestors.push(node);
+      for (let node = composedParent(element); node && node !== parent; node = composedParent(node)) ancestors.push(node);
       return ancestors;
     });
     if (ancestry.length < 2) return 0;
@@ -419,6 +527,28 @@
       parts.unshift(part);
     }
     return parts.join(' > ');
+  };
+
+  const resolveDiagnosticElement = (selector) => {
+    if (!selector) return null;
+    const roots = [document, ...deepElements(document).map((element) => element.shadowRoot).filter(Boolean)];
+    for (const root of roots) {
+      try {
+        const match = root.querySelector(selector);
+        if (match) return match;
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  };
+
+  const resolveCapturedElement = (selected) => {
+    if (selected?.captureId) {
+      const captured = capturedElements.get(selected.captureId)?.deref();
+      return captured?.isConnected ? captured : null;
+    }
+    return resolveDiagnosticElement(selected?.cssPath);
   };
 
   const semanticSummary = (element) => {
@@ -482,11 +612,14 @@
     const rect = element.getBoundingClientRect();
     const usefulAttributes = ['id', 'class', 'name', 'type', 'href', 'title', 'aria-label', 'data-testid'];
     const scope = resolvedScope();
+    const captureId = `capture-${++captureSequence}`;
+    capturedElements.set(captureId, typeof WeakRef === 'function' ? new WeakRef(element) : { deref: () => element });
     return {
       kind: 'integration-inspection',
       inspectionKind,
       page: { origin: location.origin, pathname: location.pathname, userAgent: navigator.userAgent },
       selected: {
+        captureId,
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute('role'),
         directText: inspectionKind === 'parent' ? '' : directText.slice(0, 300),
@@ -503,7 +636,7 @@
         repeatedContext: inspectionKind === 'parent' ? null : repeatedContext(element),
         selectorCandidates: selectorCandidates(element),
         shape: shapeSignature(element),
-        relativePath: scope instanceof Element && scope.contains(element) ? pathWithin(element, scope) : null,
+        relativePath: scope instanceof Element && composedContains(scope, element) ? pathWithin(element, scope) : null,
         scopeCssPath: scope instanceof Element ? cssPath(scope) : null,
       },
     };
@@ -606,7 +739,7 @@
     const directlyRendersImage = (element) => element.matches('img') || getComputedStyle(element).backgroundImage !== 'none';
     const candidates = [...new Set([...imagesBehindTarget, ...hitStack, ...chain])]
       .filter((element) => inspectionKind === 'parent' ? isParentCandidate(element) : isMeaningful(element))
-      .filter((element) => inspectionKind !== 'target' || !(scopeElement || scopeSelector || scopeSnapshot) || resolvedScope()?.contains(element))
+      .filter((element) => inspectionKind !== 'target' || !(scopeElement || scopeSelector || scopeSnapshot) || composedContains(resolvedScope(), element))
       .sort((left, right) => Number(directlyRendersImage(right)) - Number(directlyRendersImage(left)))
       .filter((element, index, all) => {
         const signatureFor = (candidate) => {
@@ -732,10 +865,15 @@
       && style.display !== 'none'
       && style.visibility !== 'hidden'
       && style.contentVisibility !== 'hidden'
-      && !element.closest('[hidden],[inert],[aria-hidden="true"]');
+      && !element.closest('[hidden]');
   };
 
-  const elementsOverlap = (left, right) => left === right || left.contains(right) || right.contains(left);
+  const structuralTargetsWithin = (root, includeRoot = false) => [
+    ...(includeRoot && root instanceof Element ? [root] : []),
+    ...deepElements(root),
+  ].filter(isStructuralTargetCandidate);
+
+  const elementsOverlap = (left, right) => left === right || composedContains(left, right) || composedContains(right, left);
 
   const targetSnapshots = (target) => (target.snapshots?.length ? target.snapshots : [target.snapshot]).filter((snapshotValue) => snapshotValue?.selected);
   const learnedNestedRelationship = (leftTarget, rightTarget) => targetSnapshots(leftTarget).some((leftSnapshot) => targetSnapshots(rightTarget).some((rightSnapshot) => {
@@ -745,22 +883,24 @@
     return left.cssPath.startsWith(`${right.cssPath} > `) || right.cssPath.startsWith(`${left.cssPath} > `);
   }));
 
+  const targetCandidateSimilarity = (expected, candidate, parent) => {
+    const shapeScore = shapeSimilarity(expected.shape, shapeSignature(candidate));
+    const relativePathScore = pathSimilarity(expected.relativePath, pathWithin(candidate, parent));
+    return { shapeScore, relativePathScore, score: shapeScore * 0.74 + relativePathScore * 0.26 };
+  };
+
   const evaluateParentCandidate = (element, parentScore, targets, minimumTargetConfidence = 0.74) => {
     const targetEvaluations = targets.map((target, fieldIndex) => {
       const variants = (target.snapshots?.length ? target.snapshots : [target.snapshot]).filter((variant) => variant?.selected?.shape);
       const negativeVariants = (target.negativeSnapshots || []).filter((variant) => variant?.selected?.shape);
-      const matches = deepElements(element).filter(isStructuralTargetCandidate).map((candidate, candidateIndex) => {
+      const includeParent = variants.some((variant) => !variant.selected.relativePath?.length);
+      const matches = structuralTargetsWithin(element, includeParent).map((candidate, candidateIndex) => {
         const positive = variants.map((variant, variantIndex) => {
           const expected = variant.selected;
-          const shapeScore = shapeSimilarity(expected.shape, shapeSignature(candidate));
-          const relativePathScore = pathSimilarity(expected.relativePath, pathWithin(candidate, element));
-          return { element: candidate, shapeScore, relativePathScore, score: shapeScore * 0.74 + relativePathScore * 0.26, variantIndex, matchedSnapshot: variant };
+          return { element: candidate, ...targetCandidateSimilarity(expected, candidate, element), variantIndex, matchedSnapshot: variant };
         }).sort((left, right) => right.score - left.score)[0];
         const negativeScore = Math.max(0, ...negativeVariants.map((variant) => {
-          const expected = variant.selected;
-          const shapeScore = shapeSimilarity(expected.shape, shapeSignature(candidate));
-          const relativePathScore = pathSimilarity(expected.relativePath, pathWithin(candidate, element));
-          return shapeScore * 0.74 + relativePathScore * 0.26;
+          return targetCandidateSimilarity(variant.selected, candidate, element).score;
         }));
         const rejectedByNegative = negativeScore >= minimumTargetConfidence && negativeScore >= positive.score - 0.035;
         return { ...positive, fieldIndex, candidateIndex, positiveScore: positive.score, negativeScore, rejectedByNegative, score: rejectedByNegative ? 0 : positive.score };
@@ -818,8 +958,8 @@
   };
 
   const patternThresholds = (pattern = {}) => {
-    const minimumConfidence = typeof pattern.minimumConfidence === 'number' ? Math.max(0.7, Math.min(0.95, pattern.minimumConfidence)) : 0.85;
-    return { minimumConfidence, minimumTargetConfidence: Math.max(0.65, minimumConfidence - 0.11) };
+    const minimumConfidence = typeof pattern.minimumConfidence === 'number' ? Math.max(0.5, Math.min(0.95, pattern.minimumConfidence)) : 0.85;
+    return { minimumConfidence, minimumTargetConfidence: Math.max(0.5, minimumConfidence - 0.11) };
   };
 
   const suggestTargetsForParent = (element, pattern = {}) => {
@@ -862,18 +1002,20 @@
     return deepElements(document)
       .filter(isParentCandidate)
       .map((element) => ({ element, parentScore: Math.max(0, ...parentShapes.map((shape) => shapeSimilarity(shape, shapeSignature(element)))) }))
-      .filter((candidate) => candidate.parentScore >= 0.62)
+      .filter((candidate) => candidate.parentScore >= Math.max(0.5, minimumConfidence - 0.13))
       .map((candidate) => {
         const evaluated = evaluateParentCandidate(candidate.element, candidate.parentScore, targets, minimumTargetConfidence);
         const presentTargets = evaluated.matchedTargets.filter((target) => !target.optional || target.element && target.score >= minimumTargetConfidence);
         const targetElements = presentTargets.map((target) => target.element).filter(Boolean);
         const distinctTargets = new Set(targetElements).size === targetElements.length;
         const targetsPass = evaluated.matchedTargets.every((target) => target.optional || target.element && target.score >= minimumTargetConfidence);
+        const hasMatchedTarget = !targets.length || evaluated.matchedTargets.some((target) => target.element && target.score >= minimumTargetConfidence);
+        const hasLearnedAbsence = evaluated.matchedTargets.some((target) => target.optional && target.rejectedByNegative);
         return {
           ...evaluated,
           distinctTargets,
           targetsPass,
-          accepted: targetsPass && distinctTargets && evaluated.score >= minimumConfidence,
+          accepted: (hasMatchedTarget || hasLearnedAbsence) && targetsPass && distinctTargets && evaluated.score >= minimumConfidence,
           minimumConfidence,
           minimumTargetConfidence,
         };
@@ -883,25 +1025,144 @@
   const findPatternMatches = (pattern = {}) => {
     const parentCandidates = evaluatePatternCandidates(pattern)
       .filter((candidate) => candidate.accepted)
-      .sort((left, right) => right.score - left.score);
+      .sort((left, right) => right.parentScore - left.parentScore || right.score - left.score);
     const accepted = [];
     for (const candidate of parentCandidates) {
-      if (accepted.some((match) => match.element.contains(candidate.element) || candidate.element.contains(match.element))) continue;
+      if (accepted.some((match) => composedContains(match.element, candidate.element) || composedContains(candidate.element, match.element))) continue;
       accepted.push(candidate);
       if (accepted.length >= 50) break;
     }
     return accepted;
   };
 
+  const diagnosticShapeSummary = (shape = {}) => ({
+    element: { tag: shape.tag, family: shape.family, role: shape.role },
+    structure: {
+      depth: shape.depth,
+      children: shape.childCount,
+      descendants: shape.descendantCount,
+      textLeaves: shape.textLeaves,
+      images: shape.imageCount,
+      links: shape.linkCount,
+      controls: shape.controlCount,
+      structuralTokens: shape.tokens?.length || 0,
+      semanticIdentityTokens: shape.semanticIdentity?.length || 0,
+      semanticLineageTokens: shape.semanticLineage?.length || 0,
+    },
+    visual: shape.visual,
+  });
+
+  const diagnosticPathSummary = (path = []) => (Array.isArray(path) ? path : []).map((node) => ({
+    tag: node.tag,
+    family: node.family,
+    role: node.role,
+    sameTagIndex: node.sameTagIndex,
+    sameTagCount: node.sameTagCount,
+  }));
+
+  const comparisonValue = (value) => {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3);
+    if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+    if (Array.isArray(value)) return value.length ? value.map((item) => typeof item === 'object' ? item.tag || JSON.stringify(item) : item).join(' › ') : '—';
+    if (typeof value === 'object') {
+      if ('hue' in value) return `h ${(value.hue * 360).toFixed(0)}° · s ${(value.saturation * 100).toFixed(0)}% · l ${(value.lightness * 100).toFixed(0)}% · a ${value.alpha.toFixed(2)}`;
+      return JSON.stringify(value);
+    }
+    return String(value);
+  };
+
+  const renderTraitComparison = (container, diagnostics, reveal) => {
+    container.replaceChildren();
+    const addSection = (title, scoreText, example, topMatch, field = null, exampleElement = null, topMatchElement = null, exactExampleElementConnected = false) => {
+      const section = document.createElement('section');
+      section.style.cssText = 'display:grid;gap:7px';
+      const heading = document.createElement('div');
+      heading.style.cssText = 'display:flex;justify-content:space-between;gap:16px;font:700 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
+      const headingTitle = document.createElement('span');
+      headingTitle.textContent = title;
+      const headingScore = document.createElement('span');
+      headingScore.textContent = scoreText;
+      const revealButton = document.createElement('button');
+      revealButton.type = 'button';
+      revealButton.textContent = 'Show on page';
+      revealButton.disabled = !exampleElement && !topMatchElement;
+      revealButton.style.cssText = 'margin-left:auto;padding:3px 7px;border:1px solid #ffffff66;border-radius:5px;background:#ffffff12;color:#fff;font:700 10px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+      revealButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        reveal(title, exampleElement, topMatchElement);
+      });
+      heading.append(headingTitle, revealButton, headingScore);
+      const table = document.createElement('table');
+      table.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font:11px/1.35 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
+      const head = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      ['Trait', 'Saved example', 'Top live candidate'].forEach((label, index) => {
+        const cell = document.createElement('th');
+        cell.textContent = label;
+        cell.style.cssText = `width:${index ? '39%' : '22%'};padding:5px 7px;text-align:left;border-bottom:1px solid #ffffff55;color:#fff`;
+        headRow.append(cell);
+      });
+      head.append(headRow);
+      const body = document.createElement('tbody');
+      const rows = [
+        ['Original selection', exactExampleElementConnected ? 'Still connected' : 'Replaced or unavailable', topMatchElement ? 'Located' : 'Not located'],
+        ['Element', example?.shape?.element?.tag, topMatch?.shape?.element?.tag],
+        ['Family', example?.shape?.element?.family, topMatch?.shape?.element?.family],
+        ['Role', example?.shape?.element?.role, topMatch?.shape?.element?.role],
+        ['DOM path', example?.path, topMatch?.path],
+        ['Depth', example?.shape?.structure?.depth, topMatch?.shape?.structure?.depth],
+        ['Children', example?.shape?.structure?.children, topMatch?.shape?.structure?.children],
+        ['Descendants', example?.shape?.structure?.descendants, topMatch?.shape?.structure?.descendants],
+        ['Text leaves', example?.shape?.structure?.textLeaves, topMatch?.shape?.structure?.textLeaves],
+        ['Controls', example?.shape?.structure?.controls, topMatch?.shape?.structure?.controls],
+        ['Display', example?.shape?.visual?.display, topMatch?.shape?.visual?.display],
+        ['Font size', example?.shape?.visual?.fontSize, topMatch?.shape?.visual?.fontSize],
+        ['Font weight', example?.shape?.visual?.fontWeight, topMatch?.shape?.visual?.fontWeight],
+        ['Width in parent', example?.shape?.visual?.widthRatio, topMatch?.shape?.visual?.widthRatio],
+        ['Height in parent', example?.shape?.visual?.heightRatio, topMatch?.shape?.visual?.heightRatio],
+        ['X in parent', example?.shape?.visual?.xRatio, topMatch?.shape?.visual?.xRatio],
+        ['Y in parent', example?.shape?.visual?.yRatio, topMatch?.shape?.visual?.yRatio],
+        ['Background', example?.shape?.visual?.backgroundColor, topMatch?.shape?.visual?.backgroundColor],
+        ['Text color', example?.shape?.visual?.textColor, topMatch?.shape?.visual?.textColor],
+        ['Border', example?.shape?.visual?.bordered, topMatch?.shape?.visual?.bordered],
+        ['Radius', example?.shape?.visual?.borderRadiusRatio, topMatch?.shape?.visual?.borderRadiusRatio],
+        ['::before rendered', example?.shape?.visual?.pseudoBefore?.rendered, topMatch?.shape?.visual?.pseudoBefore?.rendered],
+        ['::after rendered', example?.shape?.visual?.pseudoAfter?.rendered, topMatch?.shape?.visual?.pseudoAfter?.rendered],
+      ];
+      if (field) rows.unshift(['Score components', `Shape ${Math.round(field.shapeScore * 100)}%`, `Path ${Math.round(field.relativePathScore * 100)}%`]);
+      rows.forEach(([label, saved, live]) => {
+        const row = document.createElement('tr');
+        [label, comparisonValue(saved), comparisonValue(live)].forEach((value, index) => {
+          const cell = document.createElement(index ? 'td' : 'th');
+          cell.textContent = value;
+          cell.style.cssText = `padding:5px 7px;text-align:left;vertical-align:top;border-bottom:1px solid #ffffff22;overflow-wrap:anywhere;${index ? 'font-weight:500' : 'font-weight:700;color:#ffffffbb'}`;
+          row.append(cell);
+        });
+        body.append(row);
+      });
+      table.append(head, body);
+      section.append(heading, table);
+      container.append(section);
+    };
+    addSection('Parent', `${Math.round(diagnostics.bestParentScore * 100)}%`, { shape: diagnostics.parentComparison.example, path: [] }, { shape: diagnostics.parentComparison.topMatch, path: [] }, null, diagnostics.parentComparison.exampleElement, diagnostics.parentComparison.topMatchElement, diagnostics.parentComparison.exactExampleElementConnected);
+    diagnostics.fields.forEach((field) => addSection(field.label || 'Field', `${Math.round(field.score * 100)}% total`, field.example, field.topMatch, field, field.exampleElement, field.topMatchElement, field.exactExampleElementConnected));
+  };
+
   const diagnosePattern = (pattern = {}) => {
+    const { minimumTargetConfidence } = patternThresholds(pattern);
     const parentShapes = (pattern.parents || []).map((sample) => sample?.selected?.shape).filter(Boolean);
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
     const rankedParents = deepElements(document)
       .filter(isParentCandidate)
-      .map((element) => ({ element, score: Math.max(0, ...parentShapes.map((shape) => shapeSimilarity(shape, shapeSignature(element)))) }))
+      .map((element) => {
+        const shape = shapeSignature(element);
+        return { element, shape, score: Math.max(0, ...parentShapes.map((expected) => shapeSimilarity(expected, shape))) };
+      })
       .sort((left, right) => right.score - left.score);
     const bestParent = rankedParents[0];
-    const evaluated = bestParent ? evaluateParentCandidate(bestParent.element, bestParent.score, targets) : null;
+    const evaluated = bestParent ? evaluateParentCandidate(bestParent.element, bestParent.score, targets, minimumTargetConfidence) : null;
     const diagnosticTargetElements = evaluated?.matchedTargets.map((target) => target.element).filter(Boolean) || [];
     const distinctTargets = new Set(diagnosticTargetElements).size === diagnosticTargetElements.length;
     return {
@@ -915,14 +1176,34 @@
       fields: targets.map((target) => {
         const expected = (target.snapshots?.find((variant) => variant?.selected?.shape) || target.snapshot).selected;
         const best = bestParent
-          ? deepElements(bestParent.element).filter(isStructuralTargetCandidate).map((element) => {
-            const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
-            const relativePathScore = pathSimilarity(expected.relativePath, pathWithin(element, bestParent.element));
-            return { shapeScore, relativePathScore, score: shapeScore * 0.74 + relativePathScore * 0.26 };
+          ? structuralTargetsWithin(bestParent.element, !expected.relativePath?.length).map((element) => {
+            return {
+              element,
+              ...targetCandidateSimilarity(expected, element, bestParent.element),
+              shape: shapeSignature(element),
+              path: pathWithin(element, bestParent.element),
+            };
           }).sort((left, right) => right.score - left.score)[0]
           : null;
-        return { label: target.label, score: best?.score || 0, shapeScore: best?.shapeScore || 0, relativePathScore: best?.relativePathScore || 0 };
+        return {
+          label: target.label,
+          score: best?.score || 0,
+          shapeScore: best?.shapeScore || 0,
+          relativePathScore: best?.relativePathScore || 0,
+          example: { shape: diagnosticShapeSummary(expected.shape), path: diagnosticPathSummary(expected.relativePath) },
+          topMatch: best ? { shape: diagnosticShapeSummary(best.shape), path: diagnosticPathSummary(best.path) } : null,
+          exampleElement: resolveCapturedElement(expected),
+          exactExampleElementConnected: Boolean(expected.captureId && capturedElements.get(expected.captureId)?.deref()?.isConnected),
+          topMatchElement: best?.element || null,
+        };
       }),
+      parentComparison: {
+        example: diagnosticShapeSummary(parentShapes[0]),
+        topMatch: diagnosticShapeSummary(bestParent?.shape),
+        exampleElement: resolveCapturedElement(pattern.parents?.[0]?.selected),
+        exactExampleElementConnected: Boolean(pattern.parents?.[0]?.selected?.captureId && capturedElements.get(pattern.parents[0].selected.captureId)?.deref()?.isConnected),
+        topMatchElement: bestParent?.element || null,
+      },
     };
   };
 
@@ -939,15 +1220,11 @@
   const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence) => {
     const expected = snapshotValue?.selected;
     if (!expected?.shape) return { status: 'no_match', reason: 'target_pattern_missing' };
-    const candidates = deepElements(scope)
-      .filter(isStructuralTargetCandidate)
+    const candidates = structuralTargetsWithin(scope, scope instanceof Element && !expected.relativePath?.length)
       .map((element) => {
+        if (scope instanceof Element) return { element, ...targetCandidateSimilarity(expected, element, scope) };
         const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
-        const relativePathScore = scope instanceof Element && expected.relativePath
-          ? pathSimilarity(expected.relativePath, pathWithin(element, scope))
-          : 1;
-        const score = scope instanceof Element ? shapeScore * 0.74 + relativePathScore * 0.26 : shapeScore;
-        return { element, shapeScore, relativePathScore, score };
+        return { element, shapeScore, relativePathScore: 1, score: shapeScore };
       })
       .sort((left, right) => right.score - left.score);
     const best = candidates[0];
@@ -1094,7 +1371,7 @@
         const previous = records.get(key);
         if (previous && previous.record.score >= record.score) continue;
         const overlapping = structuralRecords.find((entry) => entry.element !== element
-          && (entry.element.contains(element) || element.contains(entry.element)));
+          && (composedContains(entry.element, element) || composedContains(element, entry.element)));
         if (overlapping && overlapping.record.score >= record.score) continue;
         if (overlapping) {
           records.delete(overlapping.key);
@@ -1211,11 +1488,11 @@
         existingLayer.style.cssText = 'position:fixed;inset:0;z-index:2147483645;pointer-events:none';
         const { minimumConfidence } = patternThresholds(inspectionPattern);
         const rankedCandidates = evaluatePatternCandidates(inspectionPattern)
-          .filter((candidate) => candidate.parentScore >= Math.max(0.7, minimumConfidence - 0.13))
+          .filter((candidate) => candidate.parentScore >= Math.max(0.5, minimumConfidence - 0.13))
           .sort((left, right) => right.parentScore - left.parentScore || right.score - left.score);
         const diagnosticCandidates = [];
         for (const candidate of rankedCandidates) {
-          if (diagnosticCandidates.some((record) => record.element.contains(candidate.element) || candidate.element.contains(record.element))) continue;
+          if (diagnosticCandidates.some((record) => composedContains(record.element, candidate.element) || composedContains(candidate.element, record.element))) continue;
           diagnosticCandidates.push(candidate);
           if (diagnosticCandidates.length >= 50) break;
         }
@@ -1387,6 +1664,7 @@
       }
       document.documentElement.append(status);
       document.addEventListener('pointermove', pointerMove, true);
+      document.addEventListener('mousemove', pointerMove, true);
       document.addEventListener('click', click, true);
       document.addEventListener('keydown', keydown, true);
     },
@@ -1395,6 +1673,7 @@
       inspectionPattern = null;
       targetCollection = null;
       document.removeEventListener('pointermove', pointerMove, true);
+      document.removeEventListener('mousemove', pointerMove, true);
       document.removeEventListener('click', click, true);
       document.removeEventListener('keydown', keydown, true);
       removeUi();
@@ -1477,16 +1756,30 @@
       };
       const status = document.createElement('div');
       status.id = 'hvy-galaxy-inspector-status';
-      status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;display:grid;grid-template-columns:auto minmax(150px,240px) auto;align-items:center;gap:10px;max-width:min(720px,calc(100vw - 24px));padding:8px 12px;border-radius:8px;background:#e0563f;color:#fff;box-shadow:0 4px 18px #0006;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
+      status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;display:grid;grid-template-columns:minmax(330px,1fr) minmax(150px,240px) auto auto;align-items:center;gap:10px;width:min(820px,calc(100vw - 24px));box-sizing:border-box;padding:8px 12px;border-radius:8px;background:#e0563f;color:#fff;box-shadow:0 4px 18px #0006;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
       const statusText = document.createElement('span');
       const slider = document.createElement('input');
       slider.type = 'range';
-      slider.min = '70';
+      slider.min = '50';
       slider.max = '95';
       slider.step = '1';
       slider.value = String(Math.round(patternThresholds(pattern).minimumConfidence * 100));
       slider.setAttribute('aria-label', 'Minimum match confidence');
       const confidenceOutput = document.createElement('output');
+      const compareButton = document.createElement('button');
+      compareButton.type = 'button';
+      compareButton.textContent = 'Compare traits';
+      compareButton.style.cssText = 'display:none;padding:5px 9px;border:0;border-radius:6px;background:#fff;color:#8b2d20;font:700 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+      const comparison = document.createElement('div');
+      let comparisonOpen = false;
+      comparison.style.cssText = 'grid-column:1/-1;display:none;gap:18px;max-height:min(62vh,620px);max-width:780px;overflow:auto;margin:0;padding:12px;border-radius:6px;background:#17191d;color:#f2f3f5;user-select:text';
+      compareButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        comparisonOpen = !comparisonOpen;
+        comparison.style.display = comparisonOpen ? 'grid' : 'none';
+        compareButton.textContent = comparisonOpen ? 'Hide comparison' : 'Compare traits';
+      });
       let currentPattern = { ...pattern, minimumConfidence: Number(slider.value) / 100 };
       liveMinimumConfidence = currentPattern.minimumConfidence;
       let currentAccepted = [];
@@ -1494,6 +1787,7 @@
         layer.replaceChildren();
         overlays = [];
         currentAccepted = findPatternMatches(currentPattern);
+        const diagnostics = diagnosePattern(currentPattern);
         const visualMatches = [...currentAccepted].sort((left, right) => {
           const leftRect = left.element.getBoundingClientRect();
           const rightRect = right.element.getBoundingClientRect();
@@ -1513,6 +1807,7 @@
           box.append(caption);
           layer.append(box);
           overlays.push({ element, box });
+          return box;
         };
         visualMatches.forEach((match, recordIndex) => {
           addBox(match.element, '#3478d4', `Match ${recordIndex + 1} · ${Math.round(match.score * 100)}%`, 2, 'parent', recordIndex);
@@ -1524,9 +1819,44 @@
         statusText.textContent = currentAccepted.length
           ? `${currentAccepted.length} matching ${currentAccepted.length === 1 ? 'item' : 'items'}`
           : (() => {
-            const diagnostics = diagnosePattern(currentPattern);
-            return `No matches · closest record ${Math.round(diagnostics.aggregateScore * 100)}%`;
+            const requiredFieldScores = diagnostics.fields
+              .filter((_, index) => currentPattern.targets?.[index]?.optional !== true)
+              .map((field) => field.score);
+            const lowestRequiredField = requiredFieldScores.length ? Math.min(...requiredFieldScores) : null;
+            return `No matches · closest record ${Math.round(diagnostics.aggregateScore * 100)}% · parent ${Math.round(diagnostics.bestParentScore * 100)}%${lowestRequiredField === null ? '' : ` · lowest field ${Math.round(lowestRequiredField * 100)}%`}`;
           })();
+        compareButton.style.display = 'inline-block';
+        renderTraitComparison(comparison, diagnostics, (label, exampleElement, topMatchElement) => {
+          comparisonOpen = false;
+          comparison.style.display = 'none';
+          compareButton.textContent = 'Compare traits';
+          layer.querySelectorAll('[data-match-kind="diagnostic-comparison"]').forEach((box) => box.remove());
+          overlays = overlays.filter(({ box }) => box.dataset.matchKind !== 'diagnostic-comparison');
+          const savedAvailable = Boolean(exampleElement?.isConnected);
+          const candidateAvailable = Boolean(topMatchElement?.isConnected);
+          if (savedAvailable && candidateAvailable && exampleElement === topMatchElement) {
+            addBox(exampleElement, '#ffd166', `Saved + top candidate ${label} · same element`, 4, 'diagnostic-comparison', 0);
+            statusText.textContent = `${label}: saved selection and top live candidate are the same element`;
+          } else {
+            if (savedAvailable) {
+              const savedBox = addBox(exampleElement, '#2fbf71', `Saved ${label}`, 3, 'diagnostic-comparison', 0);
+              savedBox.style.borderStyle = 'dashed';
+            }
+            if (candidateAvailable) {
+              const candidateBox = addBox(topMatchElement, '#b66cff', `Top candidate ${label}`, 3, 'diagnostic-comparison', 1);
+              candidateBox.style.outline = '2px solid #fff';
+              candidateBox.style.outlineOffset = '2px';
+            }
+            statusText.textContent = !savedAvailable
+              ? `Saved ${label} was replaced by the page · purple is the top live candidate`
+              : !candidateAvailable
+                ? `${label}: saved selection is green · no live candidate was located`
+                : `${label}: saved selection is dashed green · top live candidate is outlined purple`;
+          }
+          (topMatchElement?.isConnected ? topMatchElement : exampleElement)?.scrollIntoView({ block: 'center', inline: 'nearest' });
+          updateOverlays();
+        });
+        comparison.style.display = comparisonOpen ? 'grid' : 'none';
         updateOverlays();
       };
       slider.addEventListener('input', () => {
@@ -1534,7 +1864,7 @@
         liveMinimumConfidence = currentPattern.minimumConfidence;
         renderMatches();
       });
-      status.append(statusText, slider, confidenceOutput);
+      status.append(statusText, slider, confidenceOutput, compareButton, comparison);
       document.documentElement.append(status);
       renderMatches();
       const result = serializeMatches(currentAccepted);

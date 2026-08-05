@@ -97,14 +97,18 @@ export function defaultIntegrationRegistry(): IntegrationRegistry {
       browserStoreId: 'default-google',
     }],
     integrations: [{
-      id: 'google-workspace',
-      name: 'Google Workspace',
+      id: 'gmail',
+      name: 'Gmail',
       profileProviderId: 'google',
       editable: false,
-      pages: [
-        { id: 'gmail', name: 'Gmail', url: 'https://mail.google.com/', allowedOrigins: ['https://mail.google.com', 'https://accounts.google.com'], editable: false },
-        { id: 'google-calendar', name: 'Google Calendar', url: 'https://calendar.google.com/', allowedOrigins: ['https://calendar.google.com', 'https://accounts.google.com'], editable: false },
-      ],
+      pages: [{ id: 'gmail', name: 'Gmail', url: 'https://mail.google.com/', allowedOrigins: ['https://mail.google.com', 'https://accounts.google.com'], editable: false }],
+      actions: [],
+    }, {
+      id: 'google-calendar',
+      name: 'Google Calendar',
+      profileProviderId: 'google',
+      editable: false,
+      pages: [{ id: 'google-calendar', name: 'Google Calendar', url: 'https://calendar.google.com/', allowedOrigins: ['https://calendar.google.com', 'https://accounts.google.com'], editable: false }],
       actions: [],
     }],
   };
@@ -115,7 +119,7 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
   const value = localStorage.getItem(STORAGE_KEY);
   if (!value) return fallback;
   const saved = JSON.parse(value) as IntegrationRegistry;
-  const custom = saved.integrations.filter((integration) => integration.editable).map((integration) => ({
+  const custom = saved.integrations.filter((integration) => integration.editable && !fallback.integrations.some((builtIn) => builtIn.id === integration.id)).map((integration) => ({
     ...integration,
     pages: integration.pages.map((page) => ({
       ...page,
@@ -130,18 +134,30 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
     })),
   }));
   const savedGoogle = saved.integrations.find((integration) => integration.id === 'google-workspace');
-  const savedGoogleActions = savedGoogle?.actions ?? [];
-  fallback.integrations[0].actions = savedGoogleActions.map((action) => ({
-    ...action,
-    commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
-  }));
-  fallback.integrations[0].pages = fallback.integrations[0].pages.map((page) => ({
-    ...page,
-    commands: [
+  fallback.integrations = fallback.integrations.map((builtIn) => {
+    const page = builtIn.pages[0];
+    const savedPageIntegration = saved.integrations.find((integration) => integration.id === builtIn.id);
+    const rawActions = [
+      ...(savedPageIntegration?.actions ?? []),
+      ...(savedGoogle?.actions.filter((action) => action.pageIds[0] === page.id) ?? []),
+    ];
+    const actions = rawActions.map((action) => ({
+      ...action,
+      integrationId: builtIn.id,
+      pageIds: [page.id],
+      commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
+    }));
+    const commands = [
+      ...(savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.commands ?? []),
       ...(savedGoogle?.pages.find((savedPage) => savedPage.id === page.id)?.commands ?? []),
-      ...savedGoogleActions.filter((action) => action.pageIds[0] === page.id).flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
-    ],
-  }));
+      ...rawActions.flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
+    ];
+    return {
+      ...builtIn,
+      pages: [{ ...page, commands: [...new Map(commands.map((command) => [command.id, command])).values()] }],
+      actions,
+    };
+  });
   const profiles = (saved.profiles ?? fallback.profiles).map((profile) => (
     profile.id === 'default-google' && profile.name === 'Google account'
       ? { ...profile, name: 'Personal' }
@@ -192,7 +208,7 @@ export function createCustomPageIntegration(name: string, urlValue: string): Int
   return {
     id,
     name: name.trim(),
-    profileProviderId: id,
+    profileProviderId: 'browser',
     editable: true,
     pages: [{ id: `${id}-page`, name: name.trim(), url: url.href, allowedOrigins: [url.origin], editable: true }],
     actions: [],

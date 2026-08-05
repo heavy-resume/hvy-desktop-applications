@@ -62,7 +62,7 @@ export async function boot(): Promise<void> {
         state.integrationActionFetchPendingId = null;
         state.integrationActionFetchError = null;
         const extraction = result as { context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
-        if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.7, Math.min(0.95, extraction.minimumConfidence));
+        if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, extraction.minimumConfidence));
         const isBackgroundExampleValidation = extraction.context?.mode === 'examples';
         if (isBackgroundExampleValidation) {
           state.integrationActionLiveExampleRecords = extraction.records ?? [];
@@ -141,6 +141,7 @@ export async function boot(): Promise<void> {
       state.integrationActionBuilderOpen = true;
       state.integrationActionSelectionPending = false;
       let collectInitialFields = false;
+      let collectExistingFields = false;
       if (state.integrationActionSelectionKind === 'parent' || state.integrationActionSelectionKind === 'example') {
         const parentIndex = state.integrationActionAnchors.length;
         state.integrationActionAnchors.push(result);
@@ -160,6 +161,12 @@ export async function boot(): Promise<void> {
           state.integrationActionTargetSelectionFieldIndex = null;
           state.integrationActionSelectionPending = true;
           collectInitialFields = true;
+        } else if (state.integrationActionSelectionKind === 'example' && state.integrationActionExamples.length > 0) {
+          state.integrationActionSelectionKind = 'target';
+          state.integrationActionTargetSelectionParentIndex = parentIndex;
+          state.integrationActionTargetSelectionFieldIndex = 0;
+          state.integrationActionSelectionPending = true;
+          collectExistingFields = true;
         }
       } else {
         const fieldIndex = state.integrationActionTargetSelectionFieldIndex;
@@ -182,21 +189,37 @@ export async function boot(): Promise<void> {
           state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = null;
           state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
           state.integrationActionExamples[fieldIndex] = state.integrationActionTargetVariants[fieldIndex].find(Boolean) ?? result;
+          const nextFieldIndex = fieldIndex + 1;
+          if (nextFieldIndex < state.integrationActionExamples.length) {
+            state.integrationActionTargetSelectionFieldIndex = nextFieldIndex;
+            state.integrationActionSelectionPending = true;
+            state.status = `Select ${state.integrationActionTargetLabels[nextFieldIndex] || `field ${nextFieldIndex + 1}`} in this example`;
+            rerender({ preserveMountedDocument: true });
+            const parentSnapshot = state.integrationActionAnchors[parentIndex];
+            const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
+            await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot });
+            return;
+          }
         }
         state.integrationActionTargetSelectionFieldIndex = null;
       }
       if (result && typeof result === 'object' && typeof (result as { profileId?: unknown }).profileId === 'string') {
         const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === (result as { profileId: string }).profileId);
-        const integration = profile && state.integrationRegistry.integrations.find((candidate) => candidate.profileProviderId === profile.providerId);
-        if (profile && integration) {
+        if (profile) {
           state.selectedIntegrationProfileId = profile.id;
-          state.selectedIntegrationId = integration.id;
         }
       }
       rerender({ preserveMountedDocument: true });
       if (collectInitialFields) {
         const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
         await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true });
+        return;
+      }
+      if (collectExistingFields) {
+        const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
+        state.status = `Select ${state.integrationActionTargetLabels[0] || 'field 1'} in this example`;
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result });
         return;
       }
       await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);

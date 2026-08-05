@@ -4,7 +4,7 @@
 
 Allow a user to open a web application in HVY Galaxy, use its normal interface, extract structured data with deterministic scripts, and insert reviewed results into an HVY document.
 
-Google Workspace is the first provider, initially covering Gmail and Google Calendar, followed by Drive. The architecture must remain provider-neutral so future mods can add integrations without receiving unrestricted desktop access.
+Gmail and Google Calendar are the first bundled web pages, followed by Drive. They are independent page definitions that may use the same browser profile. The architecture must remain vendor-neutral so future mods and shared setup files can add pages without receiving unrestricted desktop access.
 
 ## Product experience
 
@@ -24,16 +24,17 @@ Trusted Galaxy controls expose:
 
 The remote page must not replace the main Galaxy renderer or receive Galaxy's privileged bridge. A later browser-chrome window may place a trusted local toolbar above the remote content using an Electron `WebContentsView` and Tauri child webview. Until then, the main Galaxy window remains the trusted command center and the remote integration window appears only when the user needs to interact with it.
 
-### Pages and integrations
+### Web pages and portable setups
 
-An integration owns one or more pages and action scripts. Gmail and Google Calendar are bundled starting integrations, but they use the same records as pages added by a user.
+A web page owns its page commands and record types. Gmail and Google Calendar are separate bundled pages: email record types belong to Gmail and calendar record types belong to Calendar. User-added pages use the same representation.
+
+A portable integration setup packages one or more page definitions, their record types, and their commands. It never packages profiles, cookies, browser storage, credentials, or captured personal values. Importing a setup such as a LinkedIn configuration adds its pages and then lets the user choose an existing local profile through **Use profile**.
 
 ```ts
 interface IntegrationDefinition {
   id: string;
   name: string;
-  profileProviderId: string;
-  pages: IntegrationPageDefinition[];
+  pages: [IntegrationPageDefinition];
   recordDefinitions: IntegrationRecordDefinition[];
 }
 
@@ -50,13 +51,12 @@ The UI must support adding, editing, and removing user-defined pages. Adding a p
 
 ### Integration profiles
 
-An integration profile represents one independent signed-in identity. Apps belonging to the same provider may share a profile, while work and personal accounts remain separate.
+An integration profile represents one independent browser identity. Profiles are separate from page definitions and portable setups. The same profile may open several pages that share authentication, while work and personal identities remain separate. Profile selection is always presented as **Use profile**, rather than as part of the page hierarchy.
 
 ```ts
 interface IntegrationProfile {
   id: string;
   name: string;
-  providerId: string;
   browserStoreId: string;
   createdAt: string;
   lastUsedAt: string;
@@ -65,7 +65,7 @@ interface IntegrationProfile {
 
 Users can create, rename, switch, reset, and delete profiles. Reset and deletion use explicit Galaxy modals and remove the complete browser store for only the selected profile.
 
-Each open profile owns an independent native webview instance. Multiple profiles for the same provider may remain open concurrently, allowing use cases such as separate personal and work Gmail accounts without switching the active login inside Google.
+Each open profile owns an independent native webview instance. Multiple profiles may remain open concurrently, allowing use cases such as separate personal and work Gmail accounts without switching the active login inside Google. One profile can be reused for Gmail and Calendar without duplicating its session store.
 
 ## Architecture
 

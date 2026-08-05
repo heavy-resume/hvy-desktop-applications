@@ -8,6 +8,14 @@ describe('integration registry', () => {
     expect(defaultIntegrationRegistry().profiles[0].name).toBe('Personal');
   });
 
+  it('models Gmail and Calendar as separate pages that can use the same profile', () => {
+    const registry = defaultIntegrationRegistry();
+    expect(registry.integrations.map((integration) => integration.id)).toEqual(['gmail', 'google-calendar']);
+    expect(registry.integrations.map((integration) => integration.pages.map((page) => page.id))).toEqual([['gmail'], ['google-calendar']]);
+    expect(registry.integrations.every((integration) => integration.profileProviderId === 'google')).toBe(true);
+    expect(registry.profiles.map((profile) => profile.id)).toEqual(['default-google']);
+  });
+
   it('stores only matcher structure and reconstructs an executable pattern', () => {
     const snapshot = {
       selected: {
@@ -67,6 +75,7 @@ describe('integration registry', () => {
     const loaded = loadIntegrationRegistry();
     expect(loaded.integrations[0].pages.find((page) => page.id === 'gmail')?.commands?.map((command) => command.id)).toEqual(['refresh-inbox']);
     expect(loaded.integrations[0].actions[0].commands?.map((command) => command.id)).toEqual(['open-message']);
+    expect(loaded.integrations[0].actions[0].integrationId).toBe('gmail');
   });
 });
 

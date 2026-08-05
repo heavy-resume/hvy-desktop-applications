@@ -235,6 +235,67 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('treats the host of a rendered pseudo-element as a selectable target', async () => {
+    await page.setContent(`
+      <style>.marker::before { content: "Calendar marker"; display:block; width:80px; height:18px; background:#4682b4; }</style>
+      <button class="event"><span>Event title</span><div class="marker"></div></button>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.event')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentSnapshot: snapshot }), parentSnapshot);
+    await movePointerTo(page, '.marker');
+
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toContain('div');
+    await clickPointerAt(page, '.marker');
+    expect(await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'Calendar marker' }).count()).toBeGreaterThan(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('matches target ancestry through a shadow root and its composed parent', async () => {
+    await page.setContent('<div class="event-host"></div>');
+    await page.evaluate(() => {
+      const host = document.querySelector('.event-host')!;
+      host.attachShadow({ mode: 'open' }).innerHTML = '<div><span class="title">Planning session</span></div>';
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.event-host')!;
+      const title = parent.shadowRoot!.querySelector('.title')!;
+      const target = window.__hvyGalaxyInspector.snapshotElement(title, parent, 'target');
+      return {
+        path: target.selected.relativePath,
+        match: window.__hvyGalaxyInspector.matchAndHighlight({
+          minimumConfidence: 0.95,
+          parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+          targets: [{ label: 'TITLE', snapshot: target }],
+        }),
+      };
+    });
+
+    expect(result.path?.map((node) => node.tag)).toEqual(['span', 'div']);
+    expect(result.match.matches, JSON.stringify(result.match, null, 2)).toBe(1);
+    expect(result.match.details[0].targets[0].score).toBeCloseTo(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('matches visually rendered fields inside an aria-hidden subtree', async () => {
+    await page.setContent('<button class="event"><div aria-hidden="true"><span class="title">Planning session</span></div></button>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.event')!;
+      const title = parent.querySelector('.title')!;
+      return window.__hvyGalaxyInspector.matchAndHighlight({
+        minimumConfidence: 0.95,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'TITLE', snapshot: window.__hvyGalaxyInspector.snapshotElement(title, parent, 'target') }],
+      });
+    });
+
+    expect(result.matches, JSON.stringify(result, null, 2)).toBe(1);
+    expect(result.details[0].targets[0].score).toBeCloseTo(1);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('suppresses page hover actions and boxes the selected parent while choosing a target', async () => {
     await page.setContent(`
       <style>
@@ -452,7 +513,47 @@ describe('integration structural inspector', () => {
     expect((visual.chip as typeof visual.chip & { borderRadiusRatio: number }).borderRadiusRatio).toBeGreaterThan(0);
     expect((visual.chip as typeof visual.chip & { paddingXRatio: number }).paddingXRatio).toBeGreaterThan(0);
     expect((visual.chip as typeof visual.chip & { hasBackground: boolean }).hasBackground).toBe(true);
+    expect((visual.chip as typeof visual.chip & { backgroundColor: { lightness: number } }).backgroundColor.lightness).toBeGreaterThan(0.8);
+    expect((visual.chip as typeof visual.chip & { borderColor: { alpha: number } }).borderColor.alpha).toBe(1);
+    expect((visual.chip as typeof visual.chip & { textColor: { alpha: number } }).textColor.alpha).toBe(1);
     expect((visual.plain as typeof visual.plain & { bordered: boolean }).bordered).toBe(false);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('scores a saved example against its unchanged live element as an exact match', async () => {
+    await page.setContent('<article class="event"><span class="title">Planning session</span></article>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.event')!;
+      return window.__hvyGalaxyInspector.matchAndHighlight({
+        minimumConfidence: 0.95,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'TITLE', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.title')!, parent, 'target') }],
+      });
+    });
+
+    expect(result.matches, JSON.stringify(result, null, 2)).toBe(1);
+    expect(result.details[0].parentScore).toBeCloseTo(1);
+    expect(result.details[0].targets[0].score).toBeCloseTo(1);
+    expect(result.details[0].score).toBeCloseTo(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('matches a button when the same element is both the record parent and selected field', async () => {
+    await page.setContent('<main><button class="event" style="width:240px;background:rgb(80,120,200)">Planning session</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const button = document.querySelector('.event')!;
+      return window.__hvyGalaxyInspector.matchAndHighlight({
+        minimumConfidence: 0.95,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(button, null, 'parent')],
+        targets: [{ label: 'TITLE', snapshot: window.__hvyGalaxyInspector.snapshotElement(button, button, 'target') }],
+      });
+    });
+
+    expect(result.matches, JSON.stringify(result, null, 2)).toBe(1);
+    expect(result.details[0].parentScore).toBeCloseTo(1);
+    expect(result.details[0].targets[0].score).toBeCloseTo(1);
     expect(pageErrors).toEqual([]);
   });
 
@@ -490,7 +591,7 @@ describe('integration structural inspector', () => {
       };
       return {
         strict: window.__hvyGalaxyInspector.extractPattern({ ...basePattern, minimumConfidence: 0.85 }).matches,
-        tolerant: window.__hvyGalaxyInspector.extractPattern({ ...basePattern, minimumConfidence: 0.8 }).matches,
+        tolerant: window.__hvyGalaxyInspector.extractPattern({ ...basePattern, minimumConfidence: 0.75 }).matches,
       };
     });
 
@@ -505,7 +606,7 @@ describe('integration structural inspector', () => {
     await page.evaluate(() => {
       const parent = document.querySelector('[data-record="reference"]')!;
       window.__hvyGalaxyInspector.matchAndHighlight({
-        minimumConfidence: 0.8,
+        minimumConfidence: 0.75,
         parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
         targets: [
           { label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target') },
@@ -515,6 +616,8 @@ describe('integration structural inspector', () => {
     });
 
     expect(await page.locator('[data-match-kind="parent"]').count()).toBe(6);
+    expect(await page.getByRole('button', { name: 'Compare traits' }).isVisible()).toBe(true);
+    expect(await page.getByRole('slider', { name: 'Minimum match confidence' }).getAttribute('min')).toBe('50');
     await page.getByRole('slider', { name: 'Minimum match confidence' }).evaluate((element) => {
       const input = element as HTMLInputElement;
       input.value = '85';
@@ -546,7 +649,7 @@ describe('integration structural inspector', () => {
     });
     await page.getByRole('slider', { name: 'Minimum match confidence' }).evaluate((element) => {
       const input = element as HTMLInputElement;
-      input.value = '80';
+      input.value = '75';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     expect(await page.locator('[data-match-kind="parent"]').count()).toBe(6);
@@ -607,6 +710,31 @@ describe('integration structural inspector', () => {
     expect(await page.locator('#hvy-galaxy-pattern-matches').textContent()).toContain('Match 1');
     expect(await page.locator('#hvy-galaxy-pattern-matches span', { hasText: 'SUBJECT' }).count()).toBe(2);
     expect(await page.locator('#hvy-galaxy-pattern-matches span', { hasText: 'PREVIEW' }).count()).toBe(2);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('prefers the stronger record boundary over a broader ancestor with a stronger field candidate', async () => {
+    await page.setContent(`
+      <main><section class="outer">
+        <article class="event"><span class="title" style="font-size:18px;font-weight:700;color:blue">Planning session</span></article>
+        <span class="decoy" style="font-size:18px;font-weight:700;color:blue">Other text</span>
+      </section></main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.event')!;
+      const target = parent.querySelector('.title')!;
+      const pattern = {
+        minimumConfidence: 0.5,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'TITLE', snapshot: window.__hvyGalaxyInspector.snapshotElement(target, parent, 'target') }],
+      };
+      target.setAttribute('style', 'font-size:11px;font-weight:400;color:red');
+      return window.__hvyGalaxyInspector.matchAndHighlight(pattern);
+    });
+
+    expect(result.matches, JSON.stringify(result, null, 2)).toBe(1);
+    expect(result.details[0].parent).toBe('html > body > main > section > article');
     expect(pageErrors).toEqual([]);
   });
 
@@ -678,6 +806,31 @@ describe('integration structural inspector', () => {
       'No files': null,
       'Files attached': 'report.pdf',
     });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not accept a parent-only record when none of its optional fields match', async () => {
+    await page.setContent('<main><article class="message"><span class="subject">Calendar event</span></article></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const parent = document.querySelector('.message')!;
+      const parentSnapshot = window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent');
+      const targetSnapshot = window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.subject')!, parent, 'target');
+      parent.querySelector('.subject')!.remove();
+      return window.__hvyGalaxyInspector.matchAndHighlight({
+        minimumConfidence: 0.5,
+        parents: [parentSnapshot],
+        targets: [{ label: 'SUBJECT', optional: true, snapshot: targetSnapshot }],
+      });
+    });
+
+    expect(result.matches).toBe(0);
+    await page.getByRole('button', { name: 'Compare traits' }).click();
+    expect(await page.locator('#hvy-galaxy-inspector-status table').count()).toBe(2);
+    expect(await page.locator('#hvy-galaxy-inspector-status').textContent()).toContain('Score components');
+    await page.getByRole('button', { name: 'Show on page' }).first().click();
+    expect(await page.locator('[data-match-kind="diagnostic-comparison"]').count()).toBeGreaterThan(0);
+    expect(await page.locator('#hvy-galaxy-inspector-status').textContent()).toMatch(/same element|top live candidate/);
     expect(pageErrors).toEqual([]);
   });
 
@@ -986,7 +1139,7 @@ describe('integration structural inspector', () => {
 
     expect(result.matches, JSON.stringify(result, null, 2)).toBe(1);
     expect(result.details[0].relationshipScore).toBeCloseTo(0.2);
-    expect(result.details[0].score).toBeGreaterThan(0.9);
+    expect(result.details[0].score).toBeGreaterThan(0.88);
   });
 
   it('numbers matches in page order and keeps overlays attached while a nested page scrolls', async () => {

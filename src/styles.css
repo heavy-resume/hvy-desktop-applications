@@ -314,8 +314,16 @@ body {
 }
 
 .integration-profile-select {
-  display: block;
+  display: grid;
+  gap: 4px;
   min-width: 180px;
+}
+
+.integration-profile-select > span {
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
 }
 
 .integration-profile-controls {

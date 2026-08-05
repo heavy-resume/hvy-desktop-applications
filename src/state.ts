@@ -410,7 +410,7 @@ export const state: AppState = {
   integrationRecordDeleteDialogOpen: false,
   integrationRecordDeleteIntegrationId: null,
   integrationRecordDeleteActionId: null,
-  selectedIntegrationId: 'google-workspace',
+  selectedIntegrationId: 'gmail',
   selectedIntegrationProfileId: 'default-google',
   addIntegrationProfileDialogOpen: false,
   appSettingsDialogMode: 'settings',
