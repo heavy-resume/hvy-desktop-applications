@@ -50,6 +50,49 @@ export async function boot(): Promise<void> {
       void handleAppCloseRequest();
     });
     await onIntegrationInspectionResult(async (result) => {
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
+        const action = (result as { action?: unknown }).action;
+        const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
+        const page = integration?.pages[0];
+        if (!integration || !page) throw new Error('The selected integration page is unavailable.');
+        if (action === 'add-page-command') handlers.addCommandForIntegrationPage(integration.id, page.id);
+        if (action === 'define-record-type') handlers.addActionForIntegrationPage(integration.id, page.id);
+        return;
+      }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-source-discovery') {
+        const discovery = result as { context?: { pageId?: string }; sources?: import('./integrationBrowser').IntegrationStructuredSource[] };
+        state.integrationStructuredSourcePending = false;
+        state.integrationStructuredSourceError = null;
+        const selectedPageId = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId)?.pages[0]?.id ?? null;
+        state.integrationStructuredSourcePageId = discovery.context?.pageId ?? selectedPageId;
+        state.integrationStructuredSources = discovery.sources ?? [];
+        state.status = state.integrationStructuredSources.length
+          ? `Found ${state.integrationStructuredSources.length} structured data source${state.integrationStructuredSources.length === 1 ? '' : 's'}`
+          : 'No structured data sources found';
+        rerender({ preserveMountedDocument: true });
+        if (!(discovery.context as { automatic?: boolean } | undefined)?.automatic) await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-structured-result') {
+        const structured = result as { context?: { sourceName?: string }; value?: unknown };
+        state.integrationStructuredSourcePending = false;
+        state.integrationStructuredSourceError = null;
+        state.integrationStructuredResultName = structured.context?.sourceName ?? 'Structured data';
+        state.integrationStructuredResult = structured.value;
+        state.integrationStructuredResultOpen = true;
+        state.status = `Fetched ${state.integrationStructuredResultName}`;
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-structured-error') {
+        state.integrationStructuredSourcePending = false;
+        state.integrationStructuredSourceError = String((result as { message?: unknown }).message ?? 'The structured source could not be fetched.');
+        state.status = 'Structured data fetch failed';
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-result') {
         const commandResult = result as { status?: unknown; reason?: unknown };
         state.status = commandResult.status === 'ambiguous'

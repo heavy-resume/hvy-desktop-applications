@@ -16,7 +16,41 @@
   let selectionOverlayCleanup = null;
   let targetCollection = null;
   let captureSequence = 0;
+  let browserChromeHost = null;
   const capturedElements = new Map();
+  const observedStructuredUrls = new Map();
+  const xhrStructuredUrls = new WeakMap();
+
+  const observeStructuredUrl = (value, contentType = '') => {
+    try {
+      const url = new URL(value instanceof Request ? value.url : String(value), location.href);
+      if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) return;
+      const normalizedType = contentType.toLowerCase();
+      const kind = normalizedType.includes('json') ? 'json-api' : normalizedType.includes('atom') ? 'atom' : normalizedType.includes('rss') || normalizedType.includes('xml') ? 'rss' : null;
+      if (kind) observedStructuredUrls.set(url.href, kind);
+    } catch (_) {}
+  };
+
+  const pageFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => pageFetch(input, init).then((response) => {
+    observeStructuredUrl(response.url || input, response.headers.get('content-type') || '');
+    return response;
+  });
+  const pageXhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    if (String(method).toUpperCase() === 'GET') {
+      try { xhrStructuredUrls.set(this, new URL(String(url), location.href).href); } catch (_) {}
+    }
+    return pageXhrOpen.call(this, method, url, ...rest);
+  };
+  const pageXhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(...args) {
+    this.addEventListener('load', () => {
+      const url = xhrStructuredUrls.get(this);
+      if (url) observeStructuredUrl(url, this.getResponseHeader('content-type') || '');
+    }, { once: true });
+    return pageXhrSend.apply(this, args);
+  };
 
   const composedParent = (element) => {
     if (element?.parentElement) return element.parentElement;
@@ -650,6 +684,82 @@
     window.location.href = `hvy-integration://inspection/${encoded}`;
   };
 
+  const browserChromeNavigate = (value) => {
+    const bytes = new TextEncoder().encode(value);
+    let binary = '';
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    window.location.href = `hvy-integration://navigate/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+  };
+
+  const installBrowserChrome = (options = {}) => {
+    if (browserChromeHost) {
+      if (!browserChromeHost.isConnected) document.documentElement.append(browserChromeHost);
+      return;
+    }
+    const host = document.createElement('div');
+    browserChromeHost = host;
+    host.id = 'hvy-galaxy-browser-chrome';
+    host.setAttribute('popover', 'manual');
+    host.style.cssText = 'all:initial;position:fixed;inset:0 0 auto 0;height:52px;z-index:2147483647;display:block';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `<style>
+      :host{color-scheme:dark}*{box-sizing:border-box}.bar{height:52px;padding:7px 10px;display:flex;align-items:center;gap:7px;background:#17191e;border-bottom:1px solid #555b64;color:#f4f4f5;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px #0008}
+      button{height:36px;min-width:36px;padding:0 10px;border:1px solid #5b6069;border-radius:7px;background:#23262d;color:inherit;font:inherit;cursor:pointer}button:hover{background:#30343d}button:focus-visible,input:focus-visible{outline:2px solid #ff5d47;outline-offset:1px}.address{height:36px;min-width:0;flex:1;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid #5b6069;border-radius:8px;background:#0f1115}.security{display:flex;align-items:center;gap:6px;white-space:nowrap}.security[data-secure="true"]{color:#9fd7b2}.security[data-allowed="false"]{color:#ffb19f}.host{font-weight:650}.url{min-width:0;flex:1;border:0;background:transparent;color:#dadce1;font:inherit;outline:0}.brand{font-weight:700;white-space:nowrap}.close{font-size:20px;line-height:1}slot[name="inspection"]{display:contents}
+    </style><div class="bar"><span class="brand">HVY Galaxy</span><button data-command="back" title="Back" aria-label="Back">←</button><button data-command="forward" title="Forward" aria-label="Forward">→</button><button data-command="reload" title="Reload" aria-label="Reload">↻</button><form class="address"><span class="security"><span class="lock"></span><span class="host"></span></span><input class="url" aria-label="Address"></form><slot name="inspection"><button data-command="inspect" title="Inspect data">Inspect</button></slot><button class="close" data-command="close" title="Close" aria-label="Close">×</button></div>`;
+    let reservedBody = null;
+    let reservedPadding = '';
+    const reservePageSpace = () => {
+      if (!document.body) return;
+      if (reservedBody !== document.body) {
+        reservedBody = document.body;
+        const originalPadding = getComputedStyle(document.body).paddingTop || '0px';
+        reservedPadding = `calc(${originalPadding} + 52px)`;
+      }
+      document.body.style.setProperty('padding-top', reservedPadding, 'important');
+      document.body.style.setProperty('box-sizing', 'border-box', 'important');
+    };
+    const mount = () => {
+      if (!host.isConnected) document.documentElement.append(host);
+      if (typeof host.showPopover === 'function') {
+        try { host.showPopover(); } catch (_) { host.removeAttribute('popover'); }
+      } else {
+        host.removeAttribute('popover');
+      }
+      reservePageSpace();
+    };
+    mount();
+    document.documentElement.style.setProperty('scroll-padding-top', '52px', 'important');
+    const allowedOrigins = new Set(options.allowedOrigins || []);
+    const update = () => {
+      const secure = location.protocol === 'https:';
+      const allowed = !allowedOrigins.size || allowedOrigins.has(location.origin);
+      const security = shadow.querySelector('.security');
+      security.dataset.secure = String(secure);
+      security.dataset.allowed = String(allowed);
+      shadow.querySelector('.lock').textContent = secure ? '●' : '▲';
+      shadow.querySelector('.host').textContent = location.hostname || location.protocol;
+      const input = shadow.querySelector('.url');
+      if (shadow.activeElement !== input) input.value = location.href;
+      security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${allowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
+    };
+    shadow.addEventListener('click', (event) => {
+      const command = event.target.closest?.('[data-command]')?.dataset.command;
+      if (command) window.location.href = `hvy-integration://browser/${command}`;
+    });
+    shadow.querySelector('form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      let value = shadow.querySelector('.url').value.trim();
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) value = `https://${value}`;
+      browserChromeNavigate(value);
+    });
+    update();
+    window.addEventListener('popstate', update);
+    setInterval(() => {
+      mount();
+      update();
+    }, 500);
+  };
+
   const snapshotByteLength = (element) => new TextEncoder().encode(JSON.stringify(snapshot(element))).byteLength;
 
   const highlight = (element) => {
@@ -659,9 +769,7 @@
       box = document.createElement('div');
       box.id = 'hvy-galaxy-inspector-highlight';
       box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:3px solid #e0563f;background:#e0563f2b;box-sizing:border-box;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 0 0 1px #fff8 inset';
-      const inspectorStatus = document.getElementById('hvy-galaxy-inspector-status');
-      if (inspectorStatus) inspectorStatus.before(box);
-      else document.documentElement.append(box);
+      document.documentElement.append(box);
     }
     const rect = element.getBoundingClientRect();
     const left = Math.max(2, rect.left);
@@ -681,7 +789,10 @@
   const elementsBehindInspector = (x, y) => {
     const shield = document.getElementById('hvy-galaxy-inspector-shield');
     if (shield) shield.style.pointerEvents = 'none';
+    const visitedRoots = new Set();
     const collect = (root) => {
+      if (visitedRoots.has(root)) return [];
+      visitedRoots.add(root);
       const hits = typeof root.elementsFromPoint === 'function' ? root.elementsFromPoint(x, y) : [];
       const result = [];
       hits.forEach((element) => {
@@ -1450,6 +1561,78 @@
   };
 
   window.__hvyGalaxyInspector = {
+    discoverStructuredSources() {
+      const sources = [];
+      document.querySelectorAll('link[rel~="alternate"][href]').forEach((link) => {
+        const type = (link.getAttribute('type') || '').toLowerCase();
+        const kind = type.includes('json') ? 'json-feed' : type.includes('atom') ? 'atom' : type.includes('rss') || type.includes('xml') ? 'rss' : null;
+        if (!kind) return;
+        sources.push({ kind, url: new URL(link.href, location.href).href, title: link.getAttribute('title') || `${kind.toUpperCase()} feed`, authenticated: false, discoveredBy: 'link' });
+      });
+      performance.getEntriesByType('resource').forEach((entry) => {
+        if (!['fetch', 'xmlhttprequest'].includes(entry.initiatorType)) return;
+        let url;
+        try { url = new URL(entry.name, location.href); } catch (_) { return; }
+        if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) return;
+        if (!/\.json(?:$|\?)|[?&](?:format|output)=json(?:&|$)/i.test(url.href)) return;
+        sources.push({ kind: 'json-api', url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
+      });
+      observedStructuredUrls.forEach((kind, value) => {
+        const url = new URL(value);
+        sources.push({ kind, url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
+      });
+      return [...new Map(sources.map((source) => [`${source.kind}|${source.url}`, source])).values()];
+    },
+    async fetchStructuredSource(source) {
+      const url = new URL(source.url, location.href);
+      if (source.kind === 'json-api' && url.origin !== location.origin) throw new Error('Authenticated API retrieval must remain on the page origin.');
+      const response = await fetch(url.href, {
+        method: 'GET',
+        credentials: url.origin === location.origin ? 'include' : 'omit',
+        headers: { Accept: source.kind === 'json-api' || source.kind === 'json-feed' ? 'application/json' : 'application/atom+xml, application/rss+xml, application/xml, text/xml' },
+      });
+      if (!response.ok) throw new Error(`Structured source returned HTTP ${response.status}.`);
+      if (source.kind === 'json-api' || source.kind === 'json-feed') return { source, contentType: response.headers.get('content-type') || '', value: await response.json() };
+      const xml = await response.text();
+      const decodeXml = (value = '') => value
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+        .replace(/&#(x[0-9a-f]+|\d+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code[0].toLowerCase() === 'x' ? code.slice(1) : code, code[0].toLowerCase() === 'x' ? 16 : 10)))
+        .replace(/&(amp|lt|gt|quot|apos);/g, (_match, name) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" })[name]);
+      const field = (entry, names) => {
+        for (const name of names) {
+          const attribute = name === 'link' ? entry.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\/?\s*>/i)?.[1] : null;
+          const content = entry.match(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`, 'i'))?.[1];
+          if (attribute || content) return decodeXml(attribute || content).replace(/<[^>]+>/g, '').trim();
+        }
+        return '';
+      };
+      const entries = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)].map((match) => {
+        const entry = match[2];
+        return {
+          title: field(entry, ['title']),
+          url: field(entry, ['link']),
+          id: field(entry, ['guid', 'id']),
+          published: field(entry, ['pubDate', 'published', 'updated']),
+          summary: field(entry, ['description', 'summary', 'content']),
+        };
+      });
+      return { source, contentType: response.headers.get('content-type') || '', value: entries };
+    },
+    discoverStructuredSourcesAndPublish(context = {}) {
+      const sources = this.discoverStructuredSources();
+      publish({ kind: 'integration-source-discovery', context, sources });
+      return sources;
+    },
+    async fetchStructuredSourceAndPublish(source, context = {}) {
+      try {
+        const result = await this.fetchStructuredSource(source);
+        publish({ kind: 'integration-structured-result', context, ...result });
+        return result;
+      } catch (error) {
+        publish({ kind: 'integration-structured-error', context, message: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    },
     start(kind = 'target', options = {}) {
       inspectionKind = kind === 'parent' ? 'parent' : 'target';
       scopeElement = null;
@@ -1581,6 +1764,7 @@
       status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border-radius:999px;background:#e0563f;color:#fff;box-shadow:0 4px 18px #0006;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
       const statusText = document.createElement('span');
       statusText.dataset.inspectorStatusText = 'true';
+      statusText.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       const activeStatusText = inspectionKind === 'parent'
         ? options.existingPattern ? 'Galaxy: add example · green passes · orange/red needs attention' : 'Galaxy: select a parent'
         : 'Galaxy: select target data';
@@ -1588,7 +1772,7 @@
       const navigationButton = document.createElement('button');
       navigationButton.type = 'button';
       navigationButton.textContent = 'Navigate page';
-      navigationButton.style.cssText = 'padding:5px 9px;border:0;border-radius:999px;background:#fff;color:#8b2d20;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+      navigationButton.style.cssText = 'height:36px;padding:0 10px;border:1px solid #ff806d;border-radius:7px;background:#5f2922;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap';
       navigationButton.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();

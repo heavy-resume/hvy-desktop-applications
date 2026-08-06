@@ -5,6 +5,7 @@ import { createServer, type ViteDevServer } from 'vite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const inspectorSource = fs.readFileSync(new URL('./integration-inspector.js', import.meta.url), 'utf8');
+const integrationToolbarSource = fs.readFileSync(new URL('../public/integration-browser-toolbar.html', import.meta.url), 'utf8');
 const guideSource = fs.readFileSync(new URL('../src-tauri/resources/hvy-guide.hvy', import.meta.url), 'utf8');
 const resumeSource = fs.readFileSync('/Users/jameshutchison/git/heavy-file-format/examples/resume.hvy', 'utf8');
 const guideTitles = ['Text', 'Image', 'Carousel', 'Table', 'Reference', 'Container', 'List', 'Grid', 'Expandable', 'Plugin', 'Custom'];
@@ -47,6 +48,8 @@ interface InspectorSnapshot {
 }
 
 interface InspectorApi {
+  discoverStructuredSources(): Array<{ kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string; title: string; authenticated: boolean; discoveredBy: 'link' | 'network' }>;
+  fetchStructuredSource(source: { kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string }): Promise<{ value: unknown }>;
   start(kind: 'parent' | 'target', options?: {
     primary?: boolean;
     parentCssPath?: string;
@@ -58,7 +61,7 @@ interface InspectorApi {
   suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
   matchAndHighlight(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
     matches: number;
-    details: Array<{ parent: string; score: number; relationshipScore: number }>;
+    details: Array<{ parent: string; score: number; parentScore: number; relationshipScore: number; targets: Array<{ label: string; score: number }> }>;
     diagnostics?: unknown;
   };
   extractPattern(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
@@ -78,6 +81,7 @@ interface InspectorApi {
 declare global {
   interface Window {
     __hvyGalaxyInspector: InspectorApi;
+    hvySetBrowserState(value: { url: string; allowed: string[] }): void;
     __guideTitlePattern?: Parameters<InspectorApi['extractPattern']>[0];
   }
 }
@@ -195,6 +199,42 @@ describe('integration structural inspector', () => {
 
     expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(0);
     expect(pageErrors).toEqual([]);
+  });
+
+  it('discovers advertised feeds without reading page content', async () => {
+    await page.setContent('<link rel="alternate" type="application/rss+xml" title="Updates" href="https://example.com/feed.xml"><link rel="alternate" type="application/feed+json" href="https://example.com/feed.json">');
+    await page.addScriptTag({ content: inspectorSource });
+
+    expect(await page.evaluate(() => window.__hvyGalaxyInspector.discoverStructuredSources())).toEqual([
+      { kind: 'rss', url: 'https://example.com/feed.xml', title: 'Updates', authenticated: false, discoveredBy: 'link' },
+      { kind: 'json-feed', url: 'https://example.com/feed.json', title: 'JSON-FEED feed', authenticated: false, discoveredBy: 'link' },
+    ]);
+  });
+
+  it('renders browser security state in the local toolbar document', async () => {
+    await page.setContent(integrationToolbarSource);
+    await page.evaluate(() => window.hvySetBrowserState({
+      url: 'https://mail.google.com/mail/u/0/',
+      allowed: ['https://mail.google.com'],
+    }));
+
+    expect(await page.locator('.host').textContent()).toBe('mail.google.com');
+    expect(await page.locator('.url').inputValue()).toBe('https://mail.google.com/mail/u/0/');
+    expect(await page.locator('.security').getAttribute('data-secure')).toBe('true');
+    expect(await page.locator('.security').getAttribute('data-allowed')).toBe('true');
+  });
+
+  it('discovers and retrieves a same-origin JSON endpoint with the page session boundary', async () => {
+    await page.route('**/integration-items.json', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [{ id: 1, title: 'Planning session' }] }) }));
+    await page.goto(viteUrl);
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => fetch('/integration-items.json').then((response) => response.json()));
+    const source = await page.evaluate(() => window.__hvyGalaxyInspector.discoverStructuredSources().find((candidate) => candidate.url.endsWith('/integration-items.json'))!);
+    const result = await page.evaluate((value) => window.__hvyGalaxyInspector.fetchStructuredSource(value), source);
+
+    expect(source.kind).toBe('json-api');
+    expect(source.authenticated).toBe(true);
+    expect(result.value).toEqual({ items: [{ id: 1, title: 'Planning session' }] });
   });
 
   it('restarts parent highlighting when another record example is requested', async () => {

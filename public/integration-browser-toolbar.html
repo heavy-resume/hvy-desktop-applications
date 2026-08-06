@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HVY Galaxy Integration Browser</title>
+  <style>
+    :root { color-scheme: dark; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #17191e; color: #f4f4f5; }
+    .bar { height: 100%; min-height: 0; padding: 4px 10px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid #555b64; box-shadow: 0 2px 8px #0008; }
+    button { height: min(36px, calc(100% - 2px)); min-width: 36px; padding: 0 10px; border: 1px solid #5b6069; border-radius: 7px; background: #23262d; color: inherit; font: inherit; cursor: pointer; }
+    button:hover { background: #30343d; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #ff5d47; outline-offset: 1px; }
+    .address { height: min(36px, calc(100% - 2px)); min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid #5b6069; border-radius: 8px; background: #0f1115; }
+    .security { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .security[data-secure="true"] { color: #9fd7b2; }
+    .security[data-allowed="false"] { color: #ffb19f; }
+    .host { font-weight: 700; white-space: nowrap; }
+    .url { min-width: 0; flex: 1; border: 0; background: transparent; color: #dadce1; font: inherit; outline: 0; }
+    .close { font-size: 20px; line-height: 1; }
+    .more-wrap { position: relative; height: min(36px, calc(100% - 2px)); }
+    .more-wrap > button { height: 100%; font-size: 20px; line-height: 1; }
+    .more-menu { position: fixed; inset: 0; z-index: 10; padding: 4px 10px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; background: #17191e; }
+    .more-menu[hidden] { display: none; }
+    .more-menu button { height: min(36px, calc(100% - 2px)); white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <button data-command="back" title="Back" aria-label="Back">&#8592;</button>
+    <button data-command="forward" title="Forward" aria-label="Forward">&#8594;</button>
+    <button data-command="reload" title="Reload" aria-label="Reload">&#8635;</button>
+    <form class="address">
+      <span class="security"><span class="lock"></span><span class="host"></span></span>
+      <input class="url" aria-label="Address">
+    </form>
+    <div class="more-wrap">
+      <button data-menu-toggle title="Page actions" aria-label="Page actions" aria-expanded="false">&hellip;</button>
+      <div class="more-menu" role="menu" hidden>
+        <button data-toolbar-action="add-page-command" role="menuitem">Add page command</button>
+        <button data-toolbar-action="define-record-type" role="menuitem">Define record type</button>
+        <button data-menu-dismiss role="menuitem">Cancel</button>
+      </div>
+    </div>
+    <button class="close" data-command="close" title="Close" aria-label="Close">&times;</button>
+  </div>
+  <script>
+    const allowedOrigins = new Set();
+    const encode = (value) => {
+      const bytes = new TextEncoder().encode(value);
+      let binary = '';
+      bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    };
+    window.hvySetBrowserState = ({ url = '', allowed = [] } = {}) => {
+      allowedOrigins.clear();
+      allowed.forEach((origin) => allowedOrigins.add(origin));
+      let parsed;
+      try { parsed = new URL(url); } catch (_) { parsed = null; }
+      const secure = parsed?.protocol === 'https:';
+      const originAllowed = !allowedOrigins.size || (parsed && allowedOrigins.has(parsed.origin));
+      const security = document.querySelector('.security');
+      security.dataset.secure = String(secure);
+      security.dataset.allowed = String(originAllowed);
+      document.querySelector('.lock').textContent = secure ? '●' : '▲';
+      document.querySelector('.host').textContent = parsed?.hostname || parsed?.protocol || '';
+      const input = document.querySelector('.url');
+      if (document.activeElement !== input) input.value = url;
+      security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${originAllowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
+    };
+    document.addEventListener('click', (event) => {
+      const menuToggle = event.target.closest?.('[data-menu-toggle]');
+      const menu = document.querySelector('.more-menu');
+      if (menuToggle) {
+        menu.hidden = !menu.hidden;
+        menuToggle.setAttribute('aria-expanded', String(!menu.hidden));
+        return;
+      }
+      const toolbarAction = event.target.closest?.('[data-toolbar-action]')?.dataset.toolbarAction;
+      if (toolbarAction) {
+        menu.hidden = true;
+        document.querySelector('[data-menu-toggle]').setAttribute('aria-expanded', 'false');
+        location.href = `hvy-integration://toolbar/${toolbarAction}`;
+        return;
+      }
+      if (event.target.closest?.('[data-menu-dismiss]')) {
+        menu.hidden = true;
+        document.querySelector('[data-menu-toggle]').setAttribute('aria-expanded', 'false');
+        return;
+      }
+      if (!event.target.closest?.('.more-wrap')) {
+        menu.hidden = true;
+        document.querySelector('[data-menu-toggle]').setAttribute('aria-expanded', 'false');
+      }
+      const command = event.target.closest?.('[data-command]')?.dataset.command;
+      if (command) location.href = `hvy-integration://browser/${command}`;
+    });
+    document.querySelector('form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      let value = document.querySelector('.url').value.trim();
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) value = `https://${value}`;
+      location.href = `hvy-integration://navigate/${encode(value)}`;
+    });
+  </script>
+</body>
+</html>

@@ -140,6 +140,10 @@ export interface UiHandlers {
   requestAddIntegrationPage(): void;
   cancelAddIntegrationPage(): void;
   addIntegrationPage(name: string, url: string): void;
+  discoverIntegrationSources(integrationId: string, pageId: string): void;
+  saveIntegrationSource(integrationId: string, pageId: string, source: import('./integrationBrowser').IntegrationStructuredSource): void;
+  fetchIntegrationSource(integrationId: string, pageId: string, sourceId: string): void;
+  closeIntegrationStructuredResult(): void;
   setInspectionPrivacyRule(path: string, action: 'label' | 'remove' | 'keep', label?: string): void;
   updateInspectionPrivacyLabel(path: string, label: string): void;
   controlIntegrationBrowser(command: 'back' | 'forward' | 'reload' | 'inspect' | 'close'): void;
@@ -532,6 +536,7 @@ export function renderModals(state: AppState): void {
     ${renderIntegrationActionDiscardDialog(state)}
     ${renderIntegrationRecordDeleteDialog(state)}
     ${renderIntegrationActionResultDialog(state)}
+    ${renderIntegrationStructuredResultDialog(state)}
     ${renderIntegrationVaultResetDialog(state)}
     ${renderDebugLogDialog(state)}
     ${renderWorkspaceChatClosePrompt(state)}
@@ -898,6 +903,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'select-integration' && target.dataset.integrationId) handlers.selectIntegration(target.dataset.integrationId);
     if (action === 'select-integration-profile' && target.dataset.profileId) handlers.selectIntegrationProfile(target.dataset.profileId);
     if (action === 'request-add-integration-page') handlers.requestAddIntegrationPage();
+    if (action === 'discover-integration-sources' && target.dataset.integrationId && target.dataset.pageId) handlers.discoverIntegrationSources(target.dataset.integrationId, target.dataset.pageId);
+    if (action === 'save-integration-source' && target.dataset.integrationId && target.dataset.pageId && target.dataset.sourceIndex) {
+      const source = state.integrationStructuredSources[Number(target.dataset.sourceIndex)];
+      if (source) handlers.saveIntegrationSource(target.dataset.integrationId, target.dataset.pageId, source);
+    }
+    if (action === 'fetch-integration-source' && target.dataset.integrationId && target.dataset.pageId && target.dataset.sourceId) handlers.fetchIntegrationSource(target.dataset.integrationId, target.dataset.pageId, target.dataset.sourceId);
+    if (action === 'close-integration-structured-result') handlers.closeIntegrationStructuredResult();
     if (action === 'cancel-add-integration-page') handlers.cancelAddIntegrationPage();
     if (action === 'request-add-integration-profile') handlers.requestAddIntegrationProfile();
     if (action === 'cancel-add-integration-profile') handlers.cancelAddIntegrationProfile();
@@ -4085,6 +4097,9 @@ function renderIntegrationsDialog(state: AppState): string {
     ?? state.integrationRegistry.integrations[0];
   const profiles = state.integrationRegistry.profiles;
   const selectedPage = selectedIntegration.pages[0];
+  const discoveredSources = state.integrationStructuredSourcePageId === selectedPage.id ? state.integrationStructuredSources : [];
+  const savedSourceKeys = new Set((selectedPage.retrievalSources ?? []).map((source) => `${source.kind}|${source.url}`));
+  const structuredSources = `<section><div class="integration-section-heading"><div><h4>Structured data</h4><p>Use feeds or same-origin data endpoints when the page already provides structured records.</p></div><button type="button" class="hvy-galaxy-button" data-action="discover-integration-sources" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" ${state.integrationStructuredSourcePending ? 'disabled' : ''}>${state.integrationStructuredSourcePending ? 'Scanning…' : 'Find data sources'}</button></div>${state.integrationStructuredSourceError ? `<div class="integration-fetch-error" role="alert"><strong>Source lookup failed</strong><span>${escapeHtml(state.integrationStructuredSourceError)}</span></div>` : ''}${selectedPage.retrievalSources?.length ? `<div class="integration-source-list">${selectedPage.retrievalSources.map((source) => `<article><div><strong>${escapeHtml(source.name)}</strong><span>${escapeHtml(source.kind.toUpperCase())} · ${escapeHtml(source.url)}</span></div><button type="button" class="hvy-galaxy-button" data-action="fetch-integration-source" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-source-id="${escapeAttr(source.id)}" ${state.integrationStructuredSourcePending ? 'disabled' : ''}>Fetch</button></article>`).join('')}</div>` : ''}${discoveredSources.length ? `<div class="integration-discovered-sources"><strong>Available on the current page</strong>${discoveredSources.map((source, index) => `<article><div><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.kind.toUpperCase())} · ${source.authenticated ? 'Uses this profile’s signed-in session' : 'Public feed'}<br>${escapeHtml(source.url)}</span></div><button type="button" class="hvy-galaxy-button" data-action="save-integration-source" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-source-index="${index}" ${savedSourceKeys.has(`${source.kind}|${source.url}`) ? 'disabled' : ''}>${savedSourceKeys.has(`${source.kind}|${source.url}`) ? 'Saved' : 'Save'}</button></article>`).join('')}</div>` : state.integrationStructuredSourcePageId === selectedPage.id && !state.integrationStructuredSourcePending ? '<small>No advertised feeds or observed same-origin data endpoints.</small>' : ''}</section>`;
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog integrations-dialog integrations-manager" role="dialog" aria-modal="true" aria-label="Integrations" data-prevent-dismiss="true">
@@ -4100,6 +4115,7 @@ function renderIntegrationsDialog(state: AppState): string {
           <main class="integration-detail">
             <div class="integration-detail-header"><div><h3>${escapeHtml(selectedPage.name)}</h3><p>${escapeHtml(new URL(selectedPage.url).hostname)}</p></div><div class="integration-profile-controls"><label class="integration-profile-select"><span>Use profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Use profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button icon-button" data-action="request-add-integration-profile" title="Add profile" aria-label="Add profile">+</button></div></div>
             <section><div class="integration-section-heading"><div><h4>Page commands</h4><p>Open this page or run commands that do not require a matched record.</p></div></div><div class="integration-page-grid"><article class="integration-page-card"><div>${selectedPage.commands?.length ? `<div class="integration-command-list">${selectedPage.commands.map((command) => `<button type="button" class="hvy-galaxy-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-command-id="${escapeAttr(command.id)}">${escapeHtml(command.name)}</button>`).join('')}</div>` : '<small>No page commands yet</small>'}</div><div class="integration-page-actions"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Open</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Add page command</button><button type="button" class="hvy-galaxy-button primary-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Define record type</button></div></article></div></section>
+            ${structuredSources}
             <section><div class="integration-section-heading"><div><h4>Record Types</h4><p>Reusable structures and commands that belong to ${escapeHtml(selectedPage.name)}.</p></div>${state.integrationActionFetchPendingId ? `<span class="integration-fetch-status" role="status"><span class="integration-selection-pulse" aria-hidden="true"></span>Fetching items in the background…</span>` : ''}</div>${state.integrationActionFetchError ? `<div class="integration-fetch-error" role="alert"><strong>Fetch failed</strong><span>${escapeHtml(state.integrationActionFetchError)}</span></div>` : ''}${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article class="integration-record-definition"><div class="integration-record-summary"><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description || action.pattern?.fields.map((field) => field.label).join(', ') || '')}</span>${renderItemCommandPills(selectedIntegration.id, action)}</div><div class="integration-record-actions"><button type="button" class="hvy-galaxy-button" data-action="edit-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Edit</button><button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Delete</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Add item command</button><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}" ${action.pattern && !state.integrationActionFetchPendingId ? '' : 'disabled'}>${state.integrationActionFetchPendingId === action.id ? 'Fetching…' : 'Fetch items'}</button></div></article>`).join('')}</div>` : '<div class="integration-empty-state"><strong>No record types yet</strong><span>Choose Define record type above to create one for this page.</span></div>'}</section>
           </main>
         </div>
@@ -4228,6 +4244,24 @@ function renderIntegrationActionResultDialog(state: AppState): string {
   const commands = action?.commands?.filter((command) => command.scope === 'record') ?? [];
   const commandContext = integration && action ? { integrationId: integration.id, actionId: action.id, commands } : undefined;
   return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Action results"><div class="modal-header"><div><p class="eyebrow">Fetched items</p><h2>${escapeHtml(state.integrationActionResultName)}</h2><p class="dialog-note">Found ${state.integrationActionResultRecords.length} matching ${state.integrationActionResultRecords.length === 1 ? 'item' : 'items'} on the current page.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-result" aria-label="Close">×</button></div><div class="integration-action-builder-content">${renderExtractionRecords(state.integrationActionResultRecords, commandContext)}</div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="close-integration-action-result">Done</button></div></section></div>`;
+}
+
+function renderStructuredDataValue(value: unknown, depth = 0): string {
+  if (depth >= 4) return '<span class="integration-empty-value">Nested data</span>';
+  if (Array.isArray(value)) {
+    if (!value.length) return '<span class="integration-empty-value">No items</span>';
+    return `<div class="integration-structured-items">${value.slice(0, 100).map((item) => `<details><summary>${isRecord(item) ? escapeHtml(String(item.title ?? item.name ?? item.id ?? 'Item')) : escapeHtml(String(item))}</summary>${renderStructuredDataValue(item, depth + 1)}</details>`).join('')}</div>`;
+  }
+  if (isRecord(value)) {
+    return `<dl class="integration-structured-fields">${Object.entries(value).slice(0, 100).map(([key, item]) => `<div><dt>${escapeHtml(key)}</dt><dd>${renderStructuredDataValue(item, depth + 1)}</dd></div>`).join('')}</dl>`;
+  }
+  if (typeof value === 'string' && /^https:\/\//.test(value)) return `<a href="${escapeAttr(value)}" target="_blank" rel="noreferrer">${escapeHtml(value)}</a>`;
+  return `<span>${escapeHtml(String(value ?? ''))}</span>`;
+}
+
+function renderIntegrationStructuredResultDialog(state: AppState): string {
+  if (!state.integrationStructuredResultOpen) return '';
+  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Structured data result"><div class="modal-header"><div><p class="eyebrow">Structured data</p><h2>${escapeHtml(state.integrationStructuredResultName)}</h2><p class="dialog-note">Fetched through the selected integration profile. Expand items to inspect their fields.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-structured-result" aria-label="Close">×</button></div><div class="integration-action-builder-content">${renderStructuredDataValue(state.integrationStructuredResult)}</div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="close-integration-structured-result">Done</button></div></section></div>`;
 }
 
 function renderIntegrationActionDiscardDialog(state: AppState): string {

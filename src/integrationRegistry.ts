@@ -5,6 +5,16 @@ export interface IntegrationPageDefinition {
   allowedOrigins: string[];
   editable: boolean;
   commands?: IntegrationCommandDefinition[];
+  retrievalSources?: IntegrationRetrievalSourceDefinition[];
+}
+
+export interface IntegrationRetrievalSourceDefinition {
+  id: string;
+  name: string;
+  kind: 'rss' | 'atom' | 'json-feed' | 'json-api';
+  url: string;
+  method: 'GET';
+  responsePath?: string;
 }
 
 export interface IntegrationActionDefinition {
@@ -152,9 +162,13 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
       ...(savedGoogle?.pages.find((savedPage) => savedPage.id === page.id)?.commands ?? []),
       ...rawActions.flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
     ];
+    const retrievalSources = [
+      ...(savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.retrievalSources ?? []),
+      ...(savedGoogle?.pages.find((savedPage) => savedPage.id === page.id)?.retrievalSources ?? []),
+    ];
     return {
       ...builtIn,
-      pages: [{ ...page, commands: [...new Map(commands.map((command) => [command.id, command])).values()] }],
+      pages: [{ ...page, commands: [...new Map(commands.map((command) => [command.id, command])).values()], retrievalSources: [...new Map(retrievalSources.map((source) => [source.id, source])).values()] }],
       actions,
     };
   });

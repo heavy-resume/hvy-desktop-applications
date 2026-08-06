@@ -8,7 +8,7 @@ import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
-import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 
 interface DocumentColorTheme {
   name: string;
@@ -111,6 +111,20 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name);
     }
   };
+  const integrationPageContext = (integrationId: string, pageId: string) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!integration || !page || !profile) throw new Error('The integration page or profile was not found.');
+    return { integration, page, profile };
+  };
+  const openPageForStructuredSource = async (page: ReturnType<typeof integrationPageContext>['page'], profile: ReturnType<typeof integrationPageContext>['profile'], payload: unknown) => {
+    if (page.id === 'gmail' || page.id === 'google-calendar') {
+      await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, payload, false, profile.name);
+    } else {
+      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, false, profile.name);
+    }
+  };
   const integrationBrowserUnavailable = (error: unknown) => error instanceof Error
     && (error.message.includes('Open Gmail or Google Calendar first')
       || error.message.includes('Script failed to execute')
@@ -188,6 +202,60 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   };
   return {
+  discoverIntegrationSources: (integrationId, pageId) => {
+    const { page, profile } = integrationPageContext(integrationId, pageId);
+    state.integrationStructuredSourcePending = true;
+    state.integrationStructuredSourceError = null;
+    state.integrationStructuredSourcePageId = pageId;
+    rerender({ preserveMountedDocument: true });
+    void runBusy(`Looking for structured data sources on ${page.name}...`, async () => {
+      const context = { integrationId, pageId };
+      if (await isIntegrationBrowserOpen(profile.id)) await controlIntegrationBrowser('discover-sources', profile.id, context);
+      else await openPageForStructuredSource(page, profile, { kind: 'source-discovery', context });
+    }, { preserveMountedDocument: true }).catch((error) => {
+      state.integrationStructuredSourcePending = false;
+      state.integrationStructuredSourceError = error instanceof Error ? error.message : String(error);
+      rerender({ preserveMountedDocument: true });
+    });
+  },
+  saveIntegrationSource: (integrationId, pageId, source) => {
+    const { integration, page } = integrationPageContext(integrationId, pageId);
+    const saved: IntegrationRetrievalSourceDefinition = {
+      id: `source-${crypto.randomUUID()}`,
+      name: source.title,
+      kind: source.kind,
+      url: source.url,
+      method: 'GET',
+    };
+    page.retrievalSources = [...(page.retrievalSources ?? []), saved];
+    state.integrationRegistry = { ...state.integrationRegistry, integrations: state.integrationRegistry.integrations.map((candidate) => candidate.id === integration.id ? { ...integration } : candidate) };
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.status = `Saved ${saved.name}`;
+    rerender({ preserveMountedDocument: true });
+  },
+  fetchIntegrationSource: (integrationId, pageId, sourceId) => {
+    const { page, profile } = integrationPageContext(integrationId, pageId);
+    const source = page.retrievalSources?.find((candidate) => candidate.id === sourceId);
+    if (!source) throw new Error('The structured data source was not found.');
+    state.integrationStructuredSourcePending = true;
+    state.integrationStructuredSourceError = null;
+    rerender({ preserveMountedDocument: true });
+    void runBusy(`Fetching ${source.name}...`, async () => {
+      const request = { kind: source.kind, url: source.url };
+      const context = { integrationId, pageId, sourceId, sourceName: source.name };
+      if (await isIntegrationBrowserOpen(profile.id)) await controlIntegrationBrowser('fetch-source', profile.id, { source: request, context });
+      else await openPageForStructuredSource(page, profile, { kind: 'source-fetch', source: request, context });
+    }, { preserveMountedDocument: true }).catch((error) => {
+      state.integrationStructuredSourcePending = false;
+      state.integrationStructuredSourceError = error instanceof Error ? error.message : String(error);
+      rerender({ preserveMountedDocument: true });
+    });
+  },
+  closeIntegrationStructuredResult: () => {
+    state.integrationStructuredResultOpen = false;
+    state.integrationStructuredResult = null;
+    rerender({ preserveMountedDocument: true });
+  },
   openIntegrations: () => {
     if (!state.integrationRegistry.integrations.some((integration) => integration.id === state.selectedIntegrationId)) {
       state.selectedIntegrationId = state.integrationRegistry.integrations[0]?.id ?? '';

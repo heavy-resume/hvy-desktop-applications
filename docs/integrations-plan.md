@@ -12,7 +12,7 @@ Gmail and Google Calendar are the first bundled web pages, followed by Drive. Th
 
 An integration profile owns an isolated native browser window. Galaxy may keep that window alive but hidden for extraction and DOM-driven commands, then show and focus it for login, inspection, trusted pointer input, or troubleshooting. Hiding is distinct from closing: it preserves the live page and its memory, while closing destroys the webview but retains the profile's persistent browser store.
 
-Trusted Galaxy controls expose:
+Every interactive integration window has Galaxy-owned browser chrome above its isolated remote content view. The shared toolbar document exposes:
 
 - Profile selector
 - Back, forward, and reload
@@ -20,9 +20,27 @@ Trusted Galaxy controls expose:
 - User-defined web pages
 - Inspect data
 - Run extractor
-- Close tab
+- Close window
+- The current URL, HTTPS state, host, and whether the page is inside the page definition's allowed origins
 
-The remote page must not replace the main Galaxy renderer or receive Galaxy's privileged bridge. A later browser-chrome window may place a trusted local toolbar above the remote content using an Electron `WebContentsView` and Tauri child webview. Until then, the main Galaxy window remains the trusted command center and the remote integration window appears only when the user needs to interact with it.
+The address field permits direct HTTPS navigation within the page definition's allowed origins. Its HTTPS and allowed-origin status comes from native-host navigation events rather than page-controlled DOM state.
+
+The toolbar is Galaxy-owned local chrome and the remote page is rendered in an isolated child view: an Electron `WebContentsView`, or a Tauri child webview. The remote page does not receive Galaxy's privileged renderer bridge and cannot remove, restyle, or imitate the actual toolbar surface. Toolbar actions cross a narrow custom-protocol boundary and are interpreted by the native host.
+
+### Structured retrieval sources
+
+A page may expose one or more retrieval sources in addition to DOM record types:
+
+- RSS or Atom advertised through `<link rel="alternate">`
+- JSON Feed advertised through `<link rel="alternate">`
+- Same-origin JSON endpoints observed from `fetch` or XHR activity
+- Explicit HTTPS endpoints added by the user
+
+Discovery does not grant access by itself. A saved source records its kind, URL pattern, HTTP method, expected content type, optional response-path mapping, and the page/profile it uses. It never stores cookies, authorization headers, response bodies, or personal example values.
+
+Authenticated retrieval runs in the isolated page profile. Same-origin requests may execute in the content webview so the browser applies its own cookies and origin policy. Feed URLs that do not require the page session may be fetched by the native host. Cross-origin credential forwarding is not inferred from a logged-in page and requires a future explicit permission model.
+
+DOM extraction remains the fallback. Preferred retrieval order is a configured structured source, a discovered feed, and then a saved DOM record definition. All paths emit the same bounded structured-record result contract so HVY insertion does not depend on how the data was retrieved.
 
 ### Web pages and portable setups
 

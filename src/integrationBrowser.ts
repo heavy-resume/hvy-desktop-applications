@@ -21,6 +21,14 @@ export interface IntegrationExtractionResult<T = unknown> {
   value: T;
 }
 
+export interface IntegrationStructuredSource {
+  kind: 'rss' | 'atom' | 'json-feed' | 'json-api';
+  url: string;
+  title: string;
+  authenticated: boolean;
+  discoveredBy: 'link' | 'network';
+}
+
 export function openIntegrationBrowser(destination: IntegrationBrowserDestination, profileId = DEFAULT_INTEGRATION_PROFILE_ID, browserStoreId = 'default-google', actionMode = false, extraction?: unknown, foreground = true, windowName?: string): Promise<void> {
   return integrationBrowserCommand('open', destination, profileId, undefined, undefined, browserStoreId, actionMode, extraction, foreground, windowName);
 }

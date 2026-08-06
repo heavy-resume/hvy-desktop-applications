@@ -18,7 +18,7 @@ pub fn run() {
             app.on_menu_event(|app, event| {
                 let id = event.id().as_ref();
                 if let Some(window_label) = id.strip_prefix("show-window:") {
-                    if let Some(window) = app.get_webview_window(window_label) {
+                    if let Some(window) = app.get_window(window_label) {
                         let _ = raise_integration_window(&window);
                     }
                 } else {
@@ -306,7 +306,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .maximize()
         .separator()
         .item(&MenuItemBuilder::new("HVY Galaxy").id("show-window:main").build(app)?);
-    let mut integration_windows = app.webview_windows().into_iter()
+    let mut integration_windows = app.windows().into_iter()
         .filter(|(label, _window)| label.starts_with(INTEGRATION_BROWSER_LABEL))
         .collect::<Vec<_>>();
     integration_windows.sort_by(|left, right| left.0.cmp(&right.0));

@@ -4,7 +4,7 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
 }
 
 #[cfg(target_os = "macos")]
-fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
+fn raise_integration_window(window: &tauri::Window) -> AppResult<()> {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSWindow};
 
@@ -27,7 +27,7 @@ fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn raise_integration_window(window: &tauri::WebviewWindow) -> AppResult<()> {
+fn raise_integration_window(window: &tauri::Window) -> AppResult<()> {
     if window.outer_position().map(|position| position.x < -5000).unwrap_or(false) {
         window.center().map_err(|error| AppError::Message(error.to_string()))?;
     }
@@ -140,6 +140,11 @@ fn install_plugin_package(app: AppHandle, name: String, bytes: Vec<u8>) -> AppRe
 }
 
 const INTEGRATION_BROWSER_LABEL: &str = "integration-browser";
+const INTEGRATION_TOOLBAR_HEIGHT: f64 = 52.0;
+#[cfg(target_os = "macos")]
+const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 15.0;
+#[cfg(not(target_os = "macos"))]
+const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 0.0;
 const INTEGRATION_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.integration-vault";
 const INTEGRATION_VAULT_ACCOUNT: &str = "default";
 const INTEGRATION_VAULT_FILE: &str = "integration-cookie-vault-tauri.json";
@@ -156,6 +161,14 @@ static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex
 
 fn integration_browser_label(profile_id: &str) -> String {
     format!("{INTEGRATION_BROWSER_LABEL}-{}", profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect::<String>())
+}
+
+fn integration_toolbar_label(profile_id: &str) -> String {
+    format!("{}-toolbar", integration_browser_label(profile_id))
+}
+
+fn integration_content_label(profile_id: &str) -> String {
+    format!("{}-content", integration_browser_label(profile_id))
 }
 
 #[cfg(target_os = "macos")]
@@ -264,7 +277,7 @@ fn integration_vault_key() -> AppResult<Vec<u8>> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn restore_integration_cookies(app: &AppHandle, window: &tauri::WebviewWindow) -> AppResult<()> {
+fn restore_integration_cookies(app: &AppHandle, window: &tauri::Webview) -> AppResult<()> {
     let key = integration_vault_key()?;
     let vault = read_integration_vault(app, &key)?;
     for stored in vault.cookies {
@@ -302,7 +315,7 @@ fn restore_integration_cookies(app: &AppHandle, window: &tauri::WebviewWindow) -
 }
 
 #[cfg(not(target_os = "macos"))]
-fn save_integration_cookies(app: &AppHandle, window: &tauri::WebviewWindow) -> AppResult<()> {
+fn save_integration_cookies(app: &AppHandle, window: &tauri::Webview) -> AppResult<()> {
     let key = integration_vault_key()?;
     let cookies = window.cookies().map_err(|error| AppError::Message(error.to_string()))?
         .into_iter()
@@ -358,7 +371,7 @@ fn setup_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> 
 
 #[tauri::command]
 async fn reset_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> {
-    if let Some(window) = app.get_webview_window(&integration_browser_label(DEFAULT_INTEGRATION_PROFILE_ID)) {
+    if let Some(window) = app.get_window(&integration_browser_label(DEFAULT_INTEGRATION_PROFILE_ID)) {
         window.close().map_err(|error| AppError::Message(error.to_string()))?;
     }
     #[cfg(target_os = "macos")]
@@ -417,6 +430,7 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
 fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>) -> AppResult<()> {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
     let window_label = integration_browser_label(&profile_id);
+    let content_label = integration_content_label(&profile_id);
     let action_mode_pending = {
         let mut modes = INTEGRATION_ACTION_MODES.get_or_init(|| Mutex::new(HashMap::new())).lock()
             .map_err(|error| AppError::Message(error.to_string()))?;
@@ -448,17 +462,17 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         };
         let blank_url = tauri::Url::parse("about:blank")
             .map_err(|error| AppError::Message(error.to_string()))?;
-        if let Some(window) = app.get_webview_window(&window_label) {
+        if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
             window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
                 .map_err(|error| AppError::Message(error.to_string()))?;
-            window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             if foreground {
                 raise_integration_window(&window)?;
             } else if !window.is_visible().unwrap_or(false) {
                 window.center().map_err(|error| AppError::Message(error.to_string()))?;
                 window.show().map_err(|error| AppError::Message(error.to_string()))?;
                 if let Some(main_window) = app.get_webview_window("main") {
-                    raise_integration_window(&main_window)?;
+                    raise_integration_window(&main_window.as_ref().window())?;
                 }
             }
             app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
@@ -468,21 +482,39 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         let integration_app = app.clone();
         let integration_window_label = window_label.clone();
         let result_profile_id = profile_id.clone();
+        let page_load_profile_id = result_profile_id.clone();
         let page_load_action_mode = action_mode_pending.clone();
         let page_load_extraction = pending_extraction.clone();
         let navigation_action_mode = action_mode_pending.clone();
-        let builder = tauri::WebviewWindowBuilder::new(
-            &app,
-            &window_label,
+        let page_load_allowed_origins = navigation_allowed_origins.clone();
+        let toolbar_allowed_origins = navigation_allowed_origins.clone();
+        let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
+        let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
+            .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
+            .visible(true)
+            .inner_size(1080.0, 700.0)
+            .min_inner_size(720.0, 520.0)
+            .center()
+            .build()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        let builder = tauri::webview::WebviewBuilder::new(
+            &content_label,
             tauri::WebviewUrl::External(blank_url),
         )
-        .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
-        .visible(true)
-        .inner_size(1080.0, 700.0)
-        .min_inner_size(720.0, 520.0)
         .initialization_script(INTEGRATION_INSPECTOR)
+        .on_document_title_changed(move |window, title| {
+            let site_title = title.trim();
+            if !site_title.is_empty() {
+                let _ = window.window().set_title(&format!("{site_title} — {title_profile_name}"));
+            }
+        })
         .on_page_load(move |window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                if let Some(toolbar) = window.app_handle().get_webview(&integration_toolbar_label(&page_load_profile_id)) {
+                    let state = serde_json::json!({ "url": payload.url().as_str(), "allowed": page_load_allowed_origins });
+                    let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
+                }
+                let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
                 if page_load_action_mode.load(Ordering::SeqCst) {
                     let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true }});", INTEGRATION_INSPECTOR);
                     let _ = window.eval(&script);
@@ -500,6 +532,10 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                             format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
                             format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
                         } else {
                             format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
                         };
@@ -513,11 +549,42 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             if requested_url.as_str() == "about:blank" {
                 return true;
             }
+            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
+                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
+                    if browser_command == "back" { let _ = window.eval("window.history.back()"); }
+                    if browser_command == "forward" { let _ = window.eval("window.history.forward()"); }
+                    if browser_command == "reload" { let _ = window.reload(); }
+                    if browser_command == "inspect" {
+                        navigation_action_mode.store(true, Ordering::SeqCst);
+                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
+                    }
+                    if browser_command == "close" {
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = save_integration_cookies(&integration_app, &window);
+                        if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
+                    }
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(value) = String::from_utf8(bytes) {
+                        if let Ok(url) = value.parse::<tauri::Url>() {
+                            if allowed_integration_url_for_origins(&url, &navigation_allowed_origins) {
+                                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
+                                    let _ = window.navigate(url);
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
             if requested_url.as_str() == "hvy-integration://close" {
-                if let Some(window) = integration_app.get_webview_window(&integration_window_label) {
+                if let Some(_window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
                     #[cfg(not(target_os = "macos"))]
-                    let _ = save_integration_cookies(&integration_app, &window);
-                    let _ = window.close();
+                    let _ = save_integration_cookies(&integration_app, &_window);
+                    if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
                 }
                 return false;
             }
@@ -540,7 +607,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                         let _ = integration_app.emit("integration-inspection-result", result);
                         if !is_background_example_validation {
                             if let Some(main_window) = integration_app.get_webview_window("main") {
-                                let _ = raise_integration_window(&main_window);
+                                let _ = raise_integration_window(&main_window.as_ref().window());
                             }
                         }
                     }
@@ -550,23 +617,95 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             if requested_url.as_str() == "hvy-integration://inspection-cancel" {
                 navigation_action_mode.store(false, Ordering::SeqCst);
                 if let Some(main_window) = integration_app.get_webview_window("main") {
-                    let _ = raise_integration_window(&main_window);
+                    let _ = raise_integration_window(&main_window.as_ref().window());
                 }
                 return false;
             }
             allowed_integration_url_for_origins(requested_url, &navigation_allowed_origins)
         });
-        let builder = builder.center();
         #[cfg(target_os = "macos")]
-        let builder = builder
-            .data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?)
-            .tabbing_identifier("hvy-galaxy-integration-window");
+        let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?);
         #[cfg(not(target_os = "macos"))]
         let builder = builder.incognito(true);
-        let window = builder.build().map_err(|error| AppError::Message(error.to_string()))?;
+        let scale = native_window.scale_factor().map_err(|error| AppError::Message(error.to_string()))?;
+        let size = native_window.inner_size().map_err(|error| AppError::Message(error.to_string()))?;
+        let logical_size = size.to_logical::<f64>(scale);
+        let toolbar_view_height = INTEGRATION_TOOLBAR_HEIGHT + INTEGRATION_TOOLBAR_WINDOW_INSET;
+        let remote_webview = native_window.add_child(
+            builder,
+            tauri::LogicalPosition::new(0.0, toolbar_view_height),
+            tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)),
+        ).map_err(|error| AppError::Message(error.to_string()))?;
+        let toolbar_label = integration_toolbar_label(&profile_id);
+        let toolbar_remote = remote_webview.clone();
+        let toolbar_window = native_window.clone();
+        let toolbar_app = app.clone();
+        let toolbar_profile_id = profile_id.clone();
+        let toolbar_origins = toolbar_allowed_origins;
+        let toolbar_action_mode = action_mode_pending.clone();
+        let toolbar = tauri::webview::WebviewBuilder::new(
+            toolbar_label,
+            tauri::WebviewUrl::App("integration-browser-toolbar.html".into()),
+        ).on_navigation(move |requested_url| {
+            if let Some(action) = requested_url.as_str().strip_prefix("hvy-integration://toolbar/") {
+                let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
+                    "kind": "integration-toolbar-action",
+                    "action": action,
+                    "profileId": toolbar_profile_id,
+                }));
+                if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                    let _ = raise_integration_window(&main_window.as_ref().window());
+                }
+                return false;
+            }
+            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
+                if browser_command == "back" { let _ = toolbar_remote.eval("window.history.back()"); }
+                if browser_command == "forward" { let _ = toolbar_remote.eval("window.history.forward()"); }
+                if browser_command == "reload" { let _ = toolbar_remote.reload(); }
+                if browser_command == "inspect" {
+                    toolbar_action_mode.store(true, Ordering::SeqCst);
+                    let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
+                }
+                if browser_command == "close" { let _ = toolbar_window.close(); }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(value) = String::from_utf8(bytes) {
+                        if let Ok(url) = value.parse::<tauri::Url>() {
+                            if allowed_integration_url_for_origins(&url, &toolbar_origins) {
+                                let _ = toolbar_remote.navigate(url);
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+            true
+        });
+        let toolbar_webview = native_window.add_child(
+            toolbar,
+            tauri::LogicalPosition::new(0.0, 0.0),
+            tauri::LogicalSize::new(logical_size.width, toolbar_view_height),
+        ).map_err(|error| AppError::Message(error.to_string()))?;
+        let resized_remote = remote_webview.clone();
+        let resized_toolbar = toolbar_webview.clone();
+        native_window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Resized(size) = event {
+                let logical_size = size.to_logical::<f64>(scale);
+                let _ = resized_remote.set_bounds(tauri::Rect {
+                    position: tauri::LogicalPosition::new(0.0, toolbar_view_height).into(),
+                    size: tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)).into(),
+                });
+                let _ = resized_toolbar.set_bounds(tauri::Rect {
+                    position: tauri::LogicalPosition::new(0.0, 0.0).into(),
+                    size: tauri::LogicalSize::new(logical_size.width, toolbar_view_height).into(),
+                });
+            }
+        });
         if !foreground {
             if let Some(main_window) = app.get_webview_window("main") {
-                raise_integration_window(&main_window)?;
+                raise_integration_window(&main_window.as_ref().window())?;
             }
         }
         app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
@@ -574,7 +713,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         let menu_app = app.clone();
         let destroyed_action_mode = action_mode_pending.clone();
         let destroyed_profile_id = profile_id.clone();
-        window.on_window_event(move |event| {
+        native_window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 if destroyed_action_mode.swap(false, Ordering::SeqCst) {
                     let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
@@ -582,7 +721,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                         "profileId": destroyed_profile_id,
                     }));
                     if let Some(main_window) = menu_app.get_webview_window("main") {
-                        let _ = raise_integration_window(&main_window);
+                        let _ = raise_integration_window(&main_window.as_ref().window());
                     }
                 }
                 if let Ok(menu) = build_menu(&menu_app) {
@@ -591,31 +730,33 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             }
         });
         #[cfg(not(target_os = "macos"))]
-        restore_integration_cookies(&app, &window)?;
-        window.navigate(url)
+        restore_integration_cookies(&app, &remote_webview)?;
+        remote_webview.navigate(url)
             .map_err(|error| AppError::Message(error.to_string()))?;
         #[cfg(not(target_os = "macos"))]
         let close_started = Arc::new(AtomicBool::new(false));
         #[cfg(not(target_os = "macos"))]
-        let close_window = window.clone();
+        let close_window = native_window.clone();
+        #[cfg(not(target_os = "macos"))]
+        let close_webview = remote_webview.clone();
         #[cfg(not(target_os = "macos"))]
         let close_app = app.clone();
         #[cfg(not(target_os = "macos"))]
-        window.on_window_event(move |event| {
+        native_window.on_window_event(move |event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if close_started.swap(true, Ordering::SeqCst) {
                     return;
                 }
                 api.prevent_close();
-                let _ = save_integration_cookies(&close_app, &close_window);
-                let _ = close_window.clear_all_browsing_data();
+                let _ = save_integration_cookies(&close_app, &close_webview);
+                let _ = close_webview.clear_all_browsing_data();
                 let _ = close_window.close();
             }
         });
         return Ok(());
     }
 
-    let Some(window) = app.get_webview_window(&window_label) else {
+    let (Some(host_window), Some(window)) = (app.get_window(&window_label), app.get_webview(&content_label)) else {
         if command == "close" {
             return Ok(());
         }
@@ -628,11 +769,11 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
     }
     let foreground_extraction = command == "extract-pattern" && payload.as_ref().and_then(|value| value.get("foreground")).and_then(serde_json::Value::as_bool) != Some(false);
     if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || foreground_extraction || command == "execute-command" || command == "focus-browser" {
-        raise_integration_window(&window)?;
+        raise_integration_window(&host_window)?;
     }
     if command == "cancel-inspect" || command == "focus-main" {
         if let Some(main_window) = app.get_webview_window("main") {
-            raise_integration_window(&main_window)?;
+            raise_integration_window(&main_window.as_ref().window())?;
         }
     }
     match command.as_str() {
@@ -645,12 +786,14 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "cancel-inspect" => window.eval("window.__hvyGalaxyInspector?.stop()"),
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {
             #[cfg(not(target_os = "macos"))]
             save_integration_cookies(&app, &window)?;
-            window.close()
+            host_window.close()
         },
         _ => return Err(AppError::Message("Unknown integration browser command.".into())),
     }
@@ -661,7 +804,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
 #[tauri::command]
 fn integration_browser_is_open(app: AppHandle, profile_id: Option<String>) -> bool {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
-    app.get_webview_window(&integration_browser_label(&profile_id)).is_some()
+    app.get_window(&integration_browser_label(&profile_id)).is_some()
 }
 
 #[derive(Serialize)]

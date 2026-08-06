@@ -6,6 +6,7 @@ import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
+import type { IntegrationStructuredSource } from './integrationBrowser';
 export { findFileInWorkspace, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces } from './workspaceFiles';
 
 export interface OpenDocument {
@@ -135,6 +136,13 @@ export interface AppState {
   integrationActionResultActionId: string | null;
   integrationActionFetchPendingId: string | null;
   integrationActionFetchError: string | null;
+  integrationStructuredSourcePageId: string | null;
+  integrationStructuredSourcePending: boolean;
+  integrationStructuredSources: IntegrationStructuredSource[];
+  integrationStructuredSourceError: string | null;
+  integrationStructuredResultOpen: boolean;
+  integrationStructuredResultName: string;
+  integrationStructuredResult: unknown;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
@@ -392,6 +400,13 @@ export const state: AppState = {
   integrationActionResultActionId: null,
   integrationActionFetchPendingId: null,
   integrationActionFetchError: null,
+  integrationStructuredSourcePageId: null,
+  integrationStructuredSourcePending: false,
+  integrationStructuredSources: [],
+  integrationStructuredSourceError: null,
+  integrationStructuredResultOpen: false,
+  integrationStructuredResultName: '',
+  integrationStructuredResult: null,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
   integrationCommandDraftIntegrationId: null,
