@@ -347,6 +347,9 @@ function buildMenu() {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  for (const browser of integrationBrowsers.values()) {
+    if (browser.window && !browser.window.isDestroyed()) browser.window.removeMenu();
+  }
 }
 
 function menuItem(label, id, accelerator) {
@@ -845,12 +848,22 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   if (browser?.closePromise) await browser.closePromise;
   if (!browser || browser.window.isDestroyed()) {
     const integrationWindow = new BrowserWindow({
-      show: foreground,
+      show: false,
       width: 1180,
       height: 820,
       minWidth: 720,
       minHeight: 520,
       title: `HVY Galaxy Integrations — ${windowName || profileId}`,
+      backgroundColor: '#f7f3ea',
+      icon: iconPath(appIconFileName()),
+      autoHideMenuBar: true,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    const toolbarView = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -868,13 +881,15 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       },
     });
     integrationWindow.contentView.addChildView(browserView);
+    integrationWindow.contentView.addChildView(toolbarView);
     const layoutBrowserView = () => {
       const [width, height] = integrationWindow.getContentSize();
+      toolbarView.setBounds({ x: 0, y: 0, width, height: INTEGRATION_TOOLBAR_HEIGHT });
       browserView.setBounds({ x: 0, y: INTEGRATION_TOOLBAR_HEIGHT, width, height: Math.max(0, height - INTEGRATION_TOOLBAR_HEIGHT) });
     };
     layoutBrowserView();
     integrationWindow.on('resize', layoutBrowserView);
-    browser = { window: integrationWindow, view: browserView, contents: browserView.webContents, name: windowName || profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
+    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
     integrationBrowsers.set(profileId, browser);
     buildMenu();
     const browserUserAgent = browser.contents.getUserAgent()
@@ -896,7 +911,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       }
       return { action: 'deny' };
     });
-    integrationWindow.webContents.on('will-navigate', (event, requestedUrl) => {
+    browser.toolbarContents.on('will-navigate', (event, requestedUrl) => {
       const toolbarPrefix = 'hvy-integration://toolbar/';
       if (requestedUrl.startsWith(toolbarPrefix)) {
         event.preventDefault();
@@ -945,8 +960,9 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         result.profileId = profileId;
         browser.actionModePending = false;
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        const isBackgroundExampleValidation = result?.kind === 'integration-extraction' && result?.context?.mode === 'examples';
-        if (!isBackgroundExampleValidation) raiseWindow(mainWindow);
+        const isBackgroundResult = (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
+          || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true);
+        if (!isBackgroundResult) raiseWindow(mainWindow);
         return;
       }
       if (requestedUrl === 'hvy-integration://inspection-cancel') {
@@ -961,7 +977,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     });
     browser.contents.on('did-finish-load', () => {
       const currentUrl = browser.contents.getURL();
-      void integrationWindow.webContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
+      void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
       void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
         void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
         if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true })');
@@ -1033,7 +1049,8 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.allowedOrigins = allowedOrigins;
   browser.actionModePending = actionMode;
   browser.pendingExtraction = pendingExtraction || null;
-  await browser.window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
+  await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
+  browser.window.removeMenu();
   await browser.contents.loadURL(url);
   if (foreground) raiseWindow(browser.window);
 }

@@ -17,6 +17,7 @@
   let targetCollection = null;
   let captureSequence = 0;
   let browserChromeHost = null;
+  const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
   const capturedElements = new Map();
   const observedStructuredUrls = new Map();
   const xhrStructuredUrls = new WeakMap();
@@ -677,6 +678,10 @@
   };
 
   const publish = (value) => {
+    if (nativePublish) {
+      nativePublish(value);
+      return;
+    }
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
@@ -787,8 +792,6 @@
   };
 
   const elementsBehindInspector = (x, y) => {
-    const shield = document.getElementById('hvy-galaxy-inspector-shield');
-    if (shield) shield.style.pointerEvents = 'none';
     const visitedRoots = new Set();
     const collect = (root) => {
       if (visitedRoots.has(root)) return [];
@@ -801,9 +804,8 @@
       });
       return result;
     };
-    const hits = [...new Set(collect(document))];
-    if (shield) shield.style.pointerEvents = 'auto';
-    return hits;
+    return [...new Set(collect(document))]
+      .filter((element) => !element.closest?.('#hvy-galaxy-inspector-shield, #hvy-galaxy-inspector-highlight, #hvy-galaxy-inspector-status, #hvy-galaxy-inspector-picker'));
   };
 
   const candidatesAt = (x, y, target, composedPath = []) => {

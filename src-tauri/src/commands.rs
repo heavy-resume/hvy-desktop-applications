@@ -150,6 +150,56 @@ const INTEGRATION_VAULT_ACCOUNT: &str = "default";
 const INTEGRATION_VAULT_FILE: &str = "integration-cookie-vault-tauri.json";
 const INTEGRATION_VAULT_AAD: &[u8] = b"hvy-galaxy-integration-vault-v1";
 const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
+
+fn integration_result_is_background(result: &serde_json::Value) -> bool {
+    (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
+        && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
+        || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
+            && result.pointer("/context/automatic").and_then(serde_json::Value::as_bool) == Some(true))
+}
+
+fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, mut result: serde_json::Value) {
+    if let Some(object) = result.as_object_mut() {
+        object.insert("profileId".into(), serde_json::Value::String(profile_id.into()));
+    }
+    let is_background = integration_result_is_background(&result);
+    action_mode.store(false, Ordering::SeqCst);
+    let _ = app.emit("integration-inspection-result", result);
+    if !is_background {
+        if let Some(main_window) = app.get_webview_window("main") {
+            let _ = raise_integration_window(&main_window.as_ref().window());
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_integration_message_handler(webview: &tauri::Webview, app: AppHandle, action_mode: Arc<AtomicBool>, profile_id: String) -> AppResult<()> {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::ICoreWebView2,
+        WebMessageReceivedEventHandler,
+    };
+    use windows_core::PWSTR;
+
+    webview.with_webview(move |platform_webview| unsafe {
+        let Ok(core_webview): Result<ICoreWebView2, _> = platform_webview.controller().CoreWebView2() else {
+            return;
+        };
+        let mut token = 0;
+        let _ = core_webview.add_WebMessageReceived(
+            &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else { return Ok(()); };
+                let mut message = PWSTR::null();
+                args.TryGetWebMessageAsString(&mut message)?;
+                let message = webview2_com::take_pwstr(message);
+                let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message) else { return Ok(()); };
+                let Some(result) = envelope.get("hvyGalaxyIntegrationResult").cloned() else { return Ok(()); };
+                emit_integration_result(&app, &action_mode, &profile_id, result);
+                Ok(())
+            })),
+            &mut token,
+        );
+    }).map_err(|error| AppError::Message(error.to_string()))
+}
 #[cfg(target_os = "macos")]
 const DEFAULT_INTEGRATION_DATA_STORE_ID: [u8; 16] = [
     0x48, 0x56, 0x59, 0x47, 0x41, 0x4c, 0x41, 0x58,
@@ -339,6 +389,16 @@ fn save_integration_cookies(app: &AppHandle, window: &tauri::Webview) -> AppResu
     write_integration_vault(app, &key, &plaintext)
 }
 
+#[cfg(not(target_os = "macos"))]
+fn save_open_integration_cookies(app: &AppHandle) -> AppResult<()> {
+    for (label, webview) in app.webviews() {
+        if label.starts_with(INTEGRATION_BROWSER_LABEL) && label.ends_with("-content") {
+            save_integration_cookies(app, &webview)?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn load_integration_vault_status(_app: AppHandle) -> AppResult<IntegrationVaultStatus> {
     #[cfg(target_os = "macos")]
@@ -427,7 +487,7 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
 }
 
 #[tauri::command]
-fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>) -> AppResult<()> {
+async fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>) -> AppResult<()> {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
     let window_label = integration_browser_label(&profile_id);
     let content_label = integration_content_label(&profile_id);
@@ -477,6 +537,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             }
             app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
                 .map_err(|error| AppError::Message(error.to_string()))?;
+            window.remove_menu().map_err(|error| AppError::Message(error.to_string()))?;
             return Ok(());
         }
         let integration_app = app.clone();
@@ -488,10 +549,20 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         let navigation_action_mode = action_mode_pending.clone();
         let page_load_allowed_origins = navigation_allowed_origins.clone();
         let toolbar_allowed_origins = navigation_allowed_origins.clone();
+        let new_window_allowed_origins = navigation_allowed_origins.clone();
+        let new_window_app = app.clone();
+        let new_window_profile_id = profile_id.clone();
         let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
+        #[cfg(target_os = "windows")]
+        let integration_inspector = format!(
+            "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\n{}",
+            INTEGRATION_INSPECTOR,
+        );
+        #[cfg(not(target_os = "windows"))]
+        let integration_inspector = INTEGRATION_INSPECTOR.to_owned();
         let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
             .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
-            .visible(true)
+            .visible(false)
             .inner_size(1080.0, 700.0)
             .min_inner_size(720.0, 520.0)
             .center()
@@ -501,7 +572,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             &content_label,
             tauri::WebviewUrl::External(blank_url),
         )
-        .initialization_script(INTEGRATION_INSPECTOR)
+        .initialization_script(integration_inspector)
         .on_document_title_changed(move |window, title| {
             let site_title = title.trim();
             if !site_title.is_empty() {
@@ -544,6 +615,14 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                     }
                 }
             }
+        })
+        .on_new_window(move |requested_url, _features| {
+            if allowed_integration_url_for_origins(&requested_url, &new_window_allowed_origins) {
+                if let Some(content) = new_window_app.get_webview(&integration_content_label(&new_window_profile_id)) {
+                    let _ = content.navigate(requested_url);
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
         })
         .on_navigation(move |requested_url| {
             if requested_url.as_str() == "about:blank" {
@@ -594,7 +673,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                         if let Some(object) = result.as_object_mut() {
                             object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
                         }
-                        let is_background_example_validation = result
+                        let is_background_result = result
                             .get("kind")
                             .and_then(serde_json::Value::as_str)
                             == Some("integration-extraction")
@@ -603,9 +682,19 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
                                 .and_then(|context| context.get("mode"))
                                 .and_then(serde_json::Value::as_str)
                                 == Some("examples");
+                        let is_background_result = is_background_result
+                            || (result
+                                .get("kind")
+                                .and_then(serde_json::Value::as_str)
+                                == Some("integration-source-discovery")
+                                && result
+                                    .get("context")
+                                    .and_then(|context| context.get("automatic"))
+                                    .and_then(serde_json::Value::as_bool)
+                                    == Some(true));
                         navigation_action_mode.store(false, Ordering::SeqCst);
                         let _ = integration_app.emit("integration-inspection-result", result);
-                        if !is_background_example_validation {
+                        if !is_background_result {
                             if let Some(main_window) = integration_app.get_webview_window("main") {
                                 let _ = raise_integration_window(&main_window.as_ref().window());
                             }
@@ -636,6 +725,13 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
             tauri::LogicalPosition::new(0.0, toolbar_view_height),
             tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)),
         ).map_err(|error| AppError::Message(error.to_string()))?;
+        #[cfg(target_os = "windows")]
+        install_integration_message_handler(
+            &remote_webview,
+            app.clone(),
+            action_mode_pending.clone(),
+            profile_id.clone(),
+        )?;
         let toolbar_label = integration_toolbar_label(&profile_id);
         let toolbar_remote = remote_webview.clone();
         let toolbar_window = native_window.clone();
@@ -710,6 +806,7 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         }
         app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
             .map_err(|error| AppError::Message(error.to_string()))?;
+        native_window.remove_menu().map_err(|error| AppError::Message(error.to_string()))?;
         let menu_app = app.clone();
         let destroyed_action_mode = action_mode_pending.clone();
         let destroyed_profile_id = profile_id.clone();
@@ -733,6 +830,12 @@ fn integration_browser_command(app: AppHandle, command: String, destination: Opt
         restore_integration_cookies(&app, &remote_webview)?;
         remote_webview.navigate(url)
             .map_err(|error| AppError::Message(error.to_string()))?;
+        native_window.show().map_err(|error| AppError::Message(error.to_string()))?;
+        if foreground {
+            raise_integration_window(&native_window)?;
+        } else if let Some(main_window) = app.get_webview_window("main") {
+            raise_integration_window(&main_window.as_ref().window())?;
+        }
         #[cfg(not(target_os = "macos"))]
         let close_started = Arc::new(AtomicBool::new(false));
         #[cfg(not(target_os = "macos"))]
@@ -2149,6 +2252,8 @@ fn open_external_url(url: String) -> AppResult<()> {
 
 #[tauri::command]
 fn close_app_window(app: AppHandle) -> AppResult<()> {
+    #[cfg(not(target_os = "macos"))]
+    save_open_integration_cookies(&app)?;
     app.exit(0);
     Ok(())
 }
