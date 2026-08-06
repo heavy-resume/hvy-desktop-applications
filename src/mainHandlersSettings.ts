@@ -328,12 +328,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = `Added ${profile.name}`;
     rerender({ preserveMountedDocument: true });
   },
-  openIntegrationPage: (integrationId, pageId) => {
+  openIntegrationPage: (integrationId, pageId, profileId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     if (!page) throw new Error('Integration page was not found.');
-    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    const selectedProfileId = profileId ?? state.selectedIntegrationProfileId;
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === selectedProfileId);
     if (!profile) throw new Error('Choose an integration profile.');
+    state.selectedIntegrationProfileId = profile.id;
     if (page.id === 'gmail' || page.id === 'google-calendar') {
       const destination = page.id === 'gmail' ? 'gmail' : 'calendar';
       void runBusy(`Opening ${page.name}...`, async () => {

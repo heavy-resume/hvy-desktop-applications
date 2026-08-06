@@ -1408,11 +1408,62 @@ body {
   border-top: 1px solid var(--hvy-border, #c5cec8);
 }
 
+.integrations-section,
+.integration-quick-views,
 .workspaces-section,
 .tree-list,
 .workspace-root {
   display: grid;
   gap: 8px;
+}
+
+.integrations-section {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 42%;
+  align-content: start;
+  overflow: auto;
+  padding-right: var(--workspace-scrollbar-gutter);
+  scrollbar-gutter: stable;
+}
+
+.integration-quick-view {
+  min-width: 0;
+}
+
+.integration-quick-view > summary {
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--hvy-text, #152223);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-profile-list {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 2px 18px;
+}
+
+.integration-quick-view-button,
+.integration-profile-quick-view {
+  width: 100%;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-quick-view-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.integration-profile-quick-view {
+  padding-block: 5px;
+  font-size: 12px;
 }
 
 .workspaces-section {
@@ -1459,6 +1510,8 @@ body {
   margin-right: auto;
 }
 
+.integration-manage-trigger,
+.integration-new-trigger,
 .workspace-manage-trigger,
 .workspace-new-trigger {
   width: 26px;
@@ -1468,6 +1521,7 @@ body {
   font-size: 18px;
 }
 
+.integration-manage-trigger,
 .workspace-manage-trigger {
   padding-bottom: 0;
 }

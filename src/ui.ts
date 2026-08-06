@@ -92,7 +92,7 @@ export interface UiHandlers {
   openIntegrations(): void;
   closeIntegrations(): void;
   openIntegration(destination: 'msn' | 'gmail' | 'calendar'): void;
-  openIntegrationPage(integrationId: string, pageId: string): void;
+  openIntegrationPage(integrationId: string, pageId: string, profileId?: string): void;
   addActionForIntegrationPage(integrationId: string, pageId: string): void;
   editIntegrationAction(integrationId: string, actionId: string): void;
   closeIntegrationActionBuilder(): void;
@@ -385,6 +385,8 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
 export function renderLeftPanel(state: AppState): void {
   const leftPanel = leftPanelRoot();
   const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
+  const integrationScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section')?.scrollTop ?? 0;
+  const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view[open]')).map((details) => details.dataset.quickViewId ?? ''));
   leftPanel.innerHTML = `
     <div class="sidebar-header">
       <div class="brand-lockup">
@@ -395,8 +397,15 @@ export function renderLeftPanel(state: AppState): void {
     </div>
     <div class="sidebar-actions">
       <button class="hvy-galaxy-button" type="button" data-action="open-file">Open File</button>
-      <button class="hvy-galaxy-button" type="button" data-action="integrations">Integrations</button>
     </div>
+    <section class="integrations-section">
+      <div class="sidebar-section-heading">
+        <h2>Integrations</h2>
+        <button type="button" class="hvy-galaxy-button icon-button integration-manage-trigger" data-action="integrations" title="Manage integrations" aria-label="Manage integrations">${gearIcon()}</button>
+        <button type="button" class="hvy-galaxy-button icon-button integration-new-trigger" data-action="request-add-integration-page" title="Add quick view" aria-label="Add quick view">+</button>
+      </div>
+      ${renderIntegrationQuickViews(state, expandedIntegrationPages)}
+    </section>
     <section class="workspaces-section">
       <div class="sidebar-section-heading">
         <h2>Workspaces</h2>
@@ -411,6 +420,30 @@ export function renderLeftPanel(state: AppState): void {
   if (nextWorkspacesSection) {
     nextWorkspacesSection.scrollTop = workspaceScrollTop;
   }
+  const nextIntegrationsSection = leftPanel.querySelector<HTMLElement>('.integrations-section');
+  if (nextIntegrationsSection) {
+    nextIntegrationsSection.scrollTop = integrationScrollTop;
+  }
+}
+
+function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet<string>): string {
+  const profiles = state.integrationRegistry.profiles;
+  const pages = state.integrationRegistry.integrations.flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
+  if (pages.length === 0) return '<div class="empty-panel">Add a web page for quick access.</div>';
+  return `<div class="integration-quick-views">${pages.map(({ integration, page }) => {
+    if (profiles.length <= 1) {
+      const profile = profiles[0];
+      return `<button type="button" class="hvy-galaxy-button integration-quick-view-button" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}"${profile ? ` data-profile-id="${escapeAttr(profile.id)}"` : ''}>${escapeHtml(page.name)}</button>`;
+    }
+    const quickViewId = `${integration.id}:${page.id}`;
+    return `
+      <details class="integration-quick-view" data-quick-view-id="${escapeAttr(quickViewId)}"${expandedPages.has(quickViewId) ? ' open' : ''}>
+        <summary>${escapeHtml(page.name)}</summary>
+        <div class="integration-profile-list">
+          ${profiles.map((profile) => `<button type="button" class="hvy-galaxy-button integration-profile-quick-view" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}</button>`).join('')}
+        </div>
+      </details>`;
+  }).join('')}</div>`;
 }
 
 export function renderDocumentControls(state: AppState): void {
@@ -844,7 +877,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.openIntegration(target.dataset.destination);
     }
     if (action === 'open-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
-      handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
+      handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId);
     }
     if (action === 'add-action-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
       handlers.addActionForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
