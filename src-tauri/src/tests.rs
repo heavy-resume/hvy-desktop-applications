@@ -729,8 +729,8 @@ model = "gpt-5.4"
         let dir = tempdir().unwrap();
         fs::create_dir(dir.path().join("people")).unwrap();
         fs::write(
-            dir.path().join("people").join("james-resume.hvy"),
-            "Resume\nJames Hutchison\nExperience building HVY Galaxy.",
+            dir.path().join("people").join("ada-resume.hvy"),
+            "Resume\nAda Lovelace\nExperience building HVY Galaxy.",
         )
         .unwrap();
         fs::write(
@@ -738,7 +738,7 @@ model = "gpt-5.4"
             "# Notes\nThis markdown file mentions HVY Galaxy but not the resume owner.",
         )
         .unwrap();
-        fs::write(dir.path().join("ignore.txt"), "James Hutchison outside supported documents").unwrap();
+        fs::write(dir.path().join("ignore.txt"), "Ada Lovelace outside supported documents").unwrap();
         let workspace = initialize_workspace_with_name(dir.path(), Some("Career Documents")).unwrap();
         let workspaces = vec![workspace.clone()];
 
@@ -750,25 +750,25 @@ model = "gpt-5.4"
         assert_eq!(tree["workspaces"][0]["path"], workspace.path);
         assert!(tree["workspaces"][0]["files"]
             .to_string()
-            .contains("james-resume.hvy"));
+            .contains("ada-resume.hvy"));
         assert!(!tree["workspaces"][0]["files"].to_string().contains("ignore.txt"));
 
         let search = mcp_workspace_search_from(
             &workspaces,
             serde_json::json!({
-                "query": "James Hutchison",
+                "query": "Ada Lovelace",
                 "max": 10
             }),
         )
         .unwrap();
-        assert_eq!(search["query"], "James Hutchison");
+        assert_eq!(search["query"], "Ada Lovelace");
         assert_eq!(search["results"].as_array().unwrap().len(), 1);
-        assert_eq!(search["results"][0]["relativePath"], "people/james-resume.hvy");
+        assert_eq!(search["results"][0]["relativePath"], "people/ada-resume.hvy");
         assert_eq!(search["results"][0]["lineNumber"], 2);
         assert!(search["results"][0]["snippet"]
             .as_str()
             .unwrap()
-            .contains("James Hutchison"));
+            .contains("Ada Lovelace"));
     }
 
     #[test]
@@ -1190,7 +1190,7 @@ model = "gpt-5.4"
     #[test]
     fn mcp_stdio_serves_initialized_tool_calls() {
         let workspace = tempdir().unwrap();
-        fs::write(workspace.path().join("resume.hvy"), "Resume for James Hutchison").unwrap();
+        fs::write(workspace.path().join("resume.hvy"), "Resume for Ada Lovelace").unwrap();
         initialize_workspace_with_name(workspace.path(), Some("Career")).unwrap();
         let requests = [
             serde_json::json!({
@@ -1210,7 +1210,7 @@ model = "gpt-5.4"
                 "params": {
                     "name": "workspace_search",
                     "arguments": {
-                        "query": "James Hutchison"
+                        "query": "Ada Lovelace"
                     }
                 }
             }),

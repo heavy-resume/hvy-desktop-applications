@@ -1,13 +1,18 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import type { AddressInfo } from 'node:net';
+import { dirname, resolve } from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright';
-import { createServer, type ViteDevServer } from 'vite';
+import { createServer, normalizePath, type ViteDevServer } from 'vite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const inspectorSource = fs.readFileSync(new URL('./integration-inspector.js', import.meta.url), 'utf8');
 const integrationToolbarSource = fs.readFileSync(new URL('../public/integration-browser-toolbar.html', import.meta.url), 'utf8');
 const guideSource = fs.readFileSync(new URL('../src-tauri/resources/hvy-guide.hvy', import.meta.url), 'utf8');
-const resumeSource = fs.readFileSync('/Users/jameshutchison/git/heavy-file-format/examples/resume.hvy', 'utf8');
+const require = createRequire(import.meta.url);
+const hvyReferenceRoot = dirname(require.resolve('heavy-file-format-ref-impl/package.json'));
+const hvyEmbedModuleUrl = `/@fs/${normalizePath(resolve(hvyReferenceRoot, 'src/embed-full.ts')).replace(/^\/+/, '')}`;
+const resumeSource = fs.readFileSync(resolve(hvyReferenceRoot, 'examples/resume.hvy'), 'utf8');
 const guideTitles = ['Text', 'Image', 'Carousel', 'Table', 'Reference', 'Container', 'List', 'Grid', 'Expandable', 'Plugin', 'Custom'];
 const projectSkills = ['Reverse Engineering', 'Library Development', 'LLM Prompt Engineering', 'Project Management'];
 
@@ -1218,8 +1223,8 @@ describe('integration structural inspector', () => {
 
   it('learns a component-title vector from the virtualized Guide and finds and scrolls to every title', async () => {
     await page.goto(`${viteUrl}/__guide-vector-test.html`);
-    await page.evaluate(async (source) => {
-      const hvy = await (0, eval)('import("/@fs/Users/jameshutchison/git/heavy-file-format/src/embed-full.ts")');
+    await page.evaluate(async ({ source, moduleUrl }) => {
+      const hvy = await (0, eval)(`import(${JSON.stringify(moduleUrl)})`);
       const documentModel = hvy.deserializeDocumentBytes(new TextEncoder().encode(source), '.hvy');
       hvy.mountHvy({
         root: document.querySelector('#guide-root') as HTMLElement,
@@ -1227,7 +1232,7 @@ describe('integration structural inspector', () => {
         mode: 'viewer',
         controls: false,
       });
-    }, guideSource);
+    }, { source: guideSource, moduleUrl: hvyEmbedModuleUrl });
     await page.locator('.reader-document').waitFor();
     await page.evaluate(() => {
       const body = document.querySelector('.reader-document-body')!;
@@ -1376,8 +1381,8 @@ describe('integration structural inspector', () => {
 
   it('extracts relevant skills from virtualized and collapsed resume projects', async () => {
     await page.goto(`${viteUrl}/__guide-vector-test.html`);
-    await page.evaluate(async (source) => {
-      const hvy = await (0, eval)('import("/@fs/Users/jameshutchison/git/heavy-file-format/src/embed-full.ts")');
+    await page.evaluate(async ({ source, moduleUrl }) => {
+      const hvy = await (0, eval)(`import(${JSON.stringify(moduleUrl)})`);
       const documentModel = hvy.deserializeDocumentBytes(new TextEncoder().encode(source), '.hvy');
       hvy.mountHvy({
         root: document.querySelector('#guide-root') as HTMLElement,
@@ -1385,7 +1390,7 @@ describe('integration structural inspector', () => {
         mode: 'viewer',
         controls: false,
       });
-    }, resumeSource);
+    }, { source: resumeSource, moduleUrl: hvyEmbedModuleUrl });
     await page.locator('.reader-document').waitFor();
     await page.addScriptTag({ content: inspectorSource });
 
