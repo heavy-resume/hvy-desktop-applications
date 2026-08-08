@@ -93,6 +93,7 @@ export interface UiHandlers {
   closeIntegrations(): void;
   openIntegration(destination: 'msn' | 'gmail' | 'calendar'): void;
   openIntegrationPage(integrationId: string, pageId: string, profileId?: string): void;
+  setIntegrationQuickViewProfile(integrationId: string, pageId: string, profileId: string, visible: boolean): void;
   addActionForIntegrationPage(integrationId: string, pageId: string): void;
   editIntegrationAction(integrationId: string, actionId: string): void;
   closeIntegrationActionBuilder(): void;
@@ -386,7 +387,8 @@ export function renderLeftPanel(state: AppState): void {
   const leftPanel = leftPanelRoot();
   const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
   const integrationScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section')?.scrollTop ?? 0;
-  const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view[open]')).map((details) => details.dataset.quickViewId ?? ''));
+  const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view-launcher[open]')).map((details) => details.dataset.quickViewId ?? ''));
+  const expandedIntegrationFilters = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-profile-filter[open]')).map((details) => details.dataset.quickViewId ?? ''));
   leftPanel.innerHTML = `
     <div class="sidebar-header">
       <div class="brand-lockup">
@@ -404,7 +406,7 @@ export function renderLeftPanel(state: AppState): void {
         <button type="button" class="hvy-galaxy-button icon-button integration-manage-trigger" data-action="integrations" title="Manage integrations" aria-label="Manage integrations">${gearIcon()}</button>
         <button type="button" class="hvy-galaxy-button icon-button integration-new-trigger" data-action="request-add-integration-page" title="Add quick view" aria-label="Add quick view">+</button>
       </div>
-      ${renderIntegrationQuickViews(state, expandedIntegrationPages)}
+      ${renderIntegrationQuickViews(state, expandedIntegrationPages, expandedIntegrationFilters)}
     </section>
     <section class="workspaces-section">
       <div class="sidebar-section-heading">
@@ -426,23 +428,33 @@ export function renderLeftPanel(state: AppState): void {
   }
 }
 
-function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet<string>): string {
+function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet<string>, expandedFilters: ReadonlySet<string>): string {
   const profiles = state.integrationRegistry.profiles;
   const pages = state.integrationRegistry.integrations.flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
   if (pages.length === 0) return '<div class="empty-panel">Add a web page for quick access.</div>';
   return `<div class="integration-quick-views">${pages.map(({ integration, page }) => {
-    if (profiles.length <= 1) {
-      const profile = profiles[0];
-      return `<button type="button" class="hvy-galaxy-button integration-quick-view-button" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}"${profile ? ` data-profile-id="${escapeAttr(profile.id)}"` : ''}>${escapeHtml(page.name)}</button>`;
-    }
     const quickViewId = `${integration.id}:${page.id}`;
+    const visibleIds = new Set(page.visibleProfileIds ?? profiles.map((profile) => profile.id));
+    const visibleProfiles = profiles.filter((profile) => visibleIds.has(profile.id));
+    const launcher = `<details class="integration-quick-view-launcher" data-quick-view-id="${escapeAttr(quickViewId)}"${expandedPages.has(quickViewId) ? ' open' : ''}>
+      <summary>${escapeHtml(page.name)}</summary>
+      <div class="integration-profile-list">
+        ${visibleProfiles.length
+    ? visibleProfiles.map((profile) => `<button type="button" class="hvy-galaxy-button integration-profile-quick-view" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}</button>`).join('')
+    : '<span class="integration-profile-list-empty">No profiles shown</span>'}
+      </div>
+    </details>`;
     return `
-      <details class="integration-quick-view" data-quick-view-id="${escapeAttr(quickViewId)}"${expandedPages.has(quickViewId) ? ' open' : ''}>
-        <summary>${escapeHtml(page.name)}</summary>
-        <div class="integration-profile-list">
-          ${profiles.map((profile) => `<button type="button" class="hvy-galaxy-button integration-profile-quick-view" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}</button>`).join('')}
-        </div>
-      </details>`;
+      <div class="integration-quick-view">
+        ${launcher}
+        <details class="integration-profile-filter" data-quick-view-id="${escapeAttr(quickViewId)}"${expandedFilters.has(quickViewId) ? ' open' : ''}>
+          <summary class="hvy-galaxy-button icon-button" title="Choose visible profiles" aria-label="Choose profiles shown for ${escapeAttr(page.name)}">${funnelIcon()}</summary>
+          <div class="integration-profile-filter-menu" role="group" aria-label="Profiles shown for ${escapeAttr(page.name)}">
+            <strong>Show profiles</strong>
+            ${profiles.map((profile) => `<label><input type="checkbox" data-action="set-integration-quick-view-profile" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}" ${visibleIds.has(profile.id) ? 'checked' : ''}> <span>${escapeHtml(profile.name)}</span></label>`).join('')}
+          </div>
+        </details>
+      </div>`;
   }).join('')}</div>`;
 }
 
@@ -1453,6 +1465,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (!target || target.closest('#hvyMount')) return;
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-integration-profile') {
       handlers.selectIntegrationProfile(target.value);
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.action === 'set-integration-quick-view-profile' && target.dataset.integrationId && target.dataset.pageId && target.dataset.profileId) {
+      handlers.setIntegrationQuickViewProfile(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId, target.checked);
       return;
     }
     if (target instanceof HTMLSelectElement && target.dataset.field === 'integration-target-cardinality') {

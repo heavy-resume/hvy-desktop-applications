@@ -4,6 +4,7 @@ export interface IntegrationPageDefinition {
   url: string;
   allowedOrigins: string[];
   editable: boolean;
+  visibleProfileIds?: string[];
   commands?: IntegrationCommandDefinition[];
   retrievalSources?: IntegrationRetrievalSourceDefinition[];
 }
@@ -168,7 +169,7 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
     ];
     return {
       ...builtIn,
-      pages: [{ ...page, commands: [...new Map(commands.map((command) => [command.id, command])).values()], retrievalSources: [...new Map(retrievalSources.map((source) => [source.id, source])).values()] }],
+      pages: [{ ...page, visibleProfileIds: savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.visibleProfileIds, commands: [...new Map(commands.map((command) => [command.id, command])).values()], retrievalSources: [...new Map(retrievalSources.map((source) => [source.id, source])).values()] }],
       actions,
     };
   });

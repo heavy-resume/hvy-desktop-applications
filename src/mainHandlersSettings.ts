@@ -351,6 +351,22 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = `Opened ${page.name}`;
     }, { preserveMountedDocument: true });
   },
+  setIntegrationQuickViewProfile: (integrationId, pageId, profileId, visible) => {
+    const profileIds = state.integrationRegistry.profiles.map((profile) => profile.id);
+    const integrations = state.integrationRegistry.integrations.map((integration) => integration.id !== integrationId ? integration : {
+      ...integration,
+      pages: integration.pages.map((page) => {
+        if (page.id !== pageId) return page;
+        const visibleProfileIds = new Set(page.visibleProfileIds ?? profileIds);
+        if (visible) visibleProfileIds.add(profileId);
+        else visibleProfileIds.delete(profileId);
+        return { ...page, visibleProfileIds: profileIds.filter((id) => visibleProfileIds.has(id)) };
+      }),
+    });
+    state.integrationRegistry = { ...state.integrationRegistry, integrations };
+    saveIntegrationRegistry(state.integrationRegistry);
+    rerender({ preserveMountedDocument: true });
+  },
   addActionForIntegrationPage: (integrationId, pageId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);

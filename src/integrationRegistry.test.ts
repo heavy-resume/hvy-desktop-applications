@@ -16,6 +16,17 @@ describe('integration registry', () => {
     expect(registry.profiles.map((profile) => profile.id)).toEqual(['default-google']);
   });
 
+  it('restores the visible profile selection for built-in sidebar items', () => {
+    const saved = defaultIntegrationRegistry();
+    saved.profiles.push({ id: 'work-google', name: 'Work', providerId: 'google', browserStoreId: 'work-google' });
+    saved.integrations[0].pages[0].visibleProfileIds = ['work-google'];
+    vi.stubGlobal('localStorage', { getItem: () => JSON.stringify(saved) });
+
+    const loaded = loadIntegrationRegistry();
+
+    expect(loaded.integrations.find((integration) => integration.id === 'gmail')?.pages[0].visibleProfileIds).toEqual(['work-google']);
+  });
+
   it('stores only matcher structure and reconstructs an executable pattern', () => {
     const snapshot = {
       selected: {
