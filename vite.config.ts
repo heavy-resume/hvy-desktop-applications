@@ -53,6 +53,12 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/graph.ts',
   },
   {
+    id: 'hvy.diagram',
+    key: 'diagram',
+    exportName: 'diagramPlugin',
+    modulePath: 'src/plugins/diagram.ts',
+  },
+  {
     id: 'hvy.qr-code',
     key: 'qrCode',
     exportName: 'qrCodePlugin',
@@ -63,6 +69,12 @@ const builtInDefinitions = [
     key: 'video',
     exportName: 'videoPlugin',
     modulePath: 'src/plugins/video/video.ts',
+  },
+  {
+    id: 'hvy.editable-text',
+    key: 'editableText',
+    exportName: 'editableTextPlugin',
+    modulePath: 'src/plugins/editable-text/editable-text.ts',
   },
 ] as const;
 

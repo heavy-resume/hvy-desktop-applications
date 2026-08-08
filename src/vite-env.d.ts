@@ -15,8 +15,10 @@ declare module 'virtual:hvy-built-in-plugins' {
     canvas?: HvyPlugin;
     powerScripting?: HvyPlugin;
     graph?: HvyPlugin;
+    diagram?: HvyPlugin;
     qrCode?: HvyPlugin;
     video?: HvyPlugin;
+    editableText?: HvyPlugin;
   }>;
   export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }
