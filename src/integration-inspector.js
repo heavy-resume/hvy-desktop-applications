@@ -1366,11 +1366,43 @@
     return true;
   };
 
+  const dispatchTextEntry = (element, text) => {
+    const textInputTypes = ['', 'text', 'search', 'email', 'tel', 'url', 'password'];
+    const isTextInput = element instanceof HTMLInputElement && textInputTypes.includes(element.type);
+    const isTextArea = element instanceof HTMLTextAreaElement;
+    const isEditableContent = element instanceof HTMLElement && element.isContentEditable;
+    if (!isTextInput && !isTextArea && !isEditableContent) return false;
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    element.focus();
+    element.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText',
+    }));
+    if (isTextInput) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, text);
+    } else if (isTextArea) {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(element, text);
+    } else {
+      element.textContent = text;
+    }
+    element.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: text,
+      inputType: 'insertText',
+    }));
+    element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    return true;
+  };
+
   const executeCommand = (payload = {}) => {
     window.__hvyGalaxyInspector.stop();
     const command = payload.command;
     const step = command?.steps?.[0];
-    if (!command || !step || !['click', 'double-click', 'right-click'].includes(step.gesture)) return { status: 'no_match', reason: 'command_invalid' };
+    if (!command || !step || !['click', 'double-click', 'right-click', 'type'].includes(step.gesture) || (step.gesture === 'type' && typeof step.text !== 'string')) return { status: 'no_match', reason: 'command_invalid' };
     const { minimumTargetConfidence } = patternThresholds(payload.pattern);
     let scope = document;
     let record = null;
@@ -1384,7 +1416,11 @@
     }
     const resolved = resolveInteractionTarget(scope, step.target, minimumTargetConfidence);
     if (resolved.status !== 'matched') return resolved;
-    dispatchInteraction(resolved.element, step.gesture);
+    if (step.gesture === 'type') {
+      if (!dispatchTextEntry(resolved.element, step.text)) return { status: 'no_match', reason: 'target_not_text_editable', score: resolved.score };
+    } else {
+      dispatchInteraction(resolved.element, step.gesture);
+    }
     return {
       status: 'executed',
       commandId: command.id,

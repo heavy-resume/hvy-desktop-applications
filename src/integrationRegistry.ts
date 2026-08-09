@@ -43,8 +43,9 @@ export interface IntegrationCommandDefinition {
 }
 
 export interface IntegrationInteractionStepDefinition {
-  gesture: 'click' | 'double-click' | 'right-click';
+  gesture: 'click' | 'double-click' | 'right-click' | 'type';
   target: unknown;
+  text?: string;
   fromState?: string;
   toState?: string;
 }

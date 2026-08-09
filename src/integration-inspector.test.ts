@@ -80,7 +80,7 @@ interface InspectorApi {
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   extractLiveExamples(pattern: Parameters<InspectorApi['extractPattern']>[0] & { targets: Array<{ label: string; snapshot: InspectorSnapshot; exampleSnapshots: Array<InspectorSnapshot | null> }> }): Promise<{ matches: number; records: Array<ReturnType<InspectorApi['extractPattern']>['records'][number] | null> }>;
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
-  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click'; target: InspectorSnapshot }> }; recordParent?: string }): { status: string; reason?: string; record?: string; target?: string; score?: number };
+  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; text?: string }> }; recordParent?: string }): { status: string; reason?: string; record?: string; target?: string; score?: number };
 }
 
 declare global {
@@ -1031,6 +1031,44 @@ describe('integration structural inspector', () => {
 
     expect(result.execution.status).toBe('executed');
     expect(result.doubleClicks).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('enters text into a structurally resolved text field and dispatches form events', async () => {
+    await page.setContent('<main><label>Subject <input class="subject-control" value="Old subject"></label></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const target = document.querySelector<HTMLInputElement>('.subject-control')!;
+      const events: string[] = [];
+      for (const name of ['beforeinput', 'input', 'change']) target.addEventListener(name, () => events.push(name));
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      const execution = window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'subject', scope: 'page', steps: [{ gesture: 'type', target: snapshot, text: 'Project update' }] },
+      });
+      return { execution, value: target.value, events, focused: document.activeElement === target };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.value).toBe('Project update');
+    expect(result.events).toEqual(['beforeinput', 'input', 'change']);
+    expect(result.focused).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('rejects text entry when the resolved target is not editable', async () => {
+    await page.setContent('<main><button class="subject-control">Subject</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const target = document.querySelector('.subject-control')!;
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      return window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'subject', scope: 'page', steps: [{ gesture: 'type', target: snapshot, text: 'Project update' }] },
+      });
+    });
+
+    expect(result).toMatchObject({ status: 'no_match', reason: 'target_not_text_editable' });
     expect(pageErrors).toEqual([]);
   });
 

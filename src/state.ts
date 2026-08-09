@@ -150,7 +150,8 @@ export interface AppState {
   integrationCommandDraftPageId: string | null;
   integrationCommandDraftName: string;
   integrationCommandDraftScope: 'page' | 'record';
-  integrationCommandDraftGesture: 'click' | 'double-click' | 'right-click';
+  integrationCommandDraftGesture: 'click' | 'double-click' | 'right-click' | 'type';
+  integrationCommandDraftText: string;
   integrationCommandDraftTarget: unknown;
   integrationCommandDraftRecord: unknown;
   integrationCommandSelectionStage: 'record' | 'target';
@@ -415,6 +416,7 @@ export const state: AppState = {
   integrationCommandDraftName: '',
   integrationCommandDraftScope: 'record',
   integrationCommandDraftGesture: 'click',
+  integrationCommandDraftText: '',
   integrationCommandDraftTarget: null,
   integrationCommandDraftRecord: null,
   integrationCommandSelectionStage: 'target',

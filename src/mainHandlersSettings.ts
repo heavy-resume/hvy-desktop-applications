@@ -766,6 +766,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftName = '';
     state.integrationCommandDraftScope = 'record';
     state.integrationCommandDraftGesture = 'click';
+    state.integrationCommandDraftText = '';
     state.integrationCommandDraftTarget = null;
     state.integrationCommandDraftRecord = null;
     state.integrationCommandSelectionStage = 'record';
@@ -783,12 +784,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftName = '';
     state.integrationCommandDraftScope = 'page';
     state.integrationCommandDraftGesture = 'click';
+    state.integrationCommandDraftText = '';
     state.integrationCommandDraftTarget = null;
     state.integrationCommandDraftRecord = null;
     state.integrationCommandSelectionStage = 'target';
     rerender({ preserveMountedDocument: true });
   },
-  beginIntegrationCommandSelection: (name, gesture) => {
+  beginIntegrationCommandSelection: (name, gesture, text) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
     const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
     const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDraftPageId);
@@ -797,6 +799,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (!name.trim()) throw new Error('Give the command a name.');
     state.integrationCommandDraftName = name.trim();
     state.integrationCommandDraftGesture = gesture;
+    state.integrationCommandDraftText = gesture === 'type' ? text : '';
     state.integrationCommandDraftTarget = null;
     state.integrationCommandDraftRecord = null;
     state.integrationCommandSelectionStage = state.integrationCommandDraftScope === 'record' ? 'record' : 'target';
@@ -833,7 +836,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       id: `command-${crypto.randomUUID()}`,
       name: state.integrationCommandDraftName,
       scope: state.integrationCommandDraftScope,
-      steps: [{ gesture: state.integrationCommandDraftGesture, target: matcherSnapshot(state.integrationCommandDraftTarget) }],
+      steps: [{
+        gesture: state.integrationCommandDraftGesture,
+        target: matcherSnapshot(state.integrationCommandDraftTarget),
+        ...(state.integrationCommandDraftGesture === 'type' ? { text: state.integrationCommandDraftText } : {}),
+      }],
     };
     if (state.integrationCommandDraftScope === 'record') {
       action!.commands ??= [];

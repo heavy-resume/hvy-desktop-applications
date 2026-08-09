@@ -213,7 +213,8 @@ function normalizeCommand(value: unknown, scope: 'page' | 'record'): Integration
   const rawStep = record.steps[0];
   if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) return null;
   const step = rawStep as Record<string, unknown>;
-  if (step.gesture !== 'click' && step.gesture !== 'double-click' && step.gesture !== 'right-click') return null;
+  if (step.gesture !== 'click' && step.gesture !== 'double-click' && step.gesture !== 'right-click' && step.gesture !== 'type') return null;
+  if (step.gesture === 'type' && typeof step.text !== 'string') return null;
   return {
     id,
     name,
@@ -221,6 +222,7 @@ function normalizeCommand(value: unknown, scope: 'page' | 'record'): Integration
     steps: [{
       gesture: step.gesture,
       target: matcherSnapshot(step.target),
+      ...(step.gesture === 'type' ? { text: step.text as string } : {}),
       ...(typeof step.fromState === 'string' ? { fromState: step.fromState } : {}),
       ...(typeof step.toState === 'string' ? { toState: step.toState } : {}),
     }],

@@ -121,7 +121,7 @@ export interface UiHandlers {
   closeIntegrationActionResult(): void;
   addCommandForIntegrationAction(integrationId: string, actionId: string): void;
   addCommandForIntegrationPage(integrationId: string, pageId: string): void;
-  beginIntegrationCommandSelection(name: string, gesture: 'click' | 'double-click' | 'right-click'): void;
+  beginIntegrationCommandSelection(name: string, gesture: 'click' | 'double-click' | 'right-click' | 'type', text: string): void;
   cancelIntegrationCommandBuilder(): void;
   saveIntegrationCommand(): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;
@@ -1464,6 +1464,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
+    if (target instanceof HTMLSelectElement && target.name === 'commandGesture') {
+      const form = target.closest<HTMLFormElement>('form[data-form="integration-command-setup"]');
+      const textField = form?.querySelector<HTMLElement>('[data-command-text-field]');
+      const textInput = textField?.querySelector<HTMLTextAreaElement>('textarea[name="commandText"]');
+      const acceptsText = target.value === 'type';
+      if (textField) textField.hidden = !acceptsText;
+      if (textInput) textInput.disabled = !acceptsText;
+      if (acceptsText) textInput?.focus();
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-integration-profile') {
       handlers.selectIntegrationProfile(target.value);
       return;
@@ -1698,8 +1708,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (form.dataset.form === 'integration-command-setup') {
       const data = new FormData(form);
       const gesture = data.get('commandGesture');
-      if (gesture === 'click' || gesture === 'double-click' || gesture === 'right-click') {
-        handlers.beginIntegrationCommandSelection(String(data.get('commandName') ?? ''), gesture);
+      if (gesture === 'click' || gesture === 'double-click' || gesture === 'right-click' || gesture === 'type') {
+        handlers.beginIntegrationCommandSelection(String(data.get('commandName') ?? ''), gesture, String(data.get('commandText') ?? ''));
       }
     }
     if (form.dataset.form === 'ai-settings') {
@@ -4133,6 +4143,7 @@ function renderAboutDialog(state: AppState): string {
 function integrationCommandGestureLabel(gesture: import('./integrationRegistry').IntegrationInteractionStepDefinition['gesture'] | undefined): string {
   if (gesture === 'double-click') return 'Double click';
   if (gesture === 'right-click') return 'Right click';
+  if (gesture === 'type') return 'Enter text';
   return 'Click';
 }
 
@@ -4279,12 +4290,15 @@ function renderIntegrationCommandBuilderDialog(state: AppState): string {
   if (!state.integrationCommandBuilderOpen) return '';
   if (state.integrationCommandSelectionPending) {
     const selectingRecord = state.integrationCommandSelectionStage === 'record';
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for command target"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>${selectingRecord ? 'Select a matching record' : `Select the ${integrationCommandGestureLabel(state.integrationCommandDraftGesture).toLocaleLowerCase()} target`}</h2><p class="dialog-note">Galaxy has switched to the integration browser. ${selectingRecord ? 'Choose a record that the existing definition recognizes.' : 'Select the control the command should use.'}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${selectingRecord ? 'Green records match the saved definition. Orange or red records have diverged and cannot silently become the command example.' : state.integrationCommandDraftScope === 'record' ? 'The target is limited to the live record you just selected.' : 'The target may be anywhere on the page.'}</span></div></section></div>`;
+    const targetPrompt = state.integrationCommandDraftGesture === 'type' ? 'Select the text field' : `Select the ${integrationCommandGestureLabel(state.integrationCommandDraftGesture).toLocaleLowerCase()} target`;
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for command target"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>${selectingRecord ? 'Select a matching record' : targetPrompt}</h2><p class="dialog-note">Galaxy has switched to the integration browser. ${selectingRecord ? 'Choose a record that the existing definition recognizes.' : 'Select the control the command should use.'}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${selectingRecord ? 'Green records match the saved definition. Orange or red records have diverged and cannot silently become the command example.' : state.integrationCommandDraftScope === 'record' ? 'The target is limited to the live record you just selected.' : 'The target may be anywhere on the page.'}</span></div></section></div>`;
   }
   if (state.integrationCommandDraftTarget) {
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review command"><div class="modal-header"><div><p class="eyebrow">Add command</p><h2>${escapeHtml(state.integrationCommandDraftName)}</h2><p class="dialog-note">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'} · ${integrationCommandGestureLabel(state.integrationCommandDraftGesture)}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-command-target-review"><span>Selected target</span><strong>${escapeHtml(selectedInspectionContent(state.integrationCommandDraftTarget) || 'Structural control')}</strong><small>${state.integrationCommandDraftScope === 'record' ? 'When run, Galaxy first resolves the record definition on the current page, then independently resolves this control inside that record. If either match is missing or ambiguous, nothing is clicked.' : 'Galaxy resolves this control against the current live page. If it is missing or ambiguous, nothing is clicked.'}</small></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-command">Save command</button></div></section></div>`;
+    const failedAction = state.integrationCommandDraftGesture === 'type' ? 'no text is entered' : 'nothing is clicked';
+    const textReview = state.integrationCommandDraftGesture === 'type' ? `<span>Text to enter</span><strong>${escapeHtml(state.integrationCommandDraftText) || '<em>Empty text</em>'}</strong>` : '';
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review command"><div class="modal-header"><div><p class="eyebrow">Add command</p><h2>${escapeHtml(state.integrationCommandDraftName)}</h2><p class="dialog-note">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'} · ${integrationCommandGestureLabel(state.integrationCommandDraftGesture)}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-command-target-review"><span>Selected target</span><strong>${escapeHtml(selectedInspectionContent(state.integrationCommandDraftTarget) || 'Structural control')}</strong>${textReview}<small>${state.integrationCommandDraftScope === 'record' ? `When run, Galaxy first resolves the record definition on the current page, then independently resolves this control inside that record. If either match is missing or ambiguous, ${failedAction}.` : `Galaxy resolves this control against the current live page. If it is missing or ambiguous, ${failedAction}.`}</small></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-command">Save command</button></div></section></div>`;
   }
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Add command" data-form="integration-command-setup"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>Define a basic interaction</h2><p class="dialog-note">${state.integrationCommandDraftScope === 'record' ? 'This command runs against one resolved record. You will select a current matching record, then the control inside it.' : 'This command runs against the page itself. You will select its control on the live page.'}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Command name</span><input class="hvy-galaxy-input" name="commandName" required autocomplete="off"></label><label><span>Interaction</span><select class="hvy-galaxy-select" name="commandGesture"><option value="click" selected>Click</option><option value="double-click">Double click</option><option value="right-click">Right click</option></select></label><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Select target</button></div></form></div>`;
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Add command" data-form="integration-command-setup"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>Define a basic interaction</h2><p class="dialog-note">${state.integrationCommandDraftScope === 'record' ? 'This command runs against one resolved record. You will select a current matching record, then the control inside it.' : 'This command runs against the page itself. You will select its control on the live page.'}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Command name</span><input class="hvy-galaxy-input" name="commandName" required autocomplete="off"></label><label><span>Interaction</span><select class="hvy-galaxy-select" name="commandGesture"><option value="click" selected>Click</option><option value="double-click">Double click</option><option value="right-click">Right click</option><option value="type">Enter text</option></select></label><label data-command-text-field hidden><span>Text to enter</span><textarea class="hvy-galaxy-input" name="commandText" rows="3" disabled></textarea></label><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Select target</button></div></form></div>`;
 }
 
 function renderIntegrationActionResultDialog(state: AppState): string {

@@ -117,17 +117,18 @@ describe('web capabilities', () => {
 
   it('creates portable page-command definitions', () => {
     const command: IntegrationCommandDefinition = {
-      id: 'compose',
-      name: 'Compose',
+      id: 'subject',
+      name: 'Enter subject',
       scope: 'page',
-      steps: [{ gesture: 'click', target: snapshot }],
+      steps: [{ gesture: 'type', target: snapshot, text: 'Project update' }],
     };
 
-    const config = createWebCommandCapabilityConfig('mail', page, command, 'compose-mail');
+    const config = createWebCommandCapabilityConfig('mail', page, command, 'enter-subject');
 
     expect(config.command.steps[0]?.target).toEqual({
       selected: { shape: snapshot.selected.shape, relativePath: snapshot.selected.relativePath },
     });
+    expect(config.command.steps[0]).toMatchObject({ gesture: 'type', text: 'Project update' });
     expect(JSON.stringify(config)).not.toContain('Private subject');
   });
 });
