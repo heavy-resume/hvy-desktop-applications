@@ -2525,6 +2525,8 @@ function defaultAppSettings() {
     debugLogMaxBytes: 10 * 1024 * 1024,
     pluginPolicies: {},
     pluginAcceptances: {},
+    webCapabilityProfileBindings: {},
+    webCapabilityAuthorizations: {},
   };
 }
 
@@ -2540,6 +2542,8 @@ function normalizeAppSettings(settings) {
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings?.debugLogMaxBytes),
     pluginPolicies: normalizePluginPolicies(settings?.pluginPolicies),
     pluginAcceptances: normalizePowerScriptAcceptances(settings?.pluginAcceptances),
+    webCapabilityProfileBindings: normalizeNestedStringMap(settings?.webCapabilityProfileBindings),
+    webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings?.webCapabilityAuthorizations),
   };
 }
 
@@ -2547,6 +2551,65 @@ function normalizePluginPolicies(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value)
     .filter(([key, policy]) => String(key).trim() && ['disabled', 'enabled', 'conditional'].includes(policy)));
+}
+
+function normalizeNestedStringMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([documentPath, entries]) => {
+    const normalizedPath = String(documentPath).trim();
+    if (!normalizedPath || !entries || typeof entries !== 'object' || Array.isArray(entries)) return [];
+    const normalizedEntries = Object.fromEntries(Object.entries(entries).flatMap(([key, entry]) => {
+      const normalizedKey = String(key).trim();
+      const normalizedEntry = typeof entry === 'string' ? entry.trim() : '';
+      return normalizedKey && normalizedEntry ? [[normalizedKey, normalizedEntry]] : [];
+    }));
+    return Object.keys(normalizedEntries).length ? [[path.resolve(normalizedPath), normalizedEntries]] : [];
+  }));
+}
+
+function normalizeWebCapabilityAuthorizations(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([documentPath, entries]) => {
+    const normalizedPath = String(documentPath).trim();
+    if (!normalizedPath || !entries || typeof entries !== 'object' || Array.isArray(entries)) return [];
+    const normalizedEntries = Object.fromEntries(Object.entries(entries).flatMap(([capabilityId, authorization]) => {
+      const id = String(capabilityId).trim();
+      if (!id || !authorization || typeof authorization !== 'object' || Array.isArray(authorization)) return [];
+      const profileId = typeof authorization.profileId === 'string' ? authorization.profileId.trim() : '';
+      const capabilityHash = typeof authorization.capabilityHash === 'string' ? authorization.capabilityHash.trim() : '';
+      const authorizedAt = typeof authorization.authorizedAt === 'string' ? authorization.authorizedAt.trim() : '';
+      const summary = authorization.summary;
+      if (!profileId || !capabilityHash || !authorizedAt || !summary || typeof summary !== 'object' || Array.isArray(summary)) return [];
+      if (summary.schemaVersion !== 1 || !['records', 'command'].includes(summary.kind)) return [];
+      const name = typeof summary.name === 'string' ? summary.name.trim() : '';
+      const pageUrl = typeof summary.pageUrl === 'string' ? summary.pageUrl.trim() : '';
+      if (!name || !pageUrl) return [];
+      const normalized = {
+        capabilityId: id,
+        profileId,
+        capabilityHash,
+        authorizedAt,
+        summary: {
+          schemaVersion: 1,
+          kind: summary.kind,
+          name,
+          pageUrl,
+          allowedOrigins: [...new Set((Array.isArray(summary.allowedOrigins) ? summary.allowedOrigins : []).filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort(),
+          fieldLabels: [...new Set((Array.isArray(summary.fieldLabels) ? summary.fieldLabels : []).filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort(),
+          commands: (Array.isArray(summary.commands) ? summary.commands : []).flatMap((command) => {
+            if (!command || typeof command !== 'object' || Array.isArray(command)) return [];
+            const commandId = typeof command.id === 'string' ? command.id.trim() : '';
+            const commandName = typeof command.name === 'string' ? command.name.trim() : '';
+            const gesture = typeof command.gesture === 'string' ? command.gesture.trim() : '';
+            const scope = typeof command.scope === 'string' ? command.scope.trim() : '';
+            return commandId && commandName && gesture && scope ? [{ id: commandId, name: commandName, gesture, scope }] : [];
+          }).sort((left, right) => left.id.localeCompare(right.id)),
+        },
+      };
+      return [[id, normalized]];
+    }));
+    return Object.keys(normalizedEntries).length ? [[path.resolve(normalizedPath), normalizedEntries]] : [];
+  }));
 }
 
 function loadInstalledPluginPackages() {

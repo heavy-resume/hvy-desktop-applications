@@ -1885,7 +1885,7 @@
     },
     executeCommandAndReport(payload = {}) {
       const result = executeCommand(payload);
-      if (result.status !== 'executed') publish({ kind: 'integration-command-result', commandId: payload.command?.id, ...result });
+      publish({ kind: 'integration-command-result', requestId: payload.requestId, commandId: payload.command?.id, ...result });
       return result;
     },
     async extractAndPublish(pattern = {}, context = {}) {

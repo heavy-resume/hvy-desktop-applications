@@ -3,6 +3,7 @@ import { getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, saveColorT
 import { state } from './state';
 import type { HvyMode, VisualDocument } from './hvy';
 import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
+import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
@@ -442,6 +443,8 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings.debugLogMaxBytes),
     pluginPolicies: settings.pluginPolicies ?? {},
     pluginAcceptances: settings.pluginAcceptances ?? {},
+    webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(settings.webCapabilityProfileBindings),
+    webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings.webCapabilityAuthorizations),
   };
 }
 

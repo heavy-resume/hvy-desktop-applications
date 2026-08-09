@@ -25,6 +25,7 @@ import { deserializeDocumentBytes } from '../../heavy-file-format/src/serializat
 import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import { isWorkspacePathTarget } from '../../heavy-file-format/src/workspace-links';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
+import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 
 export interface UiHandlers {
   newWorkspace(): void;
@@ -5814,6 +5815,8 @@ function parseAppSettings(value: string): AppSettings {
       debugLogMaxBytes: normalizeDebugLogMaxBytes(parsed.debugLogMaxBytes),
       pluginPolicies: parsed.pluginPolicies && typeof parsed.pluginPolicies === 'object' ? parsed.pluginPolicies : {},
       pluginAcceptances: parsed.pluginAcceptances && typeof parsed.pluginAcceptances === 'object' ? parsed.pluginAcceptances : {},
+      webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(parsed.webCapabilityProfileBindings),
+      webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(parsed.webCapabilityAuthorizations),
     };
   } catch {
     return {
@@ -5825,6 +5828,8 @@ function parseAppSettings(value: string): AppSettings {
       debugLogMaxBytes: DEFAULT_DEBUG_LOG_MAX_BYTES,
       pluginPolicies: {},
       pluginAcceptances: {},
+      webCapabilityProfileBindings: {},
+      webCapabilityAuthorizations: {},
     };
   }
 }

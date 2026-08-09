@@ -483,6 +483,10 @@ struct AppSettings {
     plugin_policies: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     plugin_acceptances: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    web_capability_profile_bindings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    web_capability_authorizations: std::collections::BTreeMap<String, std::collections::BTreeMap<String, WebCapabilityAuthorizationRecord>>,
 }
 
 impl Default for AppSettings {
@@ -496,8 +500,40 @@ impl Default for AppSettings {
             debug_log_max_bytes: default_debug_log_max_bytes(),
             plugin_policies: std::collections::BTreeMap::new(),
             plugin_acceptances: std::collections::BTreeMap::new(),
+            web_capability_profile_bindings: std::collections::BTreeMap::new(),
+            web_capability_authorizations: std::collections::BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WebCapabilityAuthorizationRecord {
+    capability_id: String,
+    profile_id: String,
+    capability_hash: String,
+    summary: WebCapabilityApprovalSummary,
+    authorized_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WebCapabilityApprovalSummary {
+    schema_version: u8,
+    kind: String,
+    name: String,
+    page_url: String,
+    allowed_origins: Vec<String>,
+    field_labels: Vec<String>,
+    commands: Vec<WebCapabilityApprovalCommand>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WebCapabilityApprovalCommand {
+    id: String,
+    name: String,
+    gesture: String,
+    scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

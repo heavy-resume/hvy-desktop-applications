@@ -1,0 +1,49 @@
+.hvy-web-capability {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid var(--hvy-border-color, #c9c3b8);
+  border-radius: 0.6rem;
+}
+
+.hvy-web-profile,
+.hvy-web-definition {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.hvy-web-records {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.hvy-web-records article {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem;
+  border: 1px solid var(--hvy-border-color, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-error {
+  color: var(--hvy-danger, #a12622);
+}
+
+.hvy-web-authorization-dialog dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 0.9rem;
+}
+
+.hvy-web-authorization-dialog dt {
+  font-weight: 700;
+}
+
+.hvy-web-authorization-dialog dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hvy-web-authorization-reason {
+  font-weight: 650;
+}

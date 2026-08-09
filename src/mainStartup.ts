@@ -11,6 +11,7 @@ import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
 import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
+import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 
 let findShortcutBound = false;
 
@@ -50,6 +51,7 @@ export async function boot(): Promise<void> {
       void handleAppCloseRequest();
     });
     await onIntegrationInspectionResult(async (result) => {
+      if (handleWebCapabilityIntegrationResult(result)) return;
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
         const action = (result as { action?: unknown }).action;
         const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);

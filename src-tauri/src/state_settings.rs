@@ -349,6 +349,34 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
         plugin_acceptances: settings.plugin_acceptances.into_iter()
             .filter(|(path, keys)| !path.trim().is_empty() && !keys.is_empty())
             .collect(),
+        web_capability_profile_bindings: settings.web_capability_profile_bindings.into_iter()
+            .filter_map(|(path, bindings)| {
+                let path = path.trim().to_string();
+                let bindings = bindings.into_iter()
+                    .filter_map(|(capability_id, profile_id)| {
+                        let capability_id = capability_id.trim().to_string();
+                        let profile_id = profile_id.trim().to_string();
+                        if capability_id.is_empty() || profile_id.is_empty() { None } else { Some((capability_id, profile_id)) }
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                if path.is_empty() || bindings.is_empty() { None } else { Some((path, bindings)) }
+            })
+            .collect(),
+        web_capability_authorizations: settings.web_capability_authorizations.into_iter()
+            .filter_map(|(path, authorizations)| {
+                let path = path.trim().to_string();
+                let authorizations = authorizations.into_iter()
+                    .filter(|(capability_id, authorization)| {
+                        !capability_id.trim().is_empty()
+                            && authorization.capability_id.trim() == capability_id.trim()
+                            && !authorization.profile_id.trim().is_empty()
+                            && !authorization.capability_hash.trim().is_empty()
+                            && !authorization.authorized_at.trim().is_empty()
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                if path.is_empty() || authorizations.is_empty() { None } else { Some((path, authorizations)) }
+            })
+            .collect(),
     }
 }
 

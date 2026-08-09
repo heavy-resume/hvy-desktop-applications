@@ -471,6 +471,8 @@
             power_script_acceptance_scripts: std::collections::BTreeMap::new(),
             debug_semantic_search: true,
             debug_log_max_bytes: 0,
+            web_capability_profile_bindings: std::collections::BTreeMap::new(),
+            web_capability_authorizations: std::collections::BTreeMap::new(),
         });
 
         assert_eq!(settings.image_attachment_max_dimensions.width, DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION);

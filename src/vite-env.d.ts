@@ -19,6 +19,8 @@ declare module 'virtual:hvy-built-in-plugins' {
     qrCode?: HvyPlugin;
     video?: HvyPlugin;
     editableText?: HvyPlugin;
+    webRecords?: HvyPlugin;
+    webCommand?: HvyPlugin;
   }>;
   export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }

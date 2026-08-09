@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
+import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
 
 declare global {
   interface Window {
@@ -347,6 +348,8 @@ export interface AppSettings {
   debugLogMaxBytes: number;
   pluginPolicies: Record<string, 'disabled' | 'enabled' | 'conditional'>;
   pluginAcceptances: Record<string, string[]>;
+  webCapabilityProfileBindings: WebCapabilityProfileBindings;
+  webCapabilityAuthorizations: WebCapabilityAuthorizations;
 }
 
 export interface InstalledPluginPackageFile {
@@ -597,6 +600,8 @@ export function defaultAppSettings(): AppSettings {
     debugLogMaxBytes: 10 * 1024 * 1024,
     pluginPolicies: {},
     pluginAcceptances: {},
+    webCapabilityProfileBindings: {},
+    webCapabilityAuthorizations: {},
   };
 }
 

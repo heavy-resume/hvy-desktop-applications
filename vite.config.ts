@@ -8,6 +8,7 @@ const packageJson = require('./package.json') as { version: string };
 const BUILT_IN_PLUGINS_ID = 'virtual:hvy-built-in-plugins';
 const BUILT_IN_PLUGINS_RESOLVED_ID = `\0${BUILT_IN_PLUGINS_ID}`;
 const HVY_REFERENCE_ROOT = resolve('../heavy-file-format');
+const HVY_APP_ROOT = resolve('.');
 
 const builtInDefinitions = [
   {
@@ -76,11 +77,25 @@ const builtInDefinitions = [
     exportName: 'editableTextPlugin',
     modulePath: 'src/plugins/editable-text/editable-text.ts',
   },
+  {
+    id: 'hvy.web-records',
+    key: 'webRecords',
+    exportName: 'webRecordsPlugin',
+    modulePath: 'src/plugins/webCapabilities.ts',
+    root: 'app',
+  },
+  {
+    id: 'hvy.web-command',
+    key: 'webCommand',
+    exportName: 'webCommandPlugin',
+    modulePath: 'src/plugins/webCapabilities.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
   const imports = builtInDefinitions.map((definition, index) => {
-    const modulePath = `/@fs/${resolve(HVY_REFERENCE_ROOT, definition.modulePath)}`;
+    const modulePath = `/@fs/${resolve('root' in definition && definition.root === 'app' ? HVY_APP_ROOT : HVY_REFERENCE_ROOT, definition.modulePath)}`;
     return `import { ${definition.exportName} as plugin${index} } from ${JSON.stringify(modulePath)};`;
   });
 
