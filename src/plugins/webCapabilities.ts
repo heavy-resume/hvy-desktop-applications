@@ -6,6 +6,7 @@ import {
   authorizeWebCapabilityRecord,
   createWebCommandCapabilityConfig,
   createWebRecordsCapabilityConfig,
+  findWebCapabilities,
   getWebCapabilityProfileBinding,
   isWebCapabilityAuthorized,
   readWebCommandCapabilityConfig,
@@ -16,13 +17,67 @@ import {
   WEB_RECORDS_PLUGIN_ID,
   type WebCapabilityConfig,
   type WebCapabilityAuthorizationReview,
+  type WebCommandCapabilityConfig,
+  type WebRecordsCapabilityConfig,
 } from '../webCapabilities';
 import {
   executeWebPageCommandCapability,
   executeWebRecordCommandCapability,
   executeWebRecordsCapability,
 } from '../webCapabilityRuntime';
+import {
+  queueWebCapabilityScriptOperation,
+  type WebCapabilityScriptCallback as ScriptCallback,
+  type WebCapabilityScriptCallbacks as WebScriptCallbacks,
+} from './webCapabilityScripting';
 import './webCapabilities.css';
+
+function scriptingCallbacks(args: JsonObject): WebScriptCallbacks {
+  const values = args as Record<string, unknown>;
+  const onComplete = values.on_complete;
+  const onError = values.on_error;
+  if (typeof onComplete !== 'function') {
+    throw new TypeError('The web capability scripting call requires an on_complete callback.');
+  }
+  if (onError !== undefined && onError !== null && typeof onError !== 'function') {
+    throw new TypeError('on_error must be a callback when provided.');
+  }
+  return {
+    onComplete: onComplete as ScriptCallback,
+    onError: typeof onError === 'function' ? onError as ScriptCallback : null,
+  };
+}
+
+function scriptingCapability<T extends WebCapabilityConfig>(
+  document: HvyPluginContext['rawDocument'],
+  capabilityIdValue: unknown,
+  predicate: (config: WebCapabilityConfig) => config is T,
+): T {
+  const capabilityId = String(capabilityIdValue ?? '').trim();
+  const config = findWebCapabilities(document)
+    .map((candidate) => candidate.config)
+    .find((candidate): candidate is T => candidate.capabilityId === capabilityId && predicate(candidate));
+  if (!config) throw new Error(`Web capability "${capabilityId}" was not found in this document.`);
+  return config;
+}
+
+function scriptingExecutionContext(config: WebCapabilityConfig) {
+  const documentPath = state.document?.path ?? '';
+  const profile = selectedProfile(config);
+  if (!profile) throw new Error('Choose a browser profile for this web capability before running the script.');
+  if (!isWebCapabilityAuthorized(
+    state.appSettings.webCapabilityAuthorizations,
+    documentPath,
+    config,
+    profile.id,
+  )) throw new Error('Review and allow this web capability before running the script.');
+  return {
+    documentPath,
+    profile,
+    authorizations: state.appSettings.webCapabilityAuthorizations,
+    foreground: false,
+  };
+}
 
 function button(label: string, primary = false): HTMLButtonElement {
   const element = document.createElement('button');
@@ -373,6 +428,39 @@ export const webRecordsPlugin: HvyPlugin = {
   ...metadata(WEB_RECORDS_PLUGIN_ID),
   displayName: 'Web Records',
   create: createRecordsInstance,
+  scripting: {
+    methods: {
+      fetch: (args, ctx) => {
+        const config = scriptingCapability(
+          ctx.rawDocument,
+          args.capabilityId,
+          (candidate): candidate is WebRecordsCapabilityConfig => 'record' in candidate,
+        );
+        const callbacks = scriptingCallbacks(args);
+        const executionContext = scriptingExecutionContext(config);
+        return queueWebCapabilityScriptOperation(
+          () => executeWebRecordsCapability(config, executionContext),
+          callbacks,
+        );
+      },
+      run_command: (args, ctx) => {
+        const config = scriptingCapability(
+          ctx.rawDocument,
+          args.capabilityId,
+          (candidate): candidate is WebRecordsCapabilityConfig => 'record' in candidate,
+        );
+        const commandId = String(args.commandId ?? '').trim();
+        const recordParent = String(args.recordParent ?? '').trim();
+        if (!commandId || !recordParent) throw new Error('run_command requires commandId and recordParent.');
+        const callbacks = scriptingCallbacks(args);
+        const executionContext = scriptingExecutionContext(config);
+        return queueWebCapabilityScriptOperation(
+          () => executeWebRecordCommandCapability(config, commandId, recordParent, executionContext),
+          callbacks,
+        );
+      },
+    },
+  },
   aiHint: 'Portable web record capability. Executable selector data is in pluginConfig; browser profiles and results stay app-local.',
 };
 
@@ -380,5 +468,22 @@ export const webCommandPlugin: HvyPlugin = {
   ...metadata(WEB_COMMAND_PLUGIN_ID),
   displayName: 'Web Command',
   create: createCommandInstance,
+  scripting: {
+    methods: {
+      run: (args, ctx) => {
+        const config = scriptingCapability(
+          ctx.rawDocument,
+          args.capabilityId,
+          (candidate): candidate is WebCommandCapabilityConfig => 'command' in candidate,
+        );
+        const callbacks = scriptingCallbacks(args);
+        const executionContext = scriptingExecutionContext(config);
+        return queueWebCapabilityScriptOperation(
+          () => executeWebPageCommandCapability(config, executionContext),
+          callbacks,
+        );
+      },
+    },
+  },
   aiHint: 'Portable web page command. Executable command data is in pluginConfig; browser profiles and authorization stay app-local.',
 };

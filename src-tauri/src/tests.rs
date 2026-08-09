@@ -488,6 +488,7 @@
             start_automatically: true,
             port: Some(0),
             write_access: "all".into(),
+            integration_access: "unexpected".into(),
             bearer_token: "".into(),
         })
         .unwrap();
@@ -495,6 +496,7 @@
         assert!(settings.start_automatically);
         assert_eq!(settings.port, None);
         assert_eq!(settings.write_access, "hvyCliEdits");
+        assert_eq!(settings.integration_access, "off");
         assert_eq!(settings.bearer_token, "");
 
         assert_eq!(McpSettings::default().port, Some(DEFAULT_MCP_PORT));
@@ -503,12 +505,14 @@
             start_automatically: false,
             port: Some(8794),
             write_access: "createImportSave".into(),
+            integration_access: "actions".into(),
             bearer_token: "secret-token".into(),
         })
         .unwrap();
 
         assert_eq!(explicit.port, Some(8794));
         assert_eq!(explicit.write_access, "createImportSave");
+        assert_eq!(explicit.integration_access, "actions");
         assert_eq!(explicit.bearer_token, "secret-token");
     }
 
@@ -1096,6 +1100,7 @@ model = "gpt-5.4"
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(config_workspace.path())],
                 write_access: "searchOnly".into(),
+                integration_access: "read".into(),
             },
         )
         .unwrap();
@@ -1105,6 +1110,7 @@ model = "gpt-5.4"
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(explicit_config_workspace.path())],
                 write_access: "createImportSave".into(),
+                integration_access: "actions".into(),
             },
         )
         .unwrap();
@@ -1131,6 +1137,7 @@ model = "gpt-5.4"
 
         assert_eq!(names, vec!["Args", "Config", "Explicit Config", "Env", "Cwd"]);
         assert_eq!(config.write_access, "createImportSave");
+        assert_eq!(config.integration_access, "actions");
     }
 
     #[test]
@@ -1143,6 +1150,7 @@ model = "gpt-5.4"
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(workspace.path())],
                 write_access: "searchOnly".into(),
+                integration_access: "read".into(),
             },
         )
         .unwrap();
@@ -1150,6 +1158,7 @@ model = "gpt-5.4"
         let config = mcp_stdio_workspace_config(Vec::<String>::new(), None, cwd.path().to_path_buf()).unwrap();
 
         assert_eq!(config.write_access, "searchOnly");
+        assert_eq!(config.integration_access, "read");
         assert_eq!(config.workspaces, vec![path_to_string(workspace.path())]);
     }
 

@@ -4863,6 +4863,14 @@ function renderMcpSettingsDialog(state: AppState): string {
               <option value="createImportSave" ${settings.writeAccess === 'createImportSave' ? 'selected' : ''}>Full access</option>
             </select>
           </label>
+          <label>
+            <span>Web capability access</span>
+            <select class="hvy-galaxy-select" name="integrationAccess">
+              <option value="off" ${settings.integrationAccess === 'off' ? 'selected' : ''}>Off</option>
+              <option value="read" ${settings.integrationAccess === 'read' ? 'selected' : ''}>Read exposed records</option>
+              <option value="actions" ${settings.integrationAccess === 'actions' ? 'selected' : ''}>Read and run exposed actions</option>
+            </select>
+          </label>
         </div>
         <div class="mcp-config-preview">
           <div class="mcp-config-header">
@@ -5575,17 +5583,20 @@ function readMcpSettingsForm(data: FormData): McpSettings {
   const parsed = parseMcpSettings(String(data.get('settingsJson') ?? ''));
   const portValue = Number(data.get('port') ?? '');
   const writeAccess = data.get('writeAccess');
+  const integrationAccess = data.get('integrationAccess');
   const bearerToken = String(data.get('bearerToken') ?? '').trim();
   return {
     ...(parsed ?? {
       startAutomatically: false,
       port: 8794,
       writeAccess: 'hvyCliEdits',
+      integrationAccess: 'off',
       bearerToken: generateMcpBearerToken(),
     }),
     startAutomatically: data.get('startAutomatically') === 'on',
     port: Number.isInteger(portValue) && portValue > 0 && portValue <= 65535 ? portValue : 8794,
     writeAccess: isMcpWriteAccess(writeAccess) ? writeAccess : 'hvyCliEdits',
+    integrationAccess: isMcpIntegrationAccess(integrationAccess) ? integrationAccess : 'off',
     bearerToken,
   };
 }
@@ -5601,6 +5612,10 @@ function parseMcpSettings(value: string): McpSettings | null {
 
 function isMcpWriteAccess(value: FormDataEntryValue | null): value is McpSettings['writeAccess'] {
   return value === 'searchOnly' || value === 'hvyCliEdits' || value === 'createImportSave';
+}
+
+function isMcpIntegrationAccess(value: FormDataEntryValue | null): value is McpSettings['integrationAccess'] {
+  return value === 'off' || value === 'read' || value === 'actions';
 }
 
 function isMcpClientInstallTarget(value: string | undefined): value is McpClientInstallTarget {

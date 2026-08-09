@@ -18,6 +18,8 @@ pub(crate) struct McpSettings {
     pub(crate) port: Option<u16>,
     #[serde(default = "default_mcp_write_access")]
     pub(crate) write_access: String,
+    #[serde(default = "default_mcp_integration_access")]
+    pub(crate) integration_access: String,
     #[serde(default = "generate_mcp_bearer_token")]
     pub(crate) bearer_token: String,
 }
@@ -28,6 +30,7 @@ impl Default for McpSettings {
             start_automatically: false,
             port: Some(DEFAULT_MCP_PORT),
             write_access: default_mcp_write_access(),
+            integration_access: default_mcp_integration_access(),
             bearer_token: generate_mcp_bearer_token(),
         }
     }
@@ -72,6 +75,8 @@ pub(crate) struct McpWorkspaceConfig {
     pub(crate) workspaces: Vec<String>,
     #[serde(default = "default_mcp_write_access")]
     pub(crate) write_access: String,
+    #[serde(default = "default_mcp_integration_access")]
+    pub(crate) integration_access: String,
 }
 
 impl Default for McpWorkspaceConfig {
@@ -79,6 +84,7 @@ impl Default for McpWorkspaceConfig {
         Self {
             workspaces: Vec::new(),
             write_access: default_mcp_write_access(),
+            integration_access: default_mcp_integration_access(),
         }
     }
 }

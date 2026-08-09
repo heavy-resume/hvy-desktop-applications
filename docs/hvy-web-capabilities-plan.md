@@ -186,54 +186,47 @@ Raw matcher diagnostics and DOM paths do not cross into scripting or MCP
 results. The dispatcher enforces the existing bounded record count and a
 bounded JSON result size.
 
-## Regular scripting queue
+## Regular scripting callbacks
 
-Regular sandboxed scripting remains synchronous. It does not need to suspend a
-Brython execution on a JavaScript promise. Instead, add an explicit queued
-plugin-call API:
+Regular sandboxed scripting remains synchronous. Each web plugin owns its
+asynchronous browser queue and immediately returns from the existing plugin
+call API. The call accepts real Brython callbacks, which the scripting host
+keeps alive with the normal document lifecycle and execution accounting:
 
 ```python
-job = doc.plugins.queue(
+def fetched(job):
+    records = job["result"]["records"]
+    doc.component.set_text("inbox-output", str(records))
+
+def failed(job):
+    doc.component.set_text("inbox-error", job["error"])
+
+job = doc.plugins.call(
     "hvy.web-records",
     "fetch",
-    request_key="initial-inbox",
-    args={"capabilityId": "inbox"},
+    {
+        "capabilityId": "inbox",
+        "on_complete": fetched,
+        "on_error": failed,
+    },
 )
-
-if job["status"] != "completed":
-    return
-
-records = job["value"]["records"]
 ```
 
 Queue behavior is deterministic:
 
-1. The first call returns `queued` and starts the operation after authorization
-   has been verified.
-2. Calls with the same owner and request key return `pending` without creating
-   duplicate work.
-3. Completion invokes a host callback that schedules only the originating
-   scripting block to run again.
-4. The next matching queue call returns `completed` with the value and marks it
-   delivered atomically.
-5. Later calls return `delivered` and do not enqueue the operation again.
-6. A different `request_key` explicitly creates a new generation.
-7. Failures use the same one-time delivery behavior with `failed` and an error
-   value.
-8. `authorization_required` is returned without leaving work waiting to run
-   after the user chooses a profile or grants access.
+1. The call verifies profile binding and authorization synchronously.
+2. It enqueues the operation and immediately returns a JSON-safe `jobId` with
+   status `queued`.
+3. Completion invokes `on_complete` with status `completed` and the result.
+4. Failure invokes `on_error` when supplied, otherwise `on_complete`, with
+   status `failed` and an error message.
+5. Callback execution retains the script's tracing, step budget, mutation
+   rendering, cycle detection, and delayed-error reporting.
+6. Callbacks are discarded if the document changes or its scripting runtime is
+   disposed before the operation completes.
 
-Jobs are keyed by document instance, scripting block ID, plugin ID, method, and
-request key. Job state is ephemeral and is discarded when the document unloads.
-
-Do not retain Python callback closures after a script finishes. Re-running the
-originating block keeps the existing runtime teardown, tracing, step budgets,
-cycle detection, and error reporting intact.
-
-Extend the plugin scripting capability metadata to identify methods that may be
-queued. Regular scripts may enqueue only those methods, and the document's
-plugin declaration must include the existing `scripting` permission. Power
-scripts continue to use the trusted asynchronous path:
+The document's plugin declaration must include the existing `scripting`
+permission. Power scripts can continue to use the trusted asynchronous path:
 
 ```js
 const result = await doc.plugins.call('hvy.web-records', 'fetch', {
@@ -323,12 +316,12 @@ not add another per-invocation confirmation modal.
   parallel.
 - Successful, missing, ambiguous, closed-browser, launch-failure, and timeout
   results settle correctly.
-- Regular-script jobs deduplicate, re-enter only their owner, deliver once,
-  support new request generations, and stop on unload.
-- Queued calls require the scripting permission and queueable-method metadata.
+- Callback calls return immediately and invoke the supplied completion or error
+  callback after the browser operation settles.
+- Nested callbacks and callback return values survive the Brython bridge.
+- Callback calls require the existing scripting permission and stop on unload.
 - Power scripts can await the equivalent operations directly.
-- The existing script-cycle coordinator catches a document mutation loop after
-  a queued result.
+- Callback mutations retain the existing script-cycle and step-budget checks.
 
 ### MCP and desktop parity tests
 

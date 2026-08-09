@@ -2758,6 +2758,7 @@ function defaultMcpSettings() {
     startAutomatically: false,
     port: 8794,
     writeAccess: 'hvyCliEdits',
+    integrationAccess: 'off',
     bearerToken: crypto.randomBytes(32).toString('base64url'),
   };
 }
@@ -2777,10 +2778,14 @@ function saveMcpSettings(settings) {
 }
 
 function normalizeMcpSettings(settings) {
-  return {
+  const normalized = {
     ...defaultMcpSettings(),
     ...(settings || {}),
   };
+  normalized.integrationAccess = ['off', 'read', 'actions'].includes(normalized.integrationAccess)
+    ? normalized.integrationAccess
+    : 'off';
+  return normalized;
 }
 
 function mcpStdioWorkspaceConfigPath() {
@@ -2788,10 +2793,11 @@ function mcpStdioWorkspaceConfigPath() {
 }
 
 function readMcpStdioWorkspaceConfig() {
-  const config = readJson(mcpStdioWorkspaceConfigPath(), { workspaces: [], writeAccess: defaultMcpSettings().writeAccess });
+  const config = readJson(mcpStdioWorkspaceConfigPath(), { workspaces: [], writeAccess: defaultMcpSettings().writeAccess, integrationAccess: 'off' });
   return {
     workspaces: Array.isArray(config.workspaces) ? config.workspaces.filter((workspace) => typeof workspace === 'string') : [],
     writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+    integrationAccess: ['off', 'read', 'actions'].includes(config.integrationAccess) ? config.integrationAccess : 'off',
   };
 }
 
@@ -2799,12 +2805,14 @@ function writeMcpStdioWorkspaceConfig(config) {
   return writeJson(mcpStdioWorkspaceConfigPath(), {
     workspaces: Array.isArray(config.workspaces) ? config.workspaces : [],
     writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+    integrationAccess: ['off', 'read', 'actions'].includes(config.integrationAccess) ? config.integrationAccess : 'off',
   });
 }
 
 function writeMcpStdioSettings(settings) {
   const config = readMcpStdioWorkspaceConfig();
   config.writeAccess = settings.writeAccess;
+  config.integrationAccess = settings.integrationAccess;
   writeMcpStdioWorkspaceConfig(config);
 }
 

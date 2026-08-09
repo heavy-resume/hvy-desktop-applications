@@ -183,6 +183,7 @@ pub fn update_mcp_workspaces(app: AppHandle, runtime: State<McpRuntime>, paths: 
     let config = McpWorkspaceConfig {
         workspaces: normalized.clone(),
         write_access: settings.write_access,
+        integration_access: settings.integration_access,
     };
     *runtime
         .workspaces
@@ -202,11 +203,13 @@ fn read_mcp_settings(path: &Path) -> AppResult<McpSettings> {
 
 pub(crate) fn normalize_mcp_settings(settings: McpSettings) -> AppResult<McpSettings> {
     let write_access = normalize_mcp_write_access(&settings.write_access);
+    let integration_access = normalize_mcp_integration_access(&settings.integration_access);
     let bearer_token = settings.bearer_token.trim().to_string();
     Ok(McpSettings {
         start_automatically: settings.start_automatically,
         port: settings.port.filter(|port| *port > 0),
         write_access,
+        integration_access,
         bearer_token,
     })
 }
@@ -215,6 +218,17 @@ fn normalize_mcp_write_access(value: &str) -> String {
     match value.trim() {
         "searchOnly" | "hvyCliEdits" | "createImportSave" => value.trim().to_string(),
         _ => default_mcp_write_access(),
+    }
+}
+
+fn default_mcp_integration_access() -> String {
+    "off".into()
+}
+
+fn normalize_mcp_integration_access(value: &str) -> String {
+    match value.trim() {
+        "off" | "read" | "actions" => value.trim().to_string(),
+        _ => default_mcp_integration_access(),
     }
 }
 

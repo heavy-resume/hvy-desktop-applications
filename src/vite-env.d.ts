@@ -30,6 +30,11 @@ declare module 'virtual:hvy-brython-minimal-vfs' {
   export default source;
 }
 
+declare module 'virtual:hvy-brython-plugin-vfs' {
+  const pythonLibraryVfsByName: Record<string, Record<string, unknown>>;
+  export default pythonLibraryVfsByName;
+}
+
 declare module 'pdfmake/build/pdfmake.js';
 declare module 'pdfmake/build/vfs_fonts.js';
 

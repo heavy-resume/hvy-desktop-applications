@@ -264,11 +264,13 @@ const RECOVERY_DRAFT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 let recoveryDraftDbPromise: Promise<IDBDatabase> | null = null;
 
 export type McpWriteAccess = 'searchOnly' | 'hvyCliEdits' | 'createImportSave';
+export type McpIntegrationAccess = 'off' | 'read' | 'actions';
 
 export interface McpSettings {
   startAutomatically: boolean;
   port: number | null;
   writeAccess: McpWriteAccess;
+  integrationAccess: McpIntegrationAccess;
   bearerToken: string;
 }
 
@@ -610,6 +612,7 @@ export function defaultMcpSettings(): McpSettings {
     startAutomatically: false,
     port: 8794,
     writeAccess: 'hvyCliEdits',
+    integrationAccess: 'off',
     bearerToken: generateMcpBearerToken(),
   };
 }

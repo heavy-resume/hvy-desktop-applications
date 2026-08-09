@@ -157,6 +157,7 @@ where
     Ok(McpWorkspaceConfig {
         workspaces,
         write_access: workspace_config.write_access,
+        integration_access: workspace_config.integration_access,
     })
 }
 
@@ -165,6 +166,7 @@ pub(crate) fn read_mcp_workspace_config_paths(paths: &[PathBuf]) -> AppResult<Mc
     for path in paths {
         let config = read_mcp_workspace_config(path)?;
         merged.write_access = config.write_access;
+        merged.integration_access = config.integration_access;
         merged.workspaces.extend(config.workspaces);
     }
     Ok(merged)
@@ -176,6 +178,7 @@ pub(crate) fn read_mcp_workspace_config(path: &Path) -> AppResult<McpWorkspaceCo
     }
     let config: McpWorkspaceConfig = serde_json::from_slice(&fs::read(path)?)?;
     let write_access = normalize_mcp_write_access(&config.write_access);
+    let integration_access = normalize_mcp_integration_access(&config.integration_access);
     let config_directory = path.parent().unwrap_or_else(|| Path::new("."));
     let workspaces = config
         .workspaces
@@ -193,6 +196,7 @@ pub(crate) fn read_mcp_workspace_config(path: &Path) -> AppResult<McpWorkspaceCo
     Ok(McpWorkspaceConfig {
         workspaces,
         write_access,
+        integration_access,
     })
 }
 
@@ -369,6 +373,7 @@ fn write_mcp_stdio_workspace_config(app: &AppHandle, config: &McpWorkspaceConfig
 fn write_mcp_stdio_settings(app: &AppHandle, settings: &McpSettings) -> AppResult<()> {
     let mut config = read_mcp_stdio_workspace_config(app).unwrap_or_else(|_| McpWorkspaceConfig::default());
     config.write_access = settings.write_access.clone();
+    config.integration_access = settings.integration_access.clone();
     write_mcp_stdio_workspace_config(app, &config)
 }
 
