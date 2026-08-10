@@ -96,10 +96,33 @@ export async function boot(): Promise<void> {
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-result') {
-        const commandResult = result as { status?: unknown; reason?: unknown };
-        state.status = commandResult.status === 'ambiguous'
-          ? 'Command not run: more than one control matched'
-          : `Command not run: ${String(commandResult.reason || 'target not found').replaceAll('_', ' ')}`;
+        const commandResult = result as { commandId?: unknown; status?: unknown; reason?: unknown; stepIndex?: unknown; stepsExecuted?: unknown };
+        if (commandResult.commandId === 'draft-sequence-step' && state.integrationCommandSelectionPending) {
+          if (commandResult.status === 'executed') {
+            state.integrationCommandDraftPreparedSteps = state.integrationCommandDraftSteps.length;
+            const recordSelection = state.integrationCommandDraftRecord as { selected?: { cssPath?: string } } | null;
+            const targetOptions = recordSelection?.selected?.cssPath
+              ? { parentCssPath: recordSelection.selected.cssPath, parentSnapshot: state.integrationCommandDraftRecord }
+              : {};
+            state.status = `Select step ${state.integrationCommandDraftSteps.length + 1} for ${state.integrationCommandDraftName}`;
+            rerender({ preserveMountedDocument: true });
+            await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, targetOptions);
+          } else {
+            const failedStep = typeof commandResult.stepIndex === 'number' ? commandResult.stepIndex + 1 : state.integrationCommandDraftSteps.length;
+            state.integrationCommandSelectionPending = false;
+            state.integrationCommandStepSetupOpen = true;
+            state.status = `Could not prepare step ${state.integrationCommandDraftSteps.length + 1}: step ${failedStep} ${String(commandResult.reason || 'did not run').replaceAll('_', ' ')}`;
+            rerender({ preserveMountedDocument: true });
+            await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+          }
+          return;
+        }
+        const failedStep = typeof commandResult.stepIndex === 'number' ? ` at step ${commandResult.stepIndex + 1}` : '';
+        state.status = commandResult.status === 'executed'
+          ? `Ran command${typeof commandResult.stepsExecuted === 'number' ? ` · ${commandResult.stepsExecuted} ${commandResult.stepsExecuted === 1 ? 'step' : 'steps'}` : ''}`
+          : commandResult.status === 'ambiguous'
+            ? `Command stopped${failedStep}: more than one control matched`
+            : `Command stopped${failedStep}: ${String(commandResult.reason || 'target not found').replaceAll('_', ' ')}`;
         rerender({ preserveMountedDocument: true });
         return;
       }
@@ -134,6 +157,10 @@ export async function boot(): Promise<void> {
         state.integrationActionSelectionPending = false;
         state.integrationActionPreviewPending = false;
         state.integrationActionBuilderOpen = true;
+        if (state.integrationCommandBuilderOpen) {
+          state.integrationCommandSelectionPending = false;
+          state.integrationCommandStepSetupOpen = true;
+        }
         state.status = 'Integration browser closed';
         rerender({ preserveMountedDocument: true });
         return;
@@ -175,8 +202,14 @@ export async function boot(): Promise<void> {
         }
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftTarget = result;
+        state.integrationCommandDraftSteps.push({
+          gesture: state.integrationCommandDraftGesture,
+          target: result,
+          ...(state.integrationCommandDraftGesture === 'type' ? { inputId: state.integrationCommandDraftInputId } : {}),
+        });
+        state.integrationCommandStepSetupOpen = false;
         state.integrationCommandBuilderOpen = true;
-        state.status = `Selected target for ${state.integrationCommandDraftName}`;
+        state.status = `Added step ${state.integrationCommandDraftSteps.length} to ${state.integrationCommandDraftName}`;
         rerender({ preserveMountedDocument: true });
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;

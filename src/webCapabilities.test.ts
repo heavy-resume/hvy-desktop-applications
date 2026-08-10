@@ -120,7 +120,8 @@ describe('web capabilities', () => {
       id: 'subject',
       name: 'Enter subject',
       scope: 'page',
-      steps: [{ gesture: 'type', target: snapshot, text: 'Project update' }],
+      inputs: [{ id: 'subject', name: 'Subject', required: true }],
+      steps: [{ gesture: 'click', target: snapshot }, { gesture: 'type', target: snapshot, inputId: 'subject' }],
     };
 
     const config = createWebCommandCapabilityConfig('mail', page, command, 'enter-subject');
@@ -128,7 +129,8 @@ describe('web capabilities', () => {
     expect(config.command.steps[0]?.target).toEqual({
       selected: { shape: snapshot.selected.shape, relativePath: snapshot.selected.relativePath },
     });
-    expect(config.command.steps[0]).toMatchObject({ gesture: 'type', text: 'Project update' });
+    expect(config.command.inputs).toEqual([{ id: 'subject', name: 'Subject', required: true }]);
+    expect(config.command.steps[1]).toMatchObject({ gesture: 'type', inputId: 'subject' });
     expect(JSON.stringify(config)).not.toContain('Private subject');
   });
 });

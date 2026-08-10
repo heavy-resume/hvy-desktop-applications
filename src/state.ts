@@ -1,5 +1,5 @@
 import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
-import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationRegistry } from './integrationRegistry';
+import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationCommandInputDefinition, type IntegrationInteractionStepDefinition, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
@@ -151,10 +151,16 @@ export interface AppState {
   integrationCommandDraftName: string;
   integrationCommandDraftScope: 'page' | 'record';
   integrationCommandDraftGesture: 'click' | 'double-click' | 'right-click' | 'type';
-  integrationCommandDraftText: string;
+  integrationCommandDraftInputId: string;
+  integrationCommandDraftInputs: IntegrationCommandInputDefinition[];
+  integrationCommandDraftInputValues: Record<string, string>;
+  integrationCommandDraftSteps: IntegrationInteractionStepDefinition[];
+  integrationCommandDraftPreparedSteps: number;
+  integrationCommandStepSetupOpen: boolean;
   integrationCommandDraftTarget: unknown;
   integrationCommandDraftRecord: unknown;
   integrationCommandSelectionStage: 'record' | 'target';
+  integrationCommandRunRequest: { integrationId: string; actionId?: string; pageId?: string; commandId: string; recordParent?: string } | null;
   integrationCommandDeleteDialogOpen: boolean;
   integrationCommandDeleteIntegrationId: string | null;
   integrationCommandDeleteActionId: string | null;
@@ -416,10 +422,16 @@ export const state: AppState = {
   integrationCommandDraftName: '',
   integrationCommandDraftScope: 'record',
   integrationCommandDraftGesture: 'click',
-  integrationCommandDraftText: '',
+  integrationCommandDraftInputId: '',
+  integrationCommandDraftInputs: [],
+  integrationCommandDraftInputValues: {},
+  integrationCommandDraftSteps: [],
+  integrationCommandDraftPreparedSteps: 0,
+  integrationCommandStepSetupOpen: false,
   integrationCommandDraftTarget: null,
   integrationCommandDraftRecord: null,
   integrationCommandSelectionStage: 'target',
+  integrationCommandRunRequest: null,
   integrationCommandDeleteDialogOpen: false,
   integrationCommandDeleteIntegrationId: null,
   integrationCommandDeleteActionId: null,

@@ -126,6 +126,7 @@ async function executeCommand(
   config: WebCommandCapabilityConfig | WebRecordsCapabilityConfig,
   command: WebCommandCapabilityConfig['command'],
   context: WebCapabilityExecutionContext,
+  inputs: Record<string, string>,
   recordParent?: string,
 ): Promise<WebCommandExecutionResult> {
   assertAuthorized(config, context);
@@ -145,6 +146,7 @@ async function executeCommand(
             ? config.record.pattern
             : { minimumConfidence: 0.8, parents: [], targets: [] },
           command,
+          inputs,
           ...(recordParent ? { recordParent } : {}),
         },
       });
@@ -158,8 +160,9 @@ async function executeCommand(
 export function executeWebPageCommandCapability(
   config: WebCommandCapabilityConfig,
   context: WebCapabilityExecutionContext,
+  inputs: Record<string, string> = {},
 ): Promise<WebCommandExecutionResult> {
-  return executeCommand(config, config.command, context);
+  return executeCommand(config, config.command, context, inputs);
 }
 
 export function executeWebRecordCommandCapability(
@@ -167,10 +170,11 @@ export function executeWebRecordCommandCapability(
   commandId: string,
   recordParent: string,
   context: WebCapabilityExecutionContext,
+  inputs: Record<string, string> = {},
 ): Promise<WebCommandExecutionResult> {
   const command = config.record.commands.find((candidate) => candidate.id === commandId);
   if (!command) return Promise.reject(new Error(`The web capability does not define command ${commandId}.`));
-  return executeCommand(config, command, context, recordParent);
+  return executeCommand(config, command, context, inputs, recordParent);
 }
 
 function rejectPendingOperation(requestId: string, error: unknown): void {
@@ -206,7 +210,8 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
   } else if (result.status === 'executed') {
     pending.resolve({ status: 'executed', commandId: result.commandId });
   } else {
-    pending.reject(new Error(`Command not run: ${String(result.reason ?? result.status ?? 'target not found').replaceAll('_', ' ')}`));
+    const failedStep = typeof result.stepIndex === 'number' ? ` at step ${result.stepIndex + 1}` : '';
+    pending.reject(new Error(`Command stopped${failedStep}: ${String(result.reason ?? result.status ?? 'target not found').replaceAll('_', ' ')}`));
   }
   return true;
 }

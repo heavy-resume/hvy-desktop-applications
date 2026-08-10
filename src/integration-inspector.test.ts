@@ -80,7 +80,7 @@ interface InspectorApi {
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   extractLiveExamples(pattern: Parameters<InspectorApi['extractPattern']>[0] & { targets: Array<{ label: string; snapshot: InspectorSnapshot; exampleSnapshots: Array<InspectorSnapshot | null> }> }): Promise<{ matches: number; records: Array<ReturnType<InspectorApi['extractPattern']>['records'][number] | null> }>;
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
-  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; text?: string }> }; recordParent?: string }): { status: string; reason?: string; record?: string; target?: string; score?: number };
+  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; inputId?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
 
 declare global {
@@ -967,7 +967,7 @@ describe('integration structural inspector', () => {
       <article class="message"><span class="subject">Second</span><button class="open-control">Open</button></article>
     </main>`);
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const parents = [...document.querySelectorAll('.message')];
       const clicked: number[] = [];
       parents.forEach((parent, index) => parent.querySelector('button')!.addEventListener('click', () => clicked.push(index)));
@@ -978,7 +978,7 @@ describe('integration structural inspector', () => {
       };
       const records = window.__hvyGalaxyInspector.extractPattern(pattern).records;
       const target = window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.open-control')!, parents[0], 'target');
-      const execution = window.__hvyGalaxyInspector.executeCommand({
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
         pattern,
         command: { id: 'open', scope: 'record', steps: [{ gesture: 'click', target }] },
         recordParent: records[1].parent,
@@ -994,7 +994,7 @@ describe('integration structural inspector', () => {
   it('dispatches a right-click command to a structurally resolved page target', async () => {
     await page.setContent('<main><button class="menu-control">Options</button></main>');
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const target = document.querySelector('.menu-control')!;
       let contextMenus = 0;
       target.addEventListener('contextmenu', (event) => {
@@ -1002,7 +1002,7 @@ describe('integration structural inspector', () => {
         contextMenus += 1;
       });
       const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
-      const execution = window.__hvyGalaxyInspector.executeCommand({
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
         pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
         command: { id: 'options', scope: 'page', steps: [{ gesture: 'right-click', target: snapshot }] },
       });
@@ -1017,12 +1017,12 @@ describe('integration structural inspector', () => {
   it('dispatches a double-click command to a structurally resolved page target', async () => {
     await page.setContent('<main><button class="open-control">Open</button></main>');
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const target = document.querySelector('.open-control')!;
       let doubleClicks = 0;
       target.addEventListener('dblclick', () => { doubleClicks += 1; });
       const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
-      const execution = window.__hvyGalaxyInspector.executeCommand({
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
         pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
         command: { id: 'open', scope: 'page', steps: [{ gesture: 'double-click', target: snapshot }] },
       });
@@ -1037,14 +1037,15 @@ describe('integration structural inspector', () => {
   it('enters text into a structurally resolved text field and dispatches form events', async () => {
     await page.setContent('<main><label>Subject <input class="subject-control" value="Old subject"></label></main>');
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const target = document.querySelector<HTMLInputElement>('.subject-control')!;
       const events: string[] = [];
       for (const name of ['beforeinput', 'input', 'change']) target.addEventListener(name, () => events.push(name));
       const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
-      const execution = window.__hvyGalaxyInspector.executeCommand({
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
         pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
-        command: { id: 'subject', scope: 'page', steps: [{ gesture: 'type', target: snapshot, text: 'Project update' }] },
+        command: { id: 'subject', scope: 'page', inputs: [{ id: 'subject', name: 'Subject', required: true }], steps: [{ gesture: 'type', target: snapshot, inputId: 'subject' }] },
+        inputs: { subject: 'Project update' },
       });
       return { execution, value: target.value, events, focused: document.activeElement === target };
     });
@@ -1056,31 +1057,85 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('rejects text entry when the resolved target is not editable', async () => {
-    await page.setContent('<main><button class="subject-control">Subject</button></main>');
+  it('reports the named input when a text parameter is missing', async () => {
+    await page.setContent('<main><input class="subject-control"></main>');
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const target = document.querySelector('.subject-control')!;
       const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
       return window.__hvyGalaxyInspector.executeCommand({
         pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
-        command: { id: 'subject', scope: 'page', steps: [{ gesture: 'type', target: snapshot, text: 'Project update' }] },
+        command: { id: 'subject', scope: 'page', inputs: [{ id: 'subject', name: 'Subject', required: true }], steps: [{ gesture: 'type', target: snapshot, inputId: 'subject' }] },
       });
     });
 
-    expect(result).toMatchObject({ status: 'no_match', reason: 'target_not_text_editable' });
+    expect(result).toMatchObject({ status: 'no_match', reason: 'command_input_missing', inputId: 'subject', stepIndex: 0, stepsExecuted: 0 });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('runs ordered steps and waits for targets revealed by earlier interactions', async () => {
+    await page.setContent('<main><button class="compose-control">Compose</button><section class="draft"><input class="recipient-control"><button class="send-control">Send</button></section></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const compose = document.querySelector<HTMLButtonElement>('.compose-control')!;
+      const draft = document.querySelector<HTMLElement>('.draft')!;
+      const recipient = draft.querySelector<HTMLInputElement>('.recipient-control')!;
+      const send = draft.querySelector<HTMLButtonElement>('.send-control')!;
+      const composeTarget = window.__hvyGalaxyInspector.snapshotElement(compose, null, 'target');
+      const recipientTarget = window.__hvyGalaxyInspector.snapshotElement(recipient, null, 'target');
+      const sendTarget = window.__hvyGalaxyInspector.snapshotElement(send, null, 'target');
+      draft.remove();
+      let sentValue = '';
+      send.addEventListener('click', () => { sentValue = recipient.value; });
+      compose.addEventListener('click', () => { window.setTimeout(() => document.querySelector('main')!.append(draft), 100); });
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: {
+          id: 'compose',
+          scope: 'page',
+          inputs: [{ id: 'email', name: 'Email', required: true }],
+          steps: [
+            { gesture: 'click', target: composeTarget },
+            { gesture: 'type', target: recipientTarget, inputId: 'email' },
+            { gesture: 'click', target: sendTarget },
+          ],
+        },
+        inputs: { email: 'ada@example.com' },
+      });
+      return { execution, sentValue };
+    });
+
+    expect(result.execution).toMatchObject({ status: 'executed', stepsExecuted: 3 });
+    expect(result.sentValue).toBe('ada@example.com');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not resolve a text-entry step to a non-editable target', async () => {
+    await page.setContent('<main><button class="subject-control">Subject</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const target = document.querySelector('.subject-control')!;
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      return window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'subject', scope: 'page', inputs: [{ id: 'subject', name: 'Subject', required: true }], steps: [{ gesture: 'type', target: snapshot, inputId: 'subject' }] },
+        inputs: { subject: 'Project update' },
+      });
+    });
+
+    expect(result).toMatchObject({ status: 'no_match', reason: 'target_not_found' });
     expect(pageErrors).toEqual([]);
   });
 
   it('does not execute a page command when two targets are structurally tied', async () => {
     await page.setContent('<main><button class="menu-control">First</button><button class="menu-control">Second</button></main>');
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const targets = [...document.querySelectorAll('.menu-control')];
       let clicks = 0;
       targets.forEach((target) => target.addEventListener('click', () => { clicks += 1; }));
       const snapshot = window.__hvyGalaxyInspector.snapshotElement(targets[0], null, 'target');
-      const execution = window.__hvyGalaxyInspector.executeCommand({
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
         pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
         command: { id: 'ambiguous', scope: 'page', steps: [{ gesture: 'click', target: snapshot }] },
       });

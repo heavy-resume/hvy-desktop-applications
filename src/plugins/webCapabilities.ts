@@ -87,6 +87,61 @@ function button(label: string, primary = false): HTMLButtonElement {
   return element;
 }
 
+function commandInputs(args: JsonObject): Record<string, string> {
+  const value = (args as Record<string, unknown>).inputs;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+function openCommandInputsModal(command: WebCommandCapabilityConfig['command'], onSubmit: (inputs: Record<string, string>) => void): void {
+  if (!command.inputs?.length) {
+    onSubmit({});
+    return;
+  }
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.setAttribute('role', 'presentation');
+  const form = document.createElement('form');
+  form.className = 'dialog';
+  form.setAttribute('role', 'dialog');
+  form.setAttribute('aria-modal', 'true');
+  form.setAttribute('aria-label', `Run ${command.name}`);
+  const title = document.createElement('h2');
+  title.textContent = command.name;
+  const note = document.createElement('p');
+  note.textContent = 'Enter the values for this run.';
+  form.append(title, note);
+  for (const definition of command.inputs) {
+    const label = document.createElement('label');
+    const name = document.createElement('span');
+    name.textContent = definition.name;
+    const input = definition.id.includes('body') ? document.createElement('textarea') : document.createElement('input');
+    input.className = 'hvy-galaxy-input';
+    input.name = definition.id;
+    if (input instanceof HTMLTextAreaElement) input.rows = 6;
+    input.required = definition.required;
+    label.append(name, input);
+    form.appendChild(label);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'dialog-actions';
+  const cancel = button('Cancel');
+  const run = button('Run', true);
+  run.type = 'submit';
+  cancel.addEventListener('click', () => backdrop.remove());
+  actions.append(cancel, run);
+  form.appendChild(actions);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const inputs = Object.fromEntries(command.inputs!.map((definition) => [definition.id, String(new FormData(form).get(definition.id) ?? '')]));
+    backdrop.remove();
+    onSubmit(inputs);
+  });
+  backdrop.appendChild(form);
+  document.body.appendChild(backdrop);
+  form.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')?.focus();
+}
+
 function selectedProfile(config: WebCapabilityConfig) {
   const path = state.document?.path ?? '';
   const profileId = getWebCapabilityProfileBinding(
@@ -153,7 +208,7 @@ function openAuthorizationModal(config: WebCapabilityConfig, onAuthorized: () =>
     ['Page', config.page.url],
     ['Allowed sites', config.page.allowedOrigins.join(', ')],
     ['Reads', 'record' in config ? config.record.pattern.targets.map((target) => target.label).join(', ') || 'Page structure' : 'No record values'],
-    ['Actions', ('record' in config ? config.record.commands : [config.command]).map((command) => command.name).join(', ') || 'None'],
+    ['Actions', ('record' in config ? config.record.commands : [config.command]).map((command) => `${command.name}${command.inputs?.length ? ` (${command.inputs.map((input) => input.name).join(', ')})` : ''}`).join(', ') || 'None'],
   ];
   for (const [term, description] of rows) {
     const dt = document.createElement('dt');
@@ -346,13 +401,15 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
         for (const command of config.record.commands) {
           const run = button(command.name);
           run.addEventListener('click', () => {
-            void executeWebRecordCommandCapability(config, command.id, candidate.parent as string, {
-              documentPath: state.document?.path ?? '',
-              profile,
-              authorizations: state.appSettings.webCapabilityAuthorizations,
-            }).catch((caught: unknown) => {
-              error = caught instanceof Error ? caught.message : String(caught);
-              sync();
+            openCommandInputsModal(command, (inputs) => {
+              void executeWebRecordCommandCapability(config, command.id, candidate.parent as string, {
+                documentPath: state.document?.path ?? '',
+                profile,
+                authorizations: state.appSettings.webCapabilityAuthorizations,
+              }, inputs).catch((caught: unknown) => {
+                error = caught instanceof Error ? caught.message : String(caught);
+                sync();
+              });
             });
           });
           article.appendChild(run);
@@ -394,18 +451,20 @@ function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {
           openAuthorizationModal(config, sync);
           return;
         }
-        pending = true;
-        error = '';
-        sync();
-        void executeWebPageCommandCapability(config, {
-          documentPath: state.document?.path ?? '',
-          profile,
-          authorizations: state.appSettings.webCapabilityAuthorizations,
-        }).catch((caught: unknown) => {
-          error = caught instanceof Error ? caught.message : String(caught);
-        }).finally(() => {
-          pending = false;
+        openCommandInputsModal(config.command, (inputs) => {
+          pending = true;
+          error = '';
           sync();
+          void executeWebPageCommandCapability(config, {
+            documentPath: state.document?.path ?? '',
+            profile,
+            authorizations: state.appSettings.webCapabilityAuthorizations,
+          }, inputs).catch((caught: unknown) => {
+            error = caught instanceof Error ? caught.message : String(caught);
+          }).finally(() => {
+            pending = false;
+            sync();
+          });
         });
       });
       root.appendChild(run);
@@ -455,7 +514,7 @@ export const webRecordsPlugin: HvyPlugin = {
         const callbacks = scriptingCallbacks(args);
         const executionContext = scriptingExecutionContext(config);
         return queueWebCapabilityScriptOperation(
-          () => executeWebRecordCommandCapability(config, commandId, recordParent, executionContext),
+          () => executeWebRecordCommandCapability(config, commandId, recordParent, executionContext, commandInputs(args)),
           callbacks,
         );
       },
@@ -479,7 +538,7 @@ export const webCommandPlugin: HvyPlugin = {
         const callbacks = scriptingCallbacks(args);
         const executionContext = scriptingExecutionContext(config);
         return queueWebCapabilityScriptOperation(
-          () => executeWebPageCommandCapability(config, executionContext),
+          () => executeWebPageCommandCapability(config, executionContext, commandInputs(args)),
           callbacks,
         );
       },

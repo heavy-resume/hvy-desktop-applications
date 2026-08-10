@@ -64,11 +64,12 @@ describe('integration registry', () => {
 
   it('packages page commands without coupling them to a record definition', () => {
     const snapshot = { selected: { shape: { tag: 'button' }, relativePath: [{ tag: 'button' }] } };
-    const command = { id: 'compose', name: 'Compose', scope: 'page' as const, steps: [{ gesture: 'click' as const, target: snapshot }] };
+    const command = { id: 'compose', name: 'Compose', scope: 'page' as const, inputs: [{ id: 'body', name: 'Body', required: true }], steps: [{ gesture: 'click' as const, target: snapshot }, { gesture: 'type' as const, target: snapshot, inputId: 'body' }] };
 
-    expect(pageCommandExecutionPayload(command)).toEqual({
+    expect(pageCommandExecutionPayload(command, { body: 'Hello' })).toEqual({
       pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
       command,
+      inputs: { body: 'Hello' },
     });
   });
 

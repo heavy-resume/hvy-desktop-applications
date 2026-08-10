@@ -1330,10 +1330,15 @@
     return image ? { imageUrl: image.url, alt: image.alt } : '';
   };
 
-  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence) => {
+  const isTextEntryElement = (element) => element instanceof HTMLTextAreaElement
+    || element instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'tel', 'url', 'password'].includes(element.type)
+    || element instanceof HTMLElement && element.isContentEditable;
+
+  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture) => {
     const expected = snapshotValue?.selected;
     if (!expected?.shape) return { status: 'no_match', reason: 'target_pattern_missing' };
     const candidates = structuralTargetsWithin(scope, scope instanceof Element && !expected.relativePath?.length)
+      .filter((element) => gesture !== 'type' || isTextEntryElement(element))
       .map((element) => {
         if (scope instanceof Element) return { element, ...targetCandidateSimilarity(expected, element, scope) };
         const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
@@ -1367,11 +1372,10 @@
   };
 
   const dispatchTextEntry = (element, text) => {
-    const textInputTypes = ['', 'text', 'search', 'email', 'tel', 'url', 'password'];
-    const isTextInput = element instanceof HTMLInputElement && textInputTypes.includes(element.type);
+    const isTextInput = element instanceof HTMLInputElement;
     const isTextArea = element instanceof HTMLTextAreaElement;
     const isEditableContent = element instanceof HTMLElement && element.isContentEditable;
-    if (!isTextInput && !isTextArea && !isEditableContent) return false;
+    if (!isTextEntryElement(element)) return false;
     element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     element.focus();
     element.dispatchEvent(new InputEvent('beforeinput', {
@@ -1398,36 +1402,61 @@
     return true;
   };
 
-  const executeCommand = (payload = {}) => {
+  const waitForInteractionTarget = async (scopeForStep, step, minimumConfidence) => {
+    const deadline = Date.now() + 5000;
+    let result = { status: 'no_match', reason: 'target_not_found' };
+    do {
+      const scope = scopeForStep();
+      if (scope) {
+        result = resolveInteractionTarget(scope, step.target, minimumConfidence, step.gesture);
+        if (result.status === 'matched') return result;
+      } else {
+        result = { status: 'no_match', reason: 'record_not_found' };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    return result;
+  };
+
+  const executeCommand = async (payload = {}) => {
     window.__hvyGalaxyInspector.stop();
     const command = payload.command;
-    const step = command?.steps?.[0];
-    if (!command || !step || !['click', 'double-click', 'right-click', 'type'].includes(step.gesture) || (step.gesture === 'type' && typeof step.text !== 'string')) return { status: 'no_match', reason: 'command_invalid' };
+    const steps = command?.steps;
+    const commandInputs = Array.isArray(command?.inputs) ? command.inputs : [];
+    const commandInputIds = new Set(commandInputs.map((input) => input?.id).filter((id) => typeof id === 'string' && id));
+    if (!command || !Array.isArray(steps) || !steps.length || steps.some((step) => !step || !['click', 'double-click', 'right-click', 'type'].includes(step.gesture) || (step.gesture === 'type' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId))))) return { status: 'no_match', reason: 'command_invalid', stepIndex: 0, stepsExecuted: 0 };
     const { minimumTargetConfidence } = patternThresholds(payload.pattern);
-    let scope = document;
     let record = null;
-    if (command.scope === 'record') {
+    const scopeForStep = () => {
+      if (command.scope !== 'record') return document;
+      if (record?.element?.isConnected) return record.element;
       const records = findPatternMatches(payload.pattern);
       record = payload.recordParent
         ? records.find((candidate) => cssPath(candidate.element) === payload.recordParent)
         : records[0];
-      if (!record) return { status: 'no_match', reason: 'record_not_found' };
-      scope = record.element;
-    }
-    const resolved = resolveInteractionTarget(scope, step.target, minimumTargetConfidence);
-    if (resolved.status !== 'matched') return resolved;
-    if (step.gesture === 'type') {
-      if (!dispatchTextEntry(resolved.element, step.text)) return { status: 'no_match', reason: 'target_not_text_editable', score: resolved.score };
-    } else {
-      dispatchInteraction(resolved.element, step.gesture);
+      return record?.element || null;
+    };
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+      const step = steps[stepIndex];
+      const textInput = step.gesture === 'type' ? payload.inputs?.[step.inputId] : undefined;
+      if (step.gesture === 'type' && typeof textInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
+      const initialScope = stepIndex === 0 ? scopeForStep() : null;
+      const resolved = stepIndex === 0
+        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture) : { status: 'no_match', reason: 'record_not_found' }
+        : await waitForInteractionTarget(scopeForStep, step, minimumTargetConfidence);
+      if (resolved.status !== 'matched') return { ...resolved, stepIndex, stepsExecuted: stepIndex };
+      if (step.gesture === 'type') {
+        if (!dispatchTextEntry(resolved.element, textInput)) return { status: 'no_match', reason: 'target_not_text_editable', score: resolved.score, stepIndex, stepsExecuted: stepIndex };
+      } else {
+        dispatchInteraction(resolved.element, step.gesture);
+      }
     }
     return {
       status: 'executed',
       commandId: command.id,
-      gesture: step.gesture,
+      gesture: steps.at(-1).gesture,
+      stepsExecuted: steps.length,
       record: record ? cssPath(record.element) : null,
-      target: cssPath(resolved.element),
-      score: resolved.score,
     };
   };
 
@@ -1919,8 +1948,8 @@
     executeCommand(payload = {}) {
       return executeCommand(payload);
     },
-    executeCommandAndReport(payload = {}) {
-      const result = executeCommand(payload);
+    async executeCommandAndReport(payload = {}) {
+      const result = await executeCommand(payload);
       publish({ kind: 'integration-command-result', requestId: payload.requestId, commandId: payload.command?.id, ...result });
       return result;
     },

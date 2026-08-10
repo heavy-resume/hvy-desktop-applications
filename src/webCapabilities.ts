@@ -6,6 +6,7 @@ import type { VisualDocument } from './hvy';
 import type {
   IntegrationActionDefinition,
   IntegrationCommandDefinition,
+  IntegrationInteractionStepDefinition,
   IntegrationPageDefinition,
 } from './integrationRegistry';
 import { actionPatternPayload, matcherSnapshot } from './integrationRegistry';
@@ -79,7 +80,7 @@ export interface WebCapabilityApprovalSummary {
   pageUrl: string;
   allowedOrigins: string[];
   fieldLabels: string[];
-  commands: Array<{ id: string; name: string; gesture: string; scope: string }>;
+  commands: Array<{ id: string; name: string; gesture: string; scope: string; inputs: Array<{ id: string; name: string; required: boolean }> }>;
 }
 
 export interface WebCapabilityAuthorizationRecord {
@@ -152,7 +153,14 @@ export function normalizeWebCapabilityAuthorizations(value: unknown): WebCapabil
             const commandName = typeof item.name === 'string' ? item.name.trim() : '';
             const gesture = typeof item.gesture === 'string' ? item.gesture.trim() : '';
             const scope = typeof item.scope === 'string' ? item.scope.trim() : '';
-            return id && commandName && gesture && scope ? [{ id, name: commandName, gesture, scope }] : [];
+            const inputs = Array.isArray(item.inputs) ? item.inputs.flatMap((input) => {
+              if (!input || typeof input !== 'object' || Array.isArray(input)) return [];
+              const definition = input as Record<string, unknown>;
+              const inputId = typeof definition.id === 'string' ? definition.id.trim() : '';
+              const inputName = typeof definition.name === 'string' ? definition.name.trim() : '';
+              return inputId && inputName ? [{ id: inputId, name: inputName, required: definition.required !== false }] : [];
+            }) : [];
+            return id && commandName && gesture && scope ? [{ id, name: commandName, gesture, scope, inputs }] : [];
           })
           : [];
         const normalizedRecord: WebCapabilityAuthorizationRecord = {
@@ -209,23 +217,37 @@ function normalizeCommand(value: unknown, scope: 'page' | 'record'): Integration
   const record = value as Record<string, unknown>;
   const id = typeof record.id === 'string' ? record.id.trim() : '';
   const name = typeof record.name === 'string' ? record.name.trim() : '';
-  if (!id || !name || record.scope !== scope || !Array.isArray(record.steps) || record.steps.length !== 1) return null;
-  const rawStep = record.steps[0];
-  if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) return null;
-  const step = rawStep as Record<string, unknown>;
-  if (step.gesture !== 'click' && step.gesture !== 'double-click' && step.gesture !== 'right-click' && step.gesture !== 'type') return null;
-  if (step.gesture === 'type' && typeof step.text !== 'string') return null;
+  if (!id || !name || record.scope !== scope || !Array.isArray(record.steps) || !record.steps.length) return null;
+  const inputs = Array.isArray(record.inputs) ? record.inputs.flatMap((rawInput) => {
+    if (!rawInput || typeof rawInput !== 'object' || Array.isArray(rawInput)) return [];
+    const input = rawInput as Record<string, unknown>;
+    const inputId = typeof input.id === 'string' ? input.id.trim() : '';
+    const inputName = typeof input.name === 'string' ? input.name.trim() : '';
+    if (!inputId || !inputName) return [];
+    return [{ id: inputId, name: inputName, required: input.required !== false }];
+  }) : [];
+  if (new Set(inputs.map((input) => input.id)).size !== inputs.length) return null;
+  const inputIds = new Set(inputs.map((input) => input.id));
+  const steps = record.steps.flatMap<IntegrationInteractionStepDefinition>((rawStep) => {
+    if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) return [];
+    const step = rawStep as Record<string, unknown>;
+    if (step.gesture !== 'click' && step.gesture !== 'double-click' && step.gesture !== 'right-click' && step.gesture !== 'type') return [];
+    if (step.gesture === 'type' && (typeof step.inputId !== 'string' || !inputIds.has(step.inputId))) return [];
+    return [{
+      gesture: step.gesture,
+      target: matcherSnapshot(step.target),
+      ...(step.gesture === 'type' ? { inputId: step.inputId as string } : {}),
+      ...(typeof step.fromState === 'string' ? { fromState: step.fromState } : {}),
+      ...(typeof step.toState === 'string' ? { toState: step.toState } : {}),
+    }];
+  });
+  if (steps.length !== record.steps.length) return null;
   return {
     id,
     name,
     scope,
-    steps: [{
-      gesture: step.gesture,
-      target: matcherSnapshot(step.target),
-      ...(step.gesture === 'type' ? { text: step.text as string } : {}),
-      ...(typeof step.fromState === 'string' ? { fromState: step.fromState } : {}),
-      ...(typeof step.toState === 'string' ? { toState: step.toState } : {}),
-    }],
+    ...(inputs.length ? { inputs } : {}),
+    steps,
   };
 }
 
@@ -450,8 +472,9 @@ export function webCapabilityApprovalSummary(config: WebCapabilityConfig): WebCa
     commands: commands.map((command) => ({
       id: command.id,
       name: command.name,
-      gesture: command.steps[0]?.gesture ?? '',
+      gesture: command.steps.map((step) => step.gesture).join(' → '),
       scope: command.scope,
+      inputs: (command.inputs ?? []).map((input) => ({ ...input })),
     })).sort((left, right) => left.id.localeCompare(right.id)),
   };
 }

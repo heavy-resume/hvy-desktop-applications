@@ -4813,6 +4813,10 @@ body {
   color: var(--hvy-text-alt, #4f5d59);
 }
 
+.dialog [data-command-text-field][hidden] {
+  display: none;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: end;

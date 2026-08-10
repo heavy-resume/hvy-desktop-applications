@@ -121,14 +121,18 @@ export interface UiHandlers {
   closeIntegrationActionResult(): void;
   addCommandForIntegrationAction(integrationId: string, actionId: string): void;
   addCommandForIntegrationPage(integrationId: string, pageId: string): void;
-  beginIntegrationCommandSelection(name: string, gesture: 'click' | 'double-click' | 'right-click' | 'type', text: string): void;
+  beginIntegrationCommandSelection(name: string, gesture: 'click' | 'double-click' | 'right-click' | 'type', inputName: string, exampleValue: string): void;
   cancelIntegrationCommandBuilder(): void;
+  addIntegrationCommandStep(): void;
+  removeLastIntegrationCommandStep(): void;
   saveIntegrationCommand(): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;
   cancelDeleteIntegrationCommand(): void;
   confirmDeleteIntegrationCommand(): void;
   runIntegrationCommand(integrationId: string, actionId: string, commandId: string, recordParent?: string): void;
   runIntegrationPageCommand(integrationId: string, pageId: string, commandId: string): void;
+  cancelIntegrationCommandRun(): void;
+  submitIntegrationCommandRun(inputs: Record<string, string>): void;
   requestDeleteIntegrationAction(integrationId: string, actionId: string): void;
   cancelDeleteIntegrationAction(): void;
   confirmDeleteIntegrationAction(): void;
@@ -578,6 +582,7 @@ export function renderModals(state: AppState): void {
     ${renderAddIntegrationProfileDialog(state)}
     ${renderIntegrationActionBuilderDialog(state)}
     ${renderIntegrationCommandBuilderDialog(state)}
+    ${renderIntegrationCommandRunDialog(state)}
     ${renderIntegrationCommandDeleteDialog(state)}
     ${renderIntegrationActionDiscardDialog(state)}
     ${renderIntegrationRecordDeleteDialog(state)}
@@ -929,6 +934,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'add-command-for-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.addCommandForIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
     if (action === 'add-command-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.addCommandForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'cancel-integration-command-builder') handlers.cancelIntegrationCommandBuilder();
+    if (action === 'add-integration-command-step') handlers.addIntegrationCommandStep();
+    if (action === 'remove-last-integration-command-step') handlers.removeLastIntegrationCommandStep();
     if (action === 'save-integration-command') handlers.saveIntegrationCommand();
     if (action === 'request-delete-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) handlers.requestDeleteIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId);
     if (action === 'cancel-delete-integration-command') handlers.cancelDeleteIntegrationCommand();
@@ -937,6 +944,7 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.runIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId, target.dataset.recordParent);
     }
     if (action === 'run-integration-page-command' && target.dataset.integrationId && target.dataset.pageId && target.dataset.commandId) handlers.runIntegrationPageCommand(target.dataset.integrationId, target.dataset.pageId, target.dataset.commandId);
+    if (action === 'cancel-integration-command-run') handlers.cancelIntegrationCommandRun();
     if (action === 'request-delete-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.requestDeleteIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
     if (action === 'cancel-delete-integration-action') handlers.cancelDeleteIntegrationAction();
     if (action === 'confirm-delete-integration-action') handlers.confirmDeleteIntegrationAction();
@@ -1467,11 +1475,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (target instanceof HTMLSelectElement && target.name === 'commandGesture') {
       const form = target.closest<HTMLFormElement>('form[data-form="integration-command-setup"]');
       const textField = form?.querySelector<HTMLElement>('[data-command-text-field]');
-      const textInput = textField?.querySelector<HTMLTextAreaElement>('textarea[name="commandText"]');
+      const textInputs = [...(textField?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea') ?? [])];
       const acceptsText = target.value === 'type';
       if (textField) textField.hidden = !acceptsText;
-      if (textInput) textInput.disabled = !acceptsText;
-      if (acceptsText) textInput?.focus();
+      textInputs.forEach((input) => { input.disabled = !acceptsText; });
+      if (acceptsText) textInputs[0]?.focus();
       return;
     }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-integration-profile') {
@@ -1709,8 +1717,15 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const data = new FormData(form);
       const gesture = data.get('commandGesture');
       if (gesture === 'click' || gesture === 'double-click' || gesture === 'right-click' || gesture === 'type') {
-        handlers.beginIntegrationCommandSelection(String(data.get('commandName') ?? ''), gesture, String(data.get('commandText') ?? ''));
+        handlers.beginIntegrationCommandSelection(String(data.get('commandName') ?? ''), gesture, String(data.get('commandInputName') ?? ''), String(data.get('commandExampleValue') ?? ''));
       }
+    }
+    if (form.dataset.form === 'integration-command-run') {
+      const inputs: Record<string, string> = {};
+      for (const [key, value] of new FormData(form).entries()) {
+        if (key.startsWith('commandInput:')) inputs[key.slice('commandInput:'.length)] = String(value);
+      }
+      handlers.submitIntegrationCommandRun(inputs);
     }
     if (form.dataset.form === 'ai-settings') {
       const data = new FormData(form);
@@ -4149,7 +4164,7 @@ function integrationCommandGestureLabel(gesture: import('./integrationRegistry')
 
 function renderItemCommandPills(integrationId: string, action: import('./integrationRegistry').IntegrationActionDefinition): string {
   const commands = action.commands?.filter((command) => command.scope === 'record') ?? [];
-  return `<div class="integration-item-command-group"><strong class="integration-item-command-label">Item commands</strong>${commands.length ? `<div class="integration-command-list integration-command-pills">${commands.map((command) => `<span class="integration-command-pill"><span><strong>${escapeHtml(command.name)}</strong><small>${integrationCommandGestureLabel(command.steps[0]?.gesture)}</small></span><button type="button" data-action="request-delete-integration-command" data-integration-id="${escapeAttr(integrationId)}" data-action-id="${escapeAttr(action.id)}" data-command-id="${escapeAttr(command.id)}" aria-label="Delete ${escapeAttr(command.name)}">×</button></span>`).join('')}</div>` : '<small>No item commands yet</small>'}</div>`;
+  return `<div class="integration-item-command-group"><strong class="integration-item-command-label">Item commands</strong>${commands.length ? `<div class="integration-command-list integration-command-pills">${commands.map((command) => `<span class="integration-command-pill"><span><strong>${escapeHtml(command.name)}</strong><small>${command.steps.length === 1 ? integrationCommandGestureLabel(command.steps[0]?.gesture) : `${command.steps.length} steps`}</small></span><button type="button" data-action="request-delete-integration-command" data-integration-id="${escapeAttr(integrationId)}" data-action-id="${escapeAttr(action.id)}" data-command-id="${escapeAttr(command.id)}" aria-label="Delete ${escapeAttr(command.name)}">×</button></span>`).join('')}</div>` : '<small>No item commands yet</small>'}</div>`;
 }
 
 function renderIntegrationsDialog(state: AppState): string {
@@ -4291,14 +4306,40 @@ function renderIntegrationCommandBuilderDialog(state: AppState): string {
   if (state.integrationCommandSelectionPending) {
     const selectingRecord = state.integrationCommandSelectionStage === 'record';
     const targetPrompt = state.integrationCommandDraftGesture === 'type' ? 'Select the text field' : `Select the ${integrationCommandGestureLabel(state.integrationCommandDraftGesture).toLocaleLowerCase()} target`;
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for command target"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>${selectingRecord ? 'Select a matching record' : targetPrompt}</h2><p class="dialog-note">Galaxy has switched to the integration browser. ${selectingRecord ? 'Choose a record that the existing definition recognizes.' : 'Select the control the command should use.'}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${selectingRecord ? 'Green records match the saved definition. Orange or red records have diverged and cannot silently become the command example.' : state.integrationCommandDraftScope === 'record' ? 'The target is limited to the live record you just selected.' : 'The target may be anywhere on the page.'}</span></div></section></div>`;
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for command target"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>${selectingRecord ? 'Select a matching record' : targetPrompt}</h2><p class="dialog-note">Galaxy has switched to the integration browser. ${selectingRecord ? 'Choose a record that the existing definition recognizes.' : `Choose the target for step ${state.integrationCommandDraftSteps.length + 1}.`}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${selectingRecord ? 'Green records match the saved definition. Orange or red records have diverged and cannot silently become the command example.' : state.integrationCommandDraftScope === 'record' ? 'The target is limited to the live record you selected.' : 'The target may be anywhere on the page.'}</span></div></section></div>`;
   }
-  if (state.integrationCommandDraftTarget) {
-    const failedAction = state.integrationCommandDraftGesture === 'type' ? 'no text is entered' : 'nothing is clicked';
-    const textReview = state.integrationCommandDraftGesture === 'type' ? `<span>Text to enter</span><strong>${escapeHtml(state.integrationCommandDraftText) || '<em>Empty text</em>'}</strong>` : '';
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review command"><div class="modal-header"><div><p class="eyebrow">Add command</p><h2>${escapeHtml(state.integrationCommandDraftName)}</h2><p class="dialog-note">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'} · ${integrationCommandGestureLabel(state.integrationCommandDraftGesture)}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-command-target-review"><span>Selected target</span><strong>${escapeHtml(selectedInspectionContent(state.integrationCommandDraftTarget) || 'Structural control')}</strong>${textReview}<small>${state.integrationCommandDraftScope === 'record' ? `When run, Galaxy first resolves the record definition on the current page, then independently resolves this control inside that record. If either match is missing or ambiguous, ${failedAction}.` : `Galaxy resolves this control against the current live page. If it is missing or ambiguous, ${failedAction}.`}</small></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-command">Save command</button></div></section></div>`;
+  if (state.integrationCommandStepSetupOpen) {
+    const firstStep = state.integrationCommandDraftSteps.length === 0;
+    const nameField = firstStep
+      ? '<label><span>Command name</span><input class="hvy-galaxy-input" name="commandName" required autocomplete="off"></label>'
+      : `<input type="hidden" name="commandName" value="${escapeAttr(state.integrationCommandDraftName)}">`;
+    return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Add command step" data-form="integration-command-setup"><div class="modal-header"><div><p class="eyebrow">${firstStep ? `Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command` : escapeHtml(state.integrationCommandDraftName)}</p><h2>${firstStep ? 'Define the first interaction' : `Add step ${state.integrationCommandDraftSteps.length + 1}`}</h2><p class="dialog-note">${firstStep ? 'Choose an interaction, then select its target on the live page.' : `Galaxy will run step ${state.integrationCommandDraftSteps.length} to reveal the next page state before target selection.`}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div>${nameField}<label><span>Interaction</span><select class="hvy-galaxy-select" name="commandGesture"><option value="click" selected>Click</option><option value="double-click">Double click</option><option value="right-click">Right click</option><option value="type">Enter text</option></select></label><div data-command-text-field hidden><label><span>Input parameter</span><input class="hvy-galaxy-input" name="commandInputName" placeholder="Email, subject, or body" autocomplete="off" required disabled></label><label><span>Example value for recording</span><textarea class="hvy-galaxy-input" name="commandExampleValue" rows="3" disabled></textarea></label><p class="dialog-note">The parameter is saved with the action. The example value is used only to prepare later steps while recording.</p></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">${firstStep ? 'Select target' : 'Run previous step and select target'}</button></div></form></div>`;
   }
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Add command" data-form="integration-command-setup"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>Define a basic interaction</h2><p class="dialog-note">${state.integrationCommandDraftScope === 'record' ? 'This command runs against one resolved record. You will select a current matching record, then the control inside it.' : 'This command runs against the page itself. You will select its control on the live page.'}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Command name</span><input class="hvy-galaxy-input" name="commandName" required autocomplete="off"></label><label><span>Interaction</span><select class="hvy-galaxy-select" name="commandGesture"><option value="click" selected>Click</option><option value="double-click">Double click</option><option value="right-click">Right click</option><option value="type">Enter text</option></select></label><label data-command-text-field hidden><span>Text to enter</span><textarea class="hvy-galaxy-input" name="commandText" rows="3" disabled></textarea></label><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Select target</button></div></form></div>`;
+  const steps = state.integrationCommandDraftSteps.map((step, index) => {
+    const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
+    const input = state.integrationCommandDraftInputs.find((candidate) => candidate.id === step.inputId);
+    const detail = step.gesture === 'type' ? `Enter {${escapeHtml(input?.name ?? step.inputId ?? 'input')}} into ${target}` : `${integrationCommandGestureLabel(step.gesture)} ${target}`;
+    const remove = index === state.integrationCommandDraftSteps.length - 1 ? `<button type="button" class="hvy-galaxy-button integration-selection-remove" data-action="remove-last-integration-command-step">Remove</button>` : '';
+    return `<div class="integration-selection-row"><div class="integration-selection-review"><strong>${index + 1}</strong><span>${detail}</span><small>${index === state.integrationCommandDraftSteps.length - 1 ? 'Captured but not run while recording.' : 'Run to prepare the following step.'}</small></div>${remove}</div>`;
+  }).join('');
+  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review command sequence"><div class="modal-header"><div><p class="eyebrow">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'}</p><h2>${escapeHtml(state.integrationCommandDraftName)}</h2><p class="dialog-note">Review the ordered interactions. The final captured step has not been run.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><section class="integration-selection-collection"><h3>Action sequence</h3><div>${steps}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="button" class="hvy-galaxy-button" data-action="add-integration-command-step">+ Add step</button><button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-command">Save sequence</button></div></section></div>`;
+}
+
+function renderIntegrationCommandRunDialog(state: AppState): string {
+  const request = state.integrationCommandRunRequest;
+  if (!request) return '';
+  const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === request.integrationId);
+  const action = request.actionId ? integration?.actions.find((candidate) => candidate.id === request.actionId) : undefined;
+  const page = request.pageId ? integration?.pages.find((candidate) => candidate.id === request.pageId) : undefined;
+  const command = action?.commands?.find((candidate) => candidate.id === request.commandId)
+    ?? page?.commands?.find((candidate) => candidate.id === request.commandId);
+  if (!command) return '';
+  const fields = (command.inputs ?? []).map((input) => {
+    const attributes = `class="hvy-galaxy-input" name="commandInput:${escapeAttr(input.id)}" ${input.required ? 'required' : ''}`;
+    const control = input.id.includes('body') ? `<textarea ${attributes} rows="6"></textarea>` : `<input ${attributes} autocomplete="off">`;
+    return `<label><span>${escapeHtml(input.name)}</span>${control}</label>`;
+  }).join('');
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Run ${escapeAttr(command.name)}" data-form="integration-command-run"><div class="modal-header"><div><p class="eyebrow">Run action</p><h2>${escapeHtml(command.name)}</h2><p class="dialog-note">Enter the values for this run.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-run" aria-label="Cancel command">×</button></div>${fields}<div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-run">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Run</button></div></form></div>`;
 }
 
 function renderIntegrationActionResultDialog(state: AppState): string {

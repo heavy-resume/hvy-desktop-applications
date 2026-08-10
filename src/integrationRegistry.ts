@@ -39,13 +39,20 @@ export interface IntegrationCommandDefinition {
   id: string;
   name: string;
   scope: 'page' | 'record';
+  inputs?: IntegrationCommandInputDefinition[];
   steps: IntegrationInteractionStepDefinition[];
+}
+
+export interface IntegrationCommandInputDefinition {
+  id: string;
+  name: string;
+  required: boolean;
 }
 
 export interface IntegrationInteractionStepDefinition {
   gesture: 'click' | 'double-click' | 'right-click' | 'type';
   target: unknown;
-  text?: string;
+  inputId?: string;
   fromState?: string;
   toState?: string;
 }
@@ -206,15 +213,15 @@ export function actionPatternPayload(action: IntegrationActionDefinition): { min
   };
 }
 
-export function commandExecutionPayload(action: IntegrationActionDefinition, command: IntegrationCommandDefinition, recordParent?: string): { pattern: NonNullable<ReturnType<typeof actionPatternPayload>>; command: IntegrationCommandDefinition; recordParent?: string } | null {
+export function commandExecutionPayload(action: IntegrationActionDefinition, command: IntegrationCommandDefinition, recordParent?: string, inputs?: Record<string, string>): { pattern: NonNullable<ReturnType<typeof actionPatternPayload>>; command: IntegrationCommandDefinition; recordParent?: string; inputs?: Record<string, string> } | null {
   const pattern = actionPatternPayload(action);
-  if (!pattern || command.steps.length !== 1) return null;
-  return { pattern, command, ...(recordParent ? { recordParent } : {}) };
+  if (!pattern || !command.steps.length) return null;
+  return { pattern, command, ...(recordParent ? { recordParent } : {}), ...(inputs ? { inputs } : {}) };
 }
 
-export function pageCommandExecutionPayload(command: IntegrationCommandDefinition): { pattern: { minimumConfidence: number; parents: never[]; targets: never[] }; command: IntegrationCommandDefinition } | null {
-  if (command.scope !== 'page' || command.steps.length !== 1) return null;
-  return { pattern: { minimumConfidence: 0.8, parents: [], targets: [] }, command };
+export function pageCommandExecutionPayload(command: IntegrationCommandDefinition, inputs?: Record<string, string>): { pattern: { minimumConfidence: number; parents: never[]; targets: never[] }; command: IntegrationCommandDefinition; inputs?: Record<string, string> } | null {
+  if (command.scope !== 'page' || !command.steps.length) return null;
+  return { pattern: { minimumConfidence: 0.8, parents: [], targets: [] }, command, ...(inputs ? { inputs } : {}) };
 }
 
 export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {
