@@ -15,6 +15,7 @@
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
   let targetCollection = null;
+  let commandRecorder = null;
   let captureSequence = 0;
   let browserChromeHost = null;
   const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
@@ -896,7 +897,9 @@
     picker.id = 'hvy-galaxy-inspector-picker';
     picker.style.cssText = `position:fixed;z-index:2147483647;left:${Math.max(8, Math.min(event.clientX, innerWidth - 428))}px;top:${Math.max(8, Math.min(event.clientY, innerHeight - 348))}px;width:420px;max-height:340px;overflow:auto;padding:6px;border:1px solid #82958b;border-radius:8px;background:#f7f3ea;color:#152223;box-shadow:0 10px 30px #0005;font:12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif`;
     const heading = document.createElement('div');
-    heading.textContent = inspectionKind === 'parent' ? 'Choose the parent containing one complete item' : 'Choose data inside the selected parent';
+    heading.textContent = commandRecorder
+      ? inspectionKind === 'parent' ? 'Choose the record for this command' : 'Choose the interaction target'
+      : inspectionKind === 'parent' ? 'Choose the parent containing one complete item' : 'Choose data inside the selected parent';
     heading.style.cssText = 'padding:7px 8px;font-weight:700;border-bottom:1px solid #c5cec8';
     picker.append(heading);
     candidates.forEach((element) => {
@@ -924,6 +927,11 @@
         if (inspectionKind === 'target' && targetCollection) {
           targetCollection.add(element, result);
           picker.remove();
+          return;
+        }
+        if (commandRecorder) {
+          picker.remove();
+          commandRecorder.select(element, result);
           return;
         }
         publish(result);
@@ -1855,8 +1863,204 @@
           highlighted = null;
         }
       });
-      status.append(statusText, navigationButton);
-      if (inspectionKind === 'target' && options.multiSelect) {
+      if (options.commandRecorder) {
+        status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;width:min(460px,calc(100vw - 24px));display:grid;gap:10px;padding:14px;border:1px solid #f08c7c;border-radius:12px;background:#20232a;color:#fff;box-shadow:0 10px 32px #0008;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
+        statusText.style.cssText = 'display:block;white-space:normal;font-weight:650;line-height:1.4';
+        const controls = document.createElement('div');
+        controls.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px';
+        const steps = [];
+        let recordSnapshot = null;
+        let currentGesture = null;
+        let currentTarget = null;
+        let currentResolution = null;
+        let typeStepCount = 0;
+        const recorderButton = (label, primary = false) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = label;
+          button.style.cssText = `min-height:34px;padding:6px 10px;border:1px solid ${primary ? '#ff8d79' : '#626974'};border-radius:7px;background:${primary ? '#d95640' : '#30343d'};color:#fff;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer`;
+          return button;
+        };
+        const clearRecorderInput = () => status.querySelectorAll('[data-command-recorder-input]').forEach((element) => element.remove());
+        const setRecorderPicking = (enabled) => {
+          pickingPaused = !enabled;
+          shield.style.pointerEvents = 'auto';
+          document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+          if (!enabled) {
+            document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+            highlighted = null;
+          }
+        };
+        const showCancel = () => {
+          const cancel = recorderButton('Cancel');
+          cancel.addEventListener('click', () => {
+            publish({ kind: 'integration-command-recording-cancelled' });
+            window.__hvyGalaxyInspector.stop();
+          });
+          controls.append(cancel);
+        };
+        const renderChooseGesture = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = `Step ${steps.length + 1}: choose an interaction.`;
+          const gestures = [['click', 'Click'], ['double-click', 'Double click'], ['right-click', 'Right click'], ['type', 'Enter text']];
+          gestures.forEach(([gesture, label]) => {
+            const button = recorderButton(label, gesture === 'click');
+            button.addEventListener('click', () => {
+              currentGesture = gesture;
+              inspectionKind = 'target';
+              setRecorderPicking(true);
+              controls.replaceChildren();
+              statusText.textContent = `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : `${label.toLocaleLowerCase()} target`}.`;
+              const pause = recorderButton('Pause to navigate');
+              let navigating = false;
+              pause.addEventListener('click', () => {
+                navigating = !navigating;
+                if (navigating) {
+                  pickingPaused = true;
+                  shield.style.pointerEvents = 'none';
+                  pause.textContent = 'Resume selecting';
+                  statusText.textContent = 'Page navigation is enabled. Resume when the target is visible.';
+                } else {
+                  setRecorderPicking(true);
+                  pause.textContent = 'Pause to navigate';
+                  statusText.textContent = `Step ${steps.length + 1}: select the target.`;
+                }
+              });
+              controls.append(pause);
+              showCancel();
+            });
+            controls.append(button);
+          });
+          showCancel();
+        };
+        const renderAfterStep = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = `Step ${steps.length} confirmed and performed successfully.`;
+          const add = recorderButton('Add step', true);
+          add.addEventListener('click', renderChooseGesture);
+          const finish = recorderButton('Finish recording', steps.length > 0);
+          finish.addEventListener('click', () => {
+            publish({ kind: 'integration-command-recording', steps });
+            window.__hvyGalaxyInspector.stop();
+          });
+          controls.append(add, finish);
+          showCancel();
+        };
+        const recordConfirmedStep = () => {
+          steps.push({
+            gesture: currentGesture,
+            target: currentTarget,
+            ...(currentGesture === 'type' ? { inputId: `input-${++typeStepCount}` } : {}),
+          });
+          setTimeout(renderAfterStep, 150);
+        };
+        const renderSampleInput = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = `Step ${steps.length + 1}: enter a temporary value to verify text entry.`;
+          const input = document.createElement('textarea');
+          input.rows = 3;
+          input.dataset.commandRecorderInput = 'true';
+          input.placeholder = 'Temporary sample value';
+          input.style.cssText = 'width:100%;resize:vertical;padding:8px;border:1px solid #747c88;border-radius:7px;background:#111318;color:#fff;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
+          const run = recorderButton('Confirm typing', true);
+          run.addEventListener('click', () => {
+            if (!input.value) {
+              input.focus();
+              return;
+            }
+            if (!dispatchTextEntry(currentResolution.element, input.value)) {
+              statusText.textContent = 'This target no longer accepts text. Select it again.';
+              return;
+            }
+            recordConfirmedStep();
+          });
+          status.insertBefore(input, controls);
+          controls.append(run);
+          showCancel();
+          input.focus();
+        };
+        const renderTargetConfirmation = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          if (currentResolution.status !== 'matched') {
+            statusText.textContent = currentResolution.status === 'ambiguous'
+              ? `Step ${steps.length + 1}: this target is not unique enough to run safely.`
+              : `Step ${steps.length + 1}: Galaxy could not resolve this target cleanly.`;
+            const retry = recorderButton('Choose another target', true);
+            retry.addEventListener('click', () => {
+              setRecorderPicking(true);
+              statusText.textContent = `Step ${steps.length + 1}: select a different target.`;
+              controls.replaceChildren();
+              showCancel();
+            });
+            controls.append(retry);
+            showCancel();
+            return;
+          }
+          statusText.textContent = `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence.`;
+          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : `Confirm ${currentGesture}`, true);
+          confirm.addEventListener('click', () => {
+            if (currentGesture === 'type') {
+              renderSampleInput();
+              return;
+            }
+            dispatchInteraction(currentResolution.element, currentGesture);
+            recordConfirmedStep();
+          });
+          const retry = recorderButton('Choose again');
+          retry.addEventListener('click', () => {
+            setRecorderPicking(true);
+            statusText.textContent = `Step ${steps.length + 1}: select the target again.`;
+            controls.replaceChildren();
+            showCancel();
+          });
+          controls.append(confirm, retry);
+          showCancel();
+        };
+        commandRecorder = {
+          select(element, result) {
+            if (!recordSnapshot && options.commandRecorder.scope === 'record') {
+              recordSnapshot = result;
+              scopeElement = element;
+              scopeSnapshot = result;
+              const box = document.createElement('div');
+              box.dataset.collectionSelection = 'true';
+              box.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;border:3px solid #27865f;background:#27865f12;box-sizing:border-box;color:#fff;font:11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:3px 5px';
+              box.textContent = 'Command record';
+              document.documentElement.append(box);
+              trackedBoxes.push({ element, box });
+              renderChooseGesture();
+              return;
+            }
+            currentTarget = result;
+            const scope = options.commandRecorder.scope === 'record' ? resolvedScope() : document;
+            const minimumTargetConfidence = patternThresholds(options.commandRecorder.pattern || {}).minimumTargetConfidence;
+            currentResolution = scope
+              ? resolveInteractionTarget(scope, result, minimumTargetConfidence, currentGesture)
+              : { status: 'no_match', reason: 'record_not_found' };
+            renderTargetConfirmation();
+          },
+        };
+        if (options.commandRecorder.scope === 'record') {
+          setRecorderPicking(true);
+          statusText.textContent = 'Select one matching record to scope this command.';
+          controls.replaceChildren();
+          showCancel();
+        } else {
+          renderChooseGesture();
+        }
+        status.append(statusText, controls);
+      } else {
+        status.append(statusText, navigationButton);
+      }
+      if (!options.commandRecorder && inspectionKind === 'target' && options.multiSelect) {
         const selectedItems = [];
         const selectedElements = new Set();
         const doneButton = document.createElement('button');
@@ -1923,6 +2127,7 @@
       active = false;
       inspectionPattern = null;
       targetCollection = null;
+      commandRecorder = null;
       document.removeEventListener('pointermove', pointerMove, true);
       document.removeEventListener('mousemove', pointerMove, true);
       document.removeEventListener('click', click, true);

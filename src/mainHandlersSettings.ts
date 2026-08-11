@@ -172,6 +172,36 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = `Ran ${command.name}`;
     }, { preserveMountedDocument: true });
   };
+  const startIntegrationCommandRecording = () => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
+    const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
+    const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDraftPageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    const pattern = action ? actionPatternPayload(action) : null;
+    if (!integration || !page || !profile || (state.integrationCommandDraftScope === 'record' && !pattern)) throw new Error('The command record or page was not found.');
+    const options = {
+      ...(pattern ? { existingPattern: pattern } : {}),
+      commandRecorder: {
+        scope: state.integrationCommandDraftScope,
+        ...(pattern ? { pattern } : {}),
+      },
+    };
+    const pendingSelection = {
+      kind: 'command-target',
+      context: { expectedOrigin: new URL(page.url).origin },
+      inspectionKind: state.integrationCommandDraftScope === 'record' ? 'parent' : 'target',
+      options,
+    };
+    state.integrationCommandSelectionPending = true;
+    void runBusy(`Opening ${page.name} to record the command...`, async () => {
+      if (page.id === 'gmail' || page.id === 'google-calendar') {
+        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
+      } else {
+        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
+      }
+      state.status = 'Record and verify each command step in the integration browser';
+    }, { preserveMountedDocument: true });
+  };
   const openAppSettings = (mode: 'settings' | 'plugins') => void runBusy('Scanning plugins...', async () => {
     await refreshInstalledPlugins();
     closeUiBeforeAppSettings();
@@ -792,19 +822,10 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftIntegrationId = integrationId;
     state.integrationCommandDraftActionId = actionId;
     state.integrationCommandDraftPageId = action.pageIds[0] ?? null;
-    state.integrationCommandDraftName = '';
     state.integrationCommandDraftScope = 'record';
-    state.integrationCommandDraftGesture = 'click';
-    state.integrationCommandDraftInputId = '';
-    state.integrationCommandDraftInputs = [];
-    state.integrationCommandDraftInputValues = {};
     state.integrationCommandDraftSteps = [];
-    state.integrationCommandDraftPreparedSteps = 0;
-    state.integrationCommandStepSetupOpen = true;
-    state.integrationCommandDraftTarget = null;
-    state.integrationCommandDraftRecord = null;
-    state.integrationCommandSelectionStage = 'record';
     rerender({ preserveMountedDocument: true });
+    startIntegrationCommandRecording();
   },
   addCommandForIntegrationPage: (integrationId, pageId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
@@ -815,124 +836,45 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftIntegrationId = integrationId;
     state.integrationCommandDraftActionId = null;
     state.integrationCommandDraftPageId = pageId;
-    state.integrationCommandDraftName = '';
     state.integrationCommandDraftScope = 'page';
-    state.integrationCommandDraftGesture = 'click';
-    state.integrationCommandDraftInputId = '';
-    state.integrationCommandDraftInputs = [];
-    state.integrationCommandDraftInputValues = {};
     state.integrationCommandDraftSteps = [];
-    state.integrationCommandDraftPreparedSteps = 0;
-    state.integrationCommandStepSetupOpen = true;
-    state.integrationCommandDraftTarget = null;
-    state.integrationCommandDraftRecord = null;
-    state.integrationCommandSelectionStage = 'target';
     rerender({ preserveMountedDocument: true });
-  },
-  beginIntegrationCommandSelection: (name, gesture, inputName, exampleValue) => {
-    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
-    const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
-    const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDraftPageId);
-    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-    if (!integration || !page || !profile || (state.integrationCommandDraftScope === 'record' && !action?.pattern)) throw new Error('The command record or page was not found.');
-    const continuingSequence = state.integrationCommandDraftSteps.length > 0;
-    if (!continuingSequence && !name.trim()) throw new Error('Give the command a name.');
-    if (!continuingSequence) state.integrationCommandDraftName = name.trim();
-    state.integrationCommandDraftGesture = gesture;
-    state.integrationCommandDraftInputId = '';
-    if (gesture === 'type') {
-      const normalizedInputName = inputName.trim();
-      const inputId = integrationCommandInputId(normalizedInputName);
-      if (!inputId) throw new Error('Give the text input a parameter name.');
-      if (!state.integrationCommandDraftInputs.some((input) => input.id === inputId)) {
-        state.integrationCommandDraftInputs.push({ id: inputId, name: normalizedInputName, required: true });
-      }
-      state.integrationCommandDraftInputId = inputId;
-      state.integrationCommandDraftInputValues[inputId] = exampleValue;
-    }
-    state.integrationCommandDraftTarget = null;
-    if (!continuingSequence) state.integrationCommandDraftRecord = null;
-    state.integrationCommandSelectionStage = state.integrationCommandDraftScope === 'record' && !state.integrationCommandDraftRecord ? 'record' : 'target';
-    state.integrationCommandSelectionPending = true;
-    state.integrationCommandStepSetupOpen = false;
-    const recordSelection = state.integrationCommandDraftRecord as { selected?: { cssPath?: string } } | null;
-    const targetOptions = {
-      ...(recordSelection?.selected?.cssPath ? { parentCssPath: recordSelection.selected.cssPath, parentSnapshot: state.integrationCommandDraftRecord } : {}),
-    };
-    const pendingSelection = {
-      kind: 'command-target',
-      context: { expectedOrigin: new URL(page.url).origin },
-      inspectionKind: state.integrationCommandSelectionStage === 'record' ? 'parent' : 'target',
-      options: state.integrationCommandSelectionStage === 'record' ? { existingPattern: actionPatternPayload(action!) } : targetOptions,
-    };
-    void runBusy(`Opening ${page.name} to select the command target...`, async () => {
-      if (continuingSequence) {
-        if (state.integrationCommandDraftPreparedSteps >= state.integrationCommandDraftSteps.length) {
-          await controlIntegrationBrowser('inspect-target', profile.id, targetOptions);
-          state.status = `Select step ${state.integrationCommandDraftSteps.length + 1} for ${state.integrationCommandDraftName}`;
-          return;
-        }
-        const lastStep = state.integrationCommandDraftSteps.at(-1)!;
-        const draftCommand = { id: 'draft-sequence-step', name: state.integrationCommandDraftName, scope: state.integrationCommandDraftScope, inputs: state.integrationCommandDraftInputs, steps: [lastStep] };
-        const execution = state.integrationCommandDraftScope === 'record'
-          ? commandExecutionPayload(action!, draftCommand, recordSelection?.selected?.cssPath, state.integrationCommandDraftInputValues)
-          : pageCommandExecutionPayload(draftCommand, state.integrationCommandDraftInputValues);
-        if (!execution) throw new Error('The previous sequence step is incomplete.');
-        await controlIntegrationBrowser('execute-command', profile.id, execution);
-        return;
-      }
-      if (page.id === 'gmail' || page.id === 'google-calendar') {
-        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
-      } else {
-        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
-      }
-      state.status = `Select the control for ${state.integrationCommandDraftName}`;
-    }, { preserveMountedDocument: true });
+    startIntegrationCommandRecording();
   },
   cancelIntegrationCommandBuilder: () => {
     if (state.integrationCommandSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
     state.integrationCommandBuilderOpen = false;
     state.integrationCommandSelectionPending = false;
-    state.integrationCommandDraftTarget = null;
-    state.integrationCommandDraftRecord = null;
-    state.integrationCommandDraftInputId = '';
-    state.integrationCommandDraftInputs = [];
-    state.integrationCommandDraftInputValues = {};
     state.integrationCommandDraftSteps = [];
-    state.integrationCommandDraftPreparedSteps = 0;
-    state.integrationCommandStepSetupOpen = false;
     rerender({ preserveMountedDocument: true });
   },
-  addIntegrationCommandStep: () => {
-    state.integrationCommandDraftGesture = 'click';
-    state.integrationCommandDraftInputId = '';
-    state.integrationCommandDraftTarget = null;
-    state.integrationCommandStepSetupOpen = true;
-    rerender({ preserveMountedDocument: true });
-  },
-  removeLastIntegrationCommandStep: () => {
-    const removedStep = state.integrationCommandDraftSteps.pop();
-    if (removedStep?.inputId && !state.integrationCommandDraftSteps.some((step) => step.inputId === removedStep.inputId)) {
-      state.integrationCommandDraftInputs = state.integrationCommandDraftInputs.filter((input) => input.id !== removedStep.inputId);
-      delete state.integrationCommandDraftInputValues[removedStep.inputId];
-    }
-    state.integrationCommandDraftPreparedSteps = Math.min(state.integrationCommandDraftPreparedSteps, state.integrationCommandDraftSteps.length);
-    state.integrationCommandDraftTarget = null;
-    state.integrationCommandStepSetupOpen = state.integrationCommandDraftSteps.length === 0;
-    state.status = state.integrationCommandDraftSteps.length ? `Removed step ${state.integrationCommandDraftSteps.length + 1}` : 'Add the first command step';
-    rerender({ preserveMountedDocument: true });
-  },
-  saveIntegrationCommand: () => {
+  saveIntegrationCommand: (name, inputNames) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
     const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
     const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDraftPageId);
     if (!integration || !page || !state.integrationCommandDraftSteps.length || (state.integrationCommandDraftScope === 'record' && !action)) throw new Error('Add at least one command step before saving.');
+    const commandName = name.trim();
+    if (!commandName) throw new Error('Give the command a name.');
+    const inputIds = new Map<string, string>();
+    const inputs: Array<{ id: string; name: string; required: boolean }> = [];
+    for (const step of state.integrationCommandDraftSteps) {
+      if (step.gesture !== 'type' || !step.inputId || inputIds.has(step.inputId)) continue;
+      const inputName = String(inputNames[step.inputId] ?? '').trim();
+      const inputId = integrationCommandInputId(inputName);
+      if (!inputId) throw new Error('Name each text input parameter.');
+      inputIds.set(step.inputId, inputId);
+      if (!inputs.some((input) => input.id === inputId)) inputs.push({ id: inputId, name: inputName, required: true });
+    }
     const command = {
       id: `command-${crypto.randomUUID()}`,
-      name: state.integrationCommandDraftName,
+      name: commandName,
       scope: state.integrationCommandDraftScope,
-      ...(state.integrationCommandDraftInputs.length ? { inputs: state.integrationCommandDraftInputs.map((input) => ({ ...input })) } : {}),
-      steps: state.integrationCommandDraftSteps.map((step) => ({ ...step, target: matcherSnapshot(step.target) })),
+      ...(inputs.length ? { inputs } : {}),
+      steps: state.integrationCommandDraftSteps.map((step) => ({
+        ...step,
+        target: matcherSnapshot(step.target),
+        ...(step.inputId ? { inputId: inputIds.get(step.inputId) } : {}),
+      })),
     };
     if (state.integrationCommandDraftScope === 'record') {
       action!.commands ??= [];
@@ -943,15 +885,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }
     saveIntegrationRegistry(state.integrationRegistry);
     state.integrationCommandBuilderOpen = false;
-    state.integrationCommandDraftTarget = null;
-    state.integrationCommandDraftRecord = null;
-    state.integrationCommandDraftInputId = '';
-    state.integrationCommandDraftInputs = [];
-    state.integrationCommandDraftInputValues = {};
     state.integrationCommandDraftSteps = [];
-    state.integrationCommandDraftPreparedSteps = 0;
-    state.integrationCommandStepSetupOpen = false;
-    state.status = `Saved ${state.integrationCommandDraftName}`;
+    state.status = `Saved ${commandName}`;
     rerender({ preserveMountedDocument: true });
   },
   requestDeleteIntegrationCommand: (integrationId, actionId, commandId) => {

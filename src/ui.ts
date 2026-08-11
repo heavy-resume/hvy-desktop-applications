@@ -121,11 +121,8 @@ export interface UiHandlers {
   closeIntegrationActionResult(): void;
   addCommandForIntegrationAction(integrationId: string, actionId: string): void;
   addCommandForIntegrationPage(integrationId: string, pageId: string): void;
-  beginIntegrationCommandSelection(name: string, gesture: 'click' | 'double-click' | 'right-click' | 'type', inputName: string, exampleValue: string): void;
   cancelIntegrationCommandBuilder(): void;
-  addIntegrationCommandStep(): void;
-  removeLastIntegrationCommandStep(): void;
-  saveIntegrationCommand(): void;
+  saveIntegrationCommand(name: string, inputNames: Record<string, string>): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;
   cancelDeleteIntegrationCommand(): void;
   confirmDeleteIntegrationCommand(): void;
@@ -934,9 +931,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'add-command-for-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.addCommandForIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
     if (action === 'add-command-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.addCommandForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'cancel-integration-command-builder') handlers.cancelIntegrationCommandBuilder();
-    if (action === 'add-integration-command-step') handlers.addIntegrationCommandStep();
-    if (action === 'remove-last-integration-command-step') handlers.removeLastIntegrationCommandStep();
-    if (action === 'save-integration-command') handlers.saveIntegrationCommand();
     if (action === 'request-delete-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) handlers.requestDeleteIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId);
     if (action === 'cancel-delete-integration-command') handlers.cancelDeleteIntegrationCommand();
     if (action === 'confirm-delete-integration-command') handlers.confirmDeleteIntegrationCommand();
@@ -1472,16 +1466,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
-    if (target instanceof HTMLSelectElement && target.name === 'commandGesture') {
-      const form = target.closest<HTMLFormElement>('form[data-form="integration-command-setup"]');
-      const textField = form?.querySelector<HTMLElement>('[data-command-text-field]');
-      const textInputs = [...(textField?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea') ?? [])];
-      const acceptsText = target.value === 'type';
-      if (textField) textField.hidden = !acceptsText;
-      textInputs.forEach((input) => { input.disabled = !acceptsText; });
-      if (acceptsText) textInputs[0]?.focus();
-      return;
-    }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-integration-profile') {
       handlers.selectIntegrationProfile(target.value);
       return;
@@ -1713,12 +1697,13 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       const data = new FormData(form);
       handlers.reviewIntegrationActionRequest(String(data.get('actionName') ?? ''), String(data.get('actionDescription') ?? ''));
     }
-    if (form.dataset.form === 'integration-command-setup') {
+    if (form.dataset.form === 'integration-command-reconcile') {
       const data = new FormData(form);
-      const gesture = data.get('commandGesture');
-      if (gesture === 'click' || gesture === 'double-click' || gesture === 'right-click' || gesture === 'type') {
-        handlers.beginIntegrationCommandSelection(String(data.get('commandName') ?? ''), gesture, String(data.get('commandInputName') ?? ''), String(data.get('commandExampleValue') ?? ''));
+      const inputNames: Record<string, string> = {};
+      for (const [key, value] of data.entries()) {
+        if (key.startsWith('recordedInput:')) inputNames[key.slice('recordedInput:'.length)] = String(value);
       }
+      handlers.saveIntegrationCommand(String(data.get('commandName') ?? ''), inputNames);
     }
     if (form.dataset.form === 'integration-command-run') {
       const inputs: Record<string, string> = {};
@@ -4304,25 +4289,15 @@ function renderIntegrationActionBuilderDialog(state: AppState): string {
 function renderIntegrationCommandBuilderDialog(state: AppState): string {
   if (!state.integrationCommandBuilderOpen) return '';
   if (state.integrationCommandSelectionPending) {
-    const selectingRecord = state.integrationCommandSelectionStage === 'record';
-    const targetPrompt = state.integrationCommandDraftGesture === 'type' ? 'Select the text field' : `Select the ${integrationCommandGestureLabel(state.integrationCommandDraftGesture).toLocaleLowerCase()} target`;
-    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Waiting for command target"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>${selectingRecord ? 'Select a matching record' : targetPrompt}</h2><p class="dialog-note">Galaxy has switched to the integration browser. ${selectingRecord ? 'Choose a record that the existing definition recognizes.' : `Choose the target for step ${state.integrationCommandDraftSteps.length + 1}.`}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong><span>${selectingRecord ? 'Green records match the saved definition. Orange or red records have diverged and cannot silently become the command example.' : state.integrationCommandDraftScope === 'record' ? 'The target is limited to the live record you selected.' : 'The target may be anywhere on the page.'}</span></div></section></div>`;
-  }
-  if (state.integrationCommandStepSetupOpen) {
-    const firstStep = state.integrationCommandDraftSteps.length === 0;
-    const nameField = firstStep
-      ? '<label><span>Command name</span><input class="hvy-galaxy-input" name="commandName" required autocomplete="off"></label>'
-      : `<input type="hidden" name="commandName" value="${escapeAttr(state.integrationCommandDraftName)}">`;
-    return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Add command step" data-form="integration-command-setup"><div class="modal-header"><div><p class="eyebrow">${firstStep ? `Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command` : escapeHtml(state.integrationCommandDraftName)}</p><h2>${firstStep ? 'Define the first interaction' : `Add step ${state.integrationCommandDraftSteps.length + 1}`}</h2><p class="dialog-note">${firstStep ? 'Choose an interaction, then select its target on the live page.' : `Galaxy will run step ${state.integrationCommandDraftSteps.length} to reveal the next page state before target selection.`}</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div>${nameField}<label><span>Interaction</span><select class="hvy-galaxy-select" name="commandGesture"><option value="click" selected>Click</option><option value="double-click">Double click</option><option value="right-click">Right click</option><option value="type">Enter text</option></select></label><div data-command-text-field hidden><label><span>Input parameter</span><input class="hvy-galaxy-input" name="commandInputName" placeholder="Email, subject, or body" autocomplete="off" required disabled></label><label><span>Example value for recording</span><textarea class="hvy-galaxy-input" name="commandExampleValue" rows="3" disabled></textarea></label><p class="dialog-note">The parameter is saved with the action. The example value is used only to prepare later steps while recording.</p></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">${firstStep ? 'Select target' : 'Run previous step and select target'}</button></div></form></div>`;
+    return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Recording command"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>Record and verify the action</h2><p class="dialog-note">Galaxy has switched to the integration browser. Build the complete action there in one pass.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Recording in the browser…</strong><span>Each step is structurally resolved and performed before you add the next one.</span></div></section></div>`;
   }
   const steps = state.integrationCommandDraftSteps.map((step, index) => {
     const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
-    const input = state.integrationCommandDraftInputs.find((candidate) => candidate.id === step.inputId);
-    const detail = step.gesture === 'type' ? `Enter {${escapeHtml(input?.name ?? step.inputId ?? 'input')}} into ${target}` : `${integrationCommandGestureLabel(step.gesture)} ${target}`;
-    const remove = index === state.integrationCommandDraftSteps.length - 1 ? `<button type="button" class="hvy-galaxy-button integration-selection-remove" data-action="remove-last-integration-command-step">Remove</button>` : '';
-    return `<div class="integration-selection-row"><div class="integration-selection-review"><strong>${index + 1}</strong><span>${detail}</span><small>${index === state.integrationCommandDraftSteps.length - 1 ? 'Captured but not run while recording.' : 'Run to prepare the following step.'}</small></div>${remove}</div>`;
+    const detail = step.gesture === 'type' ? `Enter a parameter into ${target}` : `${integrationCommandGestureLabel(step.gesture)} ${target}`;
+    return `<div class="integration-selection-row"><div class="integration-selection-review"><strong>${index + 1}</strong><span>${detail}</span><small>Resolved and performed successfully while recording.</small></div></div>`;
   }).join('');
-  return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Review command sequence"><div class="modal-header"><div><p class="eyebrow">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'}</p><h2>${escapeHtml(state.integrationCommandDraftName)}</h2><p class="dialog-note">Review the ordered interactions. The final captured step has not been run.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><section class="integration-selection-collection"><h3>Action sequence</h3><div>${steps}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="button" class="hvy-galaxy-button" data-action="add-integration-command-step">+ Add step</button><button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-command">Save sequence</button></div></section></div>`;
+  const inputFields = state.integrationCommandDraftSteps.flatMap((step, index) => step.gesture === 'type' && step.inputId ? [`<label><span>Parameter for step ${index + 1}</span><input class="hvy-galaxy-input" name="recordedInput:${escapeAttr(step.inputId)}" placeholder="Parameter name" required autocomplete="off"></label>`] : []).join('');
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Name recorded command" data-form="integration-command-reconcile"><div class="modal-header"><div><p class="eyebrow">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'}</p><h2>Name the recorded action</h2><p class="dialog-note">The browser already verified every interaction. Name the action and its text parameters; temporary recording values are not retained.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Action name</span><input class="hvy-galaxy-input" name="commandName" placeholder="Action name" required autocomplete="off"></label>${inputFields}<section class="integration-selection-collection"><h3>Verified sequence</h3><div>${steps}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Save action</button></div></form></div>`;
 }
 
 function renderIntegrationCommandRunDialog(state: AppState): string {

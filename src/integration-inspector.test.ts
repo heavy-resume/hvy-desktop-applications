@@ -61,6 +61,7 @@ interface InspectorApi {
     parentSnapshot?: InspectorSnapshot;
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
     multiSelect?: boolean;
+    commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0] };
   }): void;
   snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target'): InspectorSnapshot;
   suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
@@ -86,6 +87,8 @@ interface InspectorApi {
 declare global {
   interface Window {
     __hvyGalaxyInspector: InspectorApi;
+    __hvyGalaxyPublish?: (value: unknown) => void;
+    __commandRecordingResult?: unknown;
     hvySetBrowserState(value: { url: string; allowed: string[] }): void;
     __guideTitlePattern?: Parameters<InspectorApi['extractPattern']>[0];
   }
@@ -1107,6 +1110,49 @@ describe('integration structural inspector', () => {
 
     expect(result.execution).toMatchObject({ status: 'executed', stepsExecuted: 3 });
     expect(result.sentValue).toBe('ada@example.com');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('records, resolves, and performs a multi-step command without leaving the browser', async () => {
+    await page.close();
+    page = await browser.newPage();
+    pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setContent('<main><button class="reveal-control">Reveal field</button><section class="editor" hidden><input class="entry-control"></section></main>');
+    await page.evaluate(() => {
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      document.querySelector('.reveal-control')!.addEventListener('click', () => {
+        document.querySelector<HTMLElement>('.editor')!.hidden = false;
+      });
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { commandRecorder: { scope: 'page' } }));
+
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Click', exact: true }).click();
+    await clickPointerAt(page, '.reveal-control');
+    await page.locator('#hvy-galaxy-inspector-picker button').first().click();
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Confirm click' }).click();
+    await expect.poll(() => page.locator('.editor').isVisible()).toBe(true);
+
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Add step' }).click();
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Enter text' }).click();
+    await clickPointerAt(page, '.entry-control');
+    await page.locator('#hvy-galaxy-inspector-picker button').first().click();
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Continue to sample' }).click();
+    await page.locator('[data-command-recorder-input]').fill('Temporary verification value');
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Confirm typing' }).click();
+    await expect.poll(() => page.locator('.entry-control').inputValue()).toBe('Temporary verification value');
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Finish recording' }).click();
+
+    const recording = await page.evaluate(() => window.__commandRecordingResult);
+    expect(recording).toMatchObject({
+      kind: 'integration-command-recording',
+      steps: [
+        { gesture: 'click' },
+        { gesture: 'type', inputId: 'input-1' },
+      ],
+    });
+    expect(JSON.stringify(recording)).not.toContain('Temporary verification value');
     expect(pageErrors).toEqual([]);
   });
 
