@@ -26,6 +26,7 @@ import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import { isWorkspacePathTarget } from '../../heavy-file-format/src/workspace-links';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
+import { workspaceDropTargetFromElement } from './workspaceDropTarget';
 
 export interface UiHandlers {
   newWorkspace(): void;
@@ -2275,18 +2276,7 @@ function findWorkspaceFolderNode(nodes: WorkspaceTreeNode[], targetDirectory: st
 }
 
 function workspaceDropTargetFromEvent(event: Event): { element: HTMLElement; workspacePath: string; targetDirectory: string } | null {
-  if (!(event.target instanceof HTMLElement)) return null;
-  const folderSummary = event.target.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
-  if (folderSummary?.dataset.workspacePath) {
-    return {
-      element: folderSummary,
-      workspacePath: folderSummary.dataset.workspacePath,
-      targetDirectory: folderSummary.dataset.targetDirectory ?? '',
-    };
-  }
-  const workspaceRoot = event.target.closest<HTMLElement>('.workspace-root');
-  const workspacePath = workspaceRoot?.dataset.workspacePath;
-  return workspaceRoot && workspacePath ? { element: workspaceRoot, workspacePath, targetDirectory: '' } : null;
+  return workspaceDropTargetFromElement(event.target instanceof Element ? event.target : null);
 }
 
 function hasDraggedFiles(event: DragEvent): boolean {
