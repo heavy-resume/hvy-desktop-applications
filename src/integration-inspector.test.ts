@@ -61,8 +61,10 @@ interface InspectorApi {
     parentSnapshot?: InspectorSnapshot;
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
     multiSelect?: boolean;
+    externalToolbar?: boolean;
     commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0] };
   }): void;
+  control(action: 'navigate' | 'undo' | 'done'): void;
   snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target'): InspectorSnapshot;
   suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
   matchAndHighlight(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
@@ -88,8 +90,11 @@ declare global {
   interface Window {
     __hvyGalaxyInspector: InspectorApi;
     __hvyGalaxyPublish?: (value: unknown) => void;
+    __hvyGalaxyToolbarPublish?: (value: unknown) => void;
+    __toolbarState?: unknown;
     __commandRecordingResult?: unknown;
     hvySetBrowserState(value: { url: string; allowed: string[] }): void;
+    hvySetInspectionState(value?: { active?: boolean; status?: string; navigationLabel?: string; canUndo?: boolean }): void;
     __guideTitlePattern?: Parameters<InspectorApi['extractPattern']>[0];
   }
 }
@@ -230,6 +235,22 @@ describe('integration structural inspector', () => {
     expect(await page.locator('.url').inputValue()).toBe('https://mail.google.com/mail/u/0/');
     expect(await page.locator('.security').getAttribute('data-secure')).toBe('true');
     expect(await page.locator('.security').getAttribute('data-allowed')).toBe('true');
+  });
+
+  it('renders field-picking controls in the local toolbar document', async () => {
+    await page.setContent(integrationToolbarSource);
+    await page.evaluate(() => window.hvySetInspectionState({
+      active: true,
+      status: 'Galaxy: select fields, or choose Done to cancel',
+      navigationLabel: 'Navigate page',
+      canUndo: false,
+    }));
+
+    expect(await page.locator('[data-inspection-controls]').isVisible()).toBe(true);
+    expect(await page.locator('[data-inspection-status]').textContent()).toContain('choose Done to cancel');
+    expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Undo last' }).isDisabled()).toBe(true);
+    expect(await page.locator('.address').isHidden()).toBe(true);
   });
 
   it('discovers and retrieves a same-origin JSON endpoint with the page session boundary', async () => {
@@ -409,6 +430,32 @@ describe('integration structural inspector', () => {
     expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
     expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('treats Done with no selected fields as a canceled collection', async () => {
+    await page.setContent(fauxInbox);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      return window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent');
+    });
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+      externalToolbar: true,
+    }), parentSnapshot);
+
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+    expect(await page.evaluate(() => window.__toolbarState)).toMatchObject({ active: true, canUndo: false });
+    await page.evaluate(() => window.__hvyGalaxyInspector.control('done'));
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toEqual({ kind: 'integration-target-collection', items: [] });
     expect(pageErrors).toEqual([]);
   });
 

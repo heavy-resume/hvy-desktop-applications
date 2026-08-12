@@ -16,6 +16,7 @@
   let selectionOverlayCleanup = null;
   let targetCollection = null;
   let commandRecorder = null;
+  let toolbarControl = null;
   let captureSequence = 0;
   let browserChromeHost = null;
   const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
@@ -688,6 +689,18 @@
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
     const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     window.location.href = `hvy-integration://inspection/${encoded}`;
+  };
+
+  const publishToolbarState = (value) => {
+    if (typeof window.__hvyGalaxyToolbarPublish === 'function') {
+      window.__hvyGalaxyToolbarPublish(value);
+      return;
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    let binary = '';
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    window.location.href = `hvy-integration://toolbar-state/${encoded}`;
   };
 
   const browserChromeNavigate = (value) => {
@@ -1740,6 +1753,7 @@
       }, { passive: false });
       const trackedBoxes = [];
       targetCollection = null;
+      toolbarControl = null;
       if (inspectionPattern) {
         const existingLayer = document.createElement('div');
         existingLayer.id = 'hvy-galaxy-existing-matches';
@@ -1834,6 +1848,7 @@
         if (selectionFrame) cancelAnimationFrame(selectionFrame);
         document.querySelectorAll('[data-collection-selection="true"]').forEach((element) => element.remove());
       };
+      const externalToolbar = options.externalToolbar === true;
       const status = document.createElement('div');
       status.id = 'hvy-galaxy-inspector-status';
       status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;display:flex;align-items:center;gap:10px;padding:6px 8px 6px 12px;border-radius:999px;background:#e0563f;color:#fff;box-shadow:0 4px 18px #0006;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
@@ -2066,7 +2081,6 @@
         const doneButton = document.createElement('button');
         doneButton.type = 'button';
         doneButton.textContent = 'Done';
-        doneButton.disabled = true;
         doneButton.style.cssText = 'padding:5px 9px;border:0;border-radius:999px;background:#fff;color:#8b2d20;font:700 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
         const undoButton = document.createElement('button');
         undoButton.type = 'button';
@@ -2076,9 +2090,16 @@
         const updateCollectionStatus = () => {
           statusText.textContent = selectedItems.length
             ? `Galaxy: ${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
-            : 'Galaxy: select all fields, then choose Done';
-          doneButton.disabled = selectedItems.length === 0;
+            : 'Galaxy: select fields, or choose Done to cancel';
           undoButton.disabled = selectedItems.length === 0;
+          if (externalToolbar) {
+            publishToolbarState({
+              active: true,
+              status: statusText.textContent,
+              navigationLabel: pickingPaused ? 'Resume picking' : 'Navigate page',
+              canUndo: selectedItems.length > 0,
+            });
+          }
         };
         targetCollection = {
           add(element, result) {
@@ -2114,10 +2135,16 @@
           publish({ kind: 'integration-target-collection', items: selectedItems.map((item) => item.result) });
           window.__hvyGalaxyInspector.stop();
         });
-        status.append(undoButton, doneButton);
+        toolbarControl = (action) => {
+          if (action === 'navigate') navigationButton.click();
+          if (action === 'undo') undoButton.click();
+          if (action === 'done') doneButton.click();
+          if (action === 'navigate') updateCollectionStatus();
+        };
+        if (!externalToolbar) status.append(undoButton, doneButton);
         updateCollectionStatus();
       }
-      document.documentElement.append(status);
+      if (!externalToolbar || options.commandRecorder || inspectionKind !== 'target' || !options.multiSelect) document.documentElement.append(status);
       document.addEventListener('pointermove', pointerMove, true);
       document.addEventListener('mousemove', pointerMove, true);
       document.addEventListener('click', click, true);
@@ -2128,11 +2155,15 @@
       inspectionPattern = null;
       targetCollection = null;
       commandRecorder = null;
+      toolbarControl = null;
       document.removeEventListener('pointermove', pointerMove, true);
       document.removeEventListener('mousemove', pointerMove, true);
       document.removeEventListener('click', click, true);
       document.removeEventListener('keydown', keydown, true);
       removeUi();
+    },
+    control(action) {
+      toolbarControl?.(action);
     },
     snapshotElement(element, parent = null, kind = 'target') {
       const previousKind = inspectionKind;

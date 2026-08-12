@@ -5,3 +5,5 @@ For menu changes remember to make both electron and tauri updates. Most should b
 You can't use alert boxes, or native confirm, or whatever here. Gotta be explicit modals for everything.
 
 Don't use the storage key for heavy-file-format its intentionally not set so we can refresh against the file system.
+
+When writting CSS use classes do not use broad overrides and type selectors because they will break things in the HVY embed.

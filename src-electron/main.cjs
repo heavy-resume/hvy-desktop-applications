@@ -624,6 +624,15 @@ const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 
 const INTEGRATION_TOOLBAR = fs.readFileSync(path.join(__dirname, '..', 'public', 'integration-browser-toolbar.html'), 'utf8');
 const INTEGRATION_TOOLBAR_HEIGHT = 52;
 
+function setIntegrationToolbarInspectionState(browser, state = {}) {
+  if (!browser?.toolbarContents || browser.toolbarContents.isDestroyed()) return;
+  void browser.toolbarContents.executeJavaScript(`window.hvySetInspectionState?.(${JSON.stringify(state)})`);
+}
+
+function integrationInspectorOptions(payload) {
+  return { ...(payload && typeof payload === 'object' ? payload : {}), externalToolbar: true };
+}
+
 function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload, foreground = true, windowName) {
   if (command === 'open') {
     if (!loadIntegrationVaultStatus().configured) {
@@ -655,9 +664,9 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'focus-main') {
     raiseWindow(mainWindow);
   }
-  if (command === 'inspect') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start()`);
-  if (command === 'inspect-parent') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(payload || {})})`);
-  if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(payload || {})})`);
+  if (command === 'inspect') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
+  if (command === 'inspect-parent') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(integrationInspectorOptions(payload))})`);
+  if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
   if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
   if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
   if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
@@ -665,6 +674,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'fetch-source') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
   if (command === 'cancel-inspect') {
     browserContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
+    setIntegrationToolbarInspectionState(browser);
     raiseWindow(mainWindow);
   }
   if (command === 'close') integrationWindow.close();
@@ -932,9 +942,18 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         if (browserCommand === 'reload') browser.contents.reload();
         if (browserCommand === 'inspect') {
           browser.actionModePending = true;
-          browser.contents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start()`);
+          browser.contents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", { externalToolbar: true })`);
         }
         if (browserCommand === 'close') integrationWindow.close();
+        return;
+      }
+      const inspectorControlPrefix = 'hvy-integration://inspector-control/';
+      if (requestedUrl.startsWith(inspectorControlPrefix)) {
+        event.preventDefault();
+        const control = requestedUrl.slice(inspectorControlPrefix.length);
+        if (['navigate', 'undo', 'done'].includes(control)) {
+          void browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.control(${JSON.stringify(control)})`);
+        }
         return;
       }
       const navigatePrefix = 'hvy-integration://navigate/';
@@ -959,15 +978,25 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
         result.profileId = profileId;
         browser.actionModePending = false;
+        setIntegrationToolbarInspectionState(browser);
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
         const isBackgroundResult = (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
           || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true);
         if (!isBackgroundResult) raiseWindow(mainWindow);
         return;
       }
+      const toolbarStatePrefix = 'hvy-integration://toolbar-state/';
+      if (requestedUrl.startsWith(toolbarStatePrefix)) {
+        event.preventDefault();
+        const encoded = requestedUrl.slice(toolbarStatePrefix.length);
+        const state = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+        setIntegrationToolbarInspectionState(browser, state);
+        return;
+      }
       if (requestedUrl === 'hvy-integration://inspection-cancel') {
         event.preventDefault();
         browser.actionModePending = false;
+        setIntegrationToolbarInspectionState(browser);
         raiseWindow(mainWindow);
         return;
       }
@@ -980,13 +1009,13 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
       void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
         void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
-        if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true })');
+        if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
         if (browser.pendingExtraction) {
           const extraction = browser.pendingExtraction;
           if (extraction.context?.expectedOrigin && new URL(browser.contents.getURL()).origin !== extraction.context.expectedOrigin) return null;
           browser.pendingExtraction = null;
           if (extraction.kind === 'command-target') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(extraction.options || {})})`);
+            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
           }
           if (extraction.kind === 'command-execution') {
             return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);

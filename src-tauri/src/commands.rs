@@ -164,6 +164,9 @@ fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id
     }
     let is_background = integration_result_is_background(&result);
     action_mode.store(false, Ordering::SeqCst);
+    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+        let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+    }
     let _ = app.emit("integration-inspection-result", result);
     if !is_background {
         if let Some(main_window) = app.get_webview_window("main") {
@@ -587,7 +590,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
                 if page_load_action_mode.load(Ordering::SeqCst) {
-                    let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true }});", INTEGRATION_INSPECTOR);
+                    let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR);
                     let _ = window.eval(&script);
                 } else if let Ok(mut pending) = page_load_extraction.lock() {
                     let expected_origin = pending.as_ref()
@@ -598,7 +601,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                       if let Some(extraction) = pending.take() {
                         let script = if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
                             let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
-                            format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', ({}).options || {{}});", INTEGRATION_INSPECTOR, inspection_kind, extraction)
+                            format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
                             format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
@@ -635,7 +638,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     if browser_command == "reload" { let _ = window.reload(); }
                     if browser_command == "inspect" {
                         navigation_action_mode.store(true, Ordering::SeqCst);
-                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
+                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR));
                     }
                     if browser_command == "close" {
                         #[cfg(not(target_os = "macos"))]
@@ -693,6 +696,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                                     .and_then(serde_json::Value::as_bool)
                                     == Some(true));
                         navigation_action_mode.store(false, Ordering::SeqCst);
+                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                            let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+                        }
                         let _ = integration_app.emit("integration-inspection-result", result);
                         if !is_background_result {
                             if let Some(main_window) = integration_app.get_webview_window("main") {
@@ -703,8 +709,21 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 return false;
             }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://toolbar-state/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                            let _ = toolbar.eval(format!("window.hvySetInspectionState?.({state})"));
+                        }
+                    }
+                }
+                return false;
+            }
             if requested_url.as_str() == "hvy-integration://inspection-cancel" {
                 navigation_action_mode.store(false, Ordering::SeqCst);
+                if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                    let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+                }
                 if let Some(main_window) = integration_app.get_webview_window("main") {
                     let _ = raise_integration_window(&main_window.as_ref().window());
                 }
@@ -763,6 +782,12 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
                 }
                 if browser_command == "close" { let _ = toolbar_window.close(); }
+                return false;
+            }
+            if let Some(control) = requested_url.as_str().strip_prefix("hvy-integration://inspector-control/") {
+                if matches!(control, "navigate" | "undo" | "done") {
+                    let _ = toolbar_remote.eval(&format!("window.__hvyGalaxyInspector?.control({control:?})"));
+                }
                 return false;
             }
             if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
@@ -883,15 +908,20 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         "back" => window.eval("window.history.back()"),
         "forward" => window.eval("window.history.forward()"),
         "reload" => window.reload(),
-        "inspect" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR)),
-        "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', {})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "inspect" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR)),
+        "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "cancel-inspect" => window.eval("window.__hvyGalaxyInspector?.stop()"),
+        "cancel-inspect" => {
+            if let Some(toolbar) = app.get_webview(&integration_toolbar_label(&profile_id)) {
+                let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+            }
+            window.eval("window.__hvyGalaxyInspector?.stop()")
+        },
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {
             #[cfg(not(target_os = "macos"))]

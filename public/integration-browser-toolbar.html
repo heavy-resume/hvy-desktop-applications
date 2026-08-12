@@ -24,6 +24,13 @@
     .more-menu { position: fixed; inset: 0; z-index: 10; padding: 4px 10px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; background: #17191e; }
     .more-menu[hidden] { display: none; }
     .more-menu button { height: min(36px, calc(100% - 2px)); white-space: nowrap; }
+    .inspection-controls { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; }
+    .inspection-controls[hidden] { display: none; }
+    .inspection-status { min-width: 0; max-width: 380px; flex: 1; overflow: hidden; color: #ffb19f; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .inspection-button { white-space: nowrap; }
+    .inspection-button-primary { border-color: #e0563f; background: #e0563f; font-weight: 700; }
+    .inspection-button-primary:hover { background: #ed6650; }
+    .toolbar-item-hidden { display: none; }
   </style>
 </head>
 <body>
@@ -35,6 +42,12 @@
       <span class="security"><span class="lock"></span><span class="host"></span></span>
       <input class="url" aria-label="Address">
     </form>
+    <div class="inspection-controls" data-inspection-controls hidden>
+      <span class="inspection-status" data-inspection-status></span>
+      <button class="inspection-button" data-inspector-control="navigate">Navigate page</button>
+      <button class="inspection-button" data-inspector-control="undo">Undo last</button>
+      <button class="inspection-button inspection-button-primary" data-inspector-control="done">Done</button>
+    </div>
     <div class="more-wrap">
       <button data-menu-toggle title="Page actions" aria-label="Page actions" aria-expanded="false">&hellip;</button>
       <div class="more-menu" role="menu" hidden>
@@ -69,6 +82,15 @@
       if (document.activeElement !== input) input.value = url;
       security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${originAllowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
     };
+    window.hvySetInspectionState = ({ active = false, status = '', navigationLabel = 'Navigate page', canUndo = false } = {}) => {
+      const controls = document.querySelector('[data-inspection-controls]');
+      controls.hidden = !active;
+      document.querySelector('[data-inspection-status]').textContent = status;
+      document.querySelector('[data-inspector-control="navigate"]').textContent = navigationLabel;
+      document.querySelector('[data-inspector-control="undo"]').disabled = !canUndo;
+      document.querySelector('.address').classList.toggle('toolbar-item-hidden', active);
+      document.querySelector('.more-wrap').classList.toggle('toolbar-item-hidden', active);
+    };
     document.addEventListener('click', (event) => {
       const menuToggle = event.target.closest?.('[data-menu-toggle]');
       const menu = document.querySelector('.more-menu');
@@ -82,6 +104,11 @@
         menu.hidden = true;
         document.querySelector('[data-menu-toggle]').setAttribute('aria-expanded', 'false');
         location.href = `hvy-integration://toolbar/${toolbarAction}`;
+        return;
+      }
+      const inspectorControl = event.target.closest?.('[data-inspector-control]')?.dataset.inspectorControl;
+      if (inspectorControl) {
+        location.href = `hvy-integration://inspector-control/${inspectorControl}`;
         return;
       }
       if (event.target.closest?.('[data-menu-dismiss]')) {

@@ -183,7 +183,9 @@ export async function boot(): Promise<void> {
         state.integrationActionSelectionPending = false;
         state.integrationActionBuilderOpen = true;
         state.integrationActionTargetSelectionFieldIndex = null;
-        state.status = `Selected ${items.length} ${items.length === 1 ? 'field' : 'fields'}`;
+        state.status = items.length === 0
+          ? 'Canceled field selection'
+          : `Selected ${items.length} ${items.length === 1 ? 'field' : 'fields'}`;
         rerender({ preserveMountedDocument: true });
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;

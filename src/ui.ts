@@ -443,8 +443,8 @@ function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet
       <summary>${escapeHtml(page.name)}</summary>
       <div class="integration-profile-list">
         ${visibleProfiles.length
-    ? visibleProfiles.map((profile) => `<button type="button" class="hvy-galaxy-button integration-profile-quick-view" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}</button>`).join('')
-    : '<span class="integration-profile-list-empty">No profiles shown</span>'}
+        ? visibleProfiles.map((profile) => `<button type="button" class="hvy-galaxy-button integration-profile-quick-view" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}</button>`).join('')
+        : '<span class="integration-profile-list-empty">No profiles shown</span>'}
       </div>
     </details>`;
     return `
@@ -2376,17 +2376,16 @@ function renderWorkspaceChatDocument(state: AppState): string {
   const canSend = embeddingsEnabled && !state.busy && (chat.isSending || chat.draft.trim().length > 0);
   return `
     <section class="workspace-chat-document" data-workspace-chat-document="true" aria-label="${escapeAttr(chat.targetDirectory ? 'Chat folder' : 'Chat workspace')}">
-      ${
-        embeddingsEnabled
-          ? `<form class="workspace-chat-native" data-form="workspace-chat">
+      ${embeddingsEnabled
+      ? `<form class="workspace-chat-native" data-form="workspace-chat">
               <div class="workspace-chat-thread-shell">
                 <div class="workspace-chat-thread" data-workspace-chat-scroll-container="true" role="log" aria-live="polite">
                   ${chat.messages.length === 0
-                    ? `<div class="workspace-chat-empty">
+        ? `<div class="workspace-chat-empty">
                         <strong>${escapeHtml(chat.targetDirectory ? 'Ask this folder' : 'Ask this workspace')}</strong>
                         <p>Questions use embeddings from HVY files in this scope.</p>
                       </div>`
-                    : chat.messages.map(renderWorkspaceChatMessage).join('')}
+        : chat.messages.map(renderWorkspaceChatMessage).join('')}
                 </div>
                 <button type="button" class="hvy-galaxy-button workspace-chat-scroll-bottom" data-action="workspace-chat-scroll-bottom" hidden>Latest ↓</button>
               </div>
@@ -2400,12 +2399,12 @@ function renderWorkspaceChatDocument(state: AppState): string {
                 <button type="submit" class="hvy-galaxy-button secondary" ${canSend ? '' : 'disabled'}>${chat.isSending ? 'Stop' : 'Send'}</button>
               </div>
             </form>`
-          : `<div class="workspace-chat-required">
+      : `<div class="workspace-chat-required">
               <h3>Embeddings Required</h3>
               <p>Enable embeddings before chatting across folders or workspaces.</p>
               <button class="hvy-galaxy-button" type="button" data-action="ai-settings">Open AI Settings</button>
             </div>`
-      }
+    }
     </section>`;
 }
 
@@ -3238,9 +3237,9 @@ function renderWorkspaceManagerDialog(state: AppState): string {
           <h3>Open</h3>
           <div class="workspace-manager-list">
             ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaceEntries.flatMap((entry) => {
-              const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
-              return workspace ? [renderWorkspaceManagerRow(workspace)] : [];
-            }).join('')}
+    const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+    return workspace ? [renderWorkspaceManagerRow(workspace)] : [];
+  }).join('')}
           </div>
         </div>
         <div class="workspace-manager-section">
@@ -4165,9 +4164,9 @@ function renderIntegrationsDialog(state: AppState): string {
           </nav>
           <main class="integration-detail">
             <div class="integration-detail-header"><div><h3>${escapeHtml(selectedPage.name)}</h3><p>${escapeHtml(new URL(selectedPage.url).hostname)}</p></div><div class="integration-profile-controls"><label class="integration-profile-select"><span>Use profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Use profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button icon-button" data-action="request-add-integration-profile" title="Add profile" aria-label="Add profile">+</button></div></div>
-            <section><div class="integration-section-heading"><div><h4>Page commands</h4><p>Open this page or run commands that do not require a matched record.</p></div></div><div class="integration-page-grid"><article class="integration-page-card"><div>${selectedPage.commands?.length ? `<div class="integration-command-list">${selectedPage.commands.map((command) => `<button type="button" class="hvy-galaxy-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-command-id="${escapeAttr(command.id)}">${escapeHtml(command.name)}</button>`).join('')}</div>` : '<small>No page commands yet</small>'}</div><div class="integration-page-actions"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Open</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Add page command</button><button type="button" class="hvy-galaxy-button primary-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Define record type</button></div></article></div></section>
+            <section><div class="integration-section-heading"><div><h4>Page commands</h4><p>Open this page or run commands that do not require a matched record.</p></div></div><div class="integration-page-grid"><article class="integration-page-card"><div>${selectedPage.commands?.length ? `<div class="integration-command-list">${selectedPage.commands.map((command) => `<button type="button" class="hvy-galaxy-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-command-id="${escapeAttr(command.id)}">${escapeHtml(command.name)}</button>`).join('')}</div>` : '<small>No page commands yet</small>'}</div><div class="integration-page-actions"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Open</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Add page command</button></div></article></div></section>
             ${structuredSources}
-            <section><div class="integration-section-heading"><div><h4>Record Types</h4><p>Reusable structures and commands that belong to ${escapeHtml(selectedPage.name)}.</p></div>${state.integrationActionFetchPendingId ? `<span class="integration-fetch-status" role="status"><span class="integration-selection-pulse" aria-hidden="true"></span>Fetching items in the background…</span>` : ''}</div>${state.integrationActionFetchError ? `<div class="integration-fetch-error" role="alert"><strong>Fetch failed</strong><span>${escapeHtml(state.integrationActionFetchError)}</span></div>` : ''}${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article class="integration-record-definition"><div class="integration-record-summary"><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description || action.pattern?.fields.map((field) => field.label).join(', ') || '')}</span>${renderItemCommandPills(selectedIntegration.id, action)}</div><div class="integration-record-actions"><button type="button" class="hvy-galaxy-button" data-action="edit-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Edit</button><button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Delete</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Add item command</button><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}" ${action.pattern && !state.integrationActionFetchPendingId ? '' : 'disabled'}>${state.integrationActionFetchPendingId === action.id ? 'Fetching…' : 'Fetch items'}</button></div></article>`).join('')}</div>` : '<div class="integration-empty-state"><strong>No record types yet</strong><span>Choose Define record type above to create one for this page.</span></div>'}</section>
+            <section><div class="integration-section-heading"><div><h4>Record Types</h4><p>Reusable structures and commands that belong to ${escapeHtml(selectedPage.name)}.</p></div><div class="integration-section-actions">${state.integrationActionFetchPendingId ? `<span class="integration-fetch-status" role="status"><span class="integration-selection-pulse" aria-hidden="true"></span>Fetching items in the background…</span>` : ''}<button type="button" class="hvy-galaxy-button icon-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" title="Define record type" aria-label="Define record type">+</button></div></div>${state.integrationActionFetchError ? `<div class="integration-fetch-error" role="alert"><strong>Fetch failed</strong><span>${escapeHtml(state.integrationActionFetchError)}</span></div>` : ''}${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article class="integration-record-definition"><div class="integration-record-summary"><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description || action.pattern?.fields.map((field) => field.label).join(', ') || '')}</span>${renderItemCommandPills(selectedIntegration.id, action)}</div><div class="integration-record-actions"><button type="button" class="hvy-galaxy-button" data-action="edit-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Edit</button><button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Delete</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Add item command</button><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}" ${action.pattern && !state.integrationActionFetchPendingId ? '' : 'disabled'}>${state.integrationActionFetchPendingId === action.id ? 'Fetching…' : 'Fetch items'}</button></div></article>`).join('')}</div>` : '<div class="integration-empty-state integration-record-types-empty"><strong>No record types yet</strong></div>'}</section>
           </main>
         </div>
       </section>
@@ -4356,7 +4355,7 @@ function renderIntegrationCommandDeleteDialog(state: AppState): string {
 
 function renderAddIntegrationPageDialog(state: AppState): string {
   if (!state.addIntegrationPageDialogOpen) return '';
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input class="hvy-galaxy-input" name="pageName" required autocomplete="off" placeholder="Company webmail"></label><label><span>HTTPS URL</span><input class="hvy-galaxy-input" name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><p class="field-help">The page's origin becomes its initial navigation boundary.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-page">Cancel</button><button class="hvy-galaxy-button" type="submit">Add page</button></div></form></div>`;
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input class="hvy-galaxy-input" name="pageName" required autocomplete="off" placeholder="Name for this page"></label><label><span>HTTPS URL</span><input class="hvy-galaxy-input" name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><p class="field-help">The page's origin becomes its initial navigation boundary.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-page">Cancel</button><button class="hvy-galaxy-button" type="submit">Add page</button></div></form></div>`;
 }
 
 function renderAddIntegrationProfileDialog(state: AppState): string {
@@ -4559,8 +4558,8 @@ function renderScriptingReviewDialog(state: AppState): string {
         ${fingerprints.length > 0 ? `
           <div class="scripting-review-fingerprints">
             ${fingerprints.map((fingerprint) => {
-              const scripts = state.appSettings.powerScriptAcceptanceScripts[path]?.[fingerprint] ?? [];
-              return `
+      const scripts = state.appSettings.powerScriptAcceptanceScripts[path]?.[fingerprint] ?? [];
+      return `
               <div class="scripting-review-acceptance">
                 <div class="scripting-review-script-list">
                   ${scripts.length > 0 ? scripts.map((script) => `
@@ -4580,7 +4579,7 @@ function renderScriptingReviewDialog(state: AppState): string {
                   data-fingerprint="${escapeAttr(fingerprint)}"
                 >Revoke</button>
               </div>`;
-            }).join('')}
+    }).join('')}
           </div>` : '<p class="dialog-note">No individual script approvals.</p>'}
       </section>`;
   }).join('');
@@ -4613,8 +4612,8 @@ function renderAppSettingsDialog(state: AppState): string {
         <h2>${pluginManager ? 'Manage Plugins' : 'Settings'}</h2>
         <div class="app-settings-scroll">
         <p class="dialog-note">${pluginManager
-          ? 'Configure downloaded plugin access.'
-          : 'Configure application defaults used when a document does not set its own value.'}</p>
+      ? 'Configure downloaded plugin access.'
+      : 'Configure application defaults used when a document does not set its own value.'}</p>
         <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
         ${pluginManager ? '' : `<fieldset class="ai-action-config image-dimension-settings">
           <legend>Attached image defaults</legend>
@@ -4653,8 +4652,8 @@ function renderAppSettingsDialog(state: AppState): string {
           <p class="dialog-note">These plugins are included with HVY Galaxy.</p>
           <div class="plugin-settings-list">
             ${builtInPlugins.map((plugin) => {
-              const enabled = settings.pluginPolicies[plugin.id] !== 'disabled';
-              return `<label class="plugin-settings-row">
+        const enabled = settings.pluginPolicies[plugin.id] !== 'disabled';
+        return `<label class="plugin-settings-row">
                 <span>
                   <strong>${escapeHtml(plugin.displayName)}</strong>
                   <small>Built in · ${escapeHtml(plugin.id)} · ${escapeHtml(plugin.version)}</small>
@@ -4664,7 +4663,7 @@ function renderAppSettingsDialog(state: AppState): string {
                   <option value="disabled" ${enabled ? '' : 'selected'}>Disabled</option>
                 </select>
               </label>`;
-            }).join('')}
+      }).join('')}
           </div>
         </fieldset>
         <fieldset class="ai-action-config plugin-install-zone" data-plugin-drop-zone>
@@ -4678,21 +4677,21 @@ function renderAppSettingsDialog(state: AppState): string {
           </div>
           <div class="plugin-settings-list">
           ${getInstalledPlugins().map((record) => {
-            if (!record.manifest) {
-              return `<div class="dialog-note"><strong>${escapeHtml(record.file.name)}</strong>: ${escapeHtml(record.error ?? 'Invalid package')}</div>`;
-            }
-            const policy = settings.pluginPolicies[record.key] ?? 'disabled';
-            const requiresPerFileApproval = record.manifest.authorization === 'required';
-            const currentPath = state.document?.path ?? '';
-            const acceptedForCurrentFile = Boolean(currentPath)
-              && (settings.pluginAcceptances[currentPath] ?? []).includes(record.key);
-            return `<label class="plugin-settings-row">
+        if (!record.manifest) {
+          return `<div class="dialog-note"><strong>${escapeHtml(record.file.name)}</strong>: ${escapeHtml(record.error ?? 'Invalid package')}</div>`;
+        }
+        const policy = settings.pluginPolicies[record.key] ?? 'disabled';
+        const requiresPerFileApproval = record.manifest.authorization === 'required';
+        const currentPath = state.document?.path ?? '';
+        const acceptedForCurrentFile = Boolean(currentPath)
+          && (settings.pluginAcceptances[currentPath] ?? []).includes(record.key);
+        return `<label class="plugin-settings-row">
               <span>
                 <strong>${escapeHtml(record.manifest.displayName)}</strong>
                 <small>Custom · ${escapeHtml(record.manifest.id)} · ${escapeHtml(record.manifest.version)}</small>
                 <small>${record.manifest.permissions.length > 0
-                  ? `Requests: ${escapeHtml(record.manifest.permissions.join(', '))}`
-                  : 'Requests no package permissions'}${requiresPerFileApproval ? '; package requires per-file approval' : ''}</small>
+            ? `Requests: ${escapeHtml(record.manifest.permissions.join(', '))}`
+            : 'Requests no package permissions'}${requiresPerFileApproval ? '; package requires per-file approval' : ''}</small>
               </span>
               <select class="hvy-galaxy-select" name="pluginPolicy:${escapeAttr(record.key)}">
                 <option value="disabled" ${policy === 'disabled' ? 'selected' : ''}>Disabled</option>
@@ -4704,7 +4703,7 @@ function renderAppSettingsDialog(state: AppState): string {
               <input class="hvy-galaxy-input" name="pluginAccepted:${escapeAttr(record.key)}" type="checkbox" ${acceptedForCurrentFile ? 'checked' : ''}>
               <span>Allow this exact version for the current file</span>
             </label>` : ''}`;
-          }).join('') || '<p class="dialog-note">No custom plugins installed.</p>'}
+      }).join('') || '<p class="dialog-note">No custom plugins installed.</p>'}
           </div>
         </fieldset>
         ${pluginManager ? '' : `<fieldset class="ai-action-config">
@@ -5552,17 +5551,17 @@ function renderSaveConflictDialog(state: AppState): string {
   if (!state.saveConflictDialogOpen || !state.saveConflictKind) return '';
   const content = state.saveConflictKind === 'discardRecoveryDraft'
     ? {
-        title: 'Discard Unsaved Draft?',
-        note: 'Saving the original file will discard the Unsaved copy and close its tab.',
-        action: 'Save Original and Discard Draft',
-      }
+      title: 'Discard Unsaved Draft?',
+      note: 'Saving the original file will discard the Unsaved copy and close its tab.',
+      action: 'Save Original and Discard Draft',
+    }
     : state.saveConflictKind === 'overwriteRecoveryChanges'
-    ? {
+      ? {
         title: 'Overwrite Changes to Unsaved Draft?',
         note: 'The Unsaved copy was also changed. Saving the original file will discard those changes and close its tab.',
         action: 'Overwrite Unsaved Draft',
       }
-    : {
+      : {
         title: 'Overwrite Changes to Original File?',
         note: 'The original file also has unsaved changes. Saving the Unsaved copy will overwrite those changes and make this copy the primary document.',
         action: 'Overwrite Original File',
