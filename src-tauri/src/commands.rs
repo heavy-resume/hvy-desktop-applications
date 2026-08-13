@@ -1274,6 +1274,8 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
 
     let mut copied = Vec::new();
     let mut copied_templates = Vec::new();
+    let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let installs_workspace_templates = destination_root == workspace_templates_dir_path(&workspace_path);
     for source in paths {
         if document_extension(&source).is_none() {
             return Err(AppError::Message(
@@ -1283,14 +1285,10 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
-        let destination_root = if template_extension(&source).is_some() {
-            workspace_templates_dir(&workspace_path)?
-        } else {
-            workspace_target_directory(&workspace_path, &target_directory)?
-        };
+        let is_template = installs_workspace_templates && template_extension(&source).is_some();
         let destination = unique_copy_path(&destination_root, file_name);
         fs::copy(&source, &destination)?;
-        if template_extension(&source).is_some() {
+        if is_template {
             copied_templates.push(destination);
         } else {
             copied.push(destination);
@@ -1320,6 +1318,8 @@ fn add_dropped_files_to_workspace(
     ensure_workspace(&workspace_path)?;
     let mut copied = Vec::new();
     let mut copied_templates = Vec::new();
+    let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let installs_workspace_templates = destination_root == workspace_templates_dir_path(&workspace_path);
 
     for file in files {
         if document_extension(Path::new(&file.name)).is_none() {
@@ -1327,12 +1327,7 @@ fn add_dropped_files_to_workspace(
                 "Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.".into(),
             ));
         }
-        let is_template = template_extension(Path::new(&file.name)).is_some();
-        let destination_root = if is_template {
-            workspace_templates_dir(&workspace_path)?
-        } else {
-            workspace_target_directory(&workspace_path, &target_directory)?
-        };
+        let is_template = installs_workspace_templates && template_extension(Path::new(&file.name)).is_some();
         let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file.name));
         fs::write(&destination, file.bytes)?;
         if is_template {
@@ -2020,6 +2015,58 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
             touch_workspace_manifest(&source_workspace)?;
         }
     }
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    add_recent_file(&app, &destination)?;
+    read_document_at(&destination)
+}
+
+#[tauri::command]
+fn convert_workspace_document_kind(
+    app: AppHandle,
+    path: String,
+    workspace_path: String,
+    to_template: bool,
+) -> AppResult<DocumentFile> {
+    let path = PathBuf::from(path);
+    let extension = document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .phvy files can be converted.".into()))?;
+    if extension == ".md" {
+        return Err(AppError::Message("Only .hvy, .thvy, and .phvy files can be converted.".into()));
+    }
+    if !path.is_file() {
+        return Err(AppError::Message("Document file does not exist.".into()));
+    }
+    let source_parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let source_workspace = workspace_root_for_document(source_parent)
+        .ok_or_else(|| AppError::Message("Document must be inside the selected workspace.".into()))?;
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    if fs::canonicalize(&source_workspace)? != fs::canonicalize(&workspace_path)? {
+        return Err(AppError::Message("Document must be inside the selected workspace.".into()));
+    }
+    let next_extension = if extension == ".phvy" {
+        ".phvy"
+    } else if to_template {
+        ".thvy"
+    } else {
+        ".hvy"
+    };
+    let destination_root = if to_template {
+        workspace_templates_dir(&workspace_path)?
+    } else {
+        workspace_path.clone()
+    };
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
+    let file_name = format!("{stem}{next_extension}");
+    let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file_name));
+    fs::rename(&path, &destination)?;
+    rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;

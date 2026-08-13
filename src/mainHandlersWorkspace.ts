@@ -1,4 +1,5 @@
 import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, unarchiveWorkspace, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { measureDebugAsync } from './debugLog';
 import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
@@ -580,10 +581,16 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     await refreshRecents();
   }),
   addDroppedFilesToWorkspace: (workspacePath, files, targetDirectory = '') => void runBusy('Adding files...', async () => {
-    const droppedFiles = await droppedWorkspaceFilesFrom(files);
-    const result = await addDroppedFilesToWorkspace(workspacePath, droppedFiles, targetDirectory);
-    await finishAddingFilesToWorkspace(result, 'Added dropped files to workspace');
-    await refreshRecents();
+    await measureDebugAsync('event', 'workspace:addDroppedFiles', {
+      workspacePath,
+      targetDirectory,
+      fileNames: files.map((file) => file.name),
+    }, async () => {
+      const droppedFiles = await droppedWorkspaceFilesFrom(files);
+      const result = await addDroppedFilesToWorkspace(workspacePath, droppedFiles, targetDirectory);
+      await finishAddingFilesToWorkspace(result, 'Added dropped files to workspace');
+      await refreshRecents();
+    });
   }),
   openWorkspaceFilter: (workspacePath, targetDirectory = '') => {
     closeUiBeforeWorkspaceFilter();

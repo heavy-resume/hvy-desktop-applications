@@ -27,5 +27,7 @@ export function workspaceDropTargetFromElement(target: Element | null): Workspac
 
   const workspaceRoot = target.closest<HTMLElement>('.workspace-root');
   const workspacePath = workspaceRoot?.dataset.workspacePath;
-  return workspaceRoot && workspacePath ? { element: workspaceRoot, workspacePath, targetDirectory: '' } : null;
+  return workspaceRoot && workspacePath
+    ? { element: workspaceRoot, workspacePath, targetDirectory: workspaceRoot.dataset.targetDirectory ?? '' }
+    : null;
 }

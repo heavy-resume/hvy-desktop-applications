@@ -600,6 +600,7 @@ async function handleCommand(command, args) {
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
+    case 'convert_workspace_document_kind': return convertWorkspaceDocumentKind(args.path, args.workspacePath, args.toTemplate === true);
     case 'write_system_file_clipboard': return writeSystemFileClipboard(args.request);
     case 'read_system_clipboard_text': return clipboard.readText();
     case 'paste_system_files_to_workspace': return pasteSystemFilesToWorkspace(args.workspacePath, args.targetDirectory || '');
@@ -1358,10 +1359,11 @@ async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
   if (result.canceled || result.filePaths.length === 0) return null;
   const copiedPaths = [];
   const copiedTemplatePaths = [];
+  const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  const installsWorkspaceTemplates = path.resolve(destinationRoot) === path.resolve(workspaceTemplatesDir(workspacePath));
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
-    const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
-    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspaceTargetDirectory(workspacePath, targetDirectory);
+    const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
     const destination = uniqueCopyPath(destinationRoot, path.basename(source));
     fs.copyFileSync(source, destination);
     if (isTemplate) {
@@ -1384,10 +1386,11 @@ function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') 
   ensureWorkspace(workspacePath);
   const copiedPaths = [];
   const copiedTemplatePaths = [];
+  const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  const installsWorkspaceTemplates = path.resolve(destinationRoot) === path.resolve(workspaceTemplatesDir(workspacePath));
   for (const file of files || []) {
     if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
-    const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
-    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspaceTargetDirectory(workspacePath, targetDirectory);
+    const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
     const destination = uniqueCopyPath(destinationRoot, file.name);
     writeBytes(destination, file.bytes);
     if (isTemplate) {
@@ -1751,6 +1754,26 @@ function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') 
       touchWorkspaceManifest(sourceWorkspacePath);
     }
   }
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  addRecentFile(destination);
+  return readDocumentAt(destination);
+}
+
+function convertWorkspaceDocumentKind(filePath, workspacePath, toTemplate) {
+  ensureWorkspace(workspacePath);
+  const extension = documentExtension(filePath);
+  if (!extension || extension === '.md') throw new Error('Only .hvy, .thvy, and .phvy files can be converted.');
+  const sourceWorkspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (!sourceWorkspacePath || path.resolve(sourceWorkspacePath) !== path.resolve(workspacePath)) {
+    throw new Error('Document must be inside the selected workspace.');
+  }
+  const nextExtension = extension === '.phvy' ? '.phvy' : toTemplate ? '.thvy' : '.hvy';
+  const destinationRoot = toTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
+  fs.mkdirSync(destinationRoot, { recursive: true });
+  const destination = uniqueCopyPath(destinationRoot, `${path.parse(filePath).name}${nextExtension}`);
+  fs.renameSync(filePath, destination);
+  renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);

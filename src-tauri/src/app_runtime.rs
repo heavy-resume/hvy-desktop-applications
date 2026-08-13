@@ -108,6 +108,7 @@ pub fn run() {
             save_document_to_workspace_raw,
             copy_document_to_workspace,
             move_document_to_workspace,
+            convert_workspace_document_kind,
             write_system_file_clipboard,
             read_system_clipboard_text,
             paste_system_files_to_workspace,

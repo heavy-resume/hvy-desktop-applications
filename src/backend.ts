@@ -210,6 +210,12 @@ export interface WorkspaceDocumentMoveRequest {
   targetDirectory?: string;
 }
 
+export interface WorkspaceDocumentConversionRequest {
+  path: string;
+  workspacePath: string;
+  toTemplate: boolean;
+}
+
 export interface WorkspaceFolderRequest {
   workspacePath: string;
   parentDirectory?: string;
@@ -973,6 +979,14 @@ export function copyDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): 
 
 export function moveDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
   return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath, targetDirectory: request.targetDirectory ?? '' });
+}
+
+export function convertWorkspaceDocumentKind(request: WorkspaceDocumentConversionRequest): Promise<DocumentFile> {
+  return invokeDesktop('convert_workspace_document_kind', {
+    path: request.path,
+    workspacePath: request.workspacePath,
+    toTemplate: request.toTemplate,
+  });
 }
 
 export function writeSystemFileClipboard(request: SystemFileClipboardRequest): Promise<void> {

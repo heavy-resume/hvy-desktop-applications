@@ -53,4 +53,22 @@ describe('workspaceDropTargetFromElement', () => {
       targetDirectory: '',
     });
   });
+
+  it('installs workspace-level drops into the active templates view', () => {
+    const rootTree = fakeElement({}, { parentElement: fakeElement({}) });
+    const workspaceRoot = fakeElement({}, {
+      dataset: { workspacePath: '/workspaces/example', targetDirectory: 'templates' },
+    });
+    const rootFile = fakeElement({
+      '.tree [data-workspace-folder-target="true"]': null,
+      '.tree': rootTree,
+      '.workspace-root': workspaceRoot,
+    });
+
+    expect(workspaceDropTargetFromElement(rootFile)).toEqual({
+      element: workspaceRoot,
+      workspacePath: '/workspaces/example',
+      targetDirectory: 'templates',
+    });
+  });
 });

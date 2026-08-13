@@ -27,6 +27,7 @@ import { isWorkspacePathTarget } from '../../heavy-file-format/src/workspace-lin
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 import { workspaceDropTargetFromElement } from './workspaceDropTarget';
+import { workspaceFileConversionAction } from './workspaceFileConversion';
 
 export interface UiHandlers {
   newWorkspace(): void;
@@ -249,6 +250,7 @@ export interface UiHandlers {
   copyFileToWorkspace(path: string, currentName: string): void;
   moveFileToWorkspace(path: string, currentName: string): void;
   moveWorkspaceFileToFolder(path: string, workspacePath: string, targetDirectory?: string): void;
+  convertWorkspaceFileKind(path: string, workspacePath: string, toTemplate: boolean): void;
   submitRenameFile(name: string): void;
   cancelRenameFile(): void;
   saveCurrentToWorkspace(): void;
@@ -2894,6 +2896,7 @@ function showFileContextMenu(
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const parentDirectory = parentDirectoryForRelativePath(relativePath);
+  const conversion = workspaceFileConversionAction(name, relativePath);
   menu.innerHTML = archived ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="restore">Restore</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="delete">Delete</button>
@@ -2903,6 +2906,7 @@ function showFileContextMenu(
     <button class="hvy-galaxy-button" type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="rename">Rename</button>
+    ${conversion ? `<button class="hvy-galaxy-button" type="button" data-menu-action="convert-workspace-file">${conversion.label}</button>` : ''}
     <button class="hvy-galaxy-button" type="button" data-menu-action="archive">Archive</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="copy">Copy</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="cut">Cut</button>
@@ -2928,6 +2932,7 @@ function showFileContextMenu(
     if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, parentDirectory);
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
+    if (button.dataset.menuAction === 'convert-workspace-file' && conversion) handlers.convertWorkspaceFileKind(path, workspacePath, conversion.toTemplate);
     if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
     if (button.dataset.menuAction === 'restore') handlers.restoreFile(path, name);
     if (button.dataset.menuAction === 'lock') handlers.setFileLocked(path, name, true);
@@ -3351,14 +3356,15 @@ function renderWorkspace(
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
   const documentsActive = fileView === 'documents';
+  const workspaceDropDirectory = documentsActive ? '' : 'templates';
   const workspaceHiddenFromAI = workspace.manifest.hiddenFromAI === true;
   const fileViewNodes = filterNodesByWorkspaceFileView(workspace.files, fileView, workspace, savedTemplates);
   const visibleFiles = documentsActive
     ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
     : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
-    <details class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}"${expanded ? ' open' : ''}>
-      <summary title="${escapeAttr(workspace.path)}">
+    <details class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}"${expanded ? ' open' : ''}>
+      <summary class="workspace-summary" title="${escapeAttr(workspace.path)}">
         <span>${escapeHtml(workspace.manifest.name)}</span>
         ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
       </summary>
@@ -3372,7 +3378,7 @@ function renderWorkspace(
         <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
           <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
           <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
-          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Add</button>
+          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}">Add</button>
           <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
           <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
         </div>
@@ -3405,6 +3411,10 @@ function filterNodesByWorkspaceFileView(
       }
       if (view === 'documents' && inTemplateFolder) continue;
       const children = filterNodesByWorkspaceFileView(node.children, view, workspace, savedTemplates, false);
+      if (view === 'templates' && relativePath === 'templates') {
+        visibleNodes.push(...children);
+        continue;
+      }
       visibleNodes.push({ ...node, children });
       continue;
     }
@@ -3429,18 +3439,7 @@ function filterNodesByWorkspaceFileView(
         };
       });
     if (templateFiles.length > 0) {
-      const templatesFolder = visibleNodes.find((node) => node.kind === 'folder' && (node.relativePath === 'templates' || node.name === 'templates'));
-      if (templatesFolder?.kind === 'folder') {
-        templatesFolder.children = [...templatesFolder.children, ...templateFiles];
-      } else {
-        visibleNodes.push({
-          kind: 'folder',
-          name: 'templates',
-          path: `${workspace.path.replace(/\/+$/, '')}/templates`,
-          relativePath: 'templates',
-          children: templateFiles,
-        });
-      }
+      visibleNodes.push(...templateFiles);
     }
   }
   return visibleNodes;

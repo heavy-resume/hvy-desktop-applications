@@ -1,4 +1,4 @@
-import { listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DroppedWorkspaceFile, type Workspace } from './backend';
+import { convertWorkspaceDocumentKind, listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DocumentFile, type DroppedWorkspaceFile, type Workspace } from './backend';
 import { state, workspacePathForFileInWorkspaces, type AppState } from './state';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
@@ -134,10 +134,28 @@ export async function createTemporaryImportMount(
 
 export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string, targetDirectory = ''): Promise<void> {
   const sourceWorkspacePath = workspacePathForFile(path);
+  const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
+  await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
+  state.status = `Moved to ${file.name}`;
+}
+
+export async function convertOpenWorkspaceFileKind(path: string, workspacePath: string, toTemplate: boolean): Promise<void> {
+  const file = await convertWorkspaceDocumentKind({ path, workspacePath, toTemplate });
+  state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
+  await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
+  await refreshSavedTemplates(workspacePath);
+  state.status = `${toTemplate ? 'Converted to template' : 'Converted to document'}: ${file.name}`;
+}
+
+async function applyWorkspaceFileRelocation(
+  path: string,
+  workspacePath: string,
+  file: DocumentFile,
+  sourceWorkspacePath: string | null,
+): Promise<void> {
   const currentDocument = state.document?.path === path ? state.document : null;
   const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
   const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
-  const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
   documentSessions.delete(path);
   renameDocumentTabPath(path, file.path);
   if (state.selectedFilePath === path) {
@@ -160,7 +178,6 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   }
   upsertWorkspace(await loadWorkspace(workspacePath));
   await refreshRecents();
-  state.status = `Moved to ${file.name}`;
 }
 
 export async function finishAddingFilesToWorkspace(result: AddFilesResult, status: string): Promise<void> {
