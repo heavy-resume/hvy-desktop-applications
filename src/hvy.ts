@@ -316,6 +316,7 @@ export async function mountHvyDocument(
     crossDocumentLinks: true,
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
+    semanticFilterConcurrency: state.aiSettings.maxConcurrentSemanticFilters,
     editorClipboard: editorClipboardHost,
     storageKey: null,
     powerScripts: options.powerScripts ?? 'prompt',
@@ -527,6 +528,7 @@ export async function createHvyDocumentFilterSnapshot(
   const { createDocumentFilterSnapshot } = await loadHvyEmbed();
   return createDocumentFilterSnapshot({
     semanticFilterProvider: desktopSemanticFilterProvider,
+    semanticFilterConcurrency: state.aiSettings.maxConcurrentSemanticFilters,
     ...request,
   });
 }
