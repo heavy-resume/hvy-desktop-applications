@@ -1,7 +1,7 @@
 (() => {
   if (window.top !== window || window.__hvyGalaxyInspector) return;
 
-  const ids = ['hvy-galaxy-inspector-shield', 'hvy-galaxy-existing-matches', 'hvy-galaxy-inspector-scope', 'hvy-galaxy-inspector-highlight', 'hvy-galaxy-inspector-picker', 'hvy-galaxy-inspector-status', 'hvy-galaxy-pattern-matches'];
+  const ids = ['hvy-galaxy-inspector-shield', 'hvy-galaxy-existing-matches', 'hvy-galaxy-inspector-scope', 'hvy-galaxy-inspector-highlight', 'hvy-galaxy-inspector-picker', 'hvy-galaxy-inspector-status', 'hvy-galaxy-pattern-matches', 'hvy-galaxy-ready-check-matches'];
   let active = false;
   let pickingPaused = false;
   let inspectionKind = 'target';
@@ -2243,6 +2243,62 @@
     async executeCommandAndReport(payload = {}) {
       const result = await executeCommand(payload);
       publish({ kind: 'integration-command-result', requestId: payload.requestId, commandId: payload.command?.id, ...result });
+      return result;
+    },
+    validateReadyChecksAndPublish(checks = {}, context = {}) {
+      window.__hvyGalaxyInspector.stop();
+      const readiness = pageReadiness(checks);
+      const layer = document.createElement('div');
+      layer.id = 'hvy-galaxy-ready-check-matches';
+      layer.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none';
+      const overlays = [];
+      (Array.isArray(checks.elements) ? checks.elements : []).forEach((check) => {
+        const checkResult = readiness.elements.find((candidate) => candidate.id === check.id);
+        const match = resolveInteractionTarget(document, check.snapshot, 0.8, 'click');
+        if (!checkResult || match.status !== 'matched') return;
+        const color = checkResult.ready ? '#27865f' : '#b33a3a';
+        const box = document.createElement('div');
+        box.dataset.readyCheckState = checkResult.ready ? 'ready' : 'value-changed';
+        box.style.cssText = `position:fixed;border:3px solid ${color};box-sizing:border-box;background:${color}18;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif`;
+        const caption = document.createElement('span');
+        caption.textContent = checkResult.ready ? `Ready · ${check.name || 'Page landmark'}` : `Value changed · ${check.name || 'Page landmark'}`;
+        caption.style.cssText = `display:inline-block;padding:3px 6px;background:${color};color:#fff`;
+        box.append(caption);
+        layer.append(box);
+        overlays.push({ element: match.element, box });
+      });
+      document.documentElement.append(layer);
+      let updateFrame = 0;
+      const updateOverlays = () => {
+        updateFrame = 0;
+        overlays.forEach(({ element, box }) => {
+          if (!element.isConnected) {
+            box.style.display = 'none';
+            return;
+          }
+          const rect = element.getBoundingClientRect();
+          box.style.display = rect.width && rect.height ? 'block' : 'none';
+          Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+        });
+      };
+      const scheduleOverlayUpdate = () => {
+        if (!updateFrame) updateFrame = requestAnimationFrame(updateOverlays);
+      };
+      updateOverlays();
+      document.addEventListener('scroll', scheduleOverlayUpdate, true);
+      window.addEventListener('resize', scheduleOverlayUpdate);
+      matchOverlayCleanup = () => {
+        document.removeEventListener('scroll', scheduleOverlayUpdate, true);
+        window.removeEventListener('resize', scheduleOverlayUpdate);
+        if (updateFrame) cancelAnimationFrame(updateFrame);
+      };
+      const result = {
+        kind: 'integration-ready-check-validation',
+        context,
+        page: { origin: location.origin, pathname: location.pathname },
+        ...readiness,
+      };
+      publish(result);
       return result;
     },
     async extractAndPublish(pattern = {}, context = {}) {

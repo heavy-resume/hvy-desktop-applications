@@ -53,6 +53,11 @@ export async function boot(): Promise<void> {
     await onIntegrationInspectionResult(async (result) => {
       if (handleWebCapabilityIntegrationResult(result)) return;
       if (result && typeof result === 'object'
+        && (result as { kind?: unknown }).kind === 'integration-ready-check-validation') {
+        handlers.completeIntegrationReadyCheckValidation(result);
+        return;
+      }
+      if (result && typeof result === 'object'
         && (result as { context?: { mode?: unknown } }).context?.mode === 'ready-check') {
         handlers.completeIntegrationReadyCheck(result);
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);

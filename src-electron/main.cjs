@@ -980,7 +980,8 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         browser.actionModePending = false;
         setIntegrationToolbarInspectionState(browser);
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        const isBackgroundResult = (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
+        const isBackgroundResult = result?.kind === 'integration-ready-check-validation'
+          || (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
           || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true);
         if (!isBackgroundResult) raiseWindow(mainWindow);
         return;
@@ -1022,6 +1023,9 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
           }
           if (extraction.kind === 'command-execution') {
             return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
+          }
+          if (extraction.kind === 'ready-check-validation') {
+            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
           }
           if (extraction.kind === 'pattern-highlight') {
             return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);

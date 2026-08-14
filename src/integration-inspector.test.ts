@@ -84,6 +84,7 @@ interface InspectorApi {
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   extractLiveExamples(pattern: Parameters<InspectorApi['extractPattern']>[0] & { targets: Array<{ label: string; snapshot: InspectorSnapshot; exampleSnapshots: Array<InspectorSnapshot | null> }> }): Promise<{ matches: number; records: Array<ReturnType<InspectorApi['extractPattern']>['records'][number] | null> }>;
   pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
+  validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown> };
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
   executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; inputId?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
@@ -95,6 +96,7 @@ declare global {
     __hvyGalaxyToolbarPublish?: (value: unknown) => void;
     __toolbarState?: unknown;
     __commandRecordingResult?: unknown;
+    __readyCheckResult?: unknown;
     hvySetBrowserState(value: { url: string; allowed: string[] }): void;
     hvySetInspectionState(value?: { active?: boolean; status?: string; navigationLabel?: string; canUndo?: boolean }): void;
     __guideTitlePattern?: Parameters<InspectorApi['extractPattern']>[0];
@@ -250,6 +252,71 @@ describe('integration structural inspector', () => {
     expect(result.changed.elements[0].reason).toBe('value_changed');
     expect(result.wrongUrl.ready).toBe(false);
     expect(result.wrongUrl.urlReady).toBe(false);
+  });
+
+  it('publishes self-contained ready-check validation results for the UI', async () => {
+    await page.close();
+    page = await browser.newPage();
+    await page.setContent(fauxInbox);
+    await page.evaluate(() => {
+      window.__hvyGalaxyPublish = (value) => { window.__readyCheckResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const landmark = document.createElement('strong');
+      landmark.textContent = 'Signed in';
+      document.body.prepend(landmark);
+      const checks = {
+        urlMode: 'strict-url' as const,
+        urlValue: location.href,
+        elements: [{ id: 'account', name: 'Account marker', snapshot: window.__hvyGalaxyInspector.snapshotElement(landmark, null, 'target'), expectedValue: 'Signed in' }],
+      };
+      const returned = window.__hvyGalaxyInspector.validateReadyChecksAndPublish(checks, { mode: 'ready-check-validation' });
+      return { returned, published: window.__readyCheckResult };
+    });
+
+    expect(result.returned).toMatchObject({
+      kind: 'integration-ready-check-validation',
+      ready: true,
+      urlReady: true,
+      elements: [{ id: 'account', name: 'Account marker', ready: true }],
+    });
+    expect(result.published).toEqual(result.returned);
+  });
+
+  it('boxes matching ready-check landmarks green and changed values red', async () => {
+    await page.close();
+    page = await browser.newPage();
+    await page.setContent(fauxInbox);
+    await page.evaluate(() => {
+      window.__hvyGalaxyPublish = (value) => { window.__readyCheckResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const states = await page.evaluate(() => {
+      const passing = document.createElement('h1');
+      passing.textContent = 'Signed in';
+      const changed = document.createElement('time');
+      changed.textContent = 'August';
+      document.body.prepend(passing, changed);
+      window.__hvyGalaxyInspector.validateReadyChecksAndPublish({
+        urlMode: 'strict-url',
+        urlValue: location.href,
+        elements: [
+          { id: 'passing', name: 'Account heading', snapshot: window.__hvyGalaxyInspector.snapshotElement(passing, null, 'target'), expectedValue: 'Signed in' },
+          { id: 'changed', name: 'Current month', snapshot: window.__hvyGalaxyInspector.snapshotElement(changed, null, 'target'), expectedValue: 'September' },
+        ],
+      });
+      return [...document.querySelectorAll<HTMLElement>('#hvy-galaxy-ready-check-matches [data-ready-check-state]')].map((box) => ({
+        state: box.dataset.readyCheckState,
+        caption: box.textContent,
+        borderColor: box.style.borderColor,
+      }));
+    });
+
+    expect(states).toEqual([
+      { state: 'ready', caption: 'Ready · Account heading', borderColor: 'rgb(39, 134, 95)' },
+      { state: 'value-changed', caption: 'Value changed · Current month', borderColor: 'rgb(179, 58, 58)' },
+    ]);
   });
 
   it('renders browser security state in the local toolbar document', async () => {

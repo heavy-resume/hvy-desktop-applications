@@ -1,5 +1,5 @@
 import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
-import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationPageReadyChecks, type IntegrationRegistry } from './integrationRegistry';
+import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
@@ -105,6 +105,8 @@ export interface AppState {
   integrationReadyChecksPageId: string | null;
   integrationReadyChecksDraft: IntegrationPageReadyChecks | null;
   integrationReadyCheckSelectionPending: boolean;
+  integrationReadyCheckValidationPending: boolean;
+  integrationReadyCheckValidationResult: IntegrationPageReadinessResult | null;
   inspectionPrivacyRules: InspectionPrivacyRule[];
   integrationActionBuilderOpen: boolean;
   integrationActionDiscardDialogOpen: boolean;
@@ -373,6 +375,8 @@ export const state: AppState = {
   integrationReadyChecksPageId: null,
   integrationReadyChecksDraft: null,
   integrationReadyCheckSelectionPending: false,
+  integrationReadyCheckValidationPending: false,
+  integrationReadyCheckValidationResult: null,
   inspectionPrivacyRules: [],
   integrationActionBuilderOpen: false,
   integrationActionDiscardDialogOpen: false,

@@ -152,7 +152,8 @@ const INTEGRATION_VAULT_AAD: &[u8] = b"hvy-galaxy-integration-vault-v1";
 const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
-    (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
+    result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-ready-check-validation")
+        || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
         && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
             && result.pointer("/context/automatic").and_then(serde_json::Value::as_bool) == Some(true))
@@ -610,6 +611,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                             format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
                             format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("ready-check-validation") {
+                            format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
                             format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
@@ -685,12 +688,16 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         let is_background_result = result
                             .get("kind")
                             .and_then(serde_json::Value::as_str)
+                            == Some("integration-ready-check-validation");
+                        let is_background_result = is_background_result || (result
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
                             == Some("integration-extraction")
                             && result
                                 .get("context")
                                 .and_then(|context| context.get("mode"))
                                 .and_then(serde_json::Value::as_str)
-                                == Some("examples");
+                                == Some("examples"));
                         let is_background_result = is_background_result
                             || (result
                                 .get("kind")

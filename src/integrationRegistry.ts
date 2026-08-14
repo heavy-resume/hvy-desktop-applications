@@ -23,6 +23,18 @@ export interface IntegrationPageReadyChecks {
   elements: IntegrationPageReadyCheck[];
 }
 
+export interface IntegrationPageReadinessResult {
+  ready: boolean;
+  urlReady: boolean;
+  elements: Array<{
+    id: string;
+    name: string;
+    ready: boolean;
+    reason?: 'element_not_found' | 'value_changed';
+  }>;
+  message: string;
+}
+
 export function defaultIntegrationPageReadyChecks(urlValue: string, urlMode: IntegrationPageReadyChecks['urlMode'] = 'strict-url'): IntegrationPageReadyChecks {
   const url = new URL(urlValue);
   return {
