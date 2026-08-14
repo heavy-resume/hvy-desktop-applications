@@ -1266,6 +1266,28 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('does not return the same positioned record twice when its extracted value changes between scroll passes', async () => {
+    await page.setContent('<main class="events" style="height:160px;overflow:auto"><article class="event" style="height:42px"><span>Event initial</span></article><div style="height:1200px"></div></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const extraction = await page.evaluate(async () => {
+      const scroller = document.querySelector<HTMLElement>('.events')!;
+      const parent = scroller.querySelector<HTMLElement>('.event')!;
+      const value = parent.querySelector('span')!;
+      scroller.addEventListener('scroll', () => {
+        value.textContent = scroller.scrollTop > 0 ? `Event pass ${Math.round(scroller.scrollTop)}` : 'Event initial';
+      });
+      return window.__hvyGalaxyInspector.extractAcrossPage({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(value, parent, 'target') }],
+      });
+    });
+
+    expect(extraction.matches).toBe(1);
+    expect(extraction.records).toHaveLength(1);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('waits for virtualized row content to stabilize before collecting records', async () => {
     await page.setContent(`<main class="messages" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="message" style="height:42px"><span>Message ${index + 1}</span></article>`).join('')}</main>`);
     await page.addScriptTag({ content: inspectorSource });

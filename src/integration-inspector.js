@@ -1510,6 +1510,17 @@
     })),
   });
 
+  const recordContentIdentity = (record) => JSON.stringify(record.targets.map((target) => [target.label, target.value]));
+
+  const collectedRecordsOverlap = (left, right) => {
+    if (left.element !== right.element) {
+      return composedContains(left.element, right.element) || composedContains(right.element, left.element);
+    }
+    const positionTolerance = Math.max(8, Math.min(left.height, right.height) * 0.25);
+    return Math.abs(left.pageTop - right.pageTop) <= positionTolerance
+      && Math.abs(left.pageLeft - right.pageLeft) <= positionTolerance;
+  };
+
   const extractAcrossPage = async (pattern = {}) => {
     window.__hvyGalaxyInspector.stop();
     const effectivePattern = { ...pattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) };
@@ -1566,17 +1577,8 @@
       for (let index = 0; index < serialized.length; index += 1) {
         const record = serialized[index];
         const element = matches[index].element;
-        const key = JSON.stringify(record.targets.map((target) => [target.label, target.value]));
+        const key = recordContentIdentity(record);
         const previous = records.get(key);
-        if (previous && previous.record.score >= record.score) continue;
-        const overlapping = structuralRecords.find((entry) => entry.element !== element
-          && (composedContains(entry.element, element) || composedContains(element, entry.element)));
-        if (overlapping && overlapping.record.score >= record.score) continue;
-        if (overlapping) {
-          records.delete(overlapping.key);
-          structuralRecords.splice(structuralRecords.indexOf(overlapping), 1);
-        }
-        if (previous && previous !== overlapping) structuralRecords.splice(structuralRecords.indexOf(previous), 1);
         const rect = element.getBoundingClientRect();
         const scrollBounds = scroller instanceof Element ? scroller.getBoundingClientRect() : { top: 0, left: 0 };
         const entry = {
@@ -1585,7 +1587,16 @@
           record,
           pageTop: (scroller ? scroller.scrollTop : window.scrollY) + rect.top - scrollBounds.top,
           pageLeft: rect.left - scrollBounds.left,
+          height: rect.height,
         };
+        const overlapping = structuralRecords.find((candidate) => candidate !== previous && collectedRecordsOverlap(candidate, entry));
+        if ((previous && previous.record.score >= record.score)
+          || (overlapping && overlapping.record.score >= record.score)) continue;
+        if (overlapping) {
+          records.delete(overlapping.key);
+          structuralRecords.splice(structuralRecords.indexOf(overlapping), 1);
+        }
+        if (previous && previous !== overlapping) structuralRecords.splice(structuralRecords.indexOf(previous), 1);
         records.set(key, entry);
         structuralRecords.push(entry);
       }
@@ -1635,14 +1646,14 @@
       });
       const extraction = await extractAcrossPage({ ...pattern, parents: [pattern.parents[exampleIndex]], targets });
       const available = extraction.records.find((record) => {
-        const identity = JSON.stringify(record.targets.map((target) => [target.label, target.value]));
+        const identity = recordContentIdentity(record);
         return !usedRecords.has(identity);
       });
       if (!available) {
         records.push(null);
         continue;
       }
-      usedRecords.add(JSON.stringify(available.targets.map((target) => [target.label, target.value])));
+      usedRecords.add(recordContentIdentity(available));
       records.push(available);
     }
     return { matches: records.filter(Boolean).length, records, diagnostics: null, minimumConfidence: patternThresholds(pattern).minimumConfidence };

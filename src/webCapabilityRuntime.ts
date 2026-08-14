@@ -36,7 +36,8 @@ type PendingOperation = {
 
 const pendingOperations = new Map<string, PendingOperation>();
 const profileQueues = new Map<string, Promise<unknown>>();
-const OPERATION_TIMEOUT_MS = 60_000;
+const BACKGROUND_OPERATION_TIMEOUT_MS = 60_000;
+const INTERACTIVE_OPERATION_TIMEOUT_MS = 10 * 60_000;
 
 export class WebCapabilityAuthorizationError extends Error {
   constructor(message = 'This web capability has not been authorized for the selected browser profile.') {
@@ -64,12 +65,12 @@ function enqueueForProfile<T>(profileId: string, operation: () => Promise<T>): P
   return current;
 }
 
-function waitForResult<T>(requestId: string, kind: PendingOperation['kind']): Promise<T> {
+function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingOperations.delete(requestId);
       reject(new Error('The web capability timed out while waiting for the page.'));
-    }, OPERATION_TIMEOUT_MS);
+    }, timeoutMs);
     pendingOperations.set(requestId, {
       kind,
       resolve: (value) => resolve(value as T),
@@ -103,7 +104,11 @@ export async function executeWebRecordsCapability(
   assertAuthorized(config, context);
   return enqueueForProfile(context.profile.id, async () => {
     const requestId = crypto.randomUUID();
-    const result = waitForResult<WebRecordsExecutionResult>(requestId, 'records');
+    const result = waitForResult<WebRecordsExecutionResult>(
+      requestId,
+      'records',
+      context.foreground === false ? BACKGROUND_OPERATION_TIMEOUT_MS : INTERACTIVE_OPERATION_TIMEOUT_MS,
+    );
     try {
       await openForOperation(config, context, {
         kind: 'pattern-extraction',
@@ -132,7 +137,11 @@ async function executeCommand(
   assertAuthorized(config, context);
   return enqueueForProfile(context.profile.id, async () => {
     const requestId = crypto.randomUUID();
-    const result = waitForResult<WebCommandExecutionResult>(requestId, 'command');
+    const result = waitForResult<WebCommandExecutionResult>(
+      requestId,
+      'command',
+      context.foreground === false ? BACKGROUND_OPERATION_TIMEOUT_MS : INTERACTIVE_OPERATION_TIMEOUT_MS,
+    );
     try {
       await openForOperation(config, context, {
         kind: 'command-execution',
