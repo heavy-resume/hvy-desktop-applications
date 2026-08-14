@@ -1,11 +1,11 @@
 import { aiEmbeddingDefaultModel, aiEmbeddingProviderPreset, aiEmbeddingProviderPresets, aiEmbeddingProvidersForMode, aiProviderDefaultModel, aiProviderPreset, aiProviderPresets, type AiEmbeddingProviderMode } from './aiProviders';
-import { generateMcpBearerToken, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
+import { generateMcpBearerToken, includedDocuments, normalizeHomepageSetting, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentCreationType, type DocumentExtension, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from './backend';
 import { applyInspectionPrivacyRules, selectedInspectionContent } from './integrationRegistry';
 import { getInstalledPlugins } from './pluginManager';
 import { colorValueToAlpha, colorValueToPickerHex, getMatchedPaletteId, getMatchedSavedThemeId, getThemeColorLabel, HVY_PALETTES, isCssVariableName, mergeAlphaIntoCssColor, mergePickerHexIntoCssColor, THEME_COLOR_NAMES } from './colorTheme';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isWorkspaceTemplatePath } from './fileActions';
 import type { HvyMode, VisualDocument } from './hvy';
-import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
+import { findFileInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath, type AppState, type WorkspaceClipboardState, type WorkspaceFilterState } from './state';
 import { savedVersionDocumentName } from './mainUtilities';
 import { richTextActionForShortcutKey, type RichTextAction } from './uiShortcuts';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -165,6 +165,13 @@ export interface UiHandlers {
   openAppSettings(): void;
   openPluginManager(): void;
   installPluginFiles(files: File[], settings: AppSettings): void;
+  openHomepagePicker(settings: AppSettings): void;
+  useCurrentDocumentAsHomepage(settings: AppSettings): void;
+  chooseReplacementHomepage(): void;
+  cancelHomepagePicker(): void;
+  selectHomepageDocument(path: string): void;
+  useIncludedGuideAsHomepage(): void;
+  disableHomepage(): void;
   saveAppSettings(settings: AppSettings): void;
   cancelAppSettings(settings?: AppSettings): void;
   discardAppSettingsChanges(): void;
@@ -593,6 +600,8 @@ export function renderModals(state: AppState): void {
     ${renderWorkspaceChatClosePrompt(state)}
     ${renderAppSettingsDialog(state)}
     ${renderAppSettingsDiscardDialog(state)}
+    ${renderHomepageErrorDialog(state)}
+    ${renderHomepagePickerDialog(state)}
     ${renderScriptingReviewDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
@@ -725,6 +734,10 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (!target) {
       const backdrop = eventTarget instanceof HTMLElement ? eventTarget.closest<HTMLElement>('.modal-backdrop') : null;
       if (backdrop && backdrop === event.target && dismissBackdropClick) {
+        if (backdrop.querySelector('.homepage-picker-dialog')) {
+          handlers.cancelHomepagePicker();
+          return;
+        }
         if (backdrop.querySelector('.about-dialog')) {
           handlers.closeAbout();
           return;
@@ -990,6 +1003,19 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (action === 'cancel-reset-integration-vault') handlers.cancelResetIntegrationVault();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
+    if (action === 'open-homepage-picker') {
+      const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
+      if (form) handlers.openHomepagePicker(readAppSettingsForm(new FormData(form), state.document?.path ?? ''));
+    }
+    if (action === 'use-current-document-as-homepage') {
+      const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
+      if (form) handlers.useCurrentDocumentAsHomepage(readAppSettingsForm(new FormData(form), state.document?.path ?? ''));
+    }
+    if (action === 'choose-replacement-homepage') handlers.chooseReplacementHomepage();
+    if (action === 'cancel-homepage-picker') handlers.cancelHomepagePicker();
+    if (action === 'select-homepage-document' && target.dataset.path) handlers.selectHomepageDocument(target.dataset.path);
+    if (action === 'use-included-guide-as-homepage') handlers.useIncludedGuideAsHomepage();
+    if (action === 'disable-homepage') handlers.disableHomepage();
     if (action === 'review-scripting') handlers.openScriptingReview();
     if (action === 'close-scripting-review') handlers.closeScriptingReview();
     if (action === 'allow-file-power-scripting' && target.dataset.path) {
@@ -1778,6 +1804,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (event.key !== 'Escape') return;
     const target = event.target instanceof HTMLElement ? event.target : null;
+    if (root.querySelector('.homepage-picker-dialog')) {
+      event.preventDefault();
+      handlers.cancelHomepagePicker();
+      return;
+    }
     if (root.querySelector('.about-dialog')) {
       event.preventDefault();
       handlers.closeAbout();
@@ -2211,9 +2242,9 @@ function findWorkspaceFileByPath(workspaces: AppState['workspaces'], filePath: s
   return null;
 }
 
-function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): { path: string; name: string } | null {
+function findWorkspaceFileNode(nodes: WorkspaceTreeNode[], filePath: string): WorkspaceFileNode | null {
   for (const node of nodes) {
-    if (node.kind === 'file' && node.path === filePath) return { path: node.path, name: node.name };
+    if (node.kind === 'file' && node.path === filePath) return node;
     if (node.kind === 'folder') {
       const match = findWorkspaceFileNode(node.children, filePath);
       if (match) return match;
@@ -4608,6 +4639,22 @@ function renderAppSettingsDialog(state: AppState): string {
   const settings = state.appSettingsDraft ?? state.appSettings;
   const pluginManager = state.appSettingsDialogMode === 'plugins';
   const imageAttachmentMaxDimensions = normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions);
+  const homepageSelection = settings.homepage.kind === 'included'
+    ? `included:${settings.homepage.id}`
+    : settings.homepage.kind;
+  const homepagePath = settings.homepage.kind === 'file' ? settings.homepage.path : '';
+  const homepageFile = homepagePath ? findFileInWorkspaces(state.workspaces, homepagePath) : null;
+  const homepagePathAvailable = !homepagePath || Boolean(homepageFile && !homepageFile.archived);
+  const homepageDisplayPath = homepagePath
+    ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), homepagePath)
+    : '';
+  const currentWorkspaceFile = state.document?.path
+    ? findFileInWorkspaces(state.workspaces, state.document.path)
+    : null;
+  const canUseCurrentDocument = Boolean(
+    state.document?.includedDocumentId
+    || (state.document?.path && !state.document.isNew && !state.document.virtual && currentWorkspaceFile && !currentWorkspaceFile.archived)
+  );
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog app-settings-dialog" data-form="app-settings">
@@ -4617,7 +4664,26 @@ function renderAppSettingsDialog(state: AppState): string {
       ? 'Configure downloaded plugin access.'
       : 'Configure application defaults used when a document does not set its own value.'}</p>
         <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
-        ${pluginManager ? '' : `<fieldset class="ai-action-config image-dimension-settings">
+        ${pluginManager ? '' : `<fieldset class="ai-action-config homepage-settings">
+          <legend>Homepage</legend>
+          <p class="dialog-note">Shown when no launch file or previous document is restored.</p>
+          <label>
+            <span>Homepage</span>
+            <select class="hvy-galaxy-select" name="homepageSelection">
+              ${includedDocuments.map((document) => `<option value="included:${escapeAttr(document.id)}" ${homepageSelection === `included:${document.id}` ? 'selected' : ''}>${escapeHtml(document.name)}</option>`).join('')}
+              <option value="file" ${homepageSelection === 'file' ? 'selected' : ''} ${homepagePath ? '' : 'disabled'}>Custom document</option>
+              <option value="none" ${homepageSelection === 'none' ? 'selected' : ''}>No homepage</option>
+            </select>
+          </label>
+          <input name="homepagePath" type="hidden" value="${escapeAttr(homepagePath)}">
+          ${homepagePath ? `<p class="dialog-note homepage-path" title="${escapeAttr(homepageDisplayPath)}">${escapeHtml(homepageDisplayPath)}</p>` : ''}
+          ${homepagePath && !homepagePathAvailable ? '<p class="dialog-note homepage-unavailable" data-state="error">This document is not currently available. The selection will be kept.</p>' : ''}
+          <div class="dialog-actions homepage-actions">
+            <button class="hvy-galaxy-button" type="button" data-action="open-homepage-picker">Choose…</button>
+            <button class="hvy-galaxy-button" type="button" data-action="use-current-document-as-homepage" ${canUseCurrentDocument ? '' : 'disabled'}>Use Current Document</button>
+          </div>
+        </fieldset>
+        <fieldset class="ai-action-config image-dimension-settings">
           <legend>Attached image defaults</legend>
           <p class="dialog-note">Images are downscaled to reduce file size.</p>
           <label>
@@ -4749,6 +4815,105 @@ function renderAppSettingsDiscardDialog(state: AppState): string {
         </div>
       </section>
     </div>`;
+}
+
+function renderHomepageErrorDialog(state: AppState): string {
+  if (!state.homepageError) return '';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog homepage-error-dialog" role="dialog" aria-modal="true" aria-labelledby="homepageErrorTitle">
+        <h2 id="homepageErrorTitle">Homepage Could Not Be Opened</h2>
+        <p class="dialog-note homepage-error-details">${escapeHtml(state.homepageError)}</p>
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="choose-replacement-homepage">Choose Another…</button>
+          <button class="hvy-galaxy-button" type="button" data-action="use-included-guide-as-homepage">Use HVY Galaxy Guide</button>
+          <button class="hvy-galaxy-button" type="button" data-action="disable-homepage">No Homepage</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderHomepagePickerDialog(state: AppState): string {
+  if (!state.homepagePickerMode) return '';
+  const selectedPath = state.homepagePickerMode === 'settings' && state.appSettingsDraft?.homepage.kind === 'file'
+    ? state.appSettingsDraft.homepage.path
+    : state.appSettings.homepage.kind === 'file'
+      ? state.appSettings.homepage.path
+      : '';
+  const entries = state.workspaceEntries.map((entry) => {
+    const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
+    if (entry.status !== 'ready' || !workspace) {
+      const detail = entry.status === 'loading' ? 'Loading…' : entry.error ?? 'Workspace is unavailable.';
+      return `
+        <section class="homepage-picker-workspace homepage-picker-workspace-${entry.status}">
+          <div class="homepage-picker-workspace-status">
+            <strong>${escapeHtml(entry.displayName)}</strong>
+            <span title="${escapeAttr(detail)}">${escapeHtml(detail)}</span>
+          </div>
+          ${entry.status === 'loading' ? '' : `<button class="hvy-galaxy-button" type="button" data-action="retry-workspace" data-workspace-path="${escapeAttr(entry.path)}">Retry</button>`}
+        </section>`;
+    }
+    if (!workspace.files.some(workspaceNodeContainsHomepageFile)) return '';
+    const selectedFile = selectedPath ? findWorkspaceFileNode(workspace.files, selectedPath) : null;
+    const containsSelection = Boolean(selectedFile && !selectedFile.archived);
+    return `
+      <details class="homepage-picker-workspace" ${containsSelection ? 'open' : ''}>
+        <summary>${escapeHtml(workspace.manifest.name)}</summary>
+        <ul class="tree homepage-picker-tree">
+          ${sortHomepageNodes(workspace.files.filter(workspaceNodeContainsHomepageFile)).map((node) => renderHomepagePickerNode(node, selectedPath)).join('')}
+        </ul>
+      </details>`;
+  }).join('');
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog homepage-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="homepagePickerTitle">
+        <h2 id="homepagePickerTitle">Choose Homepage Document</h2>
+        <p class="dialog-note">Choose a document from a workspace known to HVY Galaxy.</p>
+        <div class="homepage-picker-workspaces">
+          ${entries || '<p class="dialog-note">No workspace documents are available to use as a homepage.</p>'}
+        </div>
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-homepage-picker">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function renderHomepagePickerNode(node: WorkspaceTreeNode, selectedPath: string): string {
+  if (node.kind === 'folder') {
+    const containsSelection = nodeContainsFilePath(node, selectedPath);
+    return `
+      <li>
+        <details ${containsSelection ? 'open' : ''}>
+          <summary>${escapeHtml(workspaceNodeName(node))}</summary>
+          <ul class="tree">${sortHomepageNodes(node.children.filter(workspaceNodeContainsHomepageFile)).map((child) => renderHomepagePickerNode(child, selectedPath)).join('')}</ul>
+        </details>
+      </li>`;
+  }
+  const selected = node.path === selectedPath;
+  return `
+    <li>
+      <button type="button" class="hvy-galaxy-button homepage-picker-file${selected ? ' is-selected' : ''}" data-action="select-homepage-document" data-path="${escapeAttr(node.path)}" title="${escapeAttr(workspaceNodeRelativePath(node))}">
+        <span>${escapeHtml(displayDocumentName(node.name))}</span>
+        ${node.locked ? '<span class="tree-file-archived">Locked</span>' : ''}
+      </button>
+    </li>`;
+}
+
+function sortHomepageNodes(nodes: WorkspaceTreeNode[]): WorkspaceTreeNode[] {
+  return [...nodes].sort((left, right) => {
+    if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
+    return workspaceNodeName(left).localeCompare(workspaceNodeName(right));
+  });
+}
+
+function nodeContainsFilePath(node: WorkspaceTreeNode, path: string): boolean {
+  if (!path) return false;
+  return node.kind === 'file' ? node.path === path : node.children.some((child) => nodeContainsFilePath(child, path));
+}
+
+function workspaceNodeContainsHomepageFile(node: WorkspaceTreeNode): boolean {
+  return node.kind === 'file' ? !node.archived : node.children.some(workspaceNodeContainsHomepageFile);
 }
 
 function renderAiSettingsDialog(state: AppState): string {
@@ -5804,8 +5969,17 @@ function readAppSettingsForm(data: FormData, currentPath = ''): AppSettings {
         : {}),
     }
     : parsedSettings.pluginAcceptances;
+  const homepageSelection = String(data.get('homepageSelection') ?? '');
+  const homepage = homepageSelection.startsWith('included:')
+    ? normalizeHomepageSetting({ kind: 'included', id: homepageSelection.slice('included:'.length) })
+    : homepageSelection === 'file'
+      ? normalizeHomepageSetting({ kind: 'file', path: String(data.get('homepagePath') ?? '') })
+      : homepageSelection === 'none'
+        ? { kind: 'none' as const }
+        : parsedSettings.homepage;
   return {
     ...parsedSettings,
+    homepage,
     imageAttachmentMaxDimensions: data.has('imageAttachmentMaxWidth') || data.has('imageAttachmentMaxHeight')
       ? normalizeImageAttachmentMaxDimensions({
         width: data.get('imageAttachmentMaxWidth'),
@@ -5837,6 +6011,7 @@ function parseAppSettings(value: string): AppSettings {
   try {
     const parsed = JSON.parse(value) as Partial<AppSettings>;
     return {
+      homepage: normalizeHomepageSetting(parsed.homepage),
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
       powerScriptingAllowedFiles: Array.isArray(parsed.powerScriptingAllowedFiles)
         ? parsed.powerScriptingAllowedFiles.filter((path): path is string => typeof path === 'string')
@@ -5856,6 +6031,7 @@ function parseAppSettings(value: string): AppSettings {
     };
   } catch {
     return {
+      homepage: { kind: 'included', id: 'hvy-galaxy-guide' },
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(null),
       powerScriptingAllowedFiles: [],
       powerScriptAcceptances: {},

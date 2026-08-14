@@ -463,6 +463,7 @@
     #[test]
     fn normalizes_app_settings() {
         let settings = normalize_app_settings(AppSettings {
+            homepage: HomepageSetting::default(),
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions { width: 0, height: 20_000 },
             power_scripting_allowed_files: vec![" /tmp/trusted.hvy ".into(), "/tmp/trusted.hvy".into(), "".into()],
             plugin_policies: std::collections::BTreeMap::new(),
@@ -480,6 +481,22 @@
         assert_eq!(settings.power_scripting_allowed_files, vec!["/tmp/trusted.hvy"]);
         assert!(settings.debug_semantic_search);
         assert_eq!(settings.debug_log_max_bytes, default_debug_log_max_bytes());
+    }
+
+    #[test]
+    fn normalizes_homepage_settings() {
+        assert_eq!(
+            normalize_homepage_setting(HomepageSetting::Included { id: "hvy-guide".into() }),
+            HomepageSetting::Included { id: "hvy-guide".into() },
+        );
+        assert_eq!(
+            normalize_homepage_setting(HomepageSetting::File { path: " /tmp/home.hvy ".into() }),
+            HomepageSetting::File { path: "/tmp/home.hvy".into() },
+        );
+        assert_eq!(
+            normalize_homepage_setting(HomepageSetting::Included { id: "missing".into() }),
+            HomepageSetting::default(),
+        );
     }
 
     #[test]

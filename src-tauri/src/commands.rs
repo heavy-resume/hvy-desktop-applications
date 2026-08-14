@@ -1034,19 +1034,15 @@ fn probe_integration_cookie_storage(app: AppHandle) -> AppResult<IntegrationStor
 }
 
 #[tauri::command]
-fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
+fn load_included_document(app: AppHandle, id: String) -> AppResult<DocumentFile> {
+    let resource = match id.as_str() {
+        "hvy-galaxy-guide" => "resources/hvy-galaxy.hvy",
+        "hvy-guide" => "resources/hvy-guide.hvy",
+        _ => return Err(AppError::Message(format!("Unknown included document: {id}"))),
+    };
     let resource_path = app
         .path()
-        .resolve("resources/hvy-galaxy.hvy", tauri::path::BaseDirectory::Resource)
-        .map_err(|error| AppError::Message(error.to_string()))?;
-    read_document_at(&resource_path)
-}
-
-#[tauri::command]
-fn load_hvy_guide(app: AppHandle) -> AppResult<DocumentFile> {
-    let resource_path = app
-        .path()
-        .resolve("resources/hvy-guide.hvy", tauri::path::BaseDirectory::Resource)
+        .resolve(resource, tauri::path::BaseDirectory::Resource)
         .map_err(|error| AppError::Message(error.to_string()))?;
     read_document_at(&resource_path)
 }

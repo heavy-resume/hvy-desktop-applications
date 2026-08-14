@@ -2,8 +2,8 @@ import { installAiChatClient } from './aiClient';
 import { installMcpClient, installPluginPackage, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
-import { state } from './state';
-import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
+import { findFileInWorkspaces, state } from './state';
+import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
@@ -209,6 +209,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.appSettingsDraft = cloneAppSettings(state.appSettings);
     state.appSettingsDialogInitialJson = JSON.stringify(canonicalAppSettings(state.appSettingsDraft));
     state.appSettingsDiscardDialogOpen = false;
+    state.homepagePickerMode = null;
     state.appSettingsDialogOpen = true;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -1047,6 +1048,64 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = files.length === 1 ? `Installed ${files[0].name}` : `Installed ${files.length} plugins`;
     rerender({ preserveMountedDocument: true });
   }),
+  openHomepagePicker: (settings) => {
+    state.appSettingsDraft = settings;
+    state.homepagePickerMode = 'settings';
+    rerender({ preserveMountedDocument: true });
+  },
+  useCurrentDocumentAsHomepage: (settings) => {
+    const document = state.document;
+    if (!document) return;
+    const workspaceFile = document.path ? findFileInWorkspaces(state.workspaces, document.path) : null;
+    const homepage = document.includedDocumentId
+      ? { kind: 'included' as const, id: document.includedDocumentId }
+      : document.path && !document.isNew && !document.virtual && workspaceFile && !workspaceFile.archived
+        ? { kind: 'file' as const, path: document.path }
+        : null;
+    if (!homepage) return;
+    state.appSettingsDraft = { ...settings, homepage };
+    state.status = 'Selected current document as homepage';
+    rerender({ preserveMountedDocument: true });
+  },
+  chooseReplacementHomepage: () => {
+    state.homepagePickerMode = 'recovery';
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelHomepagePicker: () => {
+    state.homepagePickerMode = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  selectHomepageDocument: (path) => {
+    const workspaceFile = findFileInWorkspaces(state.workspaces, path);
+    if (!workspaceFile || workspaceFile.archived) return;
+    if (state.homepagePickerMode === 'settings') {
+      state.appSettingsDraft = {
+        ...(state.appSettingsDraft ?? state.appSettings),
+        homepage: { kind: 'file', path },
+      };
+      state.homepagePickerMode = null;
+      state.status = 'Selected homepage document';
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    if (state.homepagePickerMode !== 'recovery') return;
+    void runBusy('Opening homepage...', async () => {
+      state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'file', path } });
+      state.homepagePickerMode = null;
+      state.homepageError = null;
+      await openHomepage();
+    });
+  },
+  useIncludedGuideAsHomepage: () => void runBusy('Opening homepage...', async () => {
+    state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'included', id: 'hvy-galaxy-guide' } });
+    state.homepageError = null;
+    await openHomepage();
+  }),
+  disableHomepage: () => void runBusy('Updating homepage...', async () => {
+    state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'none' } });
+    state.homepageError = null;
+    state.status = 'Homepage disabled';
+  }),
   saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {
     state.appSettings = await saveAppSettings(settings);
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
@@ -1055,6 +1114,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.appSettingsDraft = null;
     state.appSettingsDialogInitialJson = null;
     state.appSettingsDiscardDialogOpen = false;
+    state.homepagePickerMode = null;
     state.status = 'Saved settings';
     await mountCurrentDocument();
   }),
@@ -1068,6 +1128,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.appSettingsDraft = null;
     state.appSettingsDialogInitialJson = null;
     state.appSettingsDiscardDialogOpen = false;
+    state.homepagePickerMode = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -1076,6 +1137,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.appSettingsDraft = null;
     state.appSettingsDialogInitialJson = null;
     state.appSettingsDiscardDialogOpen = false;
+    state.homepagePickerMode = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },

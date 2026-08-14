@@ -347,7 +347,38 @@ export interface ImageAttachmentMaxDimensions {
   height: number;
 }
 
+export type HomepageSetting =
+  | { kind: 'included'; id: string }
+  | { kind: 'file'; path: string }
+  | { kind: 'none' };
+
+export interface IncludedDocument {
+  id: string;
+  name: string;
+}
+
+export const includedDocuments: IncludedDocument[] = [
+  { id: 'hvy-galaxy-guide', name: 'HVY Galaxy Guide' },
+  { id: 'hvy-guide', name: 'HVY Guide' },
+];
+
+export function normalizeHomepageSetting(value: unknown): HomepageSetting {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { kind: 'included', id: 'hvy-galaxy-guide' };
+  }
+  const setting = value as Partial<HomepageSetting>;
+  if (setting.kind === 'included' && typeof setting.id === 'string' && includedDocuments.some((document) => document.id === setting.id)) {
+    return { kind: 'included', id: setting.id };
+  }
+  if (setting.kind === 'file' && typeof setting.path === 'string' && setting.path.trim()) {
+    return { kind: 'file', path: setting.path.trim() };
+  }
+  if (setting.kind === 'none') return { kind: 'none' };
+  return { kind: 'included', id: 'hvy-galaxy-guide' };
+}
+
 export interface AppSettings {
+  homepage: HomepageSetting;
   imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
   powerScriptingAllowedFiles: string[];
   powerScriptAcceptances: Record<string, string[]>;
@@ -600,6 +631,7 @@ export function defaultAiSettings(): AiSettings {
 
 export function defaultAppSettings(): AppSettings {
   return {
+    homepage: { kind: 'included', id: 'hvy-galaxy-guide' },
     imageAttachmentMaxDimensions: { width: 1080, height: 1080 },
     powerScriptingAllowedFiles: [],
     powerScriptAcceptances: {},
@@ -716,12 +748,8 @@ export function defaultAiEmbeddingSettings(providerId = 'openai'): AiEmbeddingSe
   };
 }
 
-export function loadDefaultGuide(): Promise<DocumentFile> {
-  return invokeDesktop<DocumentFile>('load_default_guide').then(normalizeDocumentFileBytes);
-}
-
-export function loadHvyGuide(): Promise<DocumentFile> {
-  return invokeDesktop<DocumentFile>('load_hvy_guide').then(normalizeDocumentFileBytes);
+export function loadIncludedDocument(id: string): Promise<DocumentFile> {
+  return invokeDesktop<DocumentFile>('load_included_document', { id }).then(normalizeDocumentFileBytes);
 }
 
 export function openWorkspaceDialog(): Promise<Workspace | null> {

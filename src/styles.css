@@ -3189,6 +3189,66 @@ body {
   grid-column: 1 / -1;
 }
 
+.homepage-settings > .dialog-note {
+  margin-top: 0;
+}
+
+.homepage-path {
+  overflow-wrap: anywhere;
+}
+
+.homepage-actions {
+  justify-content: flex-start;
+}
+
+.homepage-error-details {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.homepage-picker-dialog {
+  width: min(42rem, calc(100vw - 2rem));
+}
+
+.homepage-picker-workspaces {
+  max-height: min(60vh, 36rem);
+  overflow: auto;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 0.5rem;
+  padding: 0.5rem;
+}
+
+.homepage-picker-workspace {
+  padding: 0.35rem 0.5rem;
+}
+
+.homepage-picker-workspace > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.homepage-picker-workspace-status {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.homepage-picker-workspace-status > span {
+  color: var(--hvy-text-muted, #66736d);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.homepage-picker-file {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.homepage-picker-file.is-selected {
+  background: var(--hvy-surface-tint, #e8f0ed);
+}
+
 .dimension-input input {
   padding-right: 42px;
 }

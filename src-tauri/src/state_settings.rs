@@ -337,6 +337,7 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
         .collect();
     let power_script_acceptance_scripts = settings.power_script_acceptance_scripts;
     AppSettings {
+        homepage: normalize_homepage_setting(settings.homepage),
         image_attachment_max_dimensions: normalize_image_attachment_max_dimensions(settings.image_attachment_max_dimensions),
         power_scripting_allowed_files,
         power_script_acceptances,
@@ -377,6 +378,19 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
                 if path.is_empty() || authorizations.is_empty() { None } else { Some((path, authorizations)) }
             })
             .collect(),
+    }
+}
+
+fn normalize_homepage_setting(setting: HomepageSetting) -> HomepageSetting {
+    match setting {
+        HomepageSetting::Included { id } if matches!(id.as_str(), "hvy-galaxy-guide" | "hvy-guide") => {
+            HomepageSetting::Included { id }
+        }
+        HomepageSetting::File { path } if !path.trim().is_empty() => {
+            HomepageSetting::File { path: path.trim().to_string() }
+        }
+        HomepageSetting::None => HomepageSetting::None,
+        _ => HomepageSetting::default(),
     }
 }
 

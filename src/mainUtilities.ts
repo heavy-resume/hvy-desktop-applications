@@ -1,6 +1,6 @@
-import { chooseWorkspaceFolder, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
+import { chooseWorkspaceFolder, normalizeHomepageSetting, saveAppSettings, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
 import { getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, saveColorThemeSettings } from './colorTheme';
-import { state } from './state';
+import { filePathBelongsToWorkspace, findFileInWorkspaces, state } from './state';
 import type { HvyMode, VisualDocument } from './hvy';
 import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
@@ -435,6 +435,7 @@ function normalizeEmbeddingBatchSize(value: unknown): number {
 
 export function canonicalAppSettings(settings: AppSettings): AppSettings {
   return {
+    homepage: normalizeHomepageSetting(settings.homepage),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
     powerScriptingAllowedFiles: normalizePowerScriptingAllowedFiles(settings.powerScriptingAllowedFiles),
     powerScriptAcceptances: normalizePowerScriptAcceptances(settings.powerScriptAcceptances),
@@ -446,6 +447,33 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
     webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(settings.webCapabilityProfileBindings),
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings.webCapabilityAuthorizations),
   };
+}
+
+export async function updateHomepageDocumentPath(previousPath: string, nextPath: string): Promise<void> {
+  if (state.appSettings.homepage.kind !== 'file' || state.appSettings.homepage.path !== previousPath) return;
+  state.appSettings = await saveAppSettings({
+    ...state.appSettings,
+    homepage: { kind: 'file', path: nextPath },
+  });
+}
+
+export async function clearHomepageDocumentPath(path: string): Promise<void> {
+  if (state.appSettings.homepage.kind !== 'file' || state.appSettings.homepage.path !== path) return;
+  state.appSettings = await saveAppSettings({
+    ...state.appSettings,
+    homepage: { kind: 'none' },
+  });
+}
+
+export async function clearArchivedHomepageDocument(): Promise<void> {
+  const homepage = state.appSettings.homepage;
+  if (homepage.kind !== 'file') return;
+  if (!state.workspaceEntries.some((entry) => filePathBelongsToWorkspace(homepage.path, entry.path))) {
+    await clearHomepageDocumentPath(homepage.path);
+    return;
+  }
+  const file = findFileInWorkspaces(state.workspaces, homepage.path);
+  if (file?.archived) await clearHomepageDocumentPath(homepage.path);
 }
 
 export function normalizePowerScriptAcceptanceScripts(

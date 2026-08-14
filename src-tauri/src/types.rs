@@ -465,8 +465,24 @@ fn default_image_attachment_max_dimension() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum HomepageSetting {
+    Included { id: String },
+    File { path: String },
+    None,
+}
+
+impl Default for HomepageSetting {
+    fn default() -> Self {
+        Self::Included { id: "hvy-galaxy-guide".into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
+    #[serde(default)]
+    homepage: HomepageSetting,
     #[serde(default)]
     image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
     #[serde(default)]
@@ -492,6 +508,7 @@ struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            homepage: HomepageSetting::default(),
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
             power_scripting_allowed_files: Vec::new(),
             power_script_acceptances: std::collections::BTreeMap::new(),

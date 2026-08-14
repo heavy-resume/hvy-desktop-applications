@@ -1,11 +1,11 @@
 import { installAiChatClient } from './aiClient';
-import { loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadDefaultGuide, loadHvyGuide, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
+import { includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
-import { state } from './state';
-import { handlers, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { state, workspaceRelativeFilePath } from './state';
+import { handlers, clearArchivedHomepageDocument, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
@@ -344,7 +344,7 @@ export async function boot(): Promise<void> {
     if (!state.document) {
       await restoreStartupDocument();
     }
-    await openDefaultGuide();
+    await openHomepage();
   } catch (error) {
     showStartupError(error);
   }
@@ -557,6 +557,7 @@ export async function loadRecentWorkspaces(): Promise<void> {
   }));
   rerender({ preserveMountedDocument: true });
   await Promise.all(state.recent.workspaces.map((path) => loadWorkspaceEntry(path)));
+  await clearArchivedHomepageDocument();
   state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
   syncMcpWorkspaces();
 }
@@ -578,10 +579,39 @@ export async function loadStartupWorkspacesInBackground(): Promise<void> {
 export async function openDefaultGuide(options: { force?: boolean } = {}): Promise<void> {
   if (!options.force && (state.document || state.documentTabs.length > 0 || state.selectedFilePath)) return;
   try {
-    await openDocument(await loadDefaultGuide(), { defaultDocument: true, defaultDocumentLabel: 'HVY Galaxy guide' });
+    await openDocument(await loadIncludedDocument('hvy-galaxy-guide'), { defaultDocument: true, defaultDocumentLabel: 'HVY Galaxy guide', includedDocumentId: 'hvy-galaxy-guide' });
   } catch (error) {
     state.error = error instanceof Error ? error.message : String(error);
     state.status = 'Could not load HVY Galaxy guide';
+    setMountRoot(render(state, handlers));
+  }
+}
+
+export async function openHomepage(): Promise<void> {
+  if (state.document || state.documentTabs.length > 0 || state.selectedFilePath) return;
+  const homepage = state.appSettings.homepage;
+  if (homepage.kind === 'none') return;
+  try {
+    if (homepage.kind === 'included') {
+      const included = includedDocuments.find((document) => document.id === homepage.id);
+      await openDocument(await loadIncludedDocument(homepage.id), {
+        defaultDocument: true,
+        defaultDocumentLabel: included?.name ?? 'included document',
+        includedDocumentId: homepage.id,
+      });
+    } else {
+      await openDocument(await readDocumentFile(homepage.path));
+    }
+    state.homepageError = null;
+  } catch {
+    const target = homepage.kind === 'file'
+      ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), homepage.path)
+      : includedDocuments.find((document) => document.id === homepage.id)?.name ?? homepage.id;
+    const detail = homepage.kind === 'file'
+      ? 'This document is not currently available in its workspace.'
+      : 'This included document is not currently available.';
+    state.homepageError = `${target}\n\n${detail}`;
+    state.status = 'Could not open homepage';
     setMountRoot(render(state, handlers));
   }
 }
@@ -680,6 +710,6 @@ export async function openGuide(): Promise<void> {
 
 export async function openHvyGuide(): Promise<void> {
   await runBusy('Opening HVY guide...', async () => {
-    await openDocument(await loadHvyGuide(), { defaultDocument: true, defaultDocumentLabel: 'HVY guide' });
+    await openDocument(await loadIncludedDocument('hvy-guide'), { defaultDocument: true, defaultDocumentLabel: 'HVY guide', includedDocumentId: 'hvy-guide' });
   });
 }

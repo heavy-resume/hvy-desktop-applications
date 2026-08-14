@@ -3,7 +3,7 @@ import { state, workspacePathForFileInWorkspaces, type AppState } from './state'
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
+import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, updateHomepageDocumentPath } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
@@ -135,12 +135,14 @@ export async function createTemporaryImportMount(
 export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string, targetDirectory = ''): Promise<void> {
   const sourceWorkspacePath = workspacePathForFile(path);
   const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
+  await updateHomepageDocumentPath(path, file.path);
   await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
   state.status = `Moved to ${file.name}`;
 }
 
 export async function convertOpenWorkspaceFileKind(path: string, workspacePath: string, toTemplate: boolean): Promise<void> {
   const file = await convertWorkspaceDocumentKind({ path, workspacePath, toTemplate });
+  await updateHomepageDocumentPath(path, file.path);
   state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
   await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
   await refreshSavedTemplates(workspacePath);

@@ -7,7 +7,7 @@ import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from 
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
 import type { IntegrationStructuredSource } from './integrationBrowser';
-export { findFileInWorkspace, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces } from './workspaceFiles';
+export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
 export interface OpenDocument {
   documentId: string;
@@ -15,6 +15,7 @@ export interface OpenDocument {
   name: string;
   extension: DocumentExtension;
   virtual?: 'workspaceChat' | 'versionHistory' | 'recoveryDraft' | 'defaultDocument';
+  includedDocumentId?: string;
   historySourcePath?: string;
   historySourceName?: string;
   historyVersionId?: string;
@@ -46,6 +47,8 @@ export interface AppState {
   selectedFilePath: string | null;
   recent: RecentState;
   appSettings: AppSettings;
+  homepageError: string | null;
+  homepagePickerMode: 'settings' | 'recovery' | null;
   aiSettings: AiSettings;
   mcpSettings: McpSettings;
   mcpServerStatus: McpServerStatus;
@@ -307,6 +310,8 @@ export const state: AppState = {
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
   appSettings: defaultAppSettings(),
+  homepageError: null,
+  homepagePickerMode: null,
   aiSettings: defaultAiSettings(),
   mcpSettings: defaultMcpSettings(),
   mcpServerStatus: defaultMcpServerStatus(),

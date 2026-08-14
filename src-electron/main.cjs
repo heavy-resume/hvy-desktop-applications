@@ -551,8 +551,7 @@ async function handleCommand(command, args) {
       refreshMenu();
       return mcpStatus;
     case 'update_mcp_workspaces': return updateMcpWorkspaces(args.paths);
-    case 'load_default_guide': return readDocumentAt(defaultGuidePath());
-    case 'load_hvy_guide': return readDocumentAt(hvyGuidePath());
+    case 'load_included_document': return readDocumentAt(includedDocumentPath(args.id));
     case 'open_workspace_dialog': return openWorkspaceDialog();
     case 'reauthorize_workspace': return reauthorizeWorkspace(args.path);
     case 'choose_workspace_folder': return chooseWorkspaceFolder();
@@ -1133,6 +1132,12 @@ function defaultGuidePath() {
   const packaged = path.join(process.resourcesPath || '', 'hvy-galaxy.hvy');
   if (fs.existsSync(packaged)) return packaged;
   return path.join(__dirname, '..', 'src', 'assets', 'hvy-galaxy.hvy');
+}
+
+function includedDocumentPath(id) {
+  if (id === 'hvy-galaxy-guide') return defaultGuidePath();
+  if (id === 'hvy-guide') return hvyGuidePath();
+  throw new Error(`Unknown included document: ${id}`);
 }
 
 function hvyGuidePath() {
@@ -2566,6 +2571,7 @@ function defaultAiEmbeddingSettings() {
 
 function defaultAppSettings() {
   return {
+    homepage: { kind: 'included', id: 'hvy-galaxy-guide' },
     imageAttachmentMaxDimensions: {
       width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
       height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
@@ -2586,6 +2592,7 @@ function normalizeAppSettings(settings) {
   return {
     ...defaultAppSettings(),
     ...(settings || {}),
+    homepage: normalizeHomepageSetting(settings?.homepage),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
     powerScriptingAllowedFiles: normalizePowerScriptingAllowedFiles(settings?.powerScriptingAllowedFiles),
     powerScriptAcceptances: normalizePowerScriptAcceptances(settings?.powerScriptAcceptances),
@@ -2597,6 +2604,17 @@ function normalizeAppSettings(settings) {
     webCapabilityProfileBindings: normalizeNestedStringMap(settings?.webCapabilityProfileBindings),
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings?.webCapabilityAuthorizations),
   };
+}
+
+function normalizeHomepageSetting(value) {
+  if (value?.kind === 'included' && ['hvy-galaxy-guide', 'hvy-guide'].includes(value.id)) {
+    return { kind: 'included', id: value.id };
+  }
+  if (value?.kind === 'file' && typeof value.path === 'string' && value.path.trim()) {
+    return { kind: 'file', path: value.path.trim() };
+  }
+  if (value?.kind === 'none') return { kind: 'none' };
+  return { kind: 'included', id: 'hvy-galaxy-guide' };
 }
 
 function normalizePluginPolicies(value) {
