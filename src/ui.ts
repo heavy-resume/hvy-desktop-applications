@@ -1295,14 +1295,14 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (pluginDropZone && hasDraggedFiles(event)) {
       event.preventDefault();
       event.dataTransfer!.dropEffect = 'copy';
-      pluginDropZone.classList.add('is-drag-over');
+      setDragOverTarget(root, pluginDropZone);
       return;
     }
     const dropTarget = workspaceDropTargetFromEvent(event);
     if (!dropTarget || (!hasDraggedFiles(event) && !hasDraggedWorkspaceFile(event))) return;
     event.preventDefault();
     event.dataTransfer!.dropEffect = hasDraggedWorkspaceFile(event) ? 'move' : 'copy';
-    dropTarget.element.classList.add('is-drag-over');
+    setDragOverTarget(root, dropTarget.element);
   }, { signal });
   root.addEventListener('dragleave', (event) => {
     const pluginDropZone = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-plugin-drop-zone]') : null;
@@ -1312,7 +1312,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       return;
     }
     const dropTarget = workspaceDropTargetFromEvent(event);
-    if (!dropTarget || (relatedTarget && dropTarget.element.contains(relatedTarget))) return;
+    const relatedDropTarget = workspaceDropTargetFromElement(relatedTarget instanceof Element ? relatedTarget : null);
+    if (!dropTarget || relatedDropTarget?.element === dropTarget.element) return;
     dropTarget.element.classList.remove('is-drag-over');
   }, { signal });
   root.addEventListener('drop', (event) => {
@@ -2371,6 +2372,13 @@ function findWorkspaceFolderNode(nodes: WorkspaceTreeNode[], targetDirectory: st
 
 function workspaceDropTargetFromEvent(event: Event): { element: HTMLElement; workspacePath: string; targetDirectory: string } | null {
   return workspaceDropTargetFromElement(event.target instanceof Element ? event.target : null);
+}
+
+function setDragOverTarget(root: HTMLElement, target: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>('.is-drag-over').forEach((element) => {
+    element.classList.toggle('is-drag-over', element === target);
+  });
+  target.classList.add('is-drag-over');
 }
 
 function hasDraggedFiles(event: DragEvent): boolean {
