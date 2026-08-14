@@ -1,5 +1,5 @@
 import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
-import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationRegistry } from './integrationRegistry';
+import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationPageReadyChecks, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
@@ -100,6 +100,11 @@ export interface AppState {
   integrationVaultResetDialogOpen: boolean;
   integrationRegistry: IntegrationRegistry;
   addIntegrationPageDialogOpen: boolean;
+  integrationReadyChecksDialogOpen: boolean;
+  integrationReadyChecksIntegrationId: string | null;
+  integrationReadyChecksPageId: string | null;
+  integrationReadyChecksDraft: IntegrationPageReadyChecks | null;
+  integrationReadyCheckSelectionPending: boolean;
   inspectionPrivacyRules: InspectionPrivacyRule[];
   integrationActionBuilderOpen: boolean;
   integrationActionDiscardDialogOpen: boolean;
@@ -363,6 +368,11 @@ export const state: AppState = {
   integrationVaultResetDialogOpen: false,
   integrationRegistry: loadIntegrationRegistry(),
   addIntegrationPageDialogOpen: false,
+  integrationReadyChecksDialogOpen: false,
+  integrationReadyChecksIntegrationId: null,
+  integrationReadyChecksPageId: null,
+  integrationReadyChecksDraft: null,
+  integrationReadyCheckSelectionPending: false,
   inspectionPrivacyRules: [],
   integrationActionBuilderOpen: false,
   integrationActionDiscardDialogOpen: false,

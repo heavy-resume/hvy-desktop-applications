@@ -17,6 +17,7 @@
   let targetCollection = null;
   let commandRecorder = null;
   let toolbarControl = null;
+  let inspectionContext = null;
   let captureSequence = 0;
   let browserChromeHost = null;
   const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
@@ -654,6 +655,7 @@
     return {
       kind: 'integration-inspection',
       inspectionKind,
+      ...(inspectionContext ? { context: inspectionContext } : {}),
       page: { origin: location.origin, pathname: location.pathname, userAgent: navigator.userAgent },
       selected: {
         captureId,
@@ -1351,6 +1353,45 @@
     return image ? { imageUrl: image.url, alt: image.alt } : '';
   };
 
+  const normalizedReadyValue = (value) => (typeof value === 'string' ? value : JSON.stringify(value))
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const pageReadiness = (checks = {}) => {
+    const mode = ['strict-url', 'strict-domain', 'domain-regex'].includes(checks.urlMode) ? checks.urlMode : 'strict-url';
+    const expected = typeof checks.urlValue === 'string' ? checks.urlValue.trim() : '';
+    let urlReady = false;
+    if (mode === 'strict-url') urlReady = location.href === expected;
+    if (mode === 'strict-domain') urlReady = location.hostname === expected;
+    if (mode === 'domain-regex') {
+      try { urlReady = new RegExp(expected).test(location.hostname); } catch (_) { urlReady = false; }
+    }
+    const results = (Array.isArray(checks.elements) ? checks.elements : []).map((check) => {
+      const match = resolveInteractionTarget(document, check.snapshot, 0.8, 'click');
+      if (match.status !== 'matched') return { id: check.id, name: check.name, ready: false, reason: 'element_not_found' };
+      if (typeof check.expectedValue !== 'string' || !check.expectedValue.trim()) {
+        return { id: check.id, name: check.name, ready: true };
+      }
+      const actual = normalizedReadyValue(extractedValue(match.element));
+      return {
+        id: check.id,
+        name: check.name,
+        ready: actual === normalizedReadyValue(check.expectedValue),
+        reason: actual === normalizedReadyValue(check.expectedValue) ? undefined : 'value_changed',
+      };
+    });
+    const failed = results.filter((result) => !result.ready);
+    const ready = urlReady && failed.length === 0;
+    const message = !urlReady
+      ? mode === 'strict-url' ? 'The browser is not at the exact configured URL.' : 'The browser is not at the configured domain.'
+      : failed.length
+        ? failed[0].reason === 'value_changed'
+          ? `The ready check value changed: ${failed[0].name || 'Page landmark'}.`
+          : `The page is missing the ready check: ${failed[0].name || 'Page landmark'}.`
+        : '';
+    return { ready, urlReady, elements: results, message };
+  };
+
   const isTextEntryElement = (element) => element instanceof HTMLTextAreaElement
     || element instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'tel', 'url', 'password'].includes(element.type)
     || element instanceof HTMLElement && element.isContentEditable;
@@ -1441,6 +1482,8 @@
 
   const executeCommand = async (payload = {}) => {
     window.__hvyGalaxyInspector.stop();
+    const readiness = pageReadiness(payload.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] });
+    if (!readiness.ready) return { status: 'not-ready', reason: 'page_not_ready', message: readiness.message, readiness, stepIndex: 0, stepsExecuted: 0 };
     const command = payload.command;
     const steps = command?.steps;
     const commandInputs = Array.isArray(command?.inputs) ? command.inputs : [];
@@ -1734,6 +1777,7 @@
     },
     start(kind = 'target', options = {}) {
       inspectionKind = kind === 'parent' ? 'parent' : 'target';
+      inspectionContext = options.context && typeof options.context === 'object' ? options.context : null;
       scopeElement = null;
       scopeSelector = options.parentCssPath || null;
       scopeSnapshot = options.parentSnapshot || null;
@@ -2167,6 +2211,7 @@
       targetCollection = null;
       commandRecorder = null;
       toolbarControl = null;
+      inspectionContext = null;
       document.removeEventListener('pointermove', pointerMove, true);
       document.removeEventListener('mousemove', pointerMove, true);
       document.removeEventListener('click', click, true);
@@ -2201,6 +2246,21 @@
       return result;
     },
     async extractAndPublish(pattern = {}, context = {}) {
+      const readiness = pageReadiness(context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] });
+      if (!readiness.ready) {
+        const result = {
+          kind: 'integration-extraction',
+          context,
+          page: { origin: location.origin, pathname: location.pathname },
+          status: 'not-ready',
+          message: readiness.message,
+          readiness,
+          matches: 0,
+          records: [],
+        };
+        publish(result);
+        return result;
+      }
       const extraction = context.mode === 'examples'
         ? await extractLiveExamples(pattern)
         : await extractAcrossPage(pattern);
@@ -2217,6 +2277,9 @@
     },
     extractLiveExamples(pattern = {}) {
       return extractLiveExamples(pattern);
+    },
+    pageReadiness(checks = {}) {
+      return pageReadiness(checks);
     },
     selectBestRecords(records = []) {
       const selected = [...records].sort((left, right) => right.score - left.score).slice(0, 100);

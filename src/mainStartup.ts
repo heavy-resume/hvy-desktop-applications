@@ -52,6 +52,12 @@ export async function boot(): Promise<void> {
     });
     await onIntegrationInspectionResult(async (result) => {
       if (handleWebCapabilityIntegrationResult(result)) return;
+      if (result && typeof result === 'object'
+        && (result as { context?: { mode?: unknown } }).context?.mode === 'ready-check') {
+        handlers.completeIntegrationReadyCheck(result);
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        return;
+      }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
         const action = (result as { action?: unknown }).action;
         const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
@@ -113,12 +119,14 @@ export async function boot(): Promise<void> {
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-result') {
-        const commandResult = result as { commandId?: unknown; status?: unknown; reason?: unknown; stepIndex?: unknown; stepsExecuted?: unknown };
+        const commandResult = result as { commandId?: unknown; status?: unknown; reason?: unknown; message?: unknown; stepIndex?: unknown; stepsExecuted?: unknown };
         const failedStep = typeof commandResult.stepIndex === 'number' ? ` at step ${commandResult.stepIndex + 1}` : '';
         state.status = commandResult.status === 'executed'
           ? `Ran command${typeof commandResult.stepsExecuted === 'number' ? ` · ${commandResult.stepsExecuted} ${commandResult.stepsExecuted === 1 ? 'step' : 'steps'}` : ''}`
           : commandResult.status === 'ambiguous'
             ? `Command stopped${failedStep}: more than one control matched`
+            : commandResult.status === 'not-ready'
+              ? String(commandResult.message || 'The expected page is not ready.')
             : `Command stopped${failedStep}: ${String(commandResult.reason || 'target not found').replaceAll('_', ' ')}`;
         rerender({ preserveMountedDocument: true });
         return;
@@ -126,7 +134,16 @@ export async function boot(): Promise<void> {
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-extraction') {
         state.integrationActionFetchPendingId = null;
         state.integrationActionFetchError = null;
-        const extraction = result as { context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
+        const extraction = result as { status?: string; message?: string; context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
+        if (extraction.status === 'not-ready') {
+          state.integrationActionPreviewPending = false;
+          state.integrationActionEditPageLoading = false;
+          state.integrationActionFetchError = extraction.message ?? 'The expected page is not ready.';
+          state.status = 'Page is not ready';
+          rerender({ preserveMountedDocument: true });
+          await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+          return;
+        }
         if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, extraction.minimumConfidence));
         const isBackgroundExampleValidation = extraction.context?.mode === 'examples';
         if (isBackgroundExampleValidation) {
@@ -151,6 +168,10 @@ export async function boot(): Promise<void> {
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {
+        if (state.integrationReadyCheckSelectionPending) {
+          state.integrationReadyCheckSelectionPending = false;
+          state.integrationReadyChecksDialogOpen = true;
+        }
         state.integrationActionSelectionPending = false;
         state.integrationActionPreviewPending = false;
         state.integrationActionBuilderOpen = true;

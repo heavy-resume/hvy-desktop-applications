@@ -26,6 +26,11 @@ const page: IntegrationPageDefinition = {
   url: 'https://mail.example.com/inbox',
   allowedOrigins: ['https://mail.example.com'],
   editable: true,
+  readyChecks: {
+    urlMode: 'strict-url',
+    urlValue: 'https://mail.example.com/inbox',
+    elements: [{ id: 'account', name: 'Account marker', snapshot, expectedValue: 'Personal account' }],
+  },
 };
 
 const itemCommand: IntegrationCommandDefinition = {
@@ -64,6 +69,8 @@ describe('web capabilities', () => {
       selected: { shape: snapshot.selected.shape, relativePath: snapshot.selected.relativePath },
     });
     expect(serialized).not.toContain('Private subject');
+    expect(serialized).not.toContain('Personal account');
+    expect(config.page.readyChecks.elements[0]).not.toHaveProperty('expectedValue');
     expect(serialized).not.toContain('profile');
     expect(readWebRecordsCapabilityConfig(JSON.parse(serialized))).toEqual(config);
   });

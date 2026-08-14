@@ -96,6 +96,13 @@ export interface UiHandlers {
   closeIntegrations(): void;
   openIntegration(destination: 'msn' | 'gmail' | 'calendar'): void;
   openIntegrationPage(integrationId: string, pageId: string, profileId?: string): void;
+  openIntegrationReadyChecks(integrationId: string, pageId: string): void;
+  cancelIntegrationReadyChecks(): void;
+  cancelIntegrationReadyCheckSelection(): void;
+  requestIntegrationReadyCheck(integrationId: string, pageId: string, urlMode: import('./integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, expectedValues: Record<string, string>): void;
+  completeIntegrationReadyCheck(value: unknown): void;
+  removeIntegrationReadyCheck(checkId: string): void;
+  saveIntegrationReadyChecks(integrationId: string, pageId: string, urlMode: import('./integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, expectedValues: Record<string, string>): void;
   setIntegrationQuickViewProfile(integrationId: string, pageId: string, profileId: string, visible: boolean): void;
   addActionForIntegrationPage(integrationId: string, pageId: string): void;
   editIntegrationAction(integrationId: string, actionId: string): void;
@@ -586,6 +593,7 @@ export function renderModals(state: AppState): void {
     ${renderAboutDialog(state)}
     ${renderIntegrationsDialog(state)}
     ${renderAddIntegrationPageDialog(state)}
+    ${renderIntegrationReadyChecksDialog(state)}
     ${renderAddIntegrationProfileDialog(state)}
     ${renderIntegrationActionBuilderDialog(state)}
     ${renderIntegrationCommandBuilderDialog(state)}
@@ -909,6 +917,19 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     }
     if (action === 'open-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
       handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId);
+    }
+    if (action === 'open-integration-ready-checks' && target.dataset.integrationId && target.dataset.pageId) handlers.openIntegrationReadyChecks(target.dataset.integrationId, target.dataset.pageId);
+    if (action === 'cancel-integration-ready-checks') handlers.cancelIntegrationReadyChecks();
+    if (action === 'cancel-integration-ready-check-selection') handlers.cancelIntegrationReadyCheckSelection();
+    if (action === 'remove-integration-ready-check' && target.dataset.checkId) handlers.removeIntegrationReadyCheck(target.dataset.checkId);
+    if (action === 'add-integration-ready-check') {
+      const form = target.closest<HTMLFormElement>('form[data-form="integration-ready-checks"]');
+      if (form && target.dataset.integrationId && target.dataset.pageId) {
+        const data = new FormData(form);
+        const mode = String(data.get('urlMode'));
+        const expectedValues = Object.fromEntries([...data.entries()].flatMap(([key, value]) => key.startsWith('readyValue:') ? [[key.slice('readyValue:'.length), String(value)]] : []));
+        if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') handlers.requestIntegrationReadyCheck(target.dataset.integrationId, target.dataset.pageId, mode, String(data.get('urlValue') ?? ''), expectedValues);
+      }
     }
     if (action === 'add-action-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
       handlers.addActionForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
@@ -1499,6 +1520,25 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       handlers.selectIntegrationProfile(target.value);
       return;
     }
+    if (target instanceof HTMLSelectElement && target.dataset.action === 'integration-ready-url-mode') {
+      const form = target.closest<HTMLFormElement>('form[data-form="integration-ready-checks"]');
+      const input = form?.querySelector<HTMLInputElement>('input[name="urlValue"]');
+      const help = form?.querySelector<HTMLElement>('[data-ready-url-help]');
+      const pageUrl = target.dataset.pageUrl ? new URL(target.dataset.pageUrl) : null;
+      if (input && pageUrl) {
+        input.value = target.value === 'strict-url'
+          ? pageUrl.href
+          : target.value === 'strict-domain'
+            ? pageUrl.hostname
+            : `^${pageUrl.hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`;
+      }
+      if (help) help.textContent = target.value === 'strict-url'
+        ? 'The complete URL, including its path, query, and fragment, must match.'
+        : target.value === 'strict-domain'
+          ? 'The current hostname must match exactly.'
+          : 'The regular expression is evaluated against the current hostname.';
+      return;
+    }
     if (target instanceof HTMLInputElement && target.dataset.action === 'set-integration-quick-view-profile' && target.dataset.integrationId && target.dataset.pageId && target.dataset.profileId) {
       handlers.setIntegrationQuickViewProfile(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId, target.checked);
       return;
@@ -1717,6 +1757,16 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (form.dataset.form === 'add-integration-page') {
       const data = new FormData(form);
       handlers.addIntegrationPage(String(data.get('pageName') ?? ''), String(data.get('pageUrl') ?? ''));
+    }
+    if (form.dataset.form === 'integration-ready-checks') {
+      const data = new FormData(form);
+      const mode = String(data.get('urlMode'));
+      const integrationId = String(data.get('integrationId') ?? '');
+      const pageId = String(data.get('pageId') ?? '');
+      if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') {
+        const expectedValues = Object.fromEntries([...data.entries()].flatMap(([key, value]) => key.startsWith('readyValue:') ? [[key.slice('readyValue:'.length), String(value)]] : []));
+        handlers.saveIntegrationReadyChecks(integrationId, pageId, mode, String(data.get('urlValue') ?? ''), expectedValues);
+      }
     }
     if (form.dataset.form === 'add-integration-profile') {
       const data = new FormData(form);
@@ -4196,7 +4246,7 @@ function renderIntegrationsDialog(state: AppState): string {
             <button type="button" class="hvy-galaxy-button integration-list-add" data-action="request-add-integration-page">+ Add web page</button>
           </nav>
           <main class="integration-detail">
-            <div class="integration-detail-header"><div class="integration-page-identity"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Open</button><div><h3>${escapeHtml(selectedPage.name)}</h3><p>${escapeHtml(new URL(selectedPage.url).hostname)}</p></div></div></div>
+            <div class="integration-detail-header"><div class="integration-page-identity"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Open</button><div><h3>${escapeHtml(selectedPage.name)}</h3><p>${escapeHtml(new URL(selectedPage.url).hostname)}</p></div></div><button class="hvy-galaxy-button" type="button" data-action="open-integration-ready-checks" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Ready checks</button></div>
             <section><div class="integration-section-heading"><div><h4>Page Commands</h4><p>Commands that do not require a matched record.</p></div><div class="integration-section-actions"><button type="button" class="hvy-galaxy-button icon-button" data-action="add-command-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" title="Add page command" aria-label="Add page command">+</button></div></div>${selectedPage.commands?.length ? `<div class="integration-command-list integration-page-command-list">${selectedPage.commands.map((command) => `<button type="button" class="hvy-galaxy-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-command-id="${escapeAttr(command.id)}">${escapeHtml(command.name)}</button>`).join('')}</div>` : '<div class="integration-empty-state integration-section-empty"><strong>No page commands yet</strong></div>'}</section>
             ${structuredSources}
             <section><div class="integration-section-heading"><div><h4>Record Types</h4><p>Reusable structures and commands that belong to ${escapeHtml(selectedPage.name)}.</p></div><div class="integration-section-actions">${state.integrationActionFetchPendingId ? `<span class="integration-fetch-status" role="status"><span class="integration-selection-pulse" aria-hidden="true"></span>Fetching items in the background…</span>` : ''}<button type="button" class="hvy-galaxy-button icon-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" title="Define record type" aria-label="Define record type">+</button></div></div>${state.integrationActionFetchError ? `<div class="integration-fetch-error" role="alert"><strong>Fetch failed</strong><span>${escapeHtml(state.integrationActionFetchError)}</span></div>` : ''}${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => `<article class="integration-record-definition"><div class="integration-record-summary"><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(action.description || action.pattern?.fields.map((field) => field.label).join(', ') || '')}</span>${renderItemCommandPills(selectedIntegration.id, action)}</div><div class="integration-record-actions"><button type="button" class="hvy-galaxy-button" data-action="edit-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Edit</button><button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Delete</button><button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}">Add item command</button><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-action" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-action-id="${escapeAttr(action.id)}" ${action.pattern && !state.integrationActionFetchPendingId ? '' : 'disabled'}>${state.integrationActionFetchPendingId === action.id ? 'Fetching…' : 'Fetch items'}</button></div></article>`).join('')}</div>` : '<div class="integration-empty-state integration-section-empty"><strong>No record types yet</strong></div>'}</section>
@@ -4389,6 +4439,24 @@ function renderIntegrationCommandDeleteDialog(state: AppState): string {
 function renderAddIntegrationPageDialog(state: AppState): string {
   if (!state.addIntegrationPageDialogOpen) return '';
   return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input class="hvy-galaxy-input" name="pageName" required autocomplete="off" placeholder="Name for this page"></label><label><span>HTTPS URL</span><input class="hvy-galaxy-input" name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><p class="field-help">The page's origin becomes its initial navigation boundary.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-page">Cancel</button><button class="hvy-galaxy-button" type="submit">Add page</button></div></form></div>`;
+}
+
+function renderIntegrationReadyChecksDialog(state: AppState): string {
+  if (!state.integrationReadyChecksDialogOpen || !state.integrationReadyChecksDraft) return '';
+  const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationReadyChecksIntegrationId);
+  const page = integration?.pages.find((candidate) => candidate.id === state.integrationReadyChecksPageId);
+  if (!integration || !page) return '';
+  const draft = state.integrationReadyChecksDraft;
+  if (state.integrationReadyCheckSelectionPending) {
+    return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Select a ready check"><h2>Select a page landmark</h2><p class="dialog-note">Choose an element that is only present when ${escapeHtml(page.name)} is ready. Galaxy will return here after the selection.</p><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Waiting for your selection…</strong></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-ready-check-selection">Cancel selection</button></div></section></div>`;
+  }
+  const modeHelp = draft.urlMode === 'strict-url'
+    ? 'The complete URL, including its path, query, and fragment, must match.'
+    : draft.urlMode === 'strict-domain'
+      ? 'The current hostname must match exactly.'
+      : 'The regular expression is evaluated against the current hostname.';
+  const elements = draft.elements.length ? draft.elements.map((check) => `<article class="integration-ready-check-row"><div><strong>${escapeHtml(check.name)}</strong><small>Leave the value blank to check only that the element exists.</small><input class="hvy-galaxy-input" name="readyValue:${escapeAttr(check.id)}" value="${escapeAttr(check.expectedValue ?? '')}" placeholder="Element exists"></div><button type="button" class="hvy-galaxy-button danger-button" data-action="remove-integration-ready-check" data-check-id="${escapeAttr(check.id)}">Remove</button></article>`).join('') : '<div class="integration-empty-state integration-section-empty"><strong>No element checks</strong><span>The URL check alone determines when this page is ready.</span></div>';
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog integration-ready-checks-dialog" role="dialog" aria-modal="true" aria-label="Ready checks" data-form="integration-ready-checks"><input type="hidden" name="integrationId" value="${escapeAttr(integration.id)}"><input type="hidden" name="pageId" value="${escapeAttr(page.id)}"><div class="modal-header"><div><p class="eyebrow">${escapeHtml(page.name)}</p><h2>Ready checks</h2><p class="dialog-note">Use ready checks to avoid pulling incorrect data or attempting wrong commands.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-ready-checks" aria-label="Close">×</button></div><section class="integration-ready-url"><label><span>URL check</span><select class="hvy-galaxy-select" name="urlMode" data-action="integration-ready-url-mode" data-page-url="${escapeAttr(page.url)}"><option value="strict-url" ${draft.urlMode === 'strict-url' ? 'selected' : ''}>Strict URL</option><option value="strict-domain" ${draft.urlMode === 'strict-domain' ? 'selected' : ''}>Strict domain</option><option value="domain-regex" ${draft.urlMode === 'domain-regex' ? 'selected' : ''}>Domain regex</option></select></label><label><span>Expected URL or domain</span><input class="hvy-galaxy-input" name="urlValue" required value="${escapeAttr(draft.urlValue)}"></label><p class="field-help" data-ready-url-help>${escapeHtml(modeHelp)}</p></section><section><div class="integration-section-heading"><div><h3>Page landmarks</h3><p>Use page landmarks to ensure you're logged in, etc.</p></div><button type="button" class="hvy-galaxy-button" data-action="add-integration-ready-check" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}">+ Select element</button></div><div class="integration-ready-check-list">${elements}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-ready-checks">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Save ready checks</button></div></form></div>`;
 }
 
 function renderAddIntegrationProfileDialog(state: AppState): string {

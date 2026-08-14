@@ -1012,7 +1012,10 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
         if (browser.pendingExtraction) {
           const extraction = browser.pendingExtraction;
-          if (extraction.context?.expectedOrigin && new URL(browser.contents.getURL()).origin !== extraction.context.expectedOrigin) return null;
+          const currentOrigin = new URL(browser.contents.getURL()).origin;
+          if (Array.isArray(extraction.context?.expectedOrigins)
+            ? !extraction.context.expectedOrigins.includes(currentOrigin)
+            : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return null;
           browser.pendingExtraction = null;
           if (extraction.kind === 'command-target') {
             return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);

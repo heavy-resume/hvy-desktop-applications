@@ -22,7 +22,12 @@ const config = {
   capabilityId: 'records',
   name: 'Records',
   description: '',
-  page: { name: 'Inbox', url: 'https://example.com/inbox', allowedOrigins: ['https://example.com'] },
+  page: {
+    name: 'Inbox',
+    url: 'https://example.com/inbox',
+    allowedOrigins: ['https://example.com'],
+    readyChecks: { urlMode: 'strict-url', urlValue: 'https://example.com/inbox', elements: [] },
+  },
   record: {
     id: 'messages',
     name: 'Messages',
@@ -74,6 +79,23 @@ describe('web capability operation timeouts', () => {
     const rejection = expect(operation).rejects.toThrow('The web capability timed out while waiting for the page.');
 
     await vi.advanceTimersByTimeAsync(60_000);
+
+    await rejection;
+  });
+
+  it('reports a failed ready check instead of treating the interstitial as an empty result', async () => {
+    const operation = executeWebRecordsCapability(config, executionContext(true));
+    await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+    const extraction = openIntegrationPage.mock.calls[0][5] as { context: { webCapabilityRequestId: string } };
+    const rejection = expect(operation).rejects.toThrow('The browser is not at the exact configured URL.');
+
+    expect(handleWebCapabilityIntegrationResult({
+      kind: 'integration-extraction',
+      status: 'not-ready',
+      message: 'The browser is not at the exact configured URL.',
+      context: { webCapabilityRequestId: extraction.context.webCapabilityRequestId },
+      records: [],
+    })).toBe(true);
 
     await rejection;
   });

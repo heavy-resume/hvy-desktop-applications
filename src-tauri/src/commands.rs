@@ -593,10 +593,16 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR);
                     let _ = window.eval(&script);
                 } else if let Ok(mut pending) = page_load_extraction.lock() {
+                    let current_origin = payload.url().origin().ascii_serialization();
+                    let expected_origins = pending.as_ref()
+                        .and_then(|value| value.pointer("/context/expectedOrigins"))
+                        .and_then(serde_json::Value::as_array);
                     let expected_origin = pending.as_ref()
                         .and_then(|value| value.pointer("/context/expectedOrigin"))
                         .and_then(serde_json::Value::as_str);
-                    let at_expected_origin = expected_origin.is_none_or(|origin| payload.url().origin().ascii_serialization() == origin);
+                    let at_expected_origin = expected_origins
+                        .map(|origins| origins.iter().any(|origin| origin.as_str() == Some(current_origin.as_str())))
+                        .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
                         let script = if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {

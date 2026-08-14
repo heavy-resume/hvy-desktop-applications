@@ -8,7 +8,7 @@ import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
-import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 
 interface DocumentColorTheme {
   name: string;
@@ -133,6 +133,37 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     && (error.message.includes('Open Gmail or Google Calendar first')
       || error.message.includes('Script failed to execute')
       || error.message.includes('destroyed'));
+  const updateReadyChecksDraft = (
+    urlMode: IntegrationPageReadyChecks['urlMode'],
+    urlValue: string,
+    expectedValues: Record<string, string>,
+  ) => {
+    const draft = state.integrationReadyChecksDraft;
+    if (!draft) throw new Error('The ready checks are no longer open.');
+    state.integrationReadyChecksDraft = {
+      urlMode,
+      urlValue: urlValue.trim(),
+      elements: draft.elements.map((check) => ({
+        ...check,
+        ...(expectedValues[check.id]?.trim() ? { expectedValue: expectedValues[check.id].trim() } : { expectedValue: undefined }),
+      })),
+    };
+  };
+  const selectedReadyCheckValue = (value: unknown): string => {
+    if (!value || typeof value !== 'object') return '';
+    const selected = (value as { selected?: unknown }).selected;
+    if (!selected || typeof selected !== 'object') return '';
+    const record = selected as Record<string, unknown>;
+    for (const key of ['descendantText', 'directText', 'accessibleName']) {
+      if (typeof record[key] === 'string' && record[key].trim()) return record[key].trim();
+    }
+    const image = record.image;
+    if (!image || typeof image !== 'object') return '';
+    const imageRecord = image as Record<string, unknown>;
+    return typeof imageRecord.url === 'string'
+      ? JSON.stringify({ imageUrl: imageRecord.url, alt: typeof imageRecord.alt === 'string' ? imageRecord.alt : null })
+      : '';
+  };
   const startIntegrationActionInspection = async (inspectionKind: 'parent' | 'target', options: unknown) => {
     const command = inspectionKind === 'parent' ? 'inspect-parent' : 'inspect-target';
     const reopen = () => reopenIntegrationActionPage({ kind: 'command-target', inspectionKind, options }, true);
@@ -153,9 +184,10 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const action = integration?.actions.find((candidate) => candidate.id === request.actionId);
       const command = action?.commands?.find((candidate) => candidate.id === request.commandId);
       const payload = action && command ? commandExecutionPayload(action, command, request.recordParent, inputs) : null;
-      if (!integration || !action || !command || !payload) throw new Error('The saved command is incomplete.');
+      const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
+      if (!integration || !action || !command || !payload || !page) throw new Error('The saved command is incomplete.');
       void runBusy(`Running ${command.name}...`, async () => {
-        await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, payload);
+        await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, { ...payload, readyChecks: integrationPageReadyChecks(page) });
         state.status = `Ran ${command.name}`;
       }, { preserveMountedDocument: true });
       return;
@@ -166,7 +198,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!integration || !page || !command || !payload || !profile) throw new Error('The saved page command is incomplete.');
     void runBusy(`Running ${command.name}...`, async () => {
-      const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin }, payload };
+      const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, payload: { ...payload, readyChecks: integrationPageReadyChecks(page) } };
       if (page.id === 'gmail' || page.id === 'google-calendar') await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name);
       else await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name);
       state.status = `Ran ${command.name}`;
@@ -188,7 +220,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     };
     const pendingSelection = {
       kind: 'command-target',
-      context: { expectedOrigin: new URL(page.url).origin },
+      context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) },
       inspectionKind: state.integrationCommandDraftScope === 'record' ? 'parent' : 'target',
       options,
     };
@@ -411,6 +443,118 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = `Opened ${page.name}`;
     }, { preserveMountedDocument: true });
   },
+  openIntegrationReadyChecks: (integrationId, pageId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!page) throw new Error('Integration page was not found.');
+    state.integrationReadyChecksIntegrationId = integrationId;
+    state.integrationReadyChecksPageId = pageId;
+    state.integrationReadyChecksDraft = structuredClone(integrationPageReadyChecks(page));
+    state.integrationReadyCheckSelectionPending = false;
+    state.integrationReadyChecksDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelIntegrationReadyChecks: () => {
+    if (state.integrationReadyCheckSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    state.integrationReadyChecksDialogOpen = false;
+    state.integrationReadyChecksIntegrationId = null;
+    state.integrationReadyChecksPageId = null;
+    state.integrationReadyChecksDraft = null;
+    state.integrationReadyCheckSelectionPending = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelIntegrationReadyCheckSelection: () => {
+    if (state.integrationReadyCheckSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    state.integrationReadyCheckSelectionPending = false;
+    state.integrationReadyChecksDialogOpen = true;
+    state.status = 'Canceled ready check selection';
+    rerender({ preserveMountedDocument: true });
+  },
+  requestIntegrationReadyCheck: (integrationId, pageId, urlMode, urlValue, expectedValues) => {
+    updateReadyChecksDraft(urlMode, urlValue, expectedValues);
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!page || !profile) throw new Error('The integration page or profile was not found.');
+    const options = { context: { mode: 'ready-check', integrationId, pageId } };
+    const pendingSelection = {
+      kind: 'command-target',
+      context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) },
+      inspectionKind: 'target',
+      options,
+    };
+    state.integrationReadyCheckSelectionPending = true;
+    rerender({ preserveMountedDocument: true });
+    void runBusy(`Opening ${page.name} to select a ready check...`, async () => {
+      try {
+        if (await isIntegrationBrowserOpen(profile.id)) {
+          await controlIntegrationBrowser('inspect-target', profile.id, options);
+        } else if (page.id === 'gmail' || page.id === 'google-calendar') {
+          await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
+        } else {
+          await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
+        }
+      } catch (error) {
+        state.integrationReadyCheckSelectionPending = false;
+        throw error;
+      }
+      state.status = 'Select a stable page landmark';
+    }, { preserveMountedDocument: true });
+  },
+  completeIntegrationReadyCheck: (value) => {
+    const draft = state.integrationReadyChecksDraft;
+    if (!draft || !value || typeof value !== 'object') return;
+    const content = selectedReadyCheckValue(value);
+    const checkName = `Page landmark ${draft.elements.length + 1}`;
+    state.integrationReadyChecksDraft = {
+      ...draft,
+      elements: [...draft.elements, {
+        id: crypto.randomUUID(),
+        name: checkName,
+        snapshot: matcherSnapshot(value),
+        ...(content ? { expectedValue: content } : {}),
+      }],
+    };
+    state.integrationReadyCheckSelectionPending = false;
+    state.integrationReadyChecksDialogOpen = true;
+    state.status = 'Added page ready check';
+    rerender({ preserveMountedDocument: true });
+  },
+  removeIntegrationReadyCheck: (checkId) => {
+    if (!state.integrationReadyChecksDraft) return;
+    state.integrationReadyChecksDraft = {
+      ...state.integrationReadyChecksDraft,
+      elements: state.integrationReadyChecksDraft.elements.filter((check) => check.id !== checkId),
+    };
+    rerender({ preserveMountedDocument: true });
+  },
+  saveIntegrationReadyChecks: (integrationId, pageId, urlMode, urlValue, expectedValues) => {
+    updateReadyChecksDraft(urlMode, urlValue, expectedValues);
+    const draft = state.integrationReadyChecksDraft;
+    if (!draft?.urlValue) throw new Error('Enter the expected URL or domain.');
+    if (urlMode === 'strict-url') {
+      const expectedUrl = new URL(draft.urlValue);
+      if (expectedUrl.protocol !== 'https:') throw new Error('The ready URL must use HTTPS.');
+      draft.urlValue = expectedUrl.href;
+    } else if (urlMode === 'strict-domain') {
+      if (draft.urlValue.includes('/') || draft.urlValue.includes(':')) throw new Error('Enter only the hostname for a strict domain check.');
+    } else {
+      try { new RegExp(draft.urlValue); } catch { throw new Error('Enter a valid domain regular expression.'); }
+    }
+    const integrations = state.integrationRegistry.integrations.map((integration) => integration.id !== integrationId ? integration : {
+      ...integration,
+      pages: integration.pages.map((page) => page.id === pageId ? { ...page, readyChecks: structuredClone(draft) } : page),
+    });
+    state.integrationRegistry = { ...state.integrationRegistry, integrations };
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.integrationReadyChecksDialogOpen = false;
+    state.integrationReadyChecksIntegrationId = null;
+    state.integrationReadyChecksPageId = null;
+    state.integrationReadyChecksDraft = null;
+    state.integrationReadyCheckSelectionPending = false;
+    state.status = 'Saved ready checks';
+    rerender({ preserveMountedDocument: true });
+  },
   setIntegrationQuickViewProfile: (integrationId, pageId, profileId, visible) => {
     const profileIds = state.integrationRegistry.profiles.map((profile) => profile.id);
     const integrations = state.integrationRegistry.integrations.map((integration) => integration.id !== integrationId ? integration : {
@@ -527,7 +671,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       try {
         const liveExampleExtraction = {
           pattern: actionPatternPayload(action),
-          context: { mode: 'examples' },
+          context: { mode: 'examples', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
           foreground: false,
         };
         if (page.id === 'gmail' || page.id === 'google-calendar') {
@@ -727,6 +871,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     });
   },
   previewIntegrationAction: () => {
+    const { page } = integrationActionPageContext();
     const targets = state.integrationActionExamples.map((snapshot, index) => ({
       label: state.integrationActionTargetLabels[index],
       cardinality: state.integrationActionTargetCardinalities[index] ?? 'single',
@@ -742,7 +887,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
     const extraction = {
       pattern: { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets },
-      context: { mode: 'builder' },
+      context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
       foreground: false,
     };
     void (async () => {
@@ -792,7 +937,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = `Fetching ${action.name} in the background...`;
     rerender({ preserveMountedDocument: true });
     void (async () => {
-      const extraction = { pattern, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin } };
+      const extraction = { pattern, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) } };
       try {
         if (page.id === 'gmail' || page.id === 'google-calendar') {
           await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, extraction, false, profile.name);

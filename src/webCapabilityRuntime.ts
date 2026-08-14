@@ -1,4 +1,6 @@
 import type { IntegrationProfileDefinition } from './integrationRegistry';
+import { integrationPageExpectedOrigins } from './integrationRegistry';
+import type { IntegrationPageReadyChecks } from './integrationRegistry';
 import { openIntegrationPage } from './integrationBrowser';
 import {
   isWebCapabilityAuthorized,
@@ -13,6 +15,7 @@ export interface WebCapabilityExecutionContext {
   profile: IntegrationProfileDefinition;
   authorizations: WebCapabilityAuthorizations;
   foreground?: boolean;
+  readyChecks?: IntegrationPageReadyChecks;
 }
 
 export interface WebRecordsExecutionResult {
@@ -118,6 +121,8 @@ export async function executeWebRecordsCapability(
           webCapabilityRequestId: requestId,
           capabilityId: config.capabilityId,
           expectedOrigin: new URL(config.page.url).origin,
+          expectedOrigins: integrationPageExpectedOrigins({ ...config.page, readyChecks: context.readyChecks ?? config.page.readyChecks }),
+          readyChecks: context.readyChecks ?? config.page.readyChecks,
         },
       });
     } catch (error) {
@@ -147,6 +152,7 @@ async function executeCommand(
         kind: 'command-execution',
         context: {
           expectedOrigin: new URL(config.page.url).origin,
+          expectedOrigins: integrationPageExpectedOrigins({ ...config.page, readyChecks: context.readyChecks ?? config.page.readyChecks }),
           webCapabilityRequestId: requestId,
         },
         payload: {
@@ -156,6 +162,7 @@ async function executeCommand(
             : { minimumConfidence: 0.8, parents: [], targets: [] },
           command,
           inputs,
+          readyChecks: context.readyChecks ?? config.page.readyChecks,
           ...(recordParent ? { recordParent } : {}),
         },
       });
@@ -211,6 +218,10 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
   clearTimeout(pending.timeout);
   pendingOperations.delete(requestId);
   if (pending.kind === 'records') {
+    if (result.status === 'not-ready') {
+      pending.reject(new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.'));
+      return true;
+    }
     pending.resolve({
       records: Array.isArray(result.records) ? result.records : [],
       ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
@@ -218,6 +229,8 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
     });
   } else if (result.status === 'executed') {
     pending.resolve({ status: 'executed', commandId: result.commandId });
+  } else if (result.status === 'not-ready') {
+    pending.reject(new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.'));
   } else {
     const failedStep = typeof result.stepIndex === 'number' ? ` at step ${result.stepIndex + 1}` : '';
     pending.reject(new Error(`Command stopped${failedStep}: ${String(result.reason ?? result.status ?? 'target not found').replaceAll('_', ' ')}`));

@@ -4,9 +4,49 @@ export interface IntegrationPageDefinition {
   url: string;
   allowedOrigins: string[];
   editable: boolean;
+  readyChecks?: IntegrationPageReadyChecks;
   visibleProfileIds?: string[];
   commands?: IntegrationCommandDefinition[];
   retrievalSources?: IntegrationRetrievalSourceDefinition[];
+}
+
+export interface IntegrationPageReadyCheck {
+  id: string;
+  name: string;
+  snapshot: unknown;
+  expectedValue?: string;
+}
+
+export interface IntegrationPageReadyChecks {
+  urlMode: 'strict-url' | 'strict-domain' | 'domain-regex';
+  urlValue: string;
+  elements: IntegrationPageReadyCheck[];
+}
+
+export function defaultIntegrationPageReadyChecks(urlValue: string, urlMode: IntegrationPageReadyChecks['urlMode'] = 'strict-url'): IntegrationPageReadyChecks {
+  const url = new URL(urlValue);
+  return {
+    urlMode,
+    urlValue: urlMode === 'strict-url' ? url.href : url.hostname,
+    elements: [],
+  };
+}
+
+export function integrationPageReadyChecks(page: Pick<IntegrationPageDefinition, 'url' | 'readyChecks'>): IntegrationPageReadyChecks {
+  return page.readyChecks ?? defaultIntegrationPageReadyChecks(page.url);
+}
+
+export function integrationPageExpectedOrigins(page: Pick<IntegrationPageDefinition, 'url' | 'allowedOrigins' | 'readyChecks'>): string[] {
+  const checks = integrationPageReadyChecks(page);
+  const matching = page.allowedOrigins.filter((origin) => {
+    const hostname = new URL(origin).hostname;
+    if (checks.urlMode === 'strict-domain') return hostname === checks.urlValue;
+    if (checks.urlMode === 'domain-regex') {
+      try { return new RegExp(checks.urlValue).test(hostname); } catch { return false; }
+    }
+    try { return origin === new URL(checks.urlValue).origin; } catch { return false; }
+  });
+  return matching.length ? matching : [new URL(page.url).origin];
 }
 
 export interface IntegrationRetrievalSourceDefinition {
@@ -120,14 +160,14 @@ export function defaultIntegrationRegistry(): IntegrationRegistry {
       name: 'Gmail',
       profileProviderId: 'google',
       editable: false,
-      pages: [{ id: 'gmail', name: 'Gmail', url: 'https://mail.google.com/', allowedOrigins: ['https://mail.google.com', 'https://accounts.google.com'], editable: false }],
+      pages: [{ id: 'gmail', name: 'Gmail', url: 'https://mail.google.com/', allowedOrigins: ['https://mail.google.com', 'https://accounts.google.com'], editable: false, readyChecks: defaultIntegrationPageReadyChecks('https://mail.google.com/', 'strict-domain') }],
       actions: [],
     }, {
       id: 'google-calendar',
       name: 'Google Calendar',
       profileProviderId: 'google',
       editable: false,
-      pages: [{ id: 'google-calendar', name: 'Google Calendar', url: 'https://calendar.google.com/', allowedOrigins: ['https://calendar.google.com', 'https://accounts.google.com'], editable: false }],
+      pages: [{ id: 'google-calendar', name: 'Google Calendar', url: 'https://calendar.google.com/', allowedOrigins: ['https://calendar.google.com', 'https://accounts.google.com'], editable: false, readyChecks: defaultIntegrationPageReadyChecks('https://calendar.google.com/', 'strict-domain') }],
       actions: [],
     }],
   };
@@ -177,7 +217,13 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
     ];
     return {
       ...builtIn,
-      pages: [{ ...page, visibleProfileIds: savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.visibleProfileIds, commands: [...new Map(commands.map((command) => [command.id, command])).values()], retrievalSources: [...new Map(retrievalSources.map((source) => [source.id, source])).values()] }],
+      pages: [{
+        ...page,
+        visibleProfileIds: savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.visibleProfileIds,
+        readyChecks: savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.readyChecks ?? page.readyChecks,
+        commands: [...new Map(commands.map((command) => [command.id, command])).values()],
+        retrievalSources: [...new Map(retrievalSources.map((source) => [source.id, source])).values()],
+      }],
       actions,
     };
   });
@@ -233,7 +279,7 @@ export function createCustomPageIntegration(name: string, urlValue: string): Int
     name: name.trim(),
     profileProviderId: 'browser',
     editable: true,
-    pages: [{ id: `${id}-page`, name: name.trim(), url: url.href, allowedOrigins: [url.origin], editable: true }],
+    pages: [{ id: `${id}-page`, name: name.trim(), url: url.href, allowedOrigins: [url.origin], editable: true, readyChecks: defaultIntegrationPageReadyChecks(url.href) }],
     actions: [],
   };
 }

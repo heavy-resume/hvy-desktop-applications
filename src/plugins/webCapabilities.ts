@@ -2,6 +2,7 @@ import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
 import type { HvyPlugin, HvyPluginContext, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
 import { saveAppSettings } from '../backend';
 import { state } from '../state';
+import { integrationPageReadyChecks } from '../integrationRegistry';
 import {
   authorizeWebCapabilityRecord,
   createWebCommandCapabilityConfig,
@@ -76,7 +77,17 @@ function scriptingExecutionContext(config: WebCapabilityConfig) {
     profile,
     authorizations: state.appSettings.webCapabilityAuthorizations,
     foreground: false,
+    readyChecks: localReadyChecks(config),
   };
+}
+
+function localReadyChecks(config: WebCapabilityConfig) {
+  const source = config.source;
+  if (!source) return config.page.readyChecks;
+  const page = state.integrationRegistry.integrations
+    .find((integration) => integration.id === source.integrationId)
+    ?.pages.find((candidate) => candidate.id === source.pageId);
+  return page ? integrationPageReadyChecks(page) : config.page.readyChecks;
 }
 
 function button(label: string, primary = false): HTMLButtonElement {
@@ -361,6 +372,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
             documentPath: state.document?.path ?? '',
             profile,
             authorizations: state.appSettings.webCapabilityAuthorizations,
+            readyChecks: localReadyChecks(config),
           }).then((result) => {
             records = result.records;
           }).catch((caught: unknown) => {
@@ -406,6 +418,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
                 documentPath: state.document?.path ?? '',
                 profile,
                 authorizations: state.appSettings.webCapabilityAuthorizations,
+                readyChecks: localReadyChecks(config),
               }, inputs).catch((caught: unknown) => {
                 error = caught instanceof Error ? caught.message : String(caught);
                 sync();
@@ -459,6 +472,7 @@ function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {
             documentPath: state.document?.path ?? '',
             profile,
             authorizations: state.appSettings.webCapabilityAuthorizations,
+            readyChecks: localReadyChecks(config),
           }, inputs).catch((caught: unknown) => {
             error = caught instanceof Error ? caught.message : String(caught);
           }).finally(() => {

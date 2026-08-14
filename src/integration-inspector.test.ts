@@ -62,6 +62,7 @@ interface InspectorApi {
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
     multiSelect?: boolean;
     externalToolbar?: boolean;
+    context?: Record<string, unknown>;
     commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0] };
   }): void;
   control(action: 'navigate' | 'undo' | 'done'): void;
@@ -82,6 +83,7 @@ interface InspectorApi {
   };
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   extractLiveExamples(pattern: Parameters<InspectorApi['extractPattern']>[0] & { targets: Array<{ label: string; snapshot: InspectorSnapshot; exampleSnapshots: Array<InspectorSnapshot | null> }> }): Promise<{ matches: number; records: Array<ReturnType<InspectorApi['extractPattern']>['records'][number] | null> }>;
+  pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
   executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; inputId?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
@@ -222,6 +224,32 @@ describe('integration structural inspector', () => {
       { kind: 'rss', url: 'https://example.com/feed.xml', title: 'Updates', authenticated: false, discoveredBy: 'link' },
       { kind: 'json-feed', url: 'https://example.com/feed.json', title: 'JSON-FEED feed', authenticated: false, discoveredBy: 'link' },
     ]);
+  });
+
+  it('requires the configured URL and selected landmark values before a page is ready', async () => {
+    const result = await page.evaluate(() => {
+      const subject = document.createElement('strong');
+      subject.id = 'ready-marker';
+      subject.textContent = 'Project update';
+      document.body.prepend(subject);
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(subject, null, 'target');
+      const checks = {
+        urlMode: 'strict-url' as const,
+        urlValue: location.href,
+        elements: [{ id: 'subject', name: 'Inbox subject', snapshot, expectedValue: 'Project update' }],
+      };
+      const ready = window.__hvyGalaxyInspector.pageReadiness(checks);
+      subject.textContent = 'Sign in to continue';
+      const changed = window.__hvyGalaxyInspector.pageReadiness(checks);
+      const wrongUrl = window.__hvyGalaxyInspector.pageReadiness({ ...checks, urlValue: `${location.href}other` });
+      return { ready, changed, wrongUrl };
+    });
+
+    expect(result.ready.ready).toBe(true);
+    expect(result.changed.ready).toBe(false);
+    expect(result.changed.elements[0].reason).toBe('value_changed');
+    expect(result.wrongUrl.ready).toBe(false);
+    expect(result.wrongUrl.urlReady).toBe(false);
   });
 
   it('renders browser security state in the local toolbar document', async () => {

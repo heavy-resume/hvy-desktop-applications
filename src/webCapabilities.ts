@@ -8,8 +8,9 @@ import type {
   IntegrationCommandDefinition,
   IntegrationInteractionStepDefinition,
   IntegrationPageDefinition,
+  IntegrationPageReadyChecks,
 } from './integrationRegistry';
-import { actionPatternPayload, matcherSnapshot } from './integrationRegistry';
+import { actionPatternPayload, integrationPageReadyChecks, matcherSnapshot } from './integrationRegistry';
 
 export const WEB_RECORDS_PLUGIN_ID = 'hvy.web-records';
 export const WEB_COMMAND_PLUGIN_ID = 'hvy.web-command';
@@ -19,6 +20,7 @@ export interface WebCapabilityPageSnapshot {
   name: string;
   url: string;
   allowedOrigins: string[];
+  readyChecks: IntegrationPageReadyChecks;
 }
 
 export interface WebCapabilitySource {
@@ -189,6 +191,42 @@ function uniqueStrings(value: unknown): string[] {
   return [...new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean))];
 }
 
+function normalizeReadyChecks(value: unknown, pageUrl: URL): IntegrationPageReadyChecks {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { urlMode: 'strict-url', urlValue: pageUrl.href, elements: [] };
+  }
+  const record = value as Record<string, unknown>;
+  const urlMode = record.urlMode === 'strict-domain' || record.urlMode === 'domain-regex' ? record.urlMode : 'strict-url';
+  const urlValue = typeof record.urlValue === 'string' && record.urlValue.trim()
+    ? record.urlValue.trim()
+    : urlMode === 'strict-url' ? pageUrl.href : pageUrl.hostname;
+  const elements = Array.isArray(record.elements) ? record.elements.flatMap((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const check = value as Record<string, unknown>;
+    const id = typeof check.id === 'string' ? check.id.trim() : '';
+    const name = typeof check.name === 'string' ? check.name.trim() : '';
+    const snapshot = matcherSnapshot(check.snapshot);
+    const shape = snapshot && typeof snapshot === 'object'
+      ? (snapshot as { selected?: { shape?: unknown } }).selected?.shape
+      : null;
+    if (!id || !shape) return [];
+    return [{
+      id,
+      name: name || 'Page landmark',
+      snapshot,
+      ...(typeof check.expectedValue === 'string' && check.expectedValue.trim()
+        ? { expectedValue: check.expectedValue.trim() }
+        : {}),
+    }];
+  }) : [];
+  return { urlMode, urlValue, elements };
+}
+
+function portableReadyChecks(page: IntegrationPageDefinition): IntegrationPageReadyChecks {
+  const checks = normalizeReadyChecks(integrationPageReadyChecks(page), new URL(page.url));
+  return { ...checks, elements: checks.elements.map(({ expectedValue: _expectedValue, ...check }) => check) };
+}
+
 function normalizePage(value: unknown): WebCapabilityPageSnapshot | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -209,7 +247,7 @@ function normalizePage(value: unknown): WebCapabilityPageSnapshot | null {
     }
   });
   if (!allowedOrigins.includes(url.origin)) allowedOrigins.unshift(url.origin);
-  return { name: name || url.hostname, url: url.href, allowedOrigins };
+  return { name: name || url.hostname, url: url.href, allowedOrigins, readyChecks: normalizeReadyChecks(record.readyChecks, url) };
 }
 
 function normalizeCommand(value: unknown, scope: 'page' | 'record'): IntegrationCommandDefinition | null {
@@ -316,6 +354,7 @@ export function createWebRecordsCapabilityConfig(
       name: page.name,
       url: new URL(page.url).href,
       allowedOrigins: [...new Set(page.allowedOrigins)],
+      readyChecks: portableReadyChecks(page),
     },
     record: {
       id: action.id,
@@ -351,6 +390,7 @@ export function createWebCommandCapabilityConfig(
       name: page.name,
       url: new URL(page.url).href,
       allowedOrigins: [...new Set(page.allowedOrigins)],
+      readyChecks: portableReadyChecks(page),
     },
     command: normalized,
     source: { integrationId, pageId: page.id, commandId: command.id },
