@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
+import { includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
@@ -325,6 +325,10 @@ export async function boot(): Promise<void> {
       if (event === 'app-settings') handlers.openAppSettings();
       if (event === 'review-scripting') handlers.openScriptingReview();
       if (event === 'manage-plugins') handlers.openPluginManager();
+      if (event === 'plugin-builder') void openPluginBuilderWindow(
+        state.workspaces.map((workspace) => workspace.path),
+        state.selectedWorkspacePath,
+      );
       if (event === 'ai-settings') handlers.openAiSettings();
       if (event === 'mcp-settings') handlers.openMcpSettings();
       if (event === 'colors') handlers.openColorTheme();

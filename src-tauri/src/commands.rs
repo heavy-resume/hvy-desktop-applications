@@ -139,6 +139,302 @@ fn install_plugin_package(app: AppHandle, name: String, bytes: Vec<u8>) -> AppRe
     Ok(())
 }
 
+const PLUGIN_BUILDER_WINDOW_LABEL: &str = "plugin-builder";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectRecord {
+    directory_name: String,
+    path: String,
+    manifest: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectSourceFile {
+    path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePluginProjectRequest {
+    workspace_path: String,
+    directory_name: String,
+    files: Vec<PluginProjectSourceFile>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectFile {
+    path: String,
+    content: Option<String>,
+    bytes: Option<Vec<u8>>,
+    modified_at: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WritePluginProjectFileRequest {
+    workspace_path: String,
+    directory_name: String,
+    path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WritePluginProjectBuildRequest {
+    workspace_path: String,
+    directory_name: String,
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectBuildResult {
+    path: String,
+    name: String,
+}
+
+#[tauri::command]
+fn open_plugin_builder_window(
+    app: AppHandle,
+    workspace_paths: Vec<String>,
+    selected_workspace_path: Option<String>,
+) -> AppResult<()> {
+    if let Some(window) = app.get_webview_window(PLUGIN_BUILDER_WINDOW_LABEL) {
+        return raise_integration_window(&window.as_ref().window());
+    }
+    let mut url = "plugin-builder.html".to_string();
+    if !workspace_paths.is_empty() || selected_workspace_path.is_some() {
+        let mut query_url = tauri::Url::parse("http://plugin-builder.local/")
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        {
+            let mut query = query_url.query_pairs_mut();
+            for path in workspace_paths.iter().map(String::as_str).map(str::trim).filter(|path| !path.is_empty()) {
+                query.append_pair("workspace", path);
+            }
+            if let Some(path) = selected_workspace_path.as_deref().map(str::trim).filter(|path| !path.is_empty()) {
+                query.append_pair("selectedWorkspace", path);
+            }
+        }
+        if let Some(query) = query_url.query() {
+            url.push('?');
+            url.push_str(query);
+        }
+    }
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        PLUGIN_BUILDER_WINDOW_LABEL,
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title("Plugin Builder — HVY Galaxy")
+    .inner_size(1180.0, 780.0)
+    .min_inner_size(820.0, 560.0)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    let menu_app = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Ok(menu) = build_menu(&menu_app) {
+                let _ = menu_app.set_menu(menu);
+            }
+        }
+    });
+    let menu = build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?;
+    app.set_menu(menu).map_err(|error| AppError::Message(error.to_string()))?;
+    raise_integration_window(&window.as_ref().window())
+}
+
+fn plugin_projects_directory(workspace_path: &Path) -> AppResult<PathBuf> {
+    ensure_workspace(workspace_path)?;
+    Ok(workspace_path.join("plugins"))
+}
+
+fn plugin_project_record(path: &Path, directory_name: String) -> PluginProjectRecord {
+    let manifest_path = path.join("hvy-plugin.json");
+    match fs::read(&manifest_path)
+        .map_err(AppError::from)
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(AppError::from))
+    {
+        Ok(manifest) if manifest.is_object() => PluginProjectRecord {
+            directory_name,
+            path: path_to_string(path),
+            manifest: Some(manifest),
+            error: None,
+        },
+        Ok(_) => PluginProjectRecord {
+            directory_name,
+            path: path_to_string(path),
+            manifest: None,
+            error: Some("hvy-plugin.json must contain a JSON object.".into()),
+        },
+        Err(error) => PluginProjectRecord {
+            directory_name,
+            path: path_to_string(path),
+            manifest: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+#[tauri::command]
+fn list_plugin_projects(workspace_path: String) -> AppResult<Vec<PluginProjectRecord>> {
+    let directory = plugin_projects_directory(Path::new(&workspace_path))?;
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    Ok(entries.into_iter().map(|entry| {
+        let directory_name = entry.file_name().to_string_lossy().into_owned();
+        plugin_project_record(&entry.path(), directory_name)
+    }).collect())
+}
+
+fn normalized_plugin_project_directory_name(value: &str) -> AppResult<String> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+        && value.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-');
+    if !valid {
+        return Err(AppError::Message(
+            "Plugin directory name must use lowercase letters, numbers, and single hyphens.".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn normalized_plugin_project_file_path(value: &str) -> AppResult<PathBuf> {
+    let normalized = value.replace('\\', "/");
+    let path = PathBuf::from(&normalized);
+    let valid = !normalized.is_empty()
+        && !path.is_absolute()
+        && path.components().all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !valid {
+        return Err(AppError::Message(format!(
+            "Plugin project file path \"{normalized}\" is not normalized."
+        )));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn create_plugin_project(request: CreatePluginProjectRequest) -> AppResult<PluginProjectRecord> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    let directory_name = normalized_plugin_project_directory_name(&request.directory_name)?;
+    let files = request.files.into_iter().map(|file| {
+        Ok((normalized_plugin_project_file_path(&file.path)?, file.content))
+    }).collect::<AppResult<Vec<_>>>()?;
+    if !files.iter().any(|(path, _)| path == Path::new("hvy-plugin.json")) {
+        return Err(AppError::Message("Plugin project must include hvy-plugin.json.".into()));
+    }
+    let projects_directory = plugin_projects_directory(&workspace_path)?;
+    fs::create_dir_all(&projects_directory)?;
+    let project_path = projects_directory.join(&directory_name);
+    if project_path.exists() {
+        return Err(AppError::Message("A plugin project already exists with this directory name.".into()));
+    }
+    fs::create_dir(&project_path)?;
+    for (relative_path, content) in files {
+        let destination = project_path.join(relative_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(destination, content)?;
+    }
+    touch_workspace_manifest(&workspace_path)?;
+    Ok(plugin_project_record(&project_path, directory_name))
+}
+
+fn plugin_project_path(workspace_path: &Path, directory_name: &str) -> AppResult<PathBuf> {
+    let directory_name = normalized_plugin_project_directory_name(directory_name)?;
+    let path = plugin_projects_directory(workspace_path)?.join(directory_name);
+    if !path.is_dir() {
+        return Err(AppError::Message("Plugin project was not found.".into()));
+    }
+    Ok(path)
+}
+
+fn read_plugin_project_directory(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<PluginProjectFile>,
+) -> AppResult<()> {
+    let mut entries = fs::read_dir(directory)?.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || (directory == root && name == "dist") {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            read_plugin_project_directory(root, &path, files)?;
+        } else if path.is_file() {
+            let modified_at = entry.metadata().ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64);
+            let bytes = fs::read(&path)?;
+            let content = String::from_utf8(bytes.clone()).ok();
+            files.push(PluginProjectFile {
+                path: relative_path(root, &path),
+                bytes: content.is_none().then_some(bytes),
+                content,
+                modified_at,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn read_plugin_project_files(workspace_path: String, directory_name: String) -> AppResult<Vec<PluginProjectFile>> {
+    let project_path = plugin_project_path(Path::new(&workspace_path), &directory_name)?;
+    let mut files = Vec::new();
+    read_plugin_project_directory(&project_path, &project_path, &mut files)?;
+    Ok(files)
+}
+
+#[tauri::command]
+fn write_plugin_project_file(request: WritePluginProjectFileRequest) -> AppResult<()> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    let project_path = plugin_project_path(&workspace_path, &request.directory_name)?;
+    let relative_path = normalized_plugin_project_file_path(&request.path)?;
+    let destination = project_path.join(relative_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(destination, request.content)?;
+    touch_workspace_manifest(&workspace_path)
+}
+
+#[tauri::command]
+fn write_plugin_project_build(request: WritePluginProjectBuildRequest) -> AppResult<PluginProjectBuildResult> {
+    let project_path = plugin_project_path(Path::new(&request.workspace_path), &request.directory_name)?;
+    let file_name = Path::new(&request.name).file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Plugin build name must end with .hvy.plugin.".into()))?;
+    if file_name != request.name || !file_name.ends_with(".hvy.plugin") {
+        return Err(AppError::Message("Plugin build name must end with .hvy.plugin.".into()));
+    }
+    let directory = project_path.join("dist");
+    fs::create_dir_all(&directory)?;
+    let artifact_path = directory.join(file_name);
+    fs::write(&artifact_path, request.bytes)?;
+    Ok(PluginProjectBuildResult { path: path_to_string(&artifact_path), name: file_name.into() })
+}
+
 const INTEGRATION_BROWSER_LABEL: &str = "integration-browser";
 const INTEGRATION_TOOLBAR_HEIGHT: f64 = 52.0;
 #[cfg(target_os = "macos")]

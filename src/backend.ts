@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
 import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
+import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
 
 declare global {
   interface Window {
@@ -521,6 +522,32 @@ export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFil
 
 export function installPluginPackage(name: string, bytes: number[]): Promise<void> {
   return invokeDesktop('install_plugin_package', { name, bytes });
+}
+
+export function openPluginBuilderWindow(workspacePaths: string[], selectedWorkspacePath: string | null): Promise<void> {
+  return invokeDesktop('open_plugin_builder_window', { workspacePaths, selectedWorkspacePath });
+}
+
+export function listPluginProjects(workspacePath: string): Promise<PluginProjectRecord[]> {
+  return invokeDesktop<PluginProjectRecord[]>('list_plugin_projects', { workspacePath })
+    .then((projects) => projects.map(normalizePluginProjectRecord));
+}
+
+export function createPluginProject(request: CreatePluginProjectRequest): Promise<PluginProjectRecord> {
+  return invokeDesktop<PluginProjectRecord>('create_plugin_project', { request })
+    .then(normalizePluginProjectRecord);
+}
+
+export function readPluginProjectFiles(workspacePath: string, directoryName: string): Promise<PluginProjectFile[]> {
+  return invokeDesktop('read_plugin_project_files', { workspacePath, directoryName });
+}
+
+export function writePluginProjectFile(request: WritePluginProjectFileRequest): Promise<void> {
+  return invokeDesktop('write_plugin_project_file', { request });
+}
+
+export function writePluginProjectBuild(request: WritePluginProjectBuildRequest): Promise<PluginProjectBuildResult> {
+  return invokeDesktop('write_plugin_project_build', { request });
 }
 
 export function integrationBrowserCommand(

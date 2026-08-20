@@ -44,6 +44,72 @@
     }
 
     #[test]
+    fn creates_and_lists_workspace_plugin_projects() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Plugin Workspace")).unwrap();
+        let request = CreatePluginProjectRequest {
+            workspace_path: path_to_string(dir.path()),
+            directory_name: "skill-rating".into(),
+            files: vec![
+                PluginProjectSourceFile {
+                    path: "hvy-plugin.json".into(),
+                    content: serde_json::json!({
+                        "formatVersion": "0.2",
+                        "id": "local.plugin-workspace.skill-rating",
+                        "uuid": "skill-rating-primary",
+                        "version": "0.1.0",
+                        "displayName": "Skill Rating",
+                        "entry": "plugin.js",
+                        "styles": [],
+                        "permissions": [],
+                        "hvyApiVersion": "0.1"
+                    }).to_string(),
+                },
+                PluginProjectSourceFile {
+                    path: "plugin.js".into(),
+                    content: "export default {};\n".into(),
+                },
+            ],
+        };
+
+        let created = create_plugin_project(request).unwrap();
+        assert_eq!(created.directory_name, "skill-rating");
+        assert!(dir.path().join("plugins/skill-rating/plugin.js").exists());
+
+        let projects = list_plugin_projects(path_to_string(dir.path())).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].directory_name, "skill-rating");
+        assert_eq!(
+            projects[0].manifest.as_ref().and_then(|manifest| manifest.get("id")).and_then(serde_json::Value::as_str),
+            Some("local.plugin-workspace.skill-rating"),
+        );
+
+        let files = read_plugin_project_files(path_to_string(dir.path()), "skill-rating".into()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|file| file.path == "plugin.js" && file.content.as_deref() == Some("export default {};\n")));
+
+        write_plugin_project_file(WritePluginProjectFileRequest {
+            workspace_path: path_to_string(dir.path()),
+            directory_name: "skill-rating".into(),
+            path: "plugin.js".into(),
+            content: "export default { id: 'updated' };\n".into(),
+        }).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("plugins/skill-rating/plugin.js")).unwrap(),
+            "export default { id: 'updated' };\n",
+        );
+
+        let build = write_plugin_project_build(WritePluginProjectBuildRequest {
+            workspace_path: path_to_string(dir.path()),
+            directory_name: "skill-rating".into(),
+            name: "skill-rating-0.1.0.hvy.plugin".into(),
+            bytes: vec![1, 2, 3],
+        }).unwrap();
+        assert_eq!(build.name, "skill-rating-0.1.0.hvy.plugin");
+        assert_eq!(fs::read(build.path).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
     fn workspace_file_ai_access_persists_after_reload() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("private.hvy");

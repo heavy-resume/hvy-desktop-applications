@@ -130,7 +130,7 @@ export default defineConfig({
   },
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   optimizeDeps: {
-    entries: ['index.html'],
+    entries: ['index.html', 'plugin-builder.html'],
   },
   resolve: {
     alias: {
@@ -141,6 +141,12 @@ export default defineConfig({
   },
   build: {
     target: ['safari13'],
+    rollupOptions: {
+      input: {
+        main: resolve('index.html'),
+        pluginBuilder: resolve('plugin-builder.html'),
+      },
+    },
   },
   server: {
     host: '127.0.0.1',

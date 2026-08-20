@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
   "description": "Permissions for the main HVY Galaxy desktop window.",
-  "windows": ["main"],
+  "windows": ["main", "plugin-builder"],
   "permissions": [
     "core:default",
     "core:event:default",

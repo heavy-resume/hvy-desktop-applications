@@ -46,6 +46,7 @@ if (handleSquirrelStartupEvent()) {
 }
 
 let mainWindow = null;
+let pluginBuilderWindow = null;
 const integrationBrowsers = new Map();
 const integrationBrowserOpenQueues = new Map();
 let appCloseAllowed = false;
@@ -234,6 +235,21 @@ async function loadRenderer(window) {
   await window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
+async function loadPluginBuilderRenderer(window, workspacePaths, selectedWorkspacePath) {
+  const query = {
+    workspaces: JSON.stringify(workspacePaths),
+    ...(selectedWorkspacePath ? { selectedWorkspace: selectedWorkspacePath } : {}),
+  };
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL('/plugin-builder.html', process.env.ELECTRON_RENDERER_URL);
+    url.searchParams.set('workspaces', JSON.stringify(workspacePaths));
+    if (selectedWorkspacePath) url.searchParams.set('selectedWorkspace', selectedWorkspacePath);
+    await window.loadURL(url.toString());
+    return;
+  }
+  await window.loadFile(path.join(__dirname, '..', 'dist', 'plugin-builder.html'), { query });
+}
+
 function buildMenu() {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const template = [
@@ -263,9 +279,6 @@ function buildMenu() {
         menuItem('Save', 'save', 'CmdOrCtrl+S'),
         menuItem('Save As...', 'save-as', 'CmdOrCtrl+Shift+S'),
         menuItem('Save to Workspace...', 'save-to-workspace'),
-        { type: 'separator' },
-        menuItem('Power Scripting...', 'review-scripting'),
-        menuItem('Manage Plugins...', 'manage-plugins'),
         { type: 'separator' },
         menuItem('Export PDF...', 'export-pdf'),
         menuItem('Import Into Current...', 'import-current'),
@@ -324,12 +337,24 @@ function buildMenu() {
       ],
     },
     {
+      label: 'Plugins',
+      submenu: [
+        menuItem('Plugin Builder...', 'plugin-builder'),
+        menuItem('Manage Plugins...', 'manage-plugins'),
+        { type: 'separator' },
+        menuItem('Power Scripting...', 'review-scripting'),
+      ],
+    },
+    {
       label: 'Window',
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
         { type: 'separator' },
         { label: APP_NAME, click: () => raiseWindow(mainWindow) },
+        ...(pluginBuilderWindow && !pluginBuilderWindow.isDestroyed()
+          ? [{ label: 'Plugin Builder — HVY Galaxy', click: () => raiseWindow(pluginBuilderWindow) }]
+          : []),
         ...[...integrationBrowsers.values()]
           .filter((browser) => browser.window && !browser.window.isDestroyed())
           .map((browser) => ({ label: `Integrations — ${browser.name}`, click: () => raiseWindow(browser.window) })),
@@ -523,6 +548,12 @@ async function handleCommand(command, args) {
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
     case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
+    case 'open_plugin_builder_window': return openPluginBuilderWindow(args.workspacePaths, args.selectedWorkspacePath);
+    case 'list_plugin_projects': return listPluginProjects(args.workspacePath);
+    case 'create_plugin_project': return createPluginProject(args.request);
+    case 'read_plugin_project_files': return readPluginProjectFiles(args.workspacePath, args.directoryName);
+    case 'write_plugin_project_file': return writePluginProjectFile(args.request);
+    case 'write_plugin_project_build': return writePluginProjectBuild(args.request);
     case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName);
     case 'integration_browser_is_open': {
       const browser = integrationBrowsers.get(args.profileId || 'default-google');
@@ -2699,6 +2730,172 @@ function loadInstalledPluginPackages() {
       const pluginPath = path.join(directory, entry.name);
       return { name: entry.name, path: pluginPath, bytes: [...fs.readFileSync(pluginPath)] };
     });
+}
+
+async function openPluginBuilderWindow(workspacePaths, selectedWorkspacePath) {
+  if (pluginBuilderWindow && !pluginBuilderWindow.isDestroyed()) {
+    raiseWindow(pluginBuilderWindow);
+    return;
+  }
+  pluginBuilderWindow = new BrowserWindow({
+    width: 1180,
+    height: 780,
+    minWidth: 820,
+    minHeight: 560,
+    title: 'Plugin Builder — HVY Galaxy',
+    backgroundColor: '#f7f3ea',
+    icon: iconPath(appIconFileName()),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  pluginBuilderWindow.webContents.setVisualZoomLevelLimits(1, 1);
+  pluginBuilderWindow.on('closed', () => {
+    pluginBuilderWindow = null;
+    buildMenu();
+  });
+  buildMenu();
+  const paths = Array.isArray(workspacePaths) ? workspacePaths.filter((value) => typeof value === 'string') : [];
+  const selected = typeof selectedWorkspacePath === 'string' ? selectedWorkspacePath : '';
+  await loadPluginBuilderRenderer(pluginBuilderWindow, paths, selected);
+  raiseWindow(pluginBuilderWindow);
+}
+
+function pluginProjectsDirectory(workspacePath) {
+  ensureWorkspace(workspacePath);
+  return path.join(workspacePath, 'plugins');
+}
+
+function pluginProjectRecord(projectPath, directoryName) {
+  const manifestPath = path.join(projectPath, 'hvy-plugin.json');
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+      throw new Error('hvy-plugin.json must contain a JSON object.');
+    }
+    return { directoryName, path: projectPath, manifest, error: null };
+  } catch (error) {
+    return {
+      directoryName,
+      path: projectPath,
+      manifest: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function listPluginProjects(workspacePath) {
+  const directory = pluginProjectsDirectory(String(workspacePath || ''));
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => pluginProjectRecord(path.join(directory, entry.name), entry.name));
+}
+
+function normalizedPluginProjectDirectoryName(value) {
+  const name = String(value || '').trim();
+  if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error('Plugin directory name must use lowercase letters, numbers, and single hyphens.');
+  }
+  return name;
+}
+
+function normalizedPluginProjectFilePath(value) {
+  const filePath = String(value || '').replaceAll('\\', '/');
+  const segments = filePath.split('/');
+  if (!filePath || path.posix.isAbsolute(filePath) || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error(`Plugin project file path "${filePath}" is not normalized.`);
+  }
+  return filePath;
+}
+
+function createPluginProject(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  const directoryName = normalizedPluginProjectDirectoryName(request?.directoryName);
+  const files = Array.isArray(request?.files) ? request.files.map((file) => ({
+    path: normalizedPluginProjectFilePath(file?.path),
+    content: String(file?.content ?? ''),
+  })) : [];
+  if (!files.some((file) => file.path === 'hvy-plugin.json')) {
+    throw new Error('Plugin project must include hvy-plugin.json.');
+  }
+  const projectsDirectory = pluginProjectsDirectory(workspacePath);
+  fs.mkdirSync(projectsDirectory, { recursive: true });
+  const projectPath = path.join(projectsDirectory, directoryName);
+  if (fs.existsSync(projectPath)) throw new Error('A plugin project already exists with this directory name.');
+  fs.mkdirSync(projectPath);
+  for (const file of files) {
+    const destination = path.join(projectPath, ...file.path.split('/'));
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, file.content, 'utf8');
+  }
+  touchWorkspaceManifest(workspacePath);
+  return pluginProjectRecord(projectPath, directoryName);
+}
+
+function pluginProjectPath(workspacePath, directoryName) {
+  const projectPath = path.join(
+    pluginProjectsDirectory(String(workspacePath || '')),
+    normalizedPluginProjectDirectoryName(directoryName),
+  );
+  if (!fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) {
+    throw new Error('Plugin project was not found.');
+  }
+  return projectPath;
+}
+
+function readPluginProjectFiles(workspacePath, directoryName) {
+  const projectPath = pluginProjectPath(workspacePath, directoryName);
+  const files = [];
+  const visit = (directory, prefix = '') => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name.startsWith('.') || (prefix === '' && entry.name === 'dist')) continue;
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(entryPath, relativePath);
+      else if (entry.isFile()) {
+        const stat = fs.statSync(entryPath);
+        const bytes = fs.readFileSync(entryPath);
+        let content = null;
+        try {
+          content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        } catch {}
+        files.push({
+          path: relativePath,
+          content,
+          bytes: content === null ? [...bytes] : null,
+          modifiedAt: stat.mtimeMs,
+        });
+      }
+    }
+  };
+  visit(projectPath);
+  return files;
+}
+
+function writePluginProjectFile(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  const projectPath = pluginProjectPath(workspacePath, request?.directoryName);
+  const relativePath = normalizedPluginProjectFilePath(request?.path);
+  const destination = path.join(projectPath, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, String(request?.content ?? ''), 'utf8');
+  touchWorkspaceManifest(workspacePath);
+}
+
+function writePluginProjectBuild(request) {
+  const projectPath = pluginProjectPath(request?.workspacePath, request?.directoryName);
+  const name = path.basename(String(request?.name || ''));
+  if (!name.endsWith('.hvy.plugin') || name !== request?.name) throw new Error('Plugin build name must end with .hvy.plugin.');
+  const directory = path.join(projectPath, 'dist');
+  fs.mkdirSync(directory, { recursive: true });
+  const artifactPath = path.join(directory, name);
+  fs.writeFileSync(artifactPath, Buffer.from(request?.bytes || []));
+  return { path: artifactPath, name };
 }
 
 function installPluginPackage(name, bytes) {

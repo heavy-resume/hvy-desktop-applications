@@ -38,6 +38,12 @@ pub fn run() {
             save_app_settings,
             load_installed_plugin_packages,
             install_plugin_package,
+            open_plugin_builder_window,
+            list_plugin_projects,
+            create_plugin_project,
+            read_plugin_project_files,
+            write_plugin_project_file,
+            write_plugin_project_build,
             integration_browser_command,
             integration_browser_is_open,
             probe_integration_cookie_storage,
@@ -232,9 +238,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&save_as)
         .item(&save_to_workspace)
         .separator()
-        .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
-        .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
-        .separator()
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
@@ -248,6 +251,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let ai = SubmenuBuilder::with_id(app, "ai-menu", "AI")
         .item(&MenuItemBuilder::new("LLM Settings...").id("ai-settings").build(app)?)
         .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
+        .build()?;
+    let plugins = SubmenuBuilder::with_id(app, "plugins-menu", "Plugins")
+        .item(&MenuItemBuilder::new("Plugin Builder...").id("plugin-builder").build(app)?)
+        .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
         .item(&app_shortcut_menu_item(app, "Undo", "undo", "CmdOrCtrl+Z")?)
@@ -306,6 +315,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .maximize()
         .separator()
         .item(&MenuItemBuilder::new("HVY Galaxy").id("show-window:main").build(app)?);
+    if app.get_window("plugin-builder").is_some() {
+        window_builder = window_builder.item(
+            &MenuItemBuilder::new("Plugin Builder — HVY Galaxy")
+                .id("show-window:plugin-builder")
+                .build(app)?,
+        );
+    }
     let mut integration_windows = app.windows().into_iter()
         .filter(|(label, _window)| label.starts_with(INTEGRATION_BROWSER_LABEL))
         .collect::<Vec<_>>();
@@ -334,7 +350,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let builder = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
-    builder.item(&file).item(&edit).item(&view).item(&ai).item(&window_menu).item(&help).build()
+    builder.item(&file).item(&edit).item(&view).item(&ai).item(&plugins).item(&window_menu).item(&help).build()
 }
 
 fn app_shortcut_menu_item(
