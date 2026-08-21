@@ -1684,7 +1684,7 @@ body {
 .workspaces-section {
   flex: 1 1 auto;
   min-height: 0;
-  --workspace-section-heading-height: 2.125rem;
+  --workspace-section-heading-height: 38px;
   --workspace-sticky-summary-height: 2rem;
   align-content: start;
   overflow: auto;
@@ -1698,6 +1698,7 @@ body {
   z-index: 6;
   min-height: var(--workspace-section-heading-height);
   background: var(--hvy-surface-alt, #e8ece7);
+  padding-top: 4px;
 }
 
 .workspace-root {
@@ -2467,7 +2468,7 @@ body {
 .workspace-actions-menu {
   position: absolute;
   z-index: 5;
-  top: -0.25rem;
+  top: calc((var(--workspace-sticky-summary-height) - var(--workspace-tool-size)) / 2);
   right: 0;
 }
 
@@ -2489,7 +2490,8 @@ body {
 
 .workspace-filter-trigger {
   position: absolute;
-  top: -0.25rem;
+  z-index: 5;
+  top: calc((var(--workspace-sticky-summary-height) - var(--workspace-tool-size)) / 2);
   right: var(--workspace-tool-offset);
   padding: 0;
 }
