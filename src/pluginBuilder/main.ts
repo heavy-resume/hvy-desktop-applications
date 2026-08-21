@@ -17,7 +17,6 @@ import {
   validatePluginProjectFiles,
   type PluginProjectDiagnostic,
   type PluginProjectRecord,
-  type PluginProjectScaffold,
   type PluginProjectStarter,
   type PluginProjectFile,
 } from '../pluginProjects';
@@ -117,21 +116,18 @@ function renderCreateModal(): string {
     <div class="plugin-builder-modal-backdrop" role="presentation">
       <form class="plugin-builder-modal" data-form="create-plugin" role="dialog" aria-modal="true" aria-labelledby="createPluginTitle">
         <h2 class="plugin-builder-heading-reset" id="createPluginTitle">New Plugin</h2>
-        <p class="plugin-builder-modal-copy">Create a package-format plugin project in this workspace.</p>
+        <p class="plugin-builder-modal-copy">Create a plugin in this workspace.</p>
         <label class="plugin-builder-field">
           <span>Name</span>
           <input class="plugin-builder-input" name="name" required maxlength="100" autocomplete="off" autofocus>
         </label>
         <label class="plugin-builder-field">
-          <span>Starter</span>
-          <select class="plugin-builder-select" name="starter">
-            <option value="javascript-component">JavaScript Component</option>
-            <option value="python-component">Python Component</option>
+          <span>Type</span>
+          <select class="plugin-builder-select" name="type">
+            <option value="javascript-component">Power Scripting</option>
+            <option value="python-component">Sandboxed Scripting</option>
           </select>
         </label>
-        <div class="plugin-builder-create-preview" data-role="create-preview">
-          Enter a name to preview the project location.
-        </div>
         <div class="plugin-builder-modal-actions">
           <button class="plugin-builder-button plugin-builder-button--ghost" type="button" data-action="cancel-create">Cancel</button>
           <button class="plugin-builder-button" type="submit" ${state.busy ? 'disabled' : ''}>Create Plugin</button>
@@ -158,13 +154,16 @@ function renderDiscardModal(): string {
 
 function renderProjectDetail(project: PluginProjectRecord | null): string {
   if (!project) {
+    if (state.selectedWorkspacePath) {
+      return `
+        <section class="plugin-builder-empty">
+          <button class="plugin-builder-button" type="button" data-action="open-create">Create Plugin</button>
+        </section>`;
+    }
     return `
       <section class="plugin-builder-empty">
-        <h2 class="plugin-builder-empty-title">${state.selectedWorkspacePath ? 'Build a workspace plugin' : 'Select a workspace'}</h2>
-        <p class="plugin-builder-empty-copy">${state.selectedWorkspacePath
-    ? 'Create a JavaScript or Python component plugin, then edit and build it here.'
-    : 'Plugin projects are stored in a plugins directory under an HVY workspace.'}</p>
-        ${state.selectedWorkspacePath ? '<button class="plugin-builder-button" type="button" data-action="open-create">Create Plugin</button>' : ''}
+        <h2 class="plugin-builder-empty-title">Select a workspace</h2>
+        <p class="plugin-builder-empty-copy">Plugin projects are stored in a plugins directory under an HVY workspace.</p>
       </section>`;
   }
   if (!project.manifest) {
@@ -424,24 +423,6 @@ async function buildCurrentProject(): Promise<void> {
   }
 }
 
-function previewScaffold(form: HTMLFormElement): PluginProjectScaffold | null {
-  const workspace = selectedWorkspace();
-  const data = new FormData(form);
-  const name = String(data.get('name') ?? '');
-  const starter = String(data.get('starter') ?? '') as PluginProjectStarter;
-  if (!workspace || !name.trim() || !['javascript-component', 'python-component'].includes(starter)) return null;
-  return createPluginProjectScaffold(name, starter, () => 'generated-when-created');
-}
-
-function updateCreatePreview(form: HTMLFormElement): void {
-  const preview = form.querySelector<HTMLElement>('[data-role="create-preview"]');
-  if (!preview) return;
-  const scaffold = previewScaffold(form);
-  preview.innerHTML = scaffold
-    ? `<span>plugins/${escapeHtml(scaffold.directoryName)}</span>`
-    : 'Enter a name to preview the project location.';
-}
-
 document.addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-action], [data-project], [data-file]') : null;
   if (!target) return;
@@ -479,8 +460,6 @@ document.addEventListener('change', (event) => {
   if (target instanceof HTMLSelectElement && target.dataset.field === 'workspace') {
     requestNavigation({ kind: 'workspace', value: target.value });
   }
-  const form = target instanceof Element ? target.closest<HTMLFormElement>('form[data-form="create-plugin"]') : null;
-  if (form) updateCreatePreview(form);
 });
 
 document.addEventListener('input', (event) => {
@@ -494,8 +473,6 @@ document.addEventListener('input', (event) => {
     const selectedFileButton = document.querySelector<HTMLElement>(`[data-file="${CSS.escape(state.selectedFilePath)}"]`);
     selectedFileButton?.classList.toggle('is-dirty', fileIsDirty(state.selectedFilePath));
   }
-  const form = event.target instanceof Element ? event.target.closest<HTMLFormElement>('form[data-form="create-plugin"]') : null;
-  if (form) updateCreatePreview(form);
 });
 
 document.addEventListener('submit', (event) => {
@@ -505,7 +482,7 @@ document.addEventListener('submit', (event) => {
   const workspace = selectedWorkspace();
   const data = new FormData(form);
   const name = String(data.get('name') ?? '');
-  const starter = String(data.get('starter') ?? '') as PluginProjectStarter;
+  const starter = String(data.get('type') ?? '') as PluginProjectStarter;
   if (!workspace || !['javascript-component', 'python-component'].includes(starter)) return;
   state.busy = true;
   state.error = '';

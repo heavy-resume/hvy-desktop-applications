@@ -73,6 +73,7 @@
 
 .plugin-builder-select,
 .plugin-builder-input {
+  box-sizing: border-box;
   width: 100%;
   border: 1px solid #bdb5a7;
   border-radius: 0.45rem;
@@ -489,18 +490,6 @@
 .plugin-builder-modal-copy {
   margin: -0.5rem 0 0;
   color: #6c6459;
-}
-
-.plugin-builder-create-preview {
-  display: grid;
-  gap: 0.25rem;
-  min-height: 3.5rem;
-  padding: 0.75rem;
-  border: 1px solid #d3ccbf;
-  border-radius: 0.45rem;
-  background: #eee9e0;
-  color: #6b6358;
-  font: 0.75rem ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .plugin-builder-modal-actions {

@@ -85,15 +85,13 @@ not close the main application window or prompt about open HVY documents.
 The `+` button opens an explicit modal with:
 
 - **Name**
-- **Starter**
-  - JavaScript Component
-  - Python Component
+- **Type**
+  - Power Scripting
+  - Sandboxed Scripting
 
-JavaScript Component is the default because the plugin host and DOM APIs are
-native JavaScript. The starter is an initial scaffold, not a permanent plugin
-classification. A plugin can later expose any combination of components,
-hooks, scripting methods, PDF rendering, visual descriptions, AI guidance, and
-other capabilities supported by `HvyPlugin`.
+Power Scripting is the default and generates the JavaScript implementation.
+Sandboxed Scripting generates the Python implementation. These are
+user-facing creation choices rather than technical language/runtime labels.
 
 Project creation generates:
 
@@ -107,9 +105,9 @@ Project creation generates:
 - A matching JavaScript or Python entry file.
 - A plugin CSS file and documentation starter.
 
-The modal validates the name and displays the friendly project location before
-submission. Internal IDs, UUIDs, package-format versions, and API versions are
-kept out of the default product surface.
+The modal validates the name. Project locations, internal IDs, UUIDs,
+package-format versions, and API versions are kept out of the default product
+surface.
 
 ## Workspace project format
 
@@ -488,7 +486,7 @@ required unless another product later needs the same authoring API.
 - [x] Add the project list and empty state.
 - [x] Add the `+` action.
 - [x] Add the explicit new-plugin modal.
-- [x] Show the friendly generated project location before creation.
+- [x] Keep generated project paths and identity details out of the creation modal.
 - [x] Create and select JavaScript starter projects.
 - [x] Create and select Python starter projects.
 - [x] Add a name-first project overview without exposing internal identity fields.

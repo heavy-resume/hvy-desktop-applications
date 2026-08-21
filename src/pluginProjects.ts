@@ -172,7 +172,7 @@ export function createPluginProjectScaffold(
 }
 
 export function pluginProjectStarterLabel(starter: PluginProjectStarter): string {
-  return starter === 'python-component' ? 'Python Component' : 'JavaScript Component';
+  return starter === 'python-component' ? 'Sandboxed Scripting' : 'Power Scripting';
 }
 
 export function normalizePluginProjectRecord(record: PluginProjectRecord): PluginProjectRecord {
