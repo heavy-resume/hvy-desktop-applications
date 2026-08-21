@@ -30,6 +30,14 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   };
 
   return {
+  setIntegrationsSectionExpanded: (expanded) => {
+    state.integrationsSectionExpanded = expanded;
+    rerender({ preserveMountedDocument: true });
+  },
+  setWorkspacesSectionExpanded: (expanded) => {
+    state.workspacesSectionExpanded = expanded;
+    rerender({ preserveMountedDocument: true });
+  },
   createWorkspaceFolder: (workspacePath, parentDirectory, name) => void runBusy('Creating folder...', async () => {
     const trimmed = name.trim();
     if (!workspacePath || !trimmed) {
@@ -652,6 +660,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   },
   setWorkspaceExpanded: (workspacePath, expanded) => {
     state.workspaceExpanded[workspacePath] = expanded;
+    rerender({ preserveMountedDocument: true });
   },
   setWorkspaceFolderExpanded: (workspacePath, relativePath, expanded) => {
     const normalizedPath = relativePath.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');

@@ -67,6 +67,8 @@ export interface AppState {
   workspaceInitializationName: string | null;
   workspaceManagerOpen: boolean;
   openWorkspaceActionsPath: string | null;
+  integrationsSectionExpanded: boolean;
+  workspacesSectionExpanded: boolean;
   newFolderWorkspacePath: string | null;
   newFolderParentDirectory: string;
   workspaceExpanded: Record<string, boolean>;
@@ -337,6 +339,8 @@ export const state: AppState = {
   workspaceInitializationName: null,
   workspaceManagerOpen: false,
   openWorkspaceActionsPath: null,
+  integrationsSectionExpanded: true,
+  workspacesSectionExpanded: true,
   newFolderWorkspacePath: null,
   newFolderParentDirectory: '',
   workspaceExpanded: {},

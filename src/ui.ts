@@ -40,6 +40,8 @@ export interface UiHandlers {
   setWorkspaceHiddenFromAI(workspacePath: string, hiddenFromAI: boolean): void;
   setWorkspaceFolderHiddenFromAI(workspacePath: string, targetDirectory: string, hiddenFromAI: boolean): void;
   toggleWorkspaceActions(path: string): void;
+  setIntegrationsSectionExpanded(expanded: boolean): void;
+  setWorkspacesSectionExpanded(expanded: boolean): void;
   closeWorkspaceActions(): void;
   createWorkspace(name: string, location: 'managed' | 'choose'): void;
   confirmWorkspaceInitialization(): void;
@@ -406,7 +408,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
 
 export function renderLeftPanel(state: AppState): void {
   const leftPanel = leftPanelRoot();
-  const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-section')?.scrollTop ?? 0;
+  const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-scroll-body')?.scrollTop ?? 0;
   const integrationScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section')?.scrollTop ?? 0;
   const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view-launcher[open]')).map((details) => details.dataset.quickViewId ?? ''));
   const expandedIntegrationFilters = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-profile-filter[open]')).map((details) => details.dataset.quickViewId ?? ''));
@@ -421,27 +423,41 @@ export function renderLeftPanel(state: AppState): void {
     <div class="sidebar-actions">
       <button class="hvy-galaxy-button" type="button" data-action="open-file">Open File</button>
     </div>
-    <section class="integrations-section">
+    <section class="integrations-section${state.integrationsSectionExpanded ? '' : ' is-collapsed'}">
       <div class="sidebar-section-heading">
-        <h2>Integrations</h2>
+        <h2>
+          <button type="button" class="sidebar-section-toggle" data-action="toggle-integrations-section" aria-expanded="${state.integrationsSectionExpanded ? 'true' : 'false'}">
+            <span class="sidebar-section-disclosure" aria-hidden="true">${state.integrationsSectionExpanded ? '▾' : '▸'}</span>
+            <span>Integrations</span>
+          </button>
+        </h2>
         <button type="button" class="hvy-galaxy-button icon-button integration-manage-trigger" data-action="integrations" title="Manage integrations" aria-label="Manage integrations">${gearIcon()}</button>
         <button type="button" class="hvy-galaxy-button icon-button integration-new-trigger" data-action="request-add-integration-page" title="Add quick view" aria-label="Add quick view">+</button>
       </div>
-      ${renderIntegrationQuickViews(state, expandedIntegrationPages, expandedIntegrationFilters)}
+      <div class="integrations-section-body" ${state.integrationsSectionExpanded ? '' : 'hidden'}>
+        ${renderIntegrationQuickViews(state, expandedIntegrationPages, expandedIntegrationFilters)}
+      </div>
     </section>
-    <section class="workspaces-section">
+    <section class="workspaces-section${state.workspacesSectionExpanded ? '' : ' is-collapsed'}">
       <div class="sidebar-section-heading">
-        <h2>Workspaces</h2>
+        <h2>
+          <button type="button" class="sidebar-section-toggle" data-action="toggle-workspaces-section" aria-expanded="${state.workspacesSectionExpanded ? 'true' : 'false'}">
+            <span class="sidebar-section-disclosure" aria-hidden="true">${state.workspacesSectionExpanded ? '▾' : '▸'}</span>
+            <span>Workspaces</span>
+          </button>
+        </h2>
         <button type="button" class="hvy-galaxy-button icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
         <button type="button" class="hvy-galaxy-button icon-button workspace-new-trigger" data-action="new-workspace" title="New workspace" aria-label="New workspace">+</button>
       </div>
-      ${renderWorkspaces(state)}
+      <div class="workspaces-scroll-body" ${state.workspacesSectionExpanded ? '' : 'hidden'}>
+        ${renderWorkspaces(state)}
+      </div>
     </section>
     <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>`;
   applyWorkspaceSidebarWidth(appRoot);
-  const nextWorkspacesSection = leftPanel.querySelector<HTMLElement>('.workspaces-section');
-  if (nextWorkspacesSection) {
-    nextWorkspacesSection.scrollTop = workspaceScrollTop;
+  const nextWorkspacesScrollBody = leftPanel.querySelector<HTMLElement>('.workspaces-scroll-body');
+  if (nextWorkspacesScrollBody) {
+    nextWorkspacesScrollBody.scrollTop = workspaceScrollTop;
   }
   const nextIntegrationsSection = leftPanel.querySelector<HTMLElement>('.integrations-section');
   if (nextIntegrationsSection) {
@@ -854,6 +870,12 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     const action = target.dataset.action;
     if (action === 'close-workspace-filter' && clickedDismissBackdrop && !dismissBackdropClick) return;
     if (action === 'new-workspace') handlers.newWorkspace();
+    if (action === 'toggle-integrations-section') {
+      handlers.setIntegrationsSectionExpanded(target.getAttribute('aria-expanded') !== 'true');
+    }
+    if (action === 'toggle-workspaces-section') {
+      handlers.setWorkspacesSectionExpanded(target.getAttribute('aria-expanded') !== 'true');
+    }
     if (action === 'manage-workspaces') handlers.openWorkspaceManager();
     if (action === 'close-workspace-manager') handlers.closeWorkspaceManager();
     if (action === 'show-workspace-in-folder' && target.dataset.workspacePath) handlers.showFileInFolder(target.dataset.workspacePath);
@@ -864,6 +886,11 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       event.preventDefault();
       event.stopPropagation();
       handlers.toggleWorkspaceActions(target.dataset.workspacePath);
+    }
+    if (action === 'toggle-workspace-expanded' && target.dataset.workspacePath) {
+      const expanded = target.getAttribute('aria-expanded') !== 'true';
+      handlers.setWorkspaceExpanded(target.dataset.workspacePath, expanded);
+      if (expanded) handlers.refreshWorkspace(target.dataset.workspacePath);
     }
     if (action === 'new-folder-in-workspace' || action === 'new-document-in-workspace') {
       event.stopPropagation();
@@ -1635,10 +1662,8 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
       );
       return;
     }
-    const workspaceSummary = target?.closest<HTMLElement>('.workspace-root > summary');
-    const workspacePath = workspaceSummary?.parentElement instanceof HTMLDetailsElement
-      ? workspaceSummary.parentElement.dataset.workspacePath
-      : null;
+    const workspaceSummary = target?.closest<HTMLElement>('.workspace-summary');
+    const workspacePath = workspaceSummary?.closest<HTMLElement>('.workspace-root')?.dataset.workspacePath;
     if (workspaceSummary && workspacePath) {
       event.preventDefault();
       const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
@@ -1657,18 +1682,6 @@ function bind(root: HTMLElement, handlers: UiHandlers, state: AppState): void {
     if (!target?.closest('.tree-file, .tree summary, .tree-folder-row')) return;
     event.preventDefault();
   }, { signal });
-  root.addEventListener('click', (event) => {
-    const summary = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.workspace-root > summary') : null;
-    const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
-    const workspacePath = details?.dataset.workspacePath;
-    if (!details || !workspacePath) return;
-    const wasOpen = details.open;
-    window.setTimeout(() => {
-      if (details.open === wasOpen) return;
-      handlers.setWorkspaceExpanded(workspacePath, details.open);
-      if (details.open) handlers.refreshWorkspace(workspacePath);
-    }, 0);
-  }, { signal, capture: true });
   root.addEventListener('click', (event) => {
     const summary = event.target instanceof HTMLElement
       ? event.target.closest<HTMLElement>('.tree summary[data-workspace-folder-target="true"]')
@@ -3463,29 +3476,36 @@ function renderWorkspace(
     ? filterNodesByTemplateVisibility(fileViewNodes, workspaceTemplateVisibility(workspace))
     : filterNodesByArchivedVisibility(fileViewNodes, workspaceTemplateVisibility(workspace).archivedFiles);
   return `
-    <details class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}"${expanded ? ' open' : ''}>
-      <summary class="workspace-summary" title="${escapeAttr(workspace.path)}">
-        <span>${escapeHtml(workspace.manifest.name)}</span>
-        ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
-      </summary>
-      <button type="button" class="hvy-galaxy-button workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
-      <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
-        <button type="button" class="hvy-galaxy-button ${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
-        <button type="button" class="hvy-galaxy-button ${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
+    <section class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}" data-expanded="${expanded ? 'true' : 'false'}">
+      <div class="workspace-sticky-header${actionsOpen ? ' is-actions-open' : ''}">
+        <button type="button" class="workspace-summary" data-action="toggle-workspace-expanded" data-workspace-path="${escapeAttr(workspace.path)}" aria-expanded="${expanded ? 'true' : 'false'}" title="${escapeAttr(workspace.path)}">
+          <span class="workspace-disclosure-icon" aria-hidden="true">${expanded ? '▾' : '▸'}</span>
+          <span class="workspace-summary-label">${escapeHtml(workspace.manifest.name)}</span>
+          ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
+        </button>
+        ${expanded ? `
+          <button type="button" class="hvy-galaxy-button workspace-filter-trigger${rootFilterActive ? ' is-active' : ''}" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspace.path)}" title="${escapeAttr(filterTitle)}" aria-label="${escapeAttr(filterTitle)}">${funnelIcon()}</button>
+          <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
+            <button type="button" class="hvy-galaxy-button workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
+            <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
+              <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
+              <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
+              <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}">Add</button>
+              <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
+              <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
+            </div>
+          </div>
+        ` : ''}
       </div>
-      <div class="workspace-actions-menu${actionsOpen ? ' is-open' : ''}">
-        <button type="button" class="hvy-galaxy-button workspace-action-trigger" data-action="toggle-workspace-actions" data-workspace-path="${escapeAttr(workspace.path)}" title="Workspace actions" aria-label="Workspace actions" aria-expanded="${actionsOpen ? 'true' : 'false'}">+</button>
-        <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
-          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
-          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
-          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}">Add</button>
-          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
-          <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
+      ${expanded ? `
+        <div class="workspace-view-toggle segmented-control" aria-label="${escapeAttr(`${workspace.manifest.name} view`)}">
+          <button type="button" class="hvy-galaxy-button ${documentsActive ? 'is-active' : ''}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="documents" aria-pressed="${documentsActive ? 'true' : 'false'}">Docs</button>
+          <button type="button" class="hvy-galaxy-button ${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
         </div>
-      </div>
-      ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
-      <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, folderExpanded, filter ?? null, embeddingPreview)).join('')}</ul>
-    </details>`;
+        ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
+        <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, folderExpanded, filter ?? null, embeddingPreview)).join('')}</ul>
+      ` : ''}
+    </section>`;
 }
 
 function isWorkspaceFileView(value: unknown): value is AppState['workspaceFileViews'][string] {
