@@ -1,7 +1,7 @@
 import { archiveDocumentFile, chooseWorkspaceFolder, copyDocumentToWorkspace, deleteDocumentFile, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
-import { getPhvyCompatibilityErrors, openMountedDocumentMeta, serializeHvy } from './hvy';
+import { applyMountedRecoveryState, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, serializeHvy } from './hvy';
 import { state } from './state';
 import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, renameDocumentTabPath, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, moveBackupTracking, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache } from './main';
 import type { UiHandlers } from './ui';
@@ -369,6 +369,8 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       return;
     }
     const document = state.document.mounted?.document;
+    const recoveryState = state.document.mounted ? getMountedRecoveryState(state.document.mounted) : null;
+    const documentId = state.document.documentId;
     const scrollRatio = captureMountScrollRatio(mountRoot);
     state.document.mode = mode;
     state.document.metaOpen = false;
@@ -379,7 +381,11 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       writeHotReloadSessionSnapshot();
     }
     rerender();
-    void mountCurrentDocument(document).then(() => restoreMountScrollRatio(mountRoot, scrollRatio));
+    void mountCurrentDocument(document).then(() => {
+      if (state.document?.documentId !== documentId || state.document.mode !== mode || !state.document.mounted) return;
+      applyMountedRecoveryState(state.document.mounted, recoveryState);
+      restoreMountScrollRatio(mountRoot, scrollRatio);
+    });
   },
   openDocumentMeta: () => {
     if (!state.document) return;
