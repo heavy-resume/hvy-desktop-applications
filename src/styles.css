@@ -1598,11 +1598,25 @@ body {
 }
 
 .integration-quick-view-launcher > summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
   overflow: hidden;
   cursor: pointer;
   color: var(--hvy-text, #152223);
   font-size: 13px;
   font-weight: 600;
+  list-style: none;
+}
+
+.integration-quick-view-launcher > summary::-webkit-details-marker {
+  display: none;
+}
+
+.integration-quick-view-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1747,7 +1761,8 @@ body {
 }
 
 .sidebar-section-heading h2 {
-  margin-right: auto;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sidebar-section-toggle {
@@ -1765,11 +1780,36 @@ body {
   text-transform: inherit;
 }
 
-.sidebar-section-disclosure {
+.sidebar-disclosure {
+  position: relative;
   flex: 0 0 0.75rem;
-  font-size: 1rem;
-  line-height: 1;
-  text-align: center;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.sidebar-disclosure::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.5rem;
+  height: 0.5rem;
+  background: currentColor;
+  clip-path: polygon(12.5% 0, 87.5% 50%, 12.5% 100%);
+  content: "";
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+}
+
+.sidebar-disclosure.is-expanded::before,
+.integration-quick-view-launcher[open] > summary .sidebar-disclosure::before {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.sidebar-section-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .integration-manage-trigger,
@@ -1790,10 +1830,13 @@ body {
 
 .sidebar-section-heading h2,
 .workspace-summary {
-  overflow: hidden;
   font-size: 13px;
-  text-overflow: ellipsis;
   text-transform: uppercase;
+}
+
+.workspace-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1819,13 +1862,6 @@ body {
   flex: 0 1 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.workspace-disclosure-icon {
-  flex: 0 0 0.75rem;
-  font-size: 1rem;
-  line-height: 1;
-  text-align: center;
 }
 
 .workspace-sticky-header {

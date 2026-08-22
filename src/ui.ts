@@ -427,8 +427,8 @@ export function renderLeftPanel(state: AppState): void {
       <div class="sidebar-section-heading">
         <h2>
           <button type="button" class="sidebar-section-toggle" data-action="toggle-integrations-section" aria-expanded="${state.integrationsSectionExpanded ? 'true' : 'false'}">
-            <span class="sidebar-section-disclosure" aria-hidden="true">${state.integrationsSectionExpanded ? '▾' : '▸'}</span>
-            <span>Integrations</span>
+            <span class="sidebar-disclosure sidebar-section-disclosure${state.integrationsSectionExpanded ? ' is-expanded' : ''}" aria-hidden="true"></span>
+            <span class="sidebar-section-label">Integrations</span>
           </button>
         </h2>
         <button type="button" class="hvy-galaxy-button icon-button integration-manage-trigger" data-action="integrations" title="Manage integrations" aria-label="Manage integrations">${gearIcon()}</button>
@@ -442,8 +442,8 @@ export function renderLeftPanel(state: AppState): void {
       <div class="sidebar-section-heading">
         <h2>
           <button type="button" class="sidebar-section-toggle" data-action="toggle-workspaces-section" aria-expanded="${state.workspacesSectionExpanded ? 'true' : 'false'}">
-            <span class="sidebar-section-disclosure" aria-hidden="true">${state.workspacesSectionExpanded ? '▾' : '▸'}</span>
-            <span>Workspaces</span>
+            <span class="sidebar-disclosure sidebar-section-disclosure${state.workspacesSectionExpanded ? ' is-expanded' : ''}" aria-hidden="true"></span>
+            <span class="sidebar-section-label">Workspaces</span>
           </button>
         </h2>
         <button type="button" class="hvy-galaxy-button icon-button workspace-manage-trigger" data-action="manage-workspaces" title="Manage workspaces" aria-label="Manage workspaces">${gearIcon()}</button>
@@ -468,13 +468,13 @@ export function renderLeftPanel(state: AppState): void {
 function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet<string>, expandedFilters: ReadonlySet<string>): string {
   const profiles = state.integrationRegistry.profiles;
   const pages = state.integrationRegistry.integrations.flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
-  if (pages.length === 0) return '<div class="empty-panel">Add a web page for quick access.</div>';
+  if (pages.length === 0) return '<div class="empty-panel">Fetch data and trigger actions on web pages. Configure to begin.</div>';
   return `<div class="integration-quick-views">${pages.map(({ integration, page }) => {
     const quickViewId = `${integration.id}:${page.id}`;
     const visibleIds = new Set(page.visibleProfileIds ?? profiles.map((profile) => profile.id));
     const visibleProfiles = profiles.filter((profile) => visibleIds.has(profile.id));
     const launcher = `<details class="integration-quick-view-launcher" data-quick-view-id="${escapeAttr(quickViewId)}"${expandedPages.has(quickViewId) ? ' open' : ''}>
-      <summary>${escapeHtml(page.name)}</summary>
+      <summary><span class="sidebar-disclosure" aria-hidden="true"></span><span class="integration-quick-view-label">${escapeHtml(page.name)}</span></summary>
       <div class="integration-profile-list">
         ${visibleProfiles.length
         ? visibleProfiles.map((profile) => `<button type="button" class="hvy-galaxy-button integration-profile-quick-view" data-action="open-integration-page" data-integration-id="${escapeAttr(integration.id)}" data-page-id="${escapeAttr(page.id)}" data-profile-id="${escapeAttr(profile.id)}">${escapeHtml(profile.name)}</button>`).join('')
@@ -3479,7 +3479,7 @@ function renderWorkspace(
     <section class="workspace-root${workspaceHiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}" data-expanded="${expanded ? 'true' : 'false'}">
       <div class="workspace-sticky-header${actionsOpen ? ' is-actions-open' : ''}">
         <button type="button" class="workspace-summary" data-action="toggle-workspace-expanded" data-workspace-path="${escapeAttr(workspace.path)}" aria-expanded="${expanded ? 'true' : 'false'}" title="${escapeAttr(workspace.path)}">
-          <span class="workspace-disclosure-icon" aria-hidden="true">${expanded ? '▾' : '▸'}</span>
+          <span class="sidebar-disclosure workspace-disclosure-icon${expanded ? ' is-expanded' : ''}" aria-hidden="true"></span>
           <span class="workspace-summary-label">${escapeHtml(workspace.manifest.name)}</span>
           ${workspaceHiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
         </button>
@@ -4494,7 +4494,7 @@ function renderIntegrationCommandDeleteDialog(state: AppState): string {
 
 function renderAddIntegrationPageDialog(state: AppState): string {
   if (!state.addIntegrationPageDialogOpen) return '';
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input class="hvy-galaxy-input" name="pageName" required autocomplete="off" placeholder="Name for this page"></label><label><span>HTTPS URL</span><input class="hvy-galaxy-input" name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><p class="field-help">The page's origin becomes its initial navigation boundary.</p><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-page">Cancel</button><button class="hvy-galaxy-button" type="submit">Add page</button></div></form></div>`;
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Add integration page" data-form="add-integration-page"><h2>Add web page</h2><label><span>Name</span><input class="hvy-galaxy-input" name="pageName" required autocomplete="off" placeholder="Name for this page"></label><label><span>HTTPS URL</span><input class="hvy-galaxy-input" name="pageUrl" type="url" required pattern="https://.*" placeholder="https://example.com/"></label><div class="dialog-actions"><button class="hvy-galaxy-button" type="button" data-action="cancel-add-integration-page">Cancel</button><button class="hvy-galaxy-button" type="submit">Add page</button></div></form></div>`;
 }
 
 function renderIntegrationReadyChecksDialog(state: AppState): string {
