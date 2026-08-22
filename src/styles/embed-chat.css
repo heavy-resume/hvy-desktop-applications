@@ -1,0 +1,406 @@
+.hvy-document-host {
+  display: block;
+  overflow: hidden;
+}
+
+.hvy-document-host .link-inline-modal:not(.is-open) {
+  display: none;
+}
+
+.hvy-document-host .chat-context-controls {
+  display: none;
+}
+
+.hvy-document-host.is-workspace-chat-document {
+  background: var(--hvy-surface, #ffffff);
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-chat-document {
+  color: var(--hvy-text, #17211f);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.workspace-chat-header {
+  align-items: center;
+  border-bottom: 1px solid var(--hvy-border, #d8dedc);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.workspace-chat-header h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.workspace-chat-header p {
+  color: var(--hvy-text-muted, #64706d);
+  font-size: 0.85rem;
+  margin: 2px 0 0;
+}
+
+.workspace-chat-native {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+  padding: 18px 24px 20px;
+}
+
+.workspace-chat-thread-shell {
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.workspace-chat-thread {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.workspace-chat-scroll-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 2;
+  border-radius: 999px;
+  border: 1px solid var(--hvy-border, #d8dedc);
+  background: color-mix(in srgb, var(--hvy-surface-alt, #f5f7f6) 78%, var(--hvy-surface, #ffffff));
+  box-shadow: 0 8px 20px var(--hvy-shadow, rgba(15, 23, 42, 0.16));
+  font-size: 0.82rem;
+  padding: 0.35rem 0.7rem;
+}
+
+.workspace-chat-scroll-bottom[hidden] {
+  display: none;
+}
+
+.workspace-chat-empty {
+  align-self: center;
+  color: var(--hvy-text-muted, #64706d);
+  display: grid;
+  gap: 6px;
+  margin: auto;
+  text-align: center;
+}
+
+.workspace-chat-empty strong {
+  color: var(--hvy-text, #17211f);
+  font-size: 1rem;
+}
+
+.workspace-chat-empty p {
+  margin: 0;
+}
+
+.workspace-chat-message {
+  border: 1px solid var(--hvy-border, #d8dedc);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  max-width: min(68rem, 92%);
+  padding: 12px 14px;
+}
+
+.workspace-chat-message.is-user {
+  align-self: end;
+  background: var(--hvy-surface-alt, #f5f7f6);
+}
+
+.workspace-chat-message.is-assistant {
+  align-self: start;
+  background: var(--hvy-surface, #ffffff);
+  border-color: color-mix(in srgb, var(--hvy-border, #d8dedc) 70%, transparent);
+}
+
+.workspace-chat-message.is-error {
+  border-color: var(--hvy-danger, #b42318);
+}
+
+.workspace-chat-message-role {
+  color: var(--hvy-text-muted, #64706d);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workspace-chat-message-body {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workspace-chat-message-body h1,
+.workspace-chat-message-body h2,
+.workspace-chat-message-body h3 {
+  font-size: 1rem;
+  line-height: 1.35;
+  margin: 0 0 0.55rem;
+}
+
+.workspace-chat-message-body ul,
+.workspace-chat-message-body ol {
+  margin: 0.35rem 0 0.7rem 1.35rem;
+  padding: 0;
+}
+
+.workspace-chat-message-body li {
+  margin: 0.25rem 0;
+}
+
+.workspace-chat-message-body p {
+  margin: 0 0 0.65rem;
+}
+
+.workspace-chat-message-body p:last-child {
+  margin-bottom: 0;
+}
+
+.workspace-chat-status {
+  align-items: center;
+  color: var(--hvy-text-muted, #64706d);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.86rem;
+  gap: 10px;
+  min-height: 1.5rem;
+}
+
+.workspace-chat-status p {
+  margin: 0;
+}
+
+.workspace-chat-composer {
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-chat-composer span {
+  color: var(--hvy-text-muted, #64706d);
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workspace-chat-composer textarea {
+  font-size: 1rem;
+  line-height: 1.45;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.workspace-chat-actions {
+  align-items: center;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.workspace-chat-actions span {
+  color: var(--hvy-text-muted, #64706d);
+  font-size: 0.86rem;
+  margin-right: auto;
+}
+
+.workspace-chat-error {
+  color: var(--hvy-danger, #b42318) !important;
+}
+
+.workspace-chat-progress {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+}
+
+.workspace-chat-progress div {
+  align-items: baseline;
+  display: flex;
+  gap: 4px;
+}
+
+.workspace-chat-progress dt {
+  color: var(--hvy-text-muted, #64706d);
+  font-size: 0.72rem;
+  margin: 0;
+}
+
+.workspace-chat-progress dd {
+  font-weight: 700;
+  margin: 0;
+}
+
+.workspace-chat-required {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  flex: 1;
+  padding: 32px;
+  text-align: center;
+}
+
+.workspace-chat-required h3,
+.workspace-chat-required p {
+  margin: 0;
+}
+
+.workspace-chat-save-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+.hvy-document-host>.hvy-embed-layout {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.hvy-document-host .chat-dock {
+  --hvy-chat-panel-height: min(54rem, calc(100vh - 2rem));
+  --hvy-chat-document-edit-panel-height: min(56rem, calc(100vh - 2rem));
+  width: var(--hvy-chat-panel-width, min(45rem, calc(100% - 4rem)));
+}
+
+.hvy-document-host.is-hidden-from-ai .chat-dock {
+  display: none;
+}
+
+.hvy-document-host .chat-panel.is-question-answer {
+  flex-basis: var(--hvy-chat-panel-height);
+}
+
+.hvy-document-host .chat-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  cursor: nwse-resize;
+}
+
+.hvy-document-host .chat-panel.is-resizing {
+  user-select: none;
+}
+
+.hvy-document-host .rich-toolbar .icon-button {
+  overflow: hidden;
+  font-size: 0.875rem;
+  line-height: 1;
+}
+
+.hvy-document-host .rich-toolbar .icon-button>strong {
+  display: inline-grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  place-items: center;
+}
+
+.hvy-document-host .rich-toolbar .code-icon {
+  width: 1.55rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hvy-document-host .text-editor-shell.has-fill-in-selection .text-editor-toolbar-bounds {
+  z-index: 0;
+}
+
+.hvy-document-host .text-editor-shell.has-fill-in-selection .text-editor-toolbar-slot {
+  position: relative;
+  top: auto;
+}
+
+.hvy-document-host .text-editor-shell.has-fill-in-selection .text-use-as-selection {
+  pointer-events: auto;
+}
+
+.hvy-document-host .chat-launcher {
+  width: 3.2rem !important;
+  min-width: 3.2rem !important;
+  max-width: 3.2rem !important;
+  height: 3.2rem !important;
+  min-height: 3.2rem !important;
+  max-height: 3.2rem !important;
+  border-radius: 999px !important;
+  padding: 0 !important;
+}
+
+.hvy-document-host .chat-panel-close {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  min-width: 2rem;
+  max-width: 2rem;
+  height: 2rem;
+  min-height: 2rem;
+  max-height: 2rem;
+  border-radius: 999px;
+  padding: 0;
+}
+
+.hvy-document-host .chat-panel-close .hvy-ui-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.hvy-document-host .chat-token-usage {
+  display: none;
+}
+
+.hvy-document-host .editor-shell .editor-tree {
+  position: relative;
+  z-index: 0;
+}
+
+.hvy-document-host .editor-shell:has(.editor-tree .component-picker[data-open="true"]) .editor-tree,
+.hvy-document-host .editor-shell:has(.editor-tree .component-picker:focus-within) .editor-tree {
+  z-index: 30;
+}
+
+.hvy-document-host .editor-shell:has(.editor-sidebar .component-picker[data-open="true"]) .editor-sidebar,
+.hvy-document-host .editor-shell:has(.editor-sidebar .component-picker:focus-within) .editor-sidebar {
+  z-index: 40;
+}
+
+.hvy-document-host .component-picker:not([data-active-pane="root"]) .component-picker-popover {
+  width: min(20rem, calc(100vw - 2rem));
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 100%;
+  gap: 12px;
+  color: var(--hvy-text-muted, #57635f);
+  text-align: center;
+}
+
+.empty-state h2 {
+  margin: 0;
+  color: var(--hvy-text, #1f2c2b);
+}
+
+.empty-state p {
+  max-width: 34rem;
+  margin: 0;
+}
