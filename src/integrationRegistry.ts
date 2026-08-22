@@ -167,21 +167,7 @@ export function defaultIntegrationRegistry(): IntegrationRegistry {
       providerId: 'google',
       browserStoreId: 'default-google',
     }],
-    integrations: [{
-      id: 'gmail',
-      name: 'Gmail',
-      profileProviderId: 'google',
-      editable: false,
-      pages: [{ id: 'gmail', name: 'Gmail', url: 'https://mail.google.com/', allowedOrigins: ['https://mail.google.com', 'https://accounts.google.com'], editable: false, readyChecks: defaultIntegrationPageReadyChecks('https://mail.google.com/', 'strict-domain') }],
-      actions: [],
-    }, {
-      id: 'google-calendar',
-      name: 'Google Calendar',
-      profileProviderId: 'google',
-      editable: false,
-      pages: [{ id: 'google-calendar', name: 'Google Calendar', url: 'https://calendar.google.com/', allowedOrigins: ['https://calendar.google.com', 'https://accounts.google.com'], editable: false, readyChecks: defaultIntegrationPageReadyChecks('https://calendar.google.com/', 'strict-domain') }],
-      actions: [],
-    }],
+    integrations: [],
   };
 }
 
@@ -204,47 +190,12 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
       commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
     })),
   }));
-  const savedGoogle = saved.integrations.find((integration) => integration.id === 'google-workspace');
-  fallback.integrations = fallback.integrations.map((builtIn) => {
-    const page = builtIn.pages[0];
-    const savedPageIntegration = saved.integrations.find((integration) => integration.id === builtIn.id);
-    const rawActions = [
-      ...(savedPageIntegration?.actions ?? []),
-      ...(savedGoogle?.actions.filter((action) => action.pageIds[0] === page.id) ?? []),
-    ];
-    const actions = rawActions.map((action) => ({
-      ...action,
-      integrationId: builtIn.id,
-      pageIds: [page.id],
-      commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
-    }));
-    const commands = [
-      ...(savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.commands ?? []),
-      ...(savedGoogle?.pages.find((savedPage) => savedPage.id === page.id)?.commands ?? []),
-      ...rawActions.flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
-    ];
-    const retrievalSources = [
-      ...(savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.retrievalSources ?? []),
-      ...(savedGoogle?.pages.find((savedPage) => savedPage.id === page.id)?.retrievalSources ?? []),
-    ];
-    return {
-      ...builtIn,
-      pages: [{
-        ...page,
-        visibleProfileIds: savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.visibleProfileIds,
-        readyChecks: savedPageIntegration?.pages.find((savedPage) => savedPage.id === page.id)?.readyChecks ?? page.readyChecks,
-        commands: [...new Map(commands.map((command) => [command.id, command])).values()],
-        retrievalSources: [...new Map(retrievalSources.map((source) => [source.id, source])).values()],
-      }],
-      actions,
-    };
-  });
   const profiles = (saved.profiles ?? fallback.profiles).map((profile) => (
     profile.id === 'default-google' && profile.name === 'Google account'
       ? { ...profile, name: 'Personal' }
       : profile
   ));
-  return { version: 1, integrations: [...fallback.integrations, ...custom], profiles };
+  return { version: 1, integrations: custom, profiles };
 }
 
 export function saveIntegrationRegistry(registry: IntegrationRegistry): void {

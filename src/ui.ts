@@ -4265,6 +4265,23 @@ function renderIntegrationsDialog(state: AppState): string {
   const selectedIntegration = state.integrationRegistry.integrations.find((integration) => integration.id === state.selectedIntegrationId)
     ?? state.integrationRegistry.integrations[0];
   const profiles = state.integrationRegistry.profiles;
+  if (!selectedIntegration) return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog integrations-dialog integrations-manager" role="dialog" aria-modal="true" aria-label="Integrations" data-prevent-dismiss="true">
+        <div class="modal-header">
+          <div><h2>Web Pages</h2><p class="dialog-note">Open pages with reusable profiles, then define their record types and commands.</p></div>
+          <button type="button" class="hvy-galaxy-button icon-button" data-action="close-integrations" aria-label="Close">×</button>
+        </div>
+        <div class="integrations-manager-body">
+          <nav class="integration-list" aria-label="Configured web pages">
+            <button type="button" class="hvy-galaxy-button integration-list-add" data-action="request-add-integration-page">+ Add web page</button>
+          </nav>
+          <main class="integration-detail">
+            <div class="integration-empty-state"><strong>No web pages configured</strong><span>Add a web page to open it with a reusable browser profile.</span></div>
+          </main>
+        </div>
+      </section>
+    </div>`;
   const selectedPage = selectedIntegration.pages[0];
   const discoveredSources = state.integrationStructuredSourcePageId === selectedPage.id ? state.integrationStructuredSources : [];
   const savedSourceKeys = new Set((selectedPage.retrievalSources ?? []).map((source) => `${source.kind}|${source.url}`));

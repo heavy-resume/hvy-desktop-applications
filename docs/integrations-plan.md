@@ -4,7 +4,7 @@
 
 Allow a user to open a web application in HVY Galaxy, use its normal interface, extract structured data with deterministic scripts, and insert reviewed results into an HVY document.
 
-Gmail and Google Calendar are the first bundled web pages, followed by Drive. They are independent page definitions that may use the same browser profile. The architecture must remain vendor-neutral so future mods and shared setup files can add pages without receiving unrestricted desktop access.
+Web pages are configured explicitly rather than bundled automatically. Pages for services such as Gmail, Google Calendar, or Drive may use the same browser profile. The architecture must remain vendor-neutral so future mods and shared setup files can add pages without receiving unrestricted desktop access.
 
 ## Product experience
 
@@ -44,7 +44,7 @@ DOM extraction remains the fallback. Preferred retrieval order is a configured s
 
 ### Web pages and portable setups
 
-A web page owns its page commands and record types. Gmail and Google Calendar are separate bundled pages: email record types belong to Gmail and calendar record types belong to Calendar. User-added pages use the same representation.
+A web page owns its page commands and record types. If Gmail and Google Calendar are configured, they are separate pages: email record types belong to Gmail and calendar record types belong to Calendar. All user-added pages use the same representation.
 
 A portable integration setup packages one or more page definitions, their record types, and their commands. It never packages profiles, cookies, browser storage, credentials, or captured personal values. Importing a setup such as a LinkedIn configuration adds its pages and then lets the user choose an existing local profile through **Use profile**.
 
@@ -394,7 +394,7 @@ The mod API should not be declared stable until it has been used for Google Work
 - Add the profile registry and a default Google profile.
 - Add create, rename, switch, reset, and delete flows.
 - Create one isolated runtime browser store per profile.
-- Make Gmail, Calendar, and Drive share the selected Google profile.
+- Allow explicitly configured Gmail, Calendar, and Drive pages to share a selected Google profile.
 
 ### Phase 3: Pages, records, and commands
 
@@ -434,7 +434,7 @@ The mod API should not be declared stable until it has been used for Google Work
 
 ### Phase 7: Provider integrations and mods
 
-- Package Gmail and Calendar extractors against the generic interfaces.
+- Package optional service-specific extractors against the generic interfaces without automatically adding their pages.
 - Add Drive workspace operations after read and extraction flows are stable.
 - Publish the constrained integration mod manifest and SDK.
 - Validate the API with a non-Google provider before stabilizing it.

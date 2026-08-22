@@ -8,23 +8,28 @@ describe('integration registry', () => {
     expect(defaultIntegrationRegistry().profiles[0].name).toBe('Personal');
   });
 
-  it('models Gmail and Calendar as separate pages that can use the same profile', () => {
+  it('does not configure automatic web integrations', () => {
     const registry = defaultIntegrationRegistry();
-    expect(registry.integrations.map((integration) => integration.id)).toEqual(['gmail', 'google-calendar']);
-    expect(registry.integrations.map((integration) => integration.pages.map((page) => page.id))).toEqual([['gmail'], ['google-calendar']]);
-    expect(registry.integrations.every((integration) => integration.profileProviderId === 'google')).toBe(true);
+    expect(registry.integrations).toEqual([]);
     expect(registry.profiles.map((profile) => profile.id)).toEqual(['default-google']);
   });
 
-  it('restores the visible profile selection for built-in sidebar items', () => {
+  it('restores manually configured web pages and their visible profiles', () => {
     const saved = defaultIntegrationRegistry();
     saved.profiles.push({ id: 'work-google', name: 'Work', providerId: 'google', browserStoreId: 'work-google' });
-    saved.integrations[0].pages[0].visibleProfileIds = ['work-google'];
+    saved.integrations.push({
+      id: 'custom-mail',
+      name: 'Mail',
+      profileProviderId: 'browser',
+      editable: true,
+      pages: [{ id: 'custom-mail-page', name: 'Mail', url: 'https://example.com/mail', allowedOrigins: ['https://example.com'], editable: true, visibleProfileIds: ['work-google'] }],
+      actions: [],
+    });
     vi.stubGlobal('localStorage', { getItem: () => JSON.stringify(saved) });
 
     const loaded = loadIntegrationRegistry();
 
-    expect(loaded.integrations.find((integration) => integration.id === 'gmail')?.pages[0].visibleProfileIds).toEqual(['work-google']);
+    expect(loaded.integrations.find((integration) => integration.id === 'custom-mail')?.pages[0].visibleProfileIds).toEqual(['work-google']);
   });
 
   it('stores only matcher structure and reconstructs an executable pattern', () => {
@@ -73,21 +78,17 @@ describe('integration registry', () => {
     });
   });
 
-  it('moves legacy page-scoped commands from records onto their owning page', () => {
+  it('does not restore legacy automatic integrations from saved state', () => {
     const saved = defaultIntegrationRegistry();
-    saved.integrations[0].actions.push({
-      id: 'messages', integrationId: 'google-workspace', name: 'Messages', description: '', pageIds: ['gmail'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read'], version: 1,
-      commands: [
-        { id: 'refresh-inbox', name: 'Refresh inbox', scope: 'page', steps: [{ gesture: 'click', target: {} }] },
-        { id: 'open-message', name: 'Open message', scope: 'record', steps: [{ gesture: 'click', target: {} }] },
-      ],
+    saved.integrations.push({
+      id: 'gmail', name: 'Gmail', profileProviderId: 'google', editable: false,
+      pages: [{ id: 'gmail', name: 'Gmail', url: 'https://mail.google.com/', allowedOrigins: ['https://mail.google.com'], editable: false }],
+      actions: [],
     });
     vi.stubGlobal('localStorage', { getItem: () => JSON.stringify(saved) });
 
     const loaded = loadIntegrationRegistry();
-    expect(loaded.integrations[0].pages.find((page) => page.id === 'gmail')?.commands?.map((command) => command.id)).toEqual(['refresh-inbox']);
-    expect(loaded.integrations[0].actions[0].commands?.map((command) => command.id)).toEqual(['open-message']);
-    expect(loaded.integrations[0].actions[0].integrationId).toBe('gmail');
+    expect(loaded.integrations).toEqual([]);
   });
 });
 

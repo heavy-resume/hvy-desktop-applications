@@ -442,7 +442,7 @@ export const state: AppState = {
   integrationRecordDeleteDialogOpen: false,
   integrationRecordDeleteIntegrationId: null,
   integrationRecordDeleteActionId: null,
-  selectedIntegrationId: 'gmail',
+  selectedIntegrationId: '',
   selectedIntegrationProfileId: 'default-google',
   addIntegrationProfileDialogOpen: false,
   appSettingsDialogMode: 'settings',
