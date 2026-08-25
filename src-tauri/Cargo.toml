@@ -30,7 +30,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 libc = "0.2"
 objc2 = "0.6.2"
 objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo", "NSString"] }
+objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo", "NSString", "NSUserDefaults"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38"

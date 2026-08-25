@@ -1,5 +1,6 @@
 pub fn run() {
     set_native_process_name();
+    enable_native_spellcheck();
 
     let app = tauri::Builder::default()
         .manage(mcp::McpRuntime::default())
@@ -157,6 +158,17 @@ fn set_native_process_name() {
 
 #[cfg(not(target_os = "macos"))]
 fn set_native_process_name() {}
+
+#[cfg(target_os = "macos")]
+fn enable_native_spellcheck() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+
+    let key = NSString::from_str("WebContinuousSpellCheckingEnabled");
+    NSUserDefaults::standardUserDefaults().setBool_forKey(true, &key);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enable_native_spellcheck() {}
 
 #[cfg(target_os = "windows")]
 fn install_camera_permission_handler(app: &AppHandle) {

@@ -168,8 +168,10 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: true,
     },
   });
+  installEditableContextMenu(window);
   window.webContents.setVisualZoomLevelLimits(1, 1);
   window.on('close', (event) => {
     if (appCloseAllowed) return;
@@ -193,6 +195,36 @@ function createWindow() {
     if (command === 'browser-forward') emitMenu('navigate-forward');
   });
   return window;
+}
+
+function installEditableContextMenu(window) {
+  window.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+
+    const spellingItems = params.dictionarySuggestions.map((suggestion) => ({
+      label: suggestion,
+      click: () => window.webContents.replaceMisspelling(suggestion),
+    }));
+    if (params.misspelledWord) {
+      if (spellingItems.length === 0) {
+        spellingItems.push({ label: 'No Spelling Suggestions', enabled: false });
+      }
+      spellingItems.push({
+        label: 'Add to Dictionary',
+        click: () => window.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      spellingItems.push({ type: 'separator' });
+    }
+
+    Menu.buildFromTemplate([
+      ...spellingItems,
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { type: 'separator' },
+      { role: 'selectAll' },
+    ]).popup({ window });
+  });
 }
 
 function bindWindowShortcuts(window) {
