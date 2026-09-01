@@ -209,6 +209,9 @@ export interface UiHandlers {
   cancelCloseDocument(): void;
   confirmSaveConflict(): void;
   cancelSaveConflict(): void;
+  saveBeforeWorkspaceFileOperation(): void;
+  discardBeforeWorkspaceFileOperation(): void;
+  cancelWorkspaceFileOperation(): void;
   closeDocumentWithoutSaving(): void;
   discardCloseDocumentDraft(): void;
   reviewCloseDocumentLater(): void;

@@ -118,6 +118,11 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
       handlers.cancelCloseDocument();
       return;
     }
+    if (root.querySelector('.workspace-file-operation-dialog')) {
+      event.preventDefault();
+      handlers.cancelWorkspaceFileOperation();
+      return;
+    }
     if (root.querySelector('.app-close-dialog')) {
       event.preventDefault();
       handlers.cancelAppClose();

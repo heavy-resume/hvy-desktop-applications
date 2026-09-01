@@ -256,7 +256,6 @@ export async function selectDocumentTab(path: string): Promise<void> {
     return;
   }
   if (state.document?.documentId === path) {
-    rerender({ preserveMountedDocument: true });
     return;
   }
   const session = documentSessions.get(path);

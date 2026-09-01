@@ -106,6 +106,27 @@ export function renderCloseDocumentDraftDialog(state: AppState): string {
     </div>`;
 }
 
+export function renderWorkspaceFileOperationPrompt(state: AppState): string {
+  const operation = state.pendingWorkspaceFileOperation;
+  if (!state.workspaceFileOperationPromptOpen || !operation) return '';
+  const action = operation.kind === 'copyClipboard' || operation.kind === 'pasteCopy' || (operation.kind === 'openTransfer' && operation.mode === 'copyFile')
+    ? 'copy'
+    : 'move';
+  const actionProgressLabel = action === 'copy' ? 'Copying' : 'Moving';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog workspace-file-operation-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceFileOperationTitle">
+        <h2 id="workspaceFileOperationTitle">Save Changes Before ${actionProgressLabel}?</h2>
+        <p class="dialog-note">There are unsaved edits in ${escapeHtml(operation.name)}. Save them before you ${action} the file, or discard them and use the saved version.</p>
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="save-before-workspace-file-operation">Save</button>
+          <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-before-workspace-file-operation">Discard</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-workspace-file-operation">Cancel</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 export function renderSaveConflictDialog(state: AppState): string {
   if (!state.saveConflictDialogOpen || !state.saveConflictKind) return '';
   const content = state.saveConflictKind === 'discardRecoveryDraft'

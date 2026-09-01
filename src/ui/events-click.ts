@@ -104,6 +104,10 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.cancelSaveConflict();
           return;
         }
+        if (backdrop.querySelector('.workspace-file-operation-dialog')) {
+          handlers.cancelWorkspaceFileOperation();
+          return;
+        }
         if (backdrop.querySelector('.app-close-dialog')) {
           handlers.cancelAppClose();
           return;
@@ -539,6 +543,9 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
     if (action === 'confirm-save-conflict') handlers.confirmSaveConflict();
     if (action === 'cancel-save-conflict') handlers.cancelSaveConflict();
+    if (action === 'save-before-workspace-file-operation') handlers.saveBeforeWorkspaceFileOperation();
+    if (action === 'discard-before-workspace-file-operation') handlers.discardBeforeWorkspaceFileOperation();
+    if (action === 'cancel-workspace-file-operation') handlers.cancelWorkspaceFileOperation();
     if (action === 'save-and-close-app') handlers.saveAndCloseApp();
     if (action === 'close-app-without-saving') handlers.closeAppWithoutSaving();
     if (action === 'cancel-app-close') handlers.cancelAppClose();

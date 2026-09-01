@@ -2,9 +2,104 @@ import { archiveDocumentFile, chooseWorkspaceFolder, copyDocumentToWorkspace, de
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, serializeHvy } from './hvy';
-import { state } from './state';
-import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, renameDocumentTabPath, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, moveBackupTracking, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache } from './main';
+import { state, type PendingWorkspaceFileOperation } from './state';
+import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, renameDocumentTabPath, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, moveBackupTracking, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath } from './main';
 import type { UiHandlers } from './ui';
+
+function pendingWorkspaceFileOperationBusyLabel(operation: PendingWorkspaceFileOperation): string | null {
+  if (operation.kind === 'pasteCopy') return 'Copying file...';
+  if (operation.kind === 'pasteCut' || operation.kind === 'moveToFolder') return 'Moving file...';
+  if (operation.kind === 'convert') return operation.toTemplate ? 'Converting to template...' : 'Converting to document...';
+  return null;
+}
+
+async function performWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
+  if (operation.kind === 'copyClipboard' || operation.kind === 'cutClipboard') {
+    const mode = operation.kind === 'copyClipboard' ? 'copy' : 'cut';
+    state.workspaceClipboard = { mode, path: operation.path, name: operation.name };
+    state.status = `${mode === 'copy' ? 'Copied' : 'Cut'} ${operation.name}`;
+    rerender({ preserveMountedDocument: true });
+    try {
+      await writeSystemFileClipboard({ paths: [operation.path], operation: mode });
+    } catch (error) {
+      state.status = `${mode === 'copy' ? 'Copied' : 'Cut'} in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
+      rerender({ preserveMountedDocument: true });
+    }
+    return;
+  }
+  if (operation.kind === 'openTransfer') {
+    openWorkspaceTransfer(operation.mode, operation.name, operation.path, null);
+    return;
+  }
+  if (operation.kind === 'pasteCopy') {
+    const file = await copyDocumentToWorkspace({ path: operation.path, workspacePath: operation.workspacePath, targetDirectory: operation.targetDirectory });
+    upsertWorkspace(await loadWorkspace(operation.workspacePath));
+    state.selectedWorkspacePath = operation.workspacePath;
+    state.status = `Pasted ${file.name}`;
+    await refreshRecents();
+    return;
+  }
+  if (operation.kind === 'pasteCut') {
+    await moveOpenWorkspaceFileToWorkspace(operation.path, operation.workspacePath, operation.targetDirectory);
+    state.workspaceClipboard = null;
+    return;
+  }
+  if (operation.kind === 'moveToFolder') {
+    await moveOpenWorkspaceFileToWorkspace(operation.path, operation.workspacePath, operation.targetDirectory);
+    return;
+  }
+  await convertOpenWorkspaceFileKind(operation.path, operation.workspacePath, operation.toTemplate);
+}
+
+async function executeWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
+  state.pendingWorkspaceFileOperation = null;
+  state.workspaceFileOperationPromptOpen = false;
+  const busyLabel = pendingWorkspaceFileOperationBusyLabel(operation);
+  if (busyLabel) {
+    await runBusy(busyLabel, () => performWorkspaceFileOperation(operation));
+    return;
+  }
+  await performWorkspaceFileOperation(operation);
+}
+
+async function requestWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
+  preserveCurrentDocumentSession();
+  const activeDirtyDocumentId = state.document?.path === operation.path && state.document.dirty && !state.document.readOnly
+    ? state.document.documentId
+    : null;
+  const dirtySession = [...documentSessions.values()].find((session) => session.path === operation.path && session.dirty && !session.readOnly);
+  const dirtyDocumentId = activeDirtyDocumentId ?? dirtySession?.documentId ?? null;
+  if (!dirtyDocumentId) {
+    await executeWorkspaceFileOperation(operation);
+    return;
+  }
+  await selectDocumentTab(dirtyDocumentId);
+  if (state.document?.documentId === dirtyDocumentId && !state.document.dirty) {
+    setDocumentDirty(true, { preserveStatus: true });
+  }
+  state.pendingWorkspaceFileOperation = operation;
+  state.workspaceFileOperationPromptOpen = true;
+  state.status = 'Ready';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function resumeWorkspaceFileOperationAfterSave(): Promise<void> {
+  const operation = state.pendingWorkspaceFileOperation;
+  if (!operation || state.saveConflictDialogOpen) return;
+  if (state.document?.path !== operation.path || state.document.dirty) {
+    state.workspaceFileOperationPromptOpen = true;
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  await executeWorkspaceFileOperation(operation);
+}
+
+function selectWorkspaceFile(path: string): void {
+  if (state.document?.path === path) return;
+  const openSessions = [...documentSessions.values()].filter((session) => session.path === path);
+  const openSession = openSessions.find((session) => session.dirty || session.virtual === 'recoveryDraft') ?? openSessions[0];
+  void selectDocumentTab(openSession?.documentId ?? path);
+}
 
 export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace']): Partial<UiHandlers> {
   return {
@@ -47,8 +142,47 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  confirmSaveConflict: () => void confirmSaveConflict(),
-  cancelSaveConflict: () => cancelSaveConflict(),
+  confirmSaveConflict: () => void confirmSaveConflict().then(() => resumeWorkspaceFileOperationAfterSave()),
+  cancelSaveConflict: () => {
+    cancelSaveConflict();
+    if (state.pendingWorkspaceFileOperation) {
+      state.workspaceFileOperationPromptOpen = true;
+      rerender({ preserveMountedDocument: true });
+    }
+  },
+  saveBeforeWorkspaceFileOperation: () => {
+    state.workspaceFileOperationPromptOpen = false;
+    rerender({ preserveMountedDocument: true });
+    void saveCurrentDocument().then(() => resumeWorkspaceFileOperationAfterSave());
+  },
+  discardBeforeWorkspaceFileOperation: () => {
+    const operation = state.pendingWorkspaceFileOperation;
+    if (!operation) return;
+    state.workspaceFileOperationPromptOpen = false;
+    state.pendingWorkspaceFileOperation = null;
+    void runBusy('Discarding unsaved edits...', async () => {
+      await closeCurrentDocument({ discard: true });
+      for (const session of [...documentSessions.values()]) {
+        if (session.path !== operation.path) continue;
+        documentSessions.delete(session.documentId);
+        removeDocumentTabPath(session.documentId);
+        deleteBackupTracking(backupDocumentKey(session.path, session.name));
+      }
+      const access = workspaceFileAiAccess(operation.path);
+      await openDocument(await readDocumentFile(operation.path), {
+        deferMount: true,
+        readOnly: access.readOnly,
+        hiddenFromAI: access.hiddenFromAI,
+      });
+      await performWorkspaceFileOperation(operation);
+    });
+  },
+  cancelWorkspaceFileOperation: () => {
+    state.workspaceFileOperationPromptOpen = false;
+    state.pendingWorkspaceFileOperation = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   closeDocumentWithoutSaving: () => void closeDocumentWithoutSaving(),
   discardCloseDocumentDraft: () => void closeTargetDocumentWithoutSaving({ discardDraft: true }),
   reviewCloseDocumentLater: () => void closeTargetDocumentWithoutSaving({ discardDraft: false }),
@@ -102,11 +236,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     await openDocument(await readDocumentFile(path), { deferMount: true });
     await refreshRecents();
   }),
-  selectFile: (path) => void runBusy('Opening file...', async () => {
-    const access = workspaceFileAiAccess(path);
-    await openDocument(await readDocumentFile(path), { deferMount: true, readOnly: access.readOnly, hiddenFromAI: access.hiddenFromAI });
-    await refreshRecents();
-  }),
+  selectFile: (path) => selectWorkspaceFile(path),
   refreshWorkspace: (path) => void (async () => {
     await loadWorkspaceEntry(path);
     if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
@@ -194,60 +324,36 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  copyWorkspaceFile: (path, currentName) => {
-    state.workspaceClipboard = { mode: 'copy', path, name: currentName };
-    state.status = `Copied ${currentName}`;
-    rerender({ preserveMountedDocument: true });
-    void writeSystemFileClipboard({ paths: [path], operation: 'copy' }).catch((error) => {
-      state.status = `Copied in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
-      rerender({ preserveMountedDocument: true });
-    });
-  },
-  cutWorkspaceFile: (path, currentName) => {
-    state.workspaceClipboard = { mode: 'cut', path, name: currentName };
-    state.status = `Cut ${currentName}`;
-    rerender({ preserveMountedDocument: true });
-    void writeSystemFileClipboard({ paths: [path], operation: 'cut' }).catch((error) => {
-      state.status = `Cut in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
-      rerender({ preserveMountedDocument: true });
-    });
-  },
+  copyWorkspaceFile: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'copyClipboard', path, name: currentName }),
+  cutWorkspaceFile: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'cutClipboard', path, name: currentName }),
   pasteWorkspaceClipboard: (workspacePath, targetDirectory = '') => {
     const clipboard = state.workspaceClipboard;
-    void runBusy(`${clipboard?.mode === 'cut' ? 'Moving' : 'Copying'} file...`, async () => {
-      if (!clipboard) {
+    if (!clipboard) {
+      void runBusy('Copying file...', async () => {
         const result = await pasteSystemFilesToWorkspace(workspacePath, targetDirectory);
         await finishAddingFilesToWorkspace(result, `Pasted ${result.copiedPaths.length} file${result.copiedPaths.length === 1 ? '' : 's'}`);
-        return;
-      }
-      if (clipboard.mode === 'copy') {
-        const file = await copyDocumentToWorkspace({ path: clipboard.path, workspacePath, targetDirectory });
-        upsertWorkspace(await loadWorkspace(workspacePath));
-        state.selectedWorkspacePath = workspacePath;
-        state.status = `Pasted ${file.name}`;
-        await refreshRecents();
-        return;
-      }
-      await moveOpenWorkspaceFileToWorkspace(clipboard.path, workspacePath, targetDirectory);
-      state.workspaceClipboard = null;
-    });
+      });
+      return;
+    }
+    const kind = clipboard.mode === 'copy' ? 'pasteCopy' : 'pasteCut';
+    void requestWorkspaceFileOperation({ kind, path: clipboard.path, name: clipboard.name, workspacePath, targetDirectory });
   },
-  copyFileToWorkspace: (path, currentName) => {
-    openWorkspaceTransfer('copyFile', currentName, path, null);
-  },
-  moveFileToWorkspace: (path, currentName) => {
-    openWorkspaceTransfer('moveFile', currentName, path, null);
-  },
-  moveWorkspaceFileToFolder: (path, workspacePath, targetDirectory = '') => {
-    void runBusy('Moving file...', async () => {
-      await moveOpenWorkspaceFileToWorkspace(path, workspacePath, targetDirectory);
-    });
-  },
-  convertWorkspaceFileKind: (path, workspacePath, toTemplate) => {
-    void runBusy(toTemplate ? 'Converting to template...' : 'Converting to document...', async () => {
-      await convertOpenWorkspaceFileKind(path, workspacePath, toTemplate);
-    });
-  },
+  copyFileToWorkspace: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'openTransfer', mode: 'copyFile', path, name: currentName }),
+  moveFileToWorkspace: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'openTransfer', mode: 'moveFile', path, name: currentName }),
+  moveWorkspaceFileToFolder: (path, workspacePath, targetDirectory = '') => void requestWorkspaceFileOperation({
+    kind: 'moveToFolder',
+    path,
+    name: fileNameFromPath(path),
+    workspacePath,
+    targetDirectory,
+  }),
+  convertWorkspaceFileKind: (path, workspacePath, toTemplate) => void requestWorkspaceFileOperation({
+    kind: 'convert',
+    path,
+    name: fileNameFromPath(path),
+    workspacePath,
+    toTemplate,
+  }),
   submitRenameFile: (name) => {
     const path = state.renameFilePath;
     const currentName = state.renameFileCurrentName;

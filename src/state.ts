@@ -209,6 +209,8 @@ export interface AppState {
   appCloseDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
   workspaceClipboard: WorkspaceClipboardState | null;
+  workspaceFileOperationPromptOpen: boolean;
+  pendingWorkspaceFileOperation: PendingWorkspaceFileOperation | null;
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
   deleteFilePath: string | null;
@@ -310,6 +312,15 @@ export interface WorkspaceClipboardState {
   path: string;
   name: string;
 }
+
+export type PendingWorkspaceFileOperation =
+  | { kind: 'copyClipboard'; path: string; name: string }
+  | { kind: 'cutClipboard'; path: string; name: string }
+  | { kind: 'openTransfer'; path: string; name: string; mode: 'copyFile' | 'moveFile' }
+  | { kind: 'pasteCopy'; path: string; name: string; workspacePath: string; targetDirectory: string }
+  | { kind: 'pasteCut'; path: string; name: string; workspacePath: string; targetDirectory: string }
+  | { kind: 'moveToFolder'; path: string; name: string; workspacePath: string; targetDirectory: string }
+  | { kind: 'convert'; path: string; name: string; workspacePath: string; toTemplate: boolean };
 
 export const state: AppState = {
   workspaces: [],
@@ -481,6 +492,8 @@ export const state: AppState = {
   appCloseDialogOpen: false,
   recoveryBackups: [],
   workspaceClipboard: null,
+  workspaceFileOperationPromptOpen: false,
+  pendingWorkspaceFileOperation: null,
   renameFilePath: null,
   renameFileCurrentName: null,
   deleteFilePath: null,
