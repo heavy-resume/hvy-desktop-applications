@@ -90,9 +90,7 @@
   padding: 0;
 }
 
-.search-close-button:hover:not(:disabled),
-.hvy-document-host .remove-x.ghost:hover:not(:disabled),
-.hvy-document-host .hvy-embed-layout .remove-x.ghost:hover:not(:disabled) {
+.search-close-button:hover:not(:disabled) {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -443,4 +441,3 @@
 .empty-panel.compact {
   padding: 9px;
 }
-

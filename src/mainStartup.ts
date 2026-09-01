@@ -5,13 +5,14 @@ import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state, workspaceRelativeFilePath } from './state';
-import { handlers, clearArchivedHomepageDocument, cssEscape, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { handlers, clearArchivedHomepageDocument, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
 import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
 import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
+import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
 
 let findShortcutBound = false;
 
@@ -443,6 +444,7 @@ export function bindFindShortcut(): void {
 export function openMountedSearch(): boolean {
   const root = currentMountRoot();
   if (!state.document || !root) return false;
+  if (hasOpenHvyModal(root)) return false;
   const rawSearchBar = root.querySelector<HTMLElement>('.raw-hvy-search-bar');
   if (rawSearchBar) {
     rawSearchBar.closest<HTMLElement>('.raw-hvy-shell')?.dispatchEvent(new CustomEvent('hvy:open-raw-search'));
@@ -475,19 +477,7 @@ export function performRichTextAction(action: 'bold' | 'italic' | 'underline' | 
   }
   const editable = getActiveRichEditable();
   if (!editable || !root) return;
-  const sectionKey = editable.dataset.sectionKey ?? '';
-  const blockId = editable.dataset.blockId ?? '';
-  const field = editable.dataset.field ?? '';
-  const selector = [
-    `[data-rich-action="${action}"]`,
-    sectionKey ? `[data-section-key="${cssEscape(sectionKey)}"]` : '',
-    blockId ? `[data-block-id="${cssEscape(blockId)}"]` : '',
-    field ? `[data-field="${cssEscape(field)}"]` : '',
-  ].join('');
-  const button =
-    root.querySelector<HTMLButtonElement>(selector) ??
-    editable.closest<HTMLElement>('.editor-block, .table-inline-edit-shell')?.querySelector<HTMLButtonElement>(`[data-rich-action="${action}"]`);
-  button?.click();
+  findRichTextActionButton(editable, action)?.click();
 }
 
 async function pastePlainTextFromSystemClipboard(): Promise<void> {

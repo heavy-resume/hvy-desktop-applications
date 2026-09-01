@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentBackup, Workspace } from './backend';
-import { availableRecoveryBackups, mountedDocumentDirtyAfterMount, recoveryDocumentId, recoveryDocumentTabName, recoverySaveConflictKind } from './recoveryDocuments';
+import { availableRecoveryBackups, documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentId, recoveryDocumentTabName, recoverySaveConflictKind } from './recoveryDocuments';
 
 describe('recovery document identity', () => {
   it('uses a distinct tab identity and label for an unsaved copy', () => {
@@ -13,6 +13,12 @@ describe('recovery document identity', () => {
     expect(mountedDocumentDirtyAfterMount(true, false, false)).toBe(true);
     expect(mountedDocumentDirtyAfterMount(false, false, false)).toBe(false);
     expect(mountedDocumentDirtyAfterMount(false, false, true)).toBe(true);
+  });
+
+  it('keeps a recovered document dirty when the mounted document later reports clean', () => {
+    expect(documentDirtyAfterMountedChange(false, 'recoveryDraft', false)).toBe(true);
+    expect(documentDirtyAfterMountedChange(false, undefined, false)).toBe(false);
+    expect(documentDirtyAfterMountedChange(true, undefined, false)).toBe(true);
   });
 });
 

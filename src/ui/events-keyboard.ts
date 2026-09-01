@@ -1,5 +1,5 @@
 import { type AppState } from '../state';
-import { richTextActionForShortcutKey, type RichTextAction } from '../uiShortcuts';
+import { findRichTextActionButton, richTextActionForShortcutKey, type RichTextAction } from '../uiShortcuts';
 import { MAX_WORKSPACE_SIDEBAR_WIDTH, MIN_WORKSPACE_SIDEBAR_WIDTH } from './core';
 import { findWorkspaceFileByPath, workspacePathForFileNode } from './events-workspace';
 import { readAiSettingsForm, readAppSettingsForm, readMcpSettingsForm } from './render-ai-mcp';
@@ -275,18 +275,7 @@ export function handleApplicationShortcut(event: KeyboardEvent, root: HTMLElemen
 export function clickActiveRichTextAction(root: HTMLElement, action: RichTextAction): boolean {
   const editable = getActiveRichEditable(root);
   if (!editable) return false;
-  const sectionKey = editable.dataset.sectionKey ?? '';
-  const blockId = editable.dataset.blockId ?? '';
-  const field = editable.dataset.field ?? '';
-  const selector = [
-    `[data-rich-action="${action}"]`,
-    sectionKey ? `[data-section-key="${cssEscape(sectionKey)}"]` : '',
-    blockId ? `[data-block-id="${cssEscape(blockId)}"]` : '',
-    field ? `[data-field="${cssEscape(field)}"]` : '',
-  ].join('');
-  const button =
-    root.querySelector<HTMLButtonElement>(selector) ??
-    editable.closest<HTMLElement>('.editor-block, .table-inline-edit-shell')?.querySelector<HTMLButtonElement>(`[data-rich-action="${action}"]`);
+  const button = findRichTextActionButton(editable, action);
   if (!button) return false;
   button.click();
   return true;

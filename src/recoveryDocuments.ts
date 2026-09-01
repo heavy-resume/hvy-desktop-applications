@@ -15,6 +15,14 @@ export function mountedDocumentDirtyAfterMount(startedDirty: boolean, isNew: boo
   return startedDirty || isNew || mountedDirty;
 }
 
+export function documentDirtyAfterMountedChange(
+  mountedDirty: boolean,
+  virtual: 'recoveryDraft' | 'defaultDocument' | 'versionHistory' | 'workspaceChat' | undefined,
+  isNew: boolean,
+): boolean {
+  return mountedDirty || virtual === 'recoveryDraft' || isNew;
+}
+
 export function recoverySaveConflictKind(
   savingRecoveryDraft: boolean,
   originalDirty: boolean,

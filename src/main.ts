@@ -17,7 +17,7 @@ import { currentWorkspaceChatDocumentName, currentWorkspaceChatDocumentPath, isW
 import { initializeDocumentHistory } from './documentHistory';
 import { recordDocumentNavigation } from './documentNavigationHistory';
 import { captureDocumentViewState, restoreDocumentViewState, type DocumentViewState } from './documentViewState';
-import { mountedDocumentDirtyAfterMount, recoveryDocumentTabName } from './recoveryDocuments';
+import { documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentTabName } from './recoveryDocuments';
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
 export { backupDocumentKey, cancelSaveConflict, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, confirmSaveConflict, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { recoveryDocumentId } from './recoveryDocuments';
@@ -636,13 +636,15 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
         });
         return;
       }
-      setDocumentDirty(event.dirty);
+      const dirty = documentDirtyAfterMountedChange(event.dirty, state.document?.virtual, state.document?.isNew ?? false);
+      setDocumentDirty(dirty);
       const durationMs = Math.round((performance.now() - changeStartedAt) * 10) / 10;
       documentChangeEventCount += 1;
-      if (dirtyBefore !== event.dirty || durationMs >= CHANGE_PERF_LOG_THRESHOLD_MS || documentChangeEventCount <= 20 || documentChangeEventCount % CHANGE_PERF_SAMPLE_INTERVAL === 0) {
+      if (dirtyBefore !== dirty || durationMs >= CHANGE_PERF_LOG_THRESHOLD_MS || documentChangeEventCount <= 20 || documentChangeEventCount % CHANGE_PERF_SAMPLE_INTERVAL === 0) {
         logDebugEvent('perf', 'documentChange:onDocumentChange', {
           path,
-          dirty: event.dirty,
+          dirty,
+          mountedDirty: event.dirty,
           dirtyBefore,
           dirtyAfter: state.document?.dirty ?? null,
           source: event.source,
