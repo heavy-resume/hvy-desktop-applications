@@ -123,6 +123,7 @@ pub fn run() {
             restore_document_backup,
             discard_document_backup,
             clear_document_recovery_drafts,
+            relocate_document_recovery_drafts,
             open_external_url,
             close_app_window
         ])

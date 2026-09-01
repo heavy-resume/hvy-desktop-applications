@@ -1,4 +1,4 @@
-import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup } from './backend';
+import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, relocateDocumentRecoveryDrafts, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup, type DocumentFileMetadata } from './backend';
 import { logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { attachMatchingSidecarEmbeddingIndex, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
 import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, profileHvySerializationCosts, serializeHvy, serializeMountedDocumentAsync, type VisualDocument } from './hvy';
@@ -10,6 +10,7 @@ import { activateWorkspaceChatDocument, adoptSavedAsDocument, documentSessions, 
 import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
 import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
 import { updateRuntimeDocumentFile } from './runtimeDocuments';
+import { RecoveryDraftWrites } from './recoveryDraftWrites';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -19,6 +20,7 @@ let pendingBackupIdleHandle: ReturnType<typeof setTimeout> | number | null = nul
 const backupSnapshots = new Map<string, { bytesKey: string; createdAtMs: number; revision: number }>();
 const documentBackupRevisions = new Map<string, number>();
 const restoredBackupSuppressionKeys = new Set<string>();
+const recoveryDraftWrites = new RecoveryDraftWrites();
 
 type SaveConflictContinuation = 'save' | 'saveAndCloseDocument' | 'saveBeforeExportPdf' | 'saveAndCloseApp';
 
@@ -53,6 +55,7 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
   state.status = 'Saving...';
   updateDirtyChrome();
   const saveStartedAt = performance.now();
+  let promotedRecoveryDraft = false;
   try {
     if (openDocument.readOnly) {
       state.status = 'The HVY Galaxy guide is read-only';
@@ -96,6 +99,7 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       openDocument.versionId = openDocument.source.workingVersionId;
       openDocument.virtual = undefined;
       markDocumentTabOpened(openDocument.versionId);
+      promotedRecoveryDraft = true;
     }
     openDocument.dirty = false;
     openDocument.recoveryBackupId = null;
@@ -117,6 +121,9 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
   } finally {
     state.busy = false;
     updateDirtyChrome();
+    if (promotedRecoveryDraft) {
+      renderAllAroundDocument();
+    }
   }
 }
 
@@ -406,7 +413,7 @@ export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Prom
   if (state.document?.versionId === targetPath && state.document.mounted) {
     if (state.document.recoveryBackupId) return state.document.recoveryBackupId;
     const bytes = await serializeMountedDocumentAsync(state.document.mounted);
-    const backup = await createDocumentBackup({
+    const backup = await createRecoveryDraft({
       documentPath: state.document.source.path,
       name: state.document.source.name,
       extension: state.document.source.extension,
@@ -420,7 +427,7 @@ export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Prom
   if (!session) return null;
   if (session.recoveryBackupId) return session.recoveryBackupId;
   const bytes = await serializeHvy(session.document);
-  const backup = await createDocumentBackup({
+  const backup = await createRecoveryDraft({
     documentPath: session.source.path,
     name: session.source.name,
     extension: session.source.extension,
@@ -687,12 +694,14 @@ export function setupRecoveryLifecycle(): void {
 }
 
 export async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
-  if (!state.document?.mounted || state.document.readOnly) return;
-  if (!state.document.dirty) return;
-  const path = state.document.source.path;
-  const name = state.document.source.name;
+  const openDocument = state.document;
+  const mounted = openDocument?.mounted;
+  if (!openDocument || !mounted || openDocument.readOnly) return;
+  if (!openDocument.dirty) return;
+  const source = openDocument.source;
+  const path = source.path;
   const backupStartedAt = performance.now();
-  const documentKey = backupDocumentKey(state.document.source.path, state.document.source.name);
+  const documentKey = backupDocumentKey(source.path, source.name);
   const revision = currentBackupRevision(documentKey);
   const previousBackup = backupSnapshots.get(documentKey);
   const now = Date.now();
@@ -721,36 +730,41 @@ export async function backupActiveDocument(options: { force?: boolean } = {}): P
     });
     return;
   }
-  if (state.document.recoveryBackupId && restoredBackupSuppressionKeys.has(documentKey)) {
+  if (openDocument.recoveryBackupId && restoredBackupSuppressionKeys.has(documentKey)) {
     logDebugEvent('perf', 'recoveryDraft:skipRestoredDraftBaseline', {
       path,
       revision,
-      recoveryBackupId: state.document.recoveryBackupId,
+      recoveryBackupId: openDocument.recoveryBackupId,
       durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
     });
     return;
   }
-  const documentProfile = measureDebug('perf', 'recoveryDraft:profileDocument', { path, revision }, () => profileDocumentForDebug(getMountedDocument(state.document!.mounted!)));
+  const documentProfile = measureDebug('perf', 'recoveryDraft:profileDocument', { path, revision }, () => profileDocumentForDebug(getMountedDocument(mounted)));
   logDebugEvent('perf', 'recoveryDraft:documentProfile', { path, revision, ...documentProfile });
-  await logSerializationCostProfile('recoveryDraft', path, revision, getMountedDocument(state.document!.mounted!));
-  const bytes = await measureDebugAsync('perf', 'recoveryDraft:serializeMountedDocument', { path, revision }, () => serializeMountedDocumentAsync(state.document!.mounted!));
-  const recoveryState = measureDebug('perf', 'recoveryDraft:getRecoveryState', { path, revision }, () => getMountedRecoveryState(state.document!.mounted!));
+  await logSerializationCostProfile('recoveryDraft', path, revision, getMountedDocument(mounted));
+  const bytes = await measureDebugAsync('perf', 'recoveryDraft:serializeMountedDocument', { path, revision }, () => serializeMountedDocumentAsync(mounted));
+  const recoveryState = measureDebug('perf', 'recoveryDraft:getRecoveryState', { path, revision }, () => getMountedRecoveryState(mounted));
   const bytesKey = measureDebug('perf', 'recoveryDraft:hashBytes', { path, revision, byteCount: bytes.length }, () => backupBytesKey(bytes));
   if (previousBackup?.bytesKey === bytesKey) {
+    const currentDocumentKey = backupDocumentKey(source.path, source.name);
     logDebugEvent('perf', 'recoveryDraft:skipUnchangedBytes', {
-      path,
+      path: source.path,
       revision,
       durationMs: Math.round((performance.now() - backupStartedAt) * 10) / 10,
     });
-    backupSnapshots.set(documentKey, { ...previousBackup, revision });
+    backupSnapshots.set(currentDocumentKey, { ...previousBackup, revision: currentBackupRevision(currentDocumentKey) });
     return;
   }
   try {
+    const persistencePath = source.path;
+    const persistenceName = source.name;
+    const persistenceDocumentKey = backupDocumentKey(persistencePath, persistenceName);
+    const persistenceRevision = currentBackupRevision(persistenceDocumentKey);
     const createStartedAt = performance.now();
-    const backup = await createDocumentBackup({
-      documentPath: path,
-      name,
-      extension: state.document!.source.extension,
+    const backup = await createRecoveryDraft({
+      documentPath: persistencePath,
+      name: persistenceName,
+      extension: source.extension,
       bytes,
       recoveryState,
     });
@@ -776,9 +790,9 @@ export async function backupActiveDocument(options: { force?: boolean } = {}): P
           hostTotalMs,
         });
       }
-      backupSnapshots.set(documentKey, { bytesKey, createdAtMs: Date.parse(backup.createdAt) || now, revision });
-      restoredBackupSuppressionKeys.delete(documentKey);
-      state.document.recoveryBackupId = backup.id;
+      backupSnapshots.set(persistenceDocumentKey, { bytesKey, createdAtMs: Date.parse(backup.createdAt) || now, revision: persistenceRevision });
+      restoredBackupSuppressionKeys.delete(persistenceDocumentKey);
+      openDocument.recoveryBackupId = backup.id;
     }
     logDebugEvent('perf', 'recoveryDraft:complete', {
       path,
@@ -844,6 +858,26 @@ export function moveBackupTracking(fromKey: string, toKey: string): void {
     documentBackupRevisions.delete(fromKey);
     documentBackupRevisions.set(toKey, revision);
   }
+}
+
+export async function relocateRecoveryDraftsForDocument(
+  previousPath: string,
+  previousName: string,
+  file: DocumentFileMetadata,
+): Promise<void> {
+  await recoveryDraftWrites.settle();
+  await relocateDocumentRecoveryDrafts({
+    previousDocumentPath: previousPath,
+    previousName,
+    documentPath: file.path,
+    name: file.name,
+    extension: file.extension,
+  });
+  moveBackupTracking(backupDocumentKey(previousPath, previousName), backupDocumentKey(file.path, file.name));
+}
+
+async function createRecoveryDraft(request: Parameters<typeof createDocumentBackup>[0]): Promise<DocumentBackup | null> {
+  return recoveryDraftWrites.run(() => createDocumentBackup(request));
 }
 
 export function backupBytesKey(bytes: Uint8Array | number[]): string {

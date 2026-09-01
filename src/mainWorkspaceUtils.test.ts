@@ -26,6 +26,7 @@ vi.mock('./main', () => ({
   pendingMountDocument: null,
   readDocumentColorPreference: vi.fn(),
   refreshRecents: vi.fn(),
+  relocateRecoveryDraftsForDocument: vi.fn(),
   updateOpenDocumentFile: vi.fn(),
   rerender: vi.fn(),
   runBusy: vi.fn(),

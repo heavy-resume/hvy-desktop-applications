@@ -297,6 +297,16 @@ struct DocumentRecoveryDraftRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct RelocateDocumentRecoveryDraftsRequest {
+    previous_document_path: String,
+    previous_name: String,
+    document_path: String,
+    name: String,
+    extension: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct DocumentBackup {
     id: String,
     document_path: String,

@@ -671,6 +671,7 @@ async function handleCommand(command, args) {
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
     case 'discard_document_backup': return discardDocumentBackup(args.id);
     case 'clear_document_recovery_drafts': return clearDocumentRecoveryDrafts(args.request);
+    case 'relocate_document_recovery_drafts': return relocateDocumentRecoveryDrafts(args.request);
     case 'open_external_url': return openExternalUrl(args.url);
     case 'close_app_window': return closeAppWindow();
     default: throw new Error(`Unknown Electron command: ${command}`);
@@ -2082,6 +2083,25 @@ function clearDocumentRecoveryDrafts(request) {
         // Best effort cleanup.
       }
     }
+  }
+  return null;
+}
+
+function relocateDocumentRecoveryDrafts(request) {
+  const directory = backupsDir();
+  if (!fs.existsSync(directory)) return null;
+  const previousKey = documentBackupKey({ documentPath: request.previousDocumentPath, name: request.previousName });
+  for (const entry of fs.readdirSync(directory)) {
+    if (!entry.endsWith('.json')) continue;
+    const draftPath = path.join(directory, entry);
+    const snapshot = readJson(draftPath, null);
+    if (!snapshot || documentBackupKey(snapshot) !== previousKey) continue;
+    writeJson(draftPath, {
+      ...snapshot,
+      documentPath: request.documentPath,
+      name: request.name,
+      extension: request.extension,
+    });
   }
   return null;
 }

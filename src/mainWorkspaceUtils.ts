@@ -5,7 +5,7 @@ import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, ser
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, updateHomepageDocumentPath } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
-import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
+import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, documentSessions, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
 import { logDebugEvent } from './debugLog';
 
@@ -159,8 +159,8 @@ async function applyWorkspaceFileRelocation(
     ? state.document
     : null;
   const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
-  const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.source.path, currentDocument.source.name) : null;
   updateOpenDocumentFile(path, file);
+  await relocateRecoveryDraftsForDocument(path, fileNameFromPath(path), file);
   if (state.selectedFilePath === path) {
     state.selectedFilePath = file.path;
   }
@@ -168,9 +168,6 @@ async function applyWorkspaceFileRelocation(
   if (currentDocument) {
     if (mountedDocument) {
       updateCurrentDocumentSession(mountedDocument);
-    }
-    if (oldBackupKey) {
-      moveBackupTracking(oldBackupKey, backupDocumentKey(file.path, file.name));
     }
   }
   if (sourceWorkspacePath) {

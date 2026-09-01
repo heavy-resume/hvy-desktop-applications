@@ -247,6 +247,14 @@ export interface DocumentRecoveryDraftRequest {
   name: string;
 }
 
+export interface RelocateDocumentRecoveryDraftsRequest {
+  previousDocumentPath: string;
+  previousName: string;
+  documentPath: string;
+  name: string;
+  extension: DocumentExtension;
+}
+
 export interface SaveDocumentTemplateRequest {
   scope: TemplateScope;
   workspacePath?: string | null;
@@ -1130,6 +1138,15 @@ export async function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraft
   }
 }
 
+export async function relocateDocumentRecoveryDrafts(request: RelocateDocumentRecoveryDraftsRequest): Promise<void> {
+  if (canUseRecoveryDraftDb()) {
+    await relocateIndexedRecoveryDrafts(request);
+  }
+  if (isTauriRuntime() || isElectronRuntime()) {
+    await invokeDesktop('relocate_document_recovery_drafts', { request });
+  }
+}
+
 function canUseRecoveryDraftDb(): boolean {
   return typeof indexedDB !== 'undefined' && typeof Blob !== 'undefined';
 }
@@ -1201,6 +1218,19 @@ async function clearIndexedRecoveryDrafts(request: DocumentRecoveryDraftRequest)
   await Promise.all(records
     .filter((record) => recoveryDraftDocumentKey(record.documentPath, record.name) === key)
     .map((record) => deleteIndexedRecoveryDraft(record.id)));
+}
+
+async function relocateIndexedRecoveryDrafts(request: RelocateDocumentRecoveryDraftsRequest): Promise<void> {
+  const records = await recoveryDraftStoreRequest<RecoveryDraftRecord[]>('readonly', (store) => store.getAll());
+  const previousKey = recoveryDraftDocumentKey(request.previousDocumentPath, request.previousName);
+  await Promise.all(records
+    .filter((record) => recoveryDraftDocumentKey(record.documentPath, record.name) === previousKey)
+    .map((record) => recoveryDraftStoreRequest('readwrite', (store) => store.put({
+      ...record,
+      documentPath: request.documentPath,
+      name: request.name,
+      extension: request.extension,
+    }))));
 }
 
 async function pruneIndexedRecoveryDrafts(): Promise<void> {

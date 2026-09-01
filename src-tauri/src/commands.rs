@@ -2612,6 +2612,24 @@ fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraft
 }
 
 #[tauri::command]
+fn relocate_document_recovery_drafts(app: AppHandle, request: RelocateDocumentRecoveryDraftsRequest) -> AppResult<()> {
+    let previous_key = document_recovery_draft_key(&request.previous_document_path, &request.previous_name);
+    for path in read_document_backup_snapshot_paths(&app)? {
+        let Ok(mut snapshot) = read_document_backup_snapshot(&path) else {
+            continue;
+        };
+        if document_backup_key(&snapshot) != previous_key {
+            continue;
+        }
+        snapshot.document_path = request.document_path.clone();
+        snapshot.name = request.name.clone();
+        snapshot.extension = request.extension.clone();
+        write_json_atomically(&path, &snapshot)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn open_external_url(url: String) -> AppResult<()> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:")) {

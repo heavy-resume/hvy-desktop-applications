@@ -30,6 +30,7 @@ const mainMocks = vi.hoisted(() => ({
   removeOpenDocumentFile: vi.fn(),
   refreshOpenWorkspaceForFile: vi.fn(),
   refreshRecents: vi.fn(),
+  relocateRecoveryDraftsForDocument: vi.fn(),
   rerender: vi.fn(),
   restoreMountScrollRatio: vi.fn(),
   saveCurrentDocument: vi.fn(),
@@ -219,7 +220,13 @@ describe('document handlers', () => {
 
   it('updates the shared source without changing active document or version identity when renamed', async () => {
     const document = { sections: [] };
-    state.document = testOpenDocument({ mounted: { document, mount: {} } as never });
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document, mount: {} } as never,
+    });
+    mainMocks.preserveCurrentDocumentSession.mockImplementationOnce(() => {
+      state.document!.dirty = true;
+    });
     backendMocks.renameDocumentFile.mockResolvedValueOnce({
       path: '/workspace/Renamed.hvy',
       name: 'Renamed.hvy',
@@ -235,9 +242,24 @@ describe('document handlers', () => {
       '/workspace/example.hvy',
       expect.objectContaining({ path: '/workspace/Renamed.hvy' }),
     ));
+    expect(mainMocks.relocateRecoveryDraftsForDocument).toHaveBeenCalledWith(
+      '/workspace/example.hvy',
+      'example.hvy',
+      expect.objectContaining({ path: '/workspace/Renamed.hvy', name: 'Renamed.hvy' }),
+    );
     expect(state.document.documentId).toBe('document:example');
     expect(state.document.versionId).toBe('version:example');
     expect(state.document.source.path).toBe('/workspace/Renamed.hvy');
     expect(state.document.source.name).toBe('Renamed.hvy');
+    expect(state.document.dirty).toBe(true);
+    expect(mainMocks.preserveCurrentDocumentSession).toHaveBeenCalledOnce();
+    expect(mainMocks.runBusy).toHaveBeenCalledWith(
+      'Renaming file...',
+      expect.any(Function),
+      { preserveMountedDocument: true },
+    );
+    expect(mainMocks.preserveCurrentDocumentSession.mock.invocationCallOrder[0]).toBeLessThan(
+      mainMocks.updateOpenDocumentFile.mock.invocationCallOrder[0],
+    );
   });
 });
