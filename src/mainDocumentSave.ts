@@ -9,6 +9,7 @@ import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
 import { activateWorkspaceChatDocument, adoptSavedAsDocument, documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
 import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
 import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
+import { updateRuntimeDocumentFile } from './runtimeDocuments';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -29,12 +30,12 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
     openSaveAsDialog();
     return;
   }
-  if (openDocument.isNew || !openDocument.path) {
+  if (openDocument.isNew || !openDocument.source.path) {
     openSaveAsDialog();
     return;
   }
   if (state.busy) return;
-  const pairedSessions = pairedDocumentSessions(openDocument.documentId, openDocument.path, openDocument.virtual === 'recoveryDraft');
+  const pairedSessions = pairedDocumentSessions(openDocument.versionId, openDocument.documentId, openDocument.virtual === 'recoveryDraft');
   const pairedSession = pairedSessions[0] ?? null;
   if (!options.conflictConfirmed && pairedSession) {
     const conflictKind = recoverySaveConflictKind(
@@ -43,7 +44,7 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       pairedSession.recoveryModified,
     );
     if (conflictKind) {
-      openSaveConflictDialog(conflictKind, openDocument.documentId, pairedSession.documentId, options.continuation ?? 'save');
+      openSaveConflictDialog(conflictKind, openDocument.versionId, pairedSession.versionId, options.continuation ?? 'save');
       return;
     }
   }
@@ -58,20 +59,20 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       return;
     }
     const document = mounted.document;
-    if (openDocument.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
-      await attachMatchingSidecarEmbeddingIndex(openDocument.path, document, state.aiSettings);
+    if (openDocument.source.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+      await attachMatchingSidecarEmbeddingIndex(openDocument.source.path, document, state.aiSettings);
     }
-    await logSerializationCostProfile('save', openDocument.path, null, document);
-    const bytes = await measureDebugAsync('perf', 'save:serializeMountedDocument', { path: openDocument.path }, () => serializeMountedDocumentAsync(mounted));
+    await logSerializationCostProfile('save', openDocument.source.path, null, document);
+    const bytes = await measureDebugAsync('perf', 'save:serializeMountedDocument', { path: openDocument.source.path }, () => serializeMountedDocumentAsync(mounted));
     const writeStartedAt = performance.now();
-    const writeResult = await saveDocumentFile({ path: openDocument.path, bytes });
+    const writeResult = await saveDocumentFile({ path: openDocument.source.path, bytes });
     const writeDurationMs = Math.round((performance.now() - writeStartedAt) * 10) / 10;
-    logDebugEvent('perf', 'save:writeDocumentFile', { path: openDocument.path, byteCount: bytes.length, durationMs: writeDurationMs });
+    logDebugEvent('perf', 'save:writeDocumentFile', { path: openDocument.source.path, byteCount: bytes.length, durationMs: writeDurationMs });
     if (writeResult?.debugTimings) {
-      logDebugEvent('perf', 'save:persistenceTimings', { path: openDocument.path, byteCount: bytes.length, ...writeResult.debugTimings });
+      logDebugEvent('perf', 'save:persistenceTimings', { path: openDocument.source.path, byteCount: bytes.length, ...writeResult.debugTimings });
       if (typeof writeResult.debugTimings.totalMs === 'number') {
         logDebugEvent('perf', 'save:bridgeOverhead', {
-          path: openDocument.path,
+          path: openDocument.source.path,
           byteCount: bytes.length,
           durationMs: Math.max(0, Math.round((writeDurationMs - writeResult.debugTimings.totalMs) * 10) / 10),
           writeDurationMs,
@@ -80,33 +81,33 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       }
     }
     markMountedDocumentSaved(mounted);
-    if (openDocument.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
-      await deleteSidecarIfSavedDocumentContainsMatchingIndex(openDocument.path, new Uint8Array(bytes), state.aiSettings);
+    if (openDocument.source.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+      await deleteSidecarIfSavedDocumentContainsMatchingIndex(openDocument.source.path, new Uint8Array(bytes), state.aiSettings);
     }
     for (const paired of pairedSessions) {
-      documentSessions.delete(paired.documentId);
-      removeDocumentTabPath(paired.documentId);
+      documentSessions.delete(paired.versionId);
+      removeDocumentTabPath(paired.versionId);
     }
     if (openDocument.virtual === 'recoveryDraft') {
-      const recoveryDocumentId = openDocument.documentId;
-      documentSessions.delete(recoveryDocumentId);
-      removeDocumentTabPath(openDocument.path);
-      removeDocumentTabPath(recoveryDocumentId);
-      openDocument.documentId = openDocument.path;
+      const recoveryVersionId = openDocument.versionId;
+      documentSessions.delete(recoveryVersionId);
+      removeDocumentTabPath(openDocument.source.workingVersionId);
+      removeDocumentTabPath(recoveryVersionId);
+      openDocument.versionId = openDocument.source.workingVersionId;
       openDocument.virtual = undefined;
-      markDocumentTabOpened(openDocument.path);
+      markDocumentTabOpened(openDocument.versionId);
     }
     openDocument.dirty = false;
     openDocument.recoveryBackupId = null;
     openDocument.recoveryModified = false;
-    state.status = `Saved ${openDocument.name}`;
-    recordSuccessfulDocumentSave(openDocument.path, openDocument.name, document);
+    state.status = `Saved ${openDocument.source.name}`;
+    recordSuccessfulDocumentSave(openDocument.source.path, openDocument.source.name, document);
     updateCurrentDocumentSession(document);
-    await refreshOpenWorkspaceForFile(openDocument.path);
+    await refreshOpenWorkspaceForFile(openDocument.source.path);
     await refreshRecents();
-    await clearRecoveryDraftsForDocument(openDocument.path, openDocument.name);
+    await clearRecoveryDraftsForDocument(openDocument.source.path, openDocument.source.name);
     logDebugEvent('perf', 'save:complete', {
-      path: openDocument.path,
+      path: openDocument.source.path,
       byteCount: bytes.length,
       durationMs: Math.round((performance.now() - saveStartedAt) * 10) / 10,
     });
@@ -121,8 +122,8 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
 
 export async function openVersionHistory(): Promise<void> {
   const document = state.document;
-  if (!document?.path || document.isNew || document.virtual === 'workspaceChat') return;
-  const historyPath = document.virtual === 'versionHistory' ? document.historySourcePath : document.path;
+  if (!document?.source.path || document.isNew || document.virtual === 'workspaceChat') return;
+  const historyPath = document.virtual === 'versionHistory' ? document.historySourcePath : document.source.path;
   if (!historyPath) return;
   await runBusy('Loading version history...', async () => {
     state.savedDocumentVersions = await listSavedDocumentVersions(historyPath);
@@ -138,9 +139,9 @@ export async function openVersionHistory(): Promise<void> {
 
 export async function openSavedVersionPreview(versionId: string): Promise<void> {
   const document = state.document;
-  if (!document?.path) return;
-  const sourcePath = document.virtual === 'versionHistory' ? document.historySourcePath : document.path;
-  const sourceName = document.virtual === 'versionHistory' ? document.historySourceName : document.name;
+  if (!document?.source.path) return;
+  const sourcePath = document.virtual === 'versionHistory' ? document.historySourcePath : document.source.path;
+  const sourceName = document.virtual === 'versionHistory' ? document.historySourceName : document.source.name;
   if (!sourcePath || !sourceName) return;
   await runBusy('Opening saved version...', async () => {
     const version = state.savedDocumentVersions.find((candidate) => candidate.id === versionId);
@@ -149,11 +150,13 @@ export async function openSavedVersionPreview(versionId: string): Promise<void> 
     await openDocument({
       path: `version-history:${encodeURIComponent(sourcePath)}:${versionId}`,
       name: `${sourceName} — ${version ? new Date(version.createdAt).toLocaleString() : 'Saved version'}`,
-      extension: document.extension,
+      extension: document.source.extension,
       bytes,
       locked: true,
       hiddenFromAI: true,
     }, {
+      source: document.source,
+      versionId: `${document.documentId}:history:${versionId}`,
       readOnly: true,
       hiddenFromAI: true,
       historyPreview: { sourcePath, sourceName, versionId },
@@ -182,7 +185,7 @@ export async function exportCurrentDocumentPdf(): Promise<void> {
   const openDocument = state.document;
   const mounted = openDocument?.mounted;
   if (!openDocument || !mounted || openDocument.readOnly) return;
-  if (openDocument.extension !== '.phvy') {
+  if (openDocument.source.extension !== '.phvy') {
     state.status = 'PDF export is available for PHVY documents';
     rerender({ preserveMountedDocument: true });
     return;
@@ -195,11 +198,11 @@ export async function exportCurrentDocumentPdf(): Promise<void> {
   }
   await runBusy('Exporting PDF...', async () => {
     if (!state.document?.mounted) return;
-    const blob = await state.document.mounted.mount.getPdfBlob({ filename: pdfFileName(state.document.name) });
+    const blob = await state.document.mounted.mount.getPdfBlob({ filename: pdfFileName(state.document.source.name) });
     const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
-    const savedPath = await savePdfAsDialog({ suggestedName: pdfFileName(state.document.name), bytes });
+    const savedPath = await savePdfAsDialog({ suggestedName: pdfFileName(state.document.source.name), bytes });
     state.exportedPdfPath = savedPath;
-    state.status = savedPath ? `Exported ${pdfFileName(state.document.name)}` : 'Ready';
+    state.status = savedPath ? `Exported ${pdfFileName(state.document.source.name)}` : 'Ready';
   }, { preserveMountedDocument: true });
 }
 
@@ -220,14 +223,14 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
     return;
   }
   const bytes = await serializeMountedDocumentAsync(state.document.mounted);
-  const previousPath = state.document.path;
-  const previousName = state.document.name;
+  const previousPath = state.document.source.path;
+  const previousName = state.document.source.name;
   const previousMode = state.document.mode;
   const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const document = getMountedDocument(state.document.mounted);
   const suggestedName = state.document.virtual === 'versionHistory'
-    ? savedVersionDocumentName(state.document.historySourceName ?? state.document.name)
-    : state.document.name;
+    ? savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name)
+    : state.document.source.name;
   const file = await saveDocumentAsDialog({ suggestedName, bytes });
   if (!file) return;
   adoptSavedAsDocument(file, state.document.mounted, document, previousMode, previousPath, previousUseDocumentColors);
@@ -243,8 +246,8 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
 
 export async function selectDocumentTab(path: string): Promise<void> {
   state.tabStackOpen = false;
-  if (state.document?.virtual === 'versionHistory' && state.document.documentId !== path) {
-    const previewPath = state.document.documentId;
+  if (state.document?.virtual === 'versionHistory' && state.document.versionId !== path) {
+    const previewPath = state.document.versionId;
     state.document.mounted?.mount.destroy();
     resetMountLifecycleState();
     removeDocumentTabPath(previewPath);
@@ -255,18 +258,18 @@ export async function selectDocumentTab(path: string): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
-  if (state.document?.documentId === path) {
+  if (state.document?.versionId === path) {
     return;
   }
   const session = documentSessions.get(path);
   if (session?.dirty || session?.isNew || session?.readOnly) {
     await openDocument({
-      path: session.path,
-      name: session.name,
-      extension: session.extension,
+      path: session.source.path,
+      name: session.source.name,
+      extension: session.source.extension,
       bytes: [],
       recoveryState: session.recoveryState,
-    }, { documentId: session.documentId });
+    }, { source: session.source, versionId: session.versionId });
     await refreshRecents();
     return;
   }
@@ -292,7 +295,7 @@ export async function commitTabStack(): Promise<void> {
   state.tabStackOpen = false;
   state.tabStackIndex = 0;
   if (tab) {
-    await selectDocumentTab(tab.path);
+    await selectDocumentTab(tab.versionId);
   } else {
     rerender({ preserveMountedDocument: true });
   }
@@ -300,7 +303,7 @@ export async function commitTabStack(): Promise<void> {
 
 export async function closeDocumentTab(path: string): Promise<void> {
   if (isWorkspaceChatDocumentPath(path) && state.workspaceChat.open && currentWorkspaceChatDocumentPath() === path) {
-    const wasActive = state.document?.path === path;
+    const wasActive = state.document?.source.path === path;
     if (requestCloseWorkspaceChat()) {
       removeDocumentTabPath(path);
       if (wasActive) {
@@ -310,7 +313,7 @@ export async function closeDocumentTab(path: string): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
-  if (state.document?.documentId === path) {
+  if (state.document?.versionId === path) {
     await closeCurrentDocument();
     return;
   }
@@ -329,9 +332,9 @@ export async function closeDocumentTab(path: string): Promise<void> {
 }
 
 export async function saveAndCloseDocument(): Promise<void> {
-  const targetPath = state.closeDocumentTargetPath ?? state.document?.documentId ?? null;
+  const targetPath = state.closeDocumentTargetPath ?? state.document?.versionId ?? null;
   if (targetPath === null) return;
-  if (state.document?.documentId === targetPath) {
+  if (state.document?.versionId === targetPath) {
     state.closeDocumentDialogOpen = false;
     state.closeDocumentDraftDialogOpen = false;
     state.closeDocumentTargetPath = null;
@@ -350,7 +353,7 @@ export async function saveAndCloseDocument(): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
-  if (pairedDocumentSessions(session.documentId, session.path, session.virtual === 'recoveryDraft').length > 0) {
+  if (pairedDocumentSessions(session.versionId, session.documentId, session.virtual === 'recoveryDraft').length > 0) {
     state.closeDocumentDialogOpen = false;
     state.closeDocumentDraftDialogOpen = false;
     state.closeDocumentTargetPath = null;
@@ -362,7 +365,7 @@ export async function saveAndCloseDocument(): Promise<void> {
     }
     return;
   }
-  if (session.isNew || !session.path) {
+  if (session.isNew || !session.source.path) {
     state.closeDocumentDialogOpen = false;
     state.closeDocumentDraftDialogOpen = false;
     state.closeDocumentTargetPath = null;
@@ -374,23 +377,23 @@ export async function saveAndCloseDocument(): Promise<void> {
   }
   await runBusy('Saving...', async () => {
     const bytes = Array.from(await serializeHvy(session.document));
-    await saveDocumentFile({ path: session.path, bytes });
-    recordSuccessfulDocumentSave(session.path, session.name, session.document);
-    documentSessions.delete(session.documentId);
-    removeDocumentTabPath(session.documentId);
-    workspaceFilterDocumentCache.delete(session.path);
-    deleteBackupTracking(backupDocumentKey(session.path, session.name));
-    await clearRecoveryDraftsForDocument(session.path, session.name);
-    await refreshOpenWorkspaceForFile(session.path);
+    await saveDocumentFile({ path: session.source.path, bytes });
+    recordSuccessfulDocumentSave(session.source.path, session.source.name, session.document);
+    documentSessions.delete(session.versionId);
+    removeDocumentTabPath(session.versionId);
+    workspaceFilterDocumentCache.delete(session.source.path);
+    deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
+    await clearRecoveryDraftsForDocument(session.source.path, session.source.name);
+    await refreshOpenWorkspaceForFile(session.source.path);
     await refreshRecents();
     state.closeDocumentDialogOpen = false;
     state.closeDocumentTargetPath = null;
-    state.status = `Saved ${session.name}`;
+    state.status = `Saved ${session.source.name}`;
   }, { preserveMountedDocument: true });
 }
 
 export async function promptCloseDocumentDraftChoice(): Promise<void> {
-  const targetPath = state.closeDocumentTargetPath ?? state.document?.documentId ?? null;
+  const targetPath = state.closeDocumentTargetPath ?? state.document?.versionId ?? null;
   if (targetPath === null) return;
   state.closeDocumentDialogOpen = false;
   await ensureCloseDocumentRecoveryDraft(targetPath);
@@ -400,13 +403,13 @@ export async function promptCloseDocumentDraftChoice(): Promise<void> {
 }
 
 export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Promise<string | null> {
-  if (state.document?.documentId === targetPath && state.document.mounted) {
+  if (state.document?.versionId === targetPath && state.document.mounted) {
     if (state.document.recoveryBackupId) return state.document.recoveryBackupId;
     const bytes = await serializeMountedDocumentAsync(state.document.mounted);
     const backup = await createDocumentBackup({
-      documentPath: state.document.path,
-      name: state.document.name,
-      extension: state.document.extension,
+      documentPath: state.document.source.path,
+      name: state.document.source.name,
+      extension: state.document.source.extension,
       bytes,
       recoveryState: getMountedRecoveryState(state.document.mounted),
     });
@@ -418,9 +421,9 @@ export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Prom
   if (session.recoveryBackupId) return session.recoveryBackupId;
   const bytes = await serializeHvy(session.document);
   const backup = await createDocumentBackup({
-    documentPath: session.path,
-    name: session.name,
-    extension: session.extension,
+    documentPath: session.source.path,
+    name: session.source.name,
+    extension: session.source.extension,
     bytes,
     recoveryState: session.recoveryState,
   });
@@ -429,14 +432,14 @@ export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Prom
 }
 
 export function getCloseDocumentRecoveryBackupId(targetPath: string): string | null {
-  if (state.document?.documentId === targetPath) {
+  if (state.document?.versionId === targetPath) {
     return state.document.recoveryBackupId;
   }
   return documentSessions.get(targetPath)?.recoveryBackupId ?? null;
 }
 
 export async function closeDocumentWithoutSaving(): Promise<void> {
-  const targetPath = state.closeDocumentTargetPath ?? state.document?.documentId ?? null;
+  const targetPath = state.closeDocumentTargetPath ?? state.document?.versionId ?? null;
   if (targetPath === null) return;
   if (getCloseDocumentRecoveryBackupId(targetPath)) {
     await promptCloseDocumentDraftChoice();
@@ -446,7 +449,7 @@ export async function closeDocumentWithoutSaving(): Promise<void> {
 }
 
 export async function closeTargetDocumentWithoutSaving(options: { discardDraft: boolean; createDraft?: boolean }): Promise<void> {
-  const targetPath = state.closeDocumentTargetPath ?? state.document?.documentId ?? null;
+  const targetPath = state.closeDocumentTargetPath ?? state.document?.versionId ?? null;
   if (targetPath === null) return;
   const backupId = options.createDraft === false
     ? getCloseDocumentRecoveryBackupId(targetPath)
@@ -454,14 +457,14 @@ export async function closeTargetDocumentWithoutSaving(options: { discardDraft: 
   if (options.discardDraft && backupId) {
     await discardDocumentBackup(backupId);
   }
-  if (state.document?.documentId === targetPath) {
+  if (state.document?.versionId === targetPath) {
     await closeActiveDocumentAfterUnsavedChoice({ discardDraft: options.discardDraft });
     return;
   }
   const session = documentSessions.get(targetPath);
   if (options.discardDraft && session) {
-    await clearRecoveryDraftsForDocument(session.path, session.name);
-    deleteBackupTracking(backupDocumentKey(session.path, session.name));
+    await clearRecoveryDraftsForDocument(session.source.path, session.source.name);
+    deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
   }
   documentSessions.delete(targetPath);
   removeDocumentTabPath(targetPath);
@@ -475,17 +478,17 @@ export async function closeTargetDocumentWithoutSaving(options: { discardDraft: 
 export async function closeActiveDocumentAfterUnsavedChoice(options: { discardDraft: boolean }): Promise<void> {
   const openDocument = state.document;
   if (!openDocument) return;
-  const path = openDocument.path;
-  const name = openDocument.name;
+  const path = openDocument.source.path;
+  const name = openDocument.source.name;
   const closeStartedAt = performance.now();
   logDebugEvent('close', 'closeActiveDocumentAfterUnsavedChoice:start', { path, name, discardDraft: options.discardDraft });
   measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:destroyMount', { path }, () => {
     openDocument.mounted?.mount.destroy();
   });
   measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:cleanupThemeReapply', { path }, resetMountLifecycleState);
-  documentSessions.delete(openDocument.documentId);
+  documentSessions.delete(openDocument.versionId);
   workspaceFilterDocumentCache.delete(path);
-  removeDocumentTabPath(openDocument.documentId);
+  removeDocumentTabPath(openDocument.versionId);
   deleteBackupTracking(backupDocumentKey(path, name));
   if (options.discardDraft) {
     await measureDebugAsync('close', 'closeActiveDocumentAfterUnsavedChoice:clearRecoveryDrafts', { path, name }, () => clearRecoveryDraftsForDocument(path, name));
@@ -508,13 +511,13 @@ export async function closeCurrentDocument(options: { discard?: boolean } = {}):
   if (!openDocument) return;
   if (!openDocument.readOnly && openDocument.dirty && !options.discard) {
     state.closeDocumentDialogOpen = true;
-    state.closeDocumentTargetPath = openDocument.documentId;
+    state.closeDocumentTargetPath = openDocument.versionId;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
     return;
   }
-  const path = openDocument.path;
-  const name = openDocument.name;
+  const path = openDocument.source.path;
+  const name = openDocument.source.name;
   const closeStartedAt = performance.now();
   logDebugEvent('close', 'closeCurrentDocument:start', { path, name, discard: options.discard === true });
   measureDebug('close', 'closeCurrentDocument:destroyMount', { path }, () => {
@@ -522,10 +525,10 @@ export async function closeCurrentDocument(options: { discard?: boolean } = {}):
   });
   measureDebug('close', 'closeCurrentDocument:cleanupThemeReapply', { path }, resetMountLifecycleState);
   if (path) {
-    documentSessions.delete(openDocument.documentId);
+    documentSessions.delete(openDocument.versionId);
     workspaceFilterDocumentCache.delete(path);
   }
-  removeDocumentTabPath(openDocument.documentId);
+  removeDocumentTabPath(openDocument.versionId);
   deleteBackupTracking(backupDocumentKey(path, name));
   await measureDebugAsync('close', 'closeCurrentDocument:clearRecoveryDrafts', { path, name }, () => clearRecoveryDraftsForDocument(path, name));
   state.closeDocumentDialogOpen = false;
@@ -616,10 +619,10 @@ function closeSaveConflictDialog(): void {
   state.saveConflictContinuation = 'save';
 }
 
-function pairedDocumentSessions(documentId: string, path: string, savingRecoveryDraft: boolean) {
+function pairedDocumentSessions(versionId: string, documentId: string, savingRecoveryDraft: boolean) {
   return [...documentSessions.values()].filter((session) =>
-    session.documentId !== documentId
-    && session.path === path
+    session.versionId !== versionId
+    && session.documentId === documentId
     && (savingRecoveryDraft ? session.virtual !== 'recoveryDraft' : session.virtual === 'recoveryDraft'));
 }
 
@@ -650,13 +653,13 @@ export function startBackupTimer(): void {
 export function scheduleBackupActiveDocument(): void {
   if (pendingBackupIdleHandle !== null) return;
   logDebugEvent('perf', 'recoveryDraft:schedule', {
-    path: state.document?.path ?? null,
+    path: state.document?.source.path ?? null,
     debounceMs: BACKUP_DEBOUNCE_MS,
   });
   const callback = () => {
     pendingBackupIdleHandle = null;
     logDebugEvent('perf', 'recoveryDraft:debounceElapsed', {
-      path: state.document?.path ?? null,
+      path: state.document?.source.path ?? null,
     });
     void backupActiveDocument();
   };
@@ -686,10 +689,10 @@ export function setupRecoveryLifecycle(): void {
 export async function backupActiveDocument(options: { force?: boolean } = {}): Promise<void> {
   if (!state.document?.mounted || state.document.readOnly) return;
   if (!state.document.dirty) return;
-  const path = state.document.path;
-  const name = state.document.name;
+  const path = state.document.source.path;
+  const name = state.document.source.name;
   const backupStartedAt = performance.now();
-  const documentKey = backupDocumentKey(state.document.path, state.document.name);
+  const documentKey = backupDocumentKey(state.document.source.path, state.document.source.name);
   const revision = currentBackupRevision(documentKey);
   const previousBackup = backupSnapshots.get(documentKey);
   const now = Date.now();
@@ -747,7 +750,7 @@ export async function backupActiveDocument(options: { force?: boolean } = {}): P
     const backup = await createDocumentBackup({
       documentPath: path,
       name,
-      extension: state.document!.extension,
+      extension: state.document!.source.extension,
       bytes,
       recoveryState,
     });
@@ -812,13 +815,13 @@ export function deleteBackupTracking(key: string): void {
 export function clearActiveRestoredBackupSuppression(): void {
   const document = state.document;
   if (!document?.recoveryBackupId) return;
-  restoredBackupSuppressionKeys.delete(backupDocumentKey(document.path, document.name));
+  restoredBackupSuppressionKeys.delete(backupDocumentKey(document.source.path, document.source.name));
 }
 
 export function markActiveDocumentBackupChanged(): void {
   const document = state.document;
   if (!document) return;
-  const key = backupDocumentKey(document.path, document.name);
+  const key = backupDocumentKey(document.source.path, document.source.name);
   documentBackupRevisions.set(key, (documentBackupRevisions.get(key) ?? 0) + 1);
 }
 
@@ -987,27 +990,26 @@ export async function discardRecoveryStateForBackup(backup: DocumentBackup): Pro
     documentSessions.delete(backup.documentPath);
     workspaceFilterDocumentCache.delete(backup.documentPath);
   }
-  if (!state.document || state.document.path !== backup.documentPath || state.document.name !== backup.name) {
+  if (!state.document || state.document.source.path !== backup.documentPath || state.document.source.name !== backup.name) {
     return;
   }
-  if (!state.document.path) {
+  if (!state.document.source.path) {
     state.document.dirty = false;
     state.document.isNew = false;
     setPendingMountState(null, null);
     return;
   }
-  const file = await readDocumentFile(state.document.path);
+  const file = await readDocumentFile(state.document.source.path);
   const document = await deserializeHvy(new Uint8Array(file.bytes), file.extension);
   const wasMounted = Boolean(state.document.mounted);
   state.document = {
     ...state.document,
-    name: file.name,
-    extension: file.extension,
     dirty: false,
     isNew: false,
     mounted: null,
     recoveryBackupId: null,
   };
+  updateRuntimeDocumentFile(state.document.source, file);
   setPendingMountState(null, null);
   if (wasMounted) {
     rerender();

@@ -15,8 +15,8 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const editableDocument = Boolean(document && !document.readOnly);
   const mountedEditableDocument = Boolean(document?.mounted && editableDocument);
   const historyPreview = document?.virtual === 'versionHistory';
-  const editableTemplateDocument = Boolean(document && editableDocument && isWorkspaceTemplatePath(state, document.path));
-  const editableHvyDocument = Boolean(document && editableDocument && document.extension !== '.md');
+  const editableTemplateDocument = Boolean(document && editableDocument && isWorkspaceTemplatePath(state, document.source.path));
+  const editableHvyDocument = Boolean(document && editableDocument && document.source.extension !== '.md');
   const documentWorkspacePath = currentDocumentWorkspacePath(state);
   const hasWorkspaceDestination = state.workspaces.some((workspace) => workspace.path !== documentWorkspacePath);
 
@@ -25,7 +25,7 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
     save: historyPreview || Boolean((document?.dirty || editableTemplateDocument) && editableDocument),
     saveAs: historyPreview || mountedEditableDocument,
     saveToWorkspace: Boolean(mountedEditableDocument && hasWorkspaceDestination),
-    exportPdf: Boolean(document?.extension === '.phvy' && mountedEditableDocument && !editableTemplateDocument),
+    exportPdf: Boolean(document?.source.extension === '.phvy' && mountedEditableDocument && !editableTemplateDocument),
     importCurrent: editableHvyDocument,
   };
 }
@@ -39,7 +39,7 @@ export function isWorkspaceTemplatePath(state: AppState, path: string): boolean 
 }
 
 export function currentDocumentWorkspacePath(state: AppState): string | null {
-  const path = state.document?.path;
+  const path = state.document?.source.path;
   if (!path) return null;
   return workspacePathForFileInWorkspaces(state.workspaces, path);
 }

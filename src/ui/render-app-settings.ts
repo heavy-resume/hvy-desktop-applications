@@ -157,7 +157,7 @@ export function formatDebugLogTime(value: string): string {
 
 export function renderScriptingReviewDialog(state: AppState): string {
   if (!state.scriptingReviewDialogOpen) return '';
-  const currentPath = state.document && !state.document.isNew ? state.document.path : null;
+  const currentPath = state.document && !state.document.isNew ? state.document.source.path : null;
   const paths = [...new Set([
     ...(currentPath ? [currentPath] : []),
     ...state.appSettings.powerScriptingAllowedFiles,
@@ -244,12 +244,12 @@ export function renderAppSettingsDialog(state: AppState): string {
   const homepageDisplayPath = homepagePath
     ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), homepagePath)
     : '';
-  const currentWorkspaceFile = state.document?.path
-    ? findFileInWorkspaces(state.workspaces, state.document.path)
+  const currentWorkspaceFile = state.document?.source.path
+    ? findFileInWorkspaces(state.workspaces, state.document.source.path)
     : null;
   const canUseCurrentDocument = Boolean(
     state.document?.includedDocumentId
-    || (state.document?.path && !state.document.isNew && !state.document.virtual && currentWorkspaceFile && !currentWorkspaceFile.archived)
+    || (state.document?.source.path && !state.document.isNew && !state.document.virtual && currentWorkspaceFile && !currentWorkspaceFile.archived)
   );
   return `
     <div class="modal-backdrop" role="presentation">
@@ -346,7 +346,7 @@ export function renderAppSettingsDialog(state: AppState): string {
         }
         const policy = settings.pluginPolicies[record.key] ?? 'disabled';
         const requiresPerFileApproval = record.manifest.authorization === 'required';
-        const currentPath = state.document?.path ?? '';
+        const currentPath = state.document?.source.path ?? '';
         const acceptedForCurrentFile = Boolean(currentPath)
           && (settings.pluginAcceptances[currentPath] ?? []).includes(record.key);
         return `<label class="plugin-settings-row">

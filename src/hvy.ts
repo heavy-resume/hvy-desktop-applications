@@ -272,7 +272,7 @@ export async function mountHvyDocument(
     return mountRawHvyDocument(root, document, options);
   }
   const embedMode = mode === 'advanced' ? 'editor' : mode;
-  const documentPath = state.document?.path ?? '';
+  const documentPath = state.document?.source.path ?? '';
   const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
   const activeBuiltInPlugins = builtInPlugins.filter((plugin) => state.appSettings.pluginPolicies[plugin.id] !== 'disabled');
   const plugins = [

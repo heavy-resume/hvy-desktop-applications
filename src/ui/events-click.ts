@@ -89,7 +89,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
         }
         const appSettingsForm = backdrop.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
         if (appSettingsForm) {
-          handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm), state.document?.path ?? ''));
+          handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm), state.document?.source.path ?? ''));
           return;
         }
         if (backdrop.querySelector('.workspace-filter-dialog')) {
@@ -356,11 +356,11 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'app-settings') handlers.openAppSettings();
     if (action === 'open-homepage-picker') {
       const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
-      if (form) handlers.openHomepagePicker(readAppSettingsForm(new FormData(form), state.document?.path ?? ''));
+      if (form) handlers.openHomepagePicker(readAppSettingsForm(new FormData(form), state.document?.source.path ?? ''));
     }
     if (action === 'use-current-document-as-homepage') {
       const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
-      if (form) handlers.useCurrentDocumentAsHomepage(readAppSettingsForm(new FormData(form), state.document?.path ?? ''));
+      if (form) handlers.useCurrentDocumentAsHomepage(readAppSettingsForm(new FormData(form), state.document?.source.path ?? ''));
     }
     if (action === 'choose-replacement-homepage') handlers.chooseReplacementHomepage();
     if (action === 'cancel-homepage-picker') handlers.cancelHomepagePicker();
@@ -380,7 +380,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     }
     if (action === 'cancel-app-settings') {
       const form = target.closest<HTMLFormElement>('form[data-form="app-settings"]');
-      handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form), state.document?.path ?? '') : undefined);
+      handlers.cancelAppSettings(form ? readAppSettingsForm(new FormData(form), state.document?.source.path ?? '') : undefined);
     }
     if (action === 'discard-app-settings-changes') handlers.discardAppSettingsChanges();
     if (action === 'keep-editing-app-settings') handlers.keepEditingAppSettings();

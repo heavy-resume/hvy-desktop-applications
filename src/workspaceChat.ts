@@ -221,7 +221,7 @@ export function closeWorkspaceChatNow(): void {
 function syncOpenWorkspaceChatDocument(): void {
   if (state.document?.virtual !== 'workspaceChat') return;
   state.document.dirty = state.workspaceChat.dirty;
-  state.document.name = currentWorkspaceChatDocumentName();
+  state.document.source.name = currentWorkspaceChatDocumentName();
 }
 
 export function buildWorkspaceChatContext(results: WorkspaceEmbeddingChunkResult[], maxContextChars: number): string {
@@ -470,7 +470,7 @@ export function resolveWorkspaceHref(href: string): string {
     if (matchedWithoutWorkspaceName) return matchedWithoutWorkspaceName;
     return workspacePath ? normalizePath(`${workspacePath}/${withoutWorkspaceName}`) : normalizePath(targetPath);
   }
-  const currentPath = state.document?.virtual === 'workspaceChat' ? '' : state.document?.path ?? '';
+  const currentPath = state.document?.virtual === 'workspaceChat' ? '' : state.document?.source.path ?? '';
   const basePath = currentPath.includes('/') ? currentPath.slice(0, currentPath.lastIndexOf('/')) : workspace?.path ?? state.selectedWorkspacePath ?? '';
   return normalizePath(`${basePath}/${targetPath ?? trimmed}`);
 }

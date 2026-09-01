@@ -69,8 +69,8 @@ export function renderCloseDocumentDialog(state: AppState): string {
     return '';
   }
   const targetPath = state.closeDocumentTargetPath;
-  const target = state.documentTabs.find((tab) => tab.path === targetPath) ?? state.documentTabs.find((tab) => tab.active);
-  const documentName = target?.name ?? state.document?.name ?? 'this document';
+  const target = state.documentTabs.find((tab) => tab.versionId === targetPath) ?? state.documentTabs.find((tab) => tab.active);
+  const documentName = target?.name ?? state.document?.source.name ?? 'this document';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentTitle">
@@ -90,8 +90,8 @@ export function renderCloseDocumentDraftDialog(state: AppState): string {
     return '';
   }
   const targetPath = state.closeDocumentTargetPath;
-  const target = state.documentTabs.find((tab) => tab.path === targetPath) ?? state.documentTabs.find((tab) => tab.active);
-  const documentName = target?.name ?? state.document?.name ?? 'this document';
+  const target = state.documentTabs.find((tab) => tab.versionId === targetPath) ?? state.documentTabs.find((tab) => tab.active);
+  const documentName = target?.name ?? state.document?.source.name ?? 'this document';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentDraftTitle">
@@ -163,7 +163,7 @@ export function renderAppCloseDialog(state: AppState): string {
   if (!state.appCloseDialogOpen) {
     return '';
   }
-  const documentName = state.document?.name ?? 'this document';
+  const documentName = state.document?.source.name ?? 'this document';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog app-close-dialog" role="dialog" aria-modal="true" aria-labelledby="appCloseTitle">

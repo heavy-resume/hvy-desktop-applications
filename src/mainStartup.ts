@@ -13,6 +13,7 @@ import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
 import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
+import { runtimeDocumentForFile } from './runtimeDocuments';
 
 let findShortcutBound = false;
 
@@ -523,14 +524,14 @@ export async function performUndo(): Promise<void> {
   if (measureDebug('perf', 'undo:routeNativeEditCommand', undefined, () => routeNativeEditCommand('undo'))) return;
   const mounted = state.document?.mounted;
   if (!mounted) return;
-  await measureDebugAsync('perf', 'undo:mountedDocument', { path: state.document?.path }, () => undoMountedDocument(mounted));
+  await measureDebugAsync('perf', 'undo:mountedDocument', { path: state.document?.source.path }, () => undoMountedDocument(mounted));
 }
 
 export async function performRedo(): Promise<void> {
   if (measureDebug('perf', 'redo:routeNativeEditCommand', undefined, () => routeNativeEditCommand('redo'))) return;
   const mounted = state.document?.mounted;
   if (!mounted) return;
-  await measureDebugAsync('perf', 'redo:mountedDocument', { path: state.document?.path }, () => redoMountedDocument(mounted));
+  await measureDebugAsync('perf', 'redo:mountedDocument', { path: state.document?.source.path }, () => redoMountedDocument(mounted));
 }
 
 export function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
@@ -547,7 +548,7 @@ export function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
   const mounted = state.document?.mounted;
   if (!root || !mounted) return;
   mounted.mount.setThemeOverrides(
-    readDocumentColorPreference(state.document?.path ?? '') ? null : state.colorTheme.colors,
+    readDocumentColorPreference(state.document?.source.path ?? '') ? null : state.colorTheme.colors,
   );
 }
 
@@ -641,7 +642,7 @@ export async function restoreStartupDocument(): Promise<void> {
     syncDocumentTabs();
     const restoredTab = state.documentTabs.find((tab) => tab.dirty && !tab.readOnly) ?? state.documentTabs.find((tab) => !tab.readOnly);
     if (restoredTab) {
-      await selectDocumentTab(restoredTab.path);
+      await selectDocumentTab(restoredTab.versionId);
       return;
     }
   }
@@ -669,15 +670,17 @@ export async function restoreHotReloadSession(): Promise<boolean> {
     const file = await readSnapshotDocumentFile(path);
     if (!file) continue;
     const stored = snapshot.documents.find((candidate) => candidate.path === path);
-    documentSessions.set(path, await createSessionFromHotReloadSnapshot(file, stored));
-    markDocumentTabOpened(path);
+    const session = await createSessionFromHotReloadSnapshot(file, stored);
+    documentSessions.set(session.versionId, session);
+    markDocumentTabOpened(session.versionId);
     fallbackActivePath = path;
   }
   const activePath = snapshot.activePath ?? fallbackActivePath;
   const activeFile = activePath ? await readSnapshotDocumentFile(activePath) : null;
   if (activeFile && activePath) {
     const stored = snapshot.documents.find((candidate) => candidate.path === activePath);
-    documentSessions.set(activePath, await createSessionFromHotReloadSnapshot(activeFile, stored));
+    const session = await createSessionFromHotReloadSnapshot(activeFile, stored);
+    documentSessions.set(session.versionId, session);
     await openDocument(activeFile);
     restoreMountScrollRatio(mountRoot, stored?.scrollRatio ?? null);
     state.status = `Restored ${activeFile.name}`;
@@ -701,11 +704,11 @@ export async function readSnapshotDocumentFile(path: string): Promise<DocumentFi
 
 export async function createSessionFromHotReloadSnapshot(file: DocumentFile, stored: HotReloadDocumentSnapshot | undefined): Promise<DocumentSession> {
   const workspaceAccess = workspaceFileAiAccess(file.path);
+  const source = runtimeDocumentForFile(file);
   return {
-    documentId: file.path,
-    path: file.path,
-    name: file.name,
-    extension: file.extension,
+    documentId: source.documentId,
+    versionId: source.workingVersionId,
+    source,
     mode: stored?.mode ?? defaultDocumentMode(file.extension, { hiddenFromAI: file.hiddenFromAI || workspaceAccess.hiddenFromAI }),
     dirty: false,
     readOnly: file.locked === true || workspaceAccess.readOnly,

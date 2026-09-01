@@ -26,7 +26,7 @@ vi.mock('./main', () => ({
   pendingMountDocument: null,
   readDocumentColorPreference: vi.fn(),
   refreshRecents: vi.fn(),
-  renameDocumentTabPath: vi.fn(),
+  updateOpenDocumentFile: vi.fn(),
   rerender: vi.fn(),
   runBusy: vi.fn(),
   updateCurrentDocumentSession: vi.fn(),

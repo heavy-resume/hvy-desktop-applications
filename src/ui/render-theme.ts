@@ -41,7 +41,7 @@ export function renderThemeVariableStyle(colors: Record<string, string>): string
 }
 
 export function getDocumentColorsEnabled(state: AppState): boolean {
-  return Boolean(state.document?.path && state.recent.documentColorUses?.[state.document.path] === true);
+  return Boolean(state.document?.source.path && state.recent.documentColorUses?.[state.document.source.path] === true);
 }
 
 export function getDocumentTheme(state: AppState): { name: string; colors: Record<string, string> } {

@@ -86,7 +86,7 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
     }
     if (form.dataset.form === 'app-settings') {
       const data = new FormData(form);
-      handlers.saveAppSettings(readAppSettingsForm(data, state.document?.path ?? ''));
+      handlers.saveAppSettings(readAppSettingsForm(data, state.document?.source.path ?? ''));
     }
     if (form.dataset.form === 'add-integration-page') {
       const data = new FormData(form);

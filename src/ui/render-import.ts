@@ -203,11 +203,11 @@ export function parseTagSuggestions(value: string): string[] {
 }
 
 export function suggestedImportOutputName(state: AppState, workspace: AppState['workspaces'][number] | null): string {
-  const base = `${displayDocumentName(state.document?.name ?? 'Imported')} import`;
+  const base = `${displayDocumentName(state.document?.source.name ?? 'Imported')} import`;
   if (!workspace || !state.document) {
     return base;
   }
-  const extension = importOutputExtension(state.document.extension);
+  const extension = importOutputExtension(state.document.source.extension);
   const existing = new Set(workspace.files
     .filter((node): node is Extract<WorkspaceTreeNode, { kind: 'file' }> => node.kind === 'file')
     .map((node) => node.name.toLowerCase()));
@@ -221,7 +221,7 @@ export function suggestedImportOutputName(state: AppState, workspace: AppState['
   return `${base} (${index})`;
 }
 
-export function importOutputExtension(extension: NonNullable<AppState['document']>['extension']): '.hvy' | '.phvy' {
+export function importOutputExtension(extension: NonNullable<AppState['document']>['source']['extension']): '.hvy' | '.phvy' {
   return extension === '.phvy' ? '.phvy' : '.hvy';
 }
 
@@ -351,7 +351,7 @@ export function renderExportPdfSavePrompt(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <section class="dialog" role="dialog" aria-modal="true" aria-label="Save before PDF export">
         <h2>Export PDF</h2>
-        <p class="dialog-note">Save ${escapeHtml(state.document.name)} before exporting it to PDF.</p>
+        <p class="dialog-note">Save ${escapeHtml(state.document.source.name)} before exporting it to PDF.</p>
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-export-pdf-save-prompt">Cancel</button>
           <button class="hvy-galaxy-button" type="button" data-action="save-before-export-pdf" ${state.busy ? 'disabled' : ''}>${saveLabel}</button>

@@ -86,7 +86,7 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
     const form = input.closest<HTMLFormElement>('form[data-form="app-settings"]');
     handlers.installPluginFiles(
       Array.from(input.files),
-      readAppSettingsForm(new FormData(form!), state.document?.path ?? ''),
+      readAppSettingsForm(new FormData(form!), state.document?.source.path ?? ''),
     );
     input.value = '';
   }, { signal });
@@ -138,7 +138,7 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       const form = pluginDropZone.closest<HTMLFormElement>('form[data-form="app-settings"]');
       handlers.installPluginFiles(
         Array.from(event.dataTransfer.files),
-        readAppSettingsForm(new FormData(form!), state.document?.path ?? ''),
+        readAppSettingsForm(new FormData(form!), state.document?.source.path ?? ''),
       );
       return;
     }

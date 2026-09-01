@@ -63,7 +63,7 @@ function scriptingCapability<T extends WebCapabilityConfig>(
 }
 
 function scriptingExecutionContext(config: WebCapabilityConfig) {
-  const documentPath = state.document?.path ?? '';
+  const documentPath = state.document?.source.path ?? '';
   const profile = selectedProfile(config);
   if (!profile) throw new Error('Choose a browser profile for this web capability before running the script.');
   if (!isWebCapabilityAuthorized(
@@ -154,7 +154,7 @@ function openCommandInputsModal(command: WebCommandCapabilityConfig['command'], 
 }
 
 function selectedProfile(config: WebCapabilityConfig) {
-  const path = state.document?.path ?? '';
+  const path = state.document?.source.path ?? '';
   const profileId = getWebCapabilityProfileBinding(
     state.appSettings.webCapabilityProfileBindings,
     path,
@@ -164,7 +164,7 @@ function selectedProfile(config: WebCapabilityConfig) {
 }
 
 async function persistProfileBinding(config: WebCapabilityConfig, profileId: string): Promise<void> {
-  const path = state.document?.path ?? '';
+  const path = state.document?.source.path ?? '';
   const settings = {
     ...state.appSettings,
     webCapabilityProfileBindings: setWebCapabilityProfileBinding(
@@ -192,10 +192,10 @@ function authorizationReason(review: WebCapabilityAuthorizationReview): string {
 
 function openAuthorizationModal(config: WebCapabilityConfig, onAuthorized: () => void): void {
   const profile = selectedProfile(config);
-  if (!profile || !state.document?.path) return;
+  if (!profile || !state.document?.source.path) return;
   const review = reviewWebCapabilityAuthorization(
     state.appSettings.webCapabilityAuthorizations,
-    state.document.path,
+    state.document.source.path,
     config,
     profile.id,
   );
@@ -214,7 +214,7 @@ function openAuthorizationModal(config: WebCapabilityConfig, onAuthorized: () =>
   reason.textContent = authorizationReason(review);
   const details = document.createElement('dl');
   const rows: Array<[string, string]> = [
-    ['Document', state.document.name],
+    ['Document', state.document.source.name],
     ['Browser profile', profile.name],
     ['Page', config.page.url],
     ['Allowed sites', config.page.allowedOrigins.join(', ')],
@@ -241,7 +241,7 @@ function openAuthorizationModal(config: WebCapabilityConfig, onAuthorized: () =>
       ...state.appSettings,
       webCapabilityAuthorizations: authorizeWebCapabilityRecord(
         state.appSettings.webCapabilityAuthorizations,
-        state.document!.path,
+        state.document!.source.path,
         config,
         profile.id,
       ),
@@ -356,7 +356,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     root.append(heading, description, buildProfileControls(config, sync));
     const profile = selectedProfile(config);
     if (profile) {
-      const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.path ?? '', config, profile.id);
+      const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.source.path ?? '', config, profile.id);
       if (!authorized) {
         const review = button('Review and allow');
         review.addEventListener('click', () => openAuthorizationModal(config, sync));
@@ -369,7 +369,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
           error = '';
           sync();
           void executeWebRecordsCapability(config, {
-            documentPath: state.document?.path ?? '',
+            documentPath: state.document?.source.path ?? '',
             profile,
             authorizations: state.appSettings.webCapabilityAuthorizations,
             readyChecks: localReadyChecks(config),
@@ -415,7 +415,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
           run.addEventListener('click', () => {
             openCommandInputsModal(command, (inputs) => {
               void executeWebRecordCommandCapability(config, command.id, candidate.parent as string, {
-                documentPath: state.document?.path ?? '',
+                documentPath: state.document?.source.path ?? '',
                 profile,
                 authorizations: state.appSettings.webCapabilityAuthorizations,
                 readyChecks: localReadyChecks(config),
@@ -456,7 +456,7 @@ function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {
     heading.textContent = config.name;
     root.append(heading, buildProfileControls(config, sync));
     if (profile) {
-      const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.path ?? '', config, profile.id);
+      const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.source.path ?? '', config, profile.id);
       const run = button(authorized ? (pending ? 'Running…' : config.command.name) : 'Review and allow', true);
       run.disabled = pending;
       run.addEventListener('click', () => {
@@ -469,7 +469,7 @@ function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {
           error = '';
           sync();
           void executeWebPageCommandCapability(config, {
-            documentPath: state.document?.path ?? '',
+            documentPath: state.document?.source.path ?? '',
             profile,
             authorizations: state.appSettings.webCapabilityAuthorizations,
             readyChecks: localReadyChecks(config),

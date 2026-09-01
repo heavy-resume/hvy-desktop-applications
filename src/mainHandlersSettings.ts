@@ -1246,11 +1246,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   useCurrentDocumentAsHomepage: (settings) => {
     const document = state.document;
     if (!document) return;
-    const workspaceFile = document.path ? findFileInWorkspaces(state.workspaces, document.path) : null;
+    const workspaceFile = document.source.path ? findFileInWorkspaces(state.workspaces, document.source.path) : null;
     const homepage = document.includedDocumentId
       ? { kind: 'included' as const, id: document.includedDocumentId }
-      : document.path && !document.isNew && !document.virtual && workspaceFile && !workspaceFile.archived
-        ? { kind: 'file' as const, path: document.path }
+      : document.source.path && !document.isNew && !document.virtual && workspaceFile && !workspaceFile.archived
+        ? { kind: 'file' as const, path: document.source.path }
         : null;
     if (!homepage) return;
     state.appSettingsDraft = { ...settings, homepage };
@@ -1584,7 +1584,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     saveColorThemeSettings(state.colorTheme);
   },
   setDocumentColorsEnabled: (enabled) => {
-    writeDocumentColorPreference(state.document?.path ?? '', enabled);
+    writeDocumentColorPreference(state.document?.source.path ?? '', enabled);
     applyAppColorTheme();
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });

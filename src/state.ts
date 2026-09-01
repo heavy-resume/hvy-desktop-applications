@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
 import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
@@ -7,13 +7,14 @@ import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from 
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
 import type { IntegrationStructuredSource } from './integrationBrowser';
+import type { RuntimeDocument } from './runtimeDocuments';
 export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
 export interface OpenDocument {
   documentId: string;
-  path: string;
-  name: string;
-  extension: DocumentExtension;
+  versionId: string;
+  source: RuntimeDocument;
+  displayName?: string;
   virtual?: 'workspaceChat' | 'versionHistory' | 'recoveryDraft' | 'defaultDocument';
   includedDocumentId?: string;
   historySourcePath?: string;
@@ -31,7 +32,9 @@ export interface OpenDocument {
 }
 
 export interface OpenDocumentTab {
-  path: string;
+  versionId: string;
+  documentId: string;
+  sourcePath: string;
   name: string;
   dirty: boolean;
   readOnly: boolean;

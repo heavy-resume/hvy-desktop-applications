@@ -5,7 +5,7 @@ import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, ser
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, updateHomepageDocumentPath } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
-import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, renameDocumentTabPath, rerender, runBusy, updateCurrentDocumentSession } from './main';
+import { adoptSavedAsDocument, backupDocumentKey, clearRecoveryDraftsForDocument, documentSessions, moveBackupTracking, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
 import { logDebugEvent } from './debugLog';
 
@@ -64,14 +64,14 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
   if (!state.document?.mounted) return;
   const mounted = state.document.mounted;
   const document = getMountedDocument(mounted);
-  const previousPath = state.document.path;
-  const previousName = state.document.name;
+  const previousPath = state.document.source.path;
+  const previousName = state.document.source.name;
   const previousMode = state.document.mode;
   const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const bytes = await serializeMountedDocumentAsync(mounted);
   const file = await saveDocumentToWorkspace({
     workspacePath,
-    name: documentFileName(name, documentTypeForExtension(state.document.extension)) ?? name,
+    name: documentFileName(name, documentTypeForExtension(state.document.source.extension)) ?? name,
     targetDirectory,
     bytes,
   });
@@ -155,19 +155,17 @@ async function applyWorkspaceFileRelocation(
   file: DocumentFile,
   sourceWorkspacePath: string | null,
 ): Promise<void> {
-  const currentDocument = state.document?.path === path ? state.document : null;
+  const currentDocument = state.document?.source.path === path && state.document.virtual !== 'versionHistory'
+    ? state.document
+    : null;
   const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
-  const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
-  documentSessions.delete(path);
-  renameDocumentTabPath(path, file.path);
+  const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.source.path, currentDocument.source.name) : null;
+  updateOpenDocumentFile(path, file);
   if (state.selectedFilePath === path) {
     state.selectedFilePath = file.path;
   }
   state.selectedWorkspacePath = workspacePath;
   if (currentDocument) {
-    currentDocument.path = file.path;
-    currentDocument.name = file.name;
-    currentDocument.extension = file.extension;
     if (mountedDocument) {
       updateCurrentDocumentSession(mountedDocument);
     }
@@ -221,7 +219,7 @@ export function showWorkspaceDocumentsView(workspacePath: string): void {
 }
 
 export async function refreshSavedTemplates(workspacePath?: string | null): Promise<void> {
-  state.savedTemplates = await listSavedTemplates(workspacePath ?? workspacePathForFile(state.document?.path ?? '') ?? state.selectedWorkspacePath);
+  state.savedTemplates = await listSavedTemplates(workspacePath ?? workspacePathForFile(state.document?.source.path ?? '') ?? state.selectedWorkspacePath);
 }
 
 export function templatesForCurrentWorkspaceDocumentType(workspacePath: string | null | undefined, documentType: DocumentCreationType) {

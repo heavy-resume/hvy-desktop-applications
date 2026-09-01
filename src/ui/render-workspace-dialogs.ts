@@ -420,7 +420,7 @@ export function workspaceNodeName(node: WorkspaceTreeNode): string {
 
 export function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
-  const templateDisabled = state.document.extension === '.md' || state.document.virtual === 'versionHistory';
+  const templateDisabled = state.document.source.extension === '.md' || state.document.virtual === 'versionHistory';
   if (state.saveAsKind === 'template' && !templateDisabled) {
     return renderSaveAsTemplateDialog(state);
   }
@@ -433,8 +433,8 @@ export function renderSaveAsDialog(state: AppState): string {
     : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null;
   const name = state.document.virtual === 'versionHistory'
-    ? displayDocumentName(savedVersionDocumentName(state.document.historySourceName ?? state.document.name))
-    : displayDocumentName(state.document.name);
+    ? displayDocumentName(savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name))
+    : displayDocumentName(state.document.source.name);
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="save-as-document">
@@ -482,13 +482,13 @@ export function renderSaveAsTemplateDialog(state: AppState): string {
         <label>
           <span>Format</span>
           <select class="hvy-galaxy-select" name="format">
-            <option value=".thvy" ${state.document?.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
-            <option value=".phvy" ${state.document?.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
+            <option value=".thvy" ${state.document?.source.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
+            <option value=".phvy" ${state.document?.source.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
           </select>
         </label>
         <label>
           <span>Name</span>
-          <input class="hvy-galaxy-input" name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
+          <input class="hvy-galaxy-input" name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.source.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
         </label>
         <div class="field-group">
           <span>Scope</span>

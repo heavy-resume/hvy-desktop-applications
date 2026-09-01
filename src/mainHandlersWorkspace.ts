@@ -333,7 +333,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   openImportIntoCurrent: () => void (async () => {
-    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
     state.newDocumentWorkspacePath = null;
@@ -464,13 +464,13 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       throw new Error(result.message ?? 'Import failed.');
     }
     const bytes = await serializeMountedDocumentAsync(state.document.mounted);
-    await saveDocumentFile({ path: state.document.path, bytes });
+    await saveDocumentFile({ path: state.document.source.path, bytes });
     markMountedDocumentSaved(state.document.mounted);
     state.document.dirty = false;
     state.document.isNew = false;
     updateCurrentDocumentSession(getMountedDocument(state.document.mounted));
-    await clearRecoveryDraftsForDocument(state.document.path, state.document.name);
-    await refreshOpenWorkspaceForFile(state.document.path);
+    await clearRecoveryDraftsForDocument(state.document.source.path, state.document.source.name);
+    await refreshOpenWorkspaceForFile(state.document.source.path);
     await refreshRecents();
     state.status = result.message ?? `Imported ${source.name}`;
     } finally {
@@ -479,7 +479,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   }),
   importIntoCurrent: (instructions, pastedSourceText, excludeTags, newSectionsOnly, outputMode, outputName) => void runBusy('Importing into current document...', async () => {
     const source = await importSourceFrom(pastedSourceText);
-    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
     if (!source) {
@@ -500,7 +500,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       return;
     }
     const outputFileName = outputMode === 'workspace'
-      ? workspaceRootDocumentFileName(outputName, documentTypeForExtension(importedTemplateOutputExtension(state.document.extension)))
+      ? workspaceRootDocumentFileName(outputName, documentTypeForExtension(importedTemplateOutputExtension(state.document.source.extension)))
       : null;
     if (outputMode === 'workspace' && !outputFileName) {
       state.status = 'Document name is required';
@@ -515,8 +515,8 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
     try {
       const outputExtension = outputMode === 'workspace'
-        ? importedTemplateOutputExtension(state.document.extension)
-        : state.document.extension;
+        ? importedTemplateOutputExtension(state.document.source.extension)
+        : state.document.source.extension;
       if (outputMode !== 'workspace') {
         state.document.mounted.document.extension = outputExtension;
       }

@@ -9,11 +9,11 @@ export function renderDocumentTabs(state: AppState): string {
     <nav class="document-tabs${state.documentTabs.length === 0 ? ' is-empty' : ''}" aria-label="Open documents">
       ${state.documentTabs.map((tab) => `
         <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}">
-          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.path)}" title="${escapeAttr(tab.path)}" aria-current="${tab.active ? 'page' : 'false'}">
+          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">
             <span class="document-tab-dirty" aria-hidden="true"></span>
             <span class="document-tab-name">${escapeHtml(tab.name)}</span>
           </button>
-          <button type="button" class="hvy-galaxy-button document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.path)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
+          <button type="button" class="hvy-galaxy-button document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.versionId)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
         </div>
       `).join('')}
     </nav>`;
@@ -27,7 +27,7 @@ export function renderTabStackPopover(state: AppState): string {
   return `
     <div class="tab-stack-popover" role="listbox" aria-label="Open documents">
       ${state.documentTabs.map((tab, index) => `
-        <button type="button" class="hvy-galaxy-button tab-stack-item${index === activeIndex ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}" role="option" aria-selected="${index === activeIndex ? 'true' : 'false'}" data-action="select-tab-stack-item" data-path="${escapeAttr(tab.path)}">
+        <button type="button" class="hvy-galaxy-button tab-stack-item${index === activeIndex ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}" role="option" aria-selected="${index === activeIndex ? 'true' : 'false'}" data-action="select-tab-stack-item" data-path="${escapeAttr(tab.versionId)}">
           <span class="tab-stack-dirty" aria-hidden="true"></span>
           <span>${escapeHtml(tab.name)}</span>
         </button>
@@ -47,7 +47,7 @@ export function renderToolbar(state: AppState): string {
     const dirtyLabel = state.workspaceChat.dirty ? 'Unsaved' : 'Saved';
     return `
       <div class="toolbar-title">
-        <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
+        <strong title="${escapeAttr(document.source.path)}">${escapeHtml(document.source.name)}</strong>
         <span>${escapeHtml(state.workspaceChat.scopeLabel || 'Workspace chat')}</span>
       </div>
       <div class="toolbar-actions">
@@ -59,12 +59,12 @@ export function renderToolbar(state: AppState): string {
   const dirtyState = document.readOnly ? 'read-only' : document.dirty ? 'dirty' : 'clean';
   const dirtyLabel = document.readOnly ? 'Read only' : document.dirty ? 'Unsaved' : 'Saved';
   const fileActions = getFileActionAvailability(state);
-  const showExportPdf = document.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.path);
+  const showExportPdf = document.source.extension === '.phvy' && !isWorkspaceTemplatePath(state, document.source.path);
   const documentColorsEnabled = getDocumentColorsEnabled(state);
   const documentColorsEditable = !document.readOnly || document.virtual === 'defaultDocument';
   return `
     <div class="toolbar-title">
-      <strong title="${escapeAttr(document.path)}">${escapeHtml(document.name)}</strong>
+      <strong title="${escapeAttr(document.source.path)}">${escapeHtml(document.source.name)}</strong>
       <span>${document.readOnly ? 'Read-only document' : document.virtual === 'recoveryDraft' ? 'Recovered unsaved copy' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">

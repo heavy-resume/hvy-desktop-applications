@@ -75,7 +75,7 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
       ?? root.querySelector<HTMLFormElement>('form[data-form="app-settings"]');
     if (appSettingsForm) {
       event.preventDefault();
-      handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm), state.document?.path ?? ''));
+      handlers.cancelAppSettings(readAppSettingsForm(new FormData(appSettingsForm), state.document?.source.path ?? ''));
       return;
     }
     if (root.querySelector('.workspace-filter-dialog')) {
