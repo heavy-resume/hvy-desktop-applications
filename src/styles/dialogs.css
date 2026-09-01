@@ -443,6 +443,28 @@
   text-transform: uppercase;
 }
 
+.workspace-manager-section-heading,
+.workspace-manager-sort-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workspace-manager-section-heading {
+  justify-content: space-between;
+}
+
+.workspace-manager-sort-actions>span {
+  color: var(--hvy-text-alt, #394744);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workspace-manager-sort-actions .hvy-galaxy-button {
+  padding: 4px 7px;
+}
+
 .workspace-manager-row {
   display: grid;
   grid-template-columns: minmax(150px, 0.8fr) minmax(0, 1.2fr) minmax(0, auto);
@@ -901,4 +923,3 @@
   margin: 0;
   padding: 10px;
 }
-

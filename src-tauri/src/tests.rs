@@ -491,6 +491,29 @@
     }
 
     #[test]
+    fn legacy_workspace_order_initializes_separate_recency() {
+        let dir = tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let recent_path = dir.path().join("recent.json");
+        fs::write(
+            &recent_path,
+            serde_json::json!({
+                "workspaces": [path_to_string(&first), path_to_string(&second)],
+                "files": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let recent = read_recent_state(&recent_path).unwrap();
+
+        assert_eq!(recent.recent_workspaces, recent.workspaces);
+    }
+
+    #[test]
     fn normalizes_ai_settings() {
         let settings = normalize_ai_settings(AiSettings {
             active_provider_id: " local ".into(),

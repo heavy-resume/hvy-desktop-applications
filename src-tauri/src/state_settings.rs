@@ -172,7 +172,7 @@ fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> 
     replace_recent_menu_items(
         app,
         &recent_workspaces,
-        &recent.workspaces,
+        &recent.recent_workspaces,
         "recent-workspace:",
         "No Recent Workspaces",
     )?;
@@ -260,13 +260,24 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
         return Ok(RecentState::default());
     }
     let state: RecentState = serde_json::from_slice(&fs::read(path)?)?;
+    let workspaces: Vec<String> = state
+        .workspaces
+        .into_iter()
+        .filter(|entry| Path::new(entry).is_dir())
+        .take(RECENT_LIMIT)
+        .collect();
+    let mut recent_workspaces: Vec<String> = state
+        .recent_workspaces
+        .into_iter()
+        .filter(|entry| Path::new(entry).is_dir())
+        .take(RECENT_LIMIT)
+        .collect();
+    if recent_workspaces.is_empty() {
+        recent_workspaces = workspaces.clone();
+    }
     Ok(RecentState {
-        workspaces: state
-            .workspaces
-            .into_iter()
-            .filter(|entry| Path::new(entry).is_dir())
-            .take(RECENT_LIMIT)
-            .collect(),
+        workspaces,
+        recent_workspaces,
         files: state
             .files
             .into_iter()

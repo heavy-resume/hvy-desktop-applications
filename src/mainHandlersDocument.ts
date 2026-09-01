@@ -207,7 +207,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     const candidate = await chooseWorkspaceFolder();
     if (!candidate) return;
     const workspace = candidate.hasManifest
-      ? await loadWorkspace(candidate.path)
+      ? await loadWorkspace(candidate.path, { recordRecent: true })
       : requestWorkspaceInitialization(candidate.path, candidate.defaultName);
     if (!workspace) {
       state.status = 'Ready';
@@ -226,7 +226,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     await refreshRecents();
   }),
   openRecentWorkspace: (path) => void (async () => {
-    await loadWorkspaceEntry(path);
+    await loadWorkspaceEntry(path, { recordRecent: true });
     if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
     await refreshRecents();
     await refreshArchivedWorkspaces();

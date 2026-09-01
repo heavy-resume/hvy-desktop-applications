@@ -209,8 +209,11 @@ export function workspacePathForFile(filePath: string): string | null {
   return workspacePathForFileInWorkspaces(state.workspaces, filePath);
 }
 
-export function loadWorkspace(path: string): Promise<Workspace> {
-  return loadWorkspaceBackend(path, { includeTemplates: state.workspaceFileViews[path] === 'templates' });
+export function loadWorkspace(path: string, options: { recordRecent?: boolean } = {}): Promise<Workspace> {
+  return loadWorkspaceBackend(path, {
+    includeTemplates: state.workspaceFileViews[path] === 'templates',
+    recordRecent: options.recordRecent === true,
+  });
 }
 
 export function showWorkspaceDocumentsView(workspacePath: string): void {
@@ -250,7 +253,7 @@ export function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspa
   const entryIndex = state.workspaceEntries.findIndex((candidate) => candidate.path === workspace.path);
   const entry = { path: workspace.path, displayName: workspace.manifest.name, status: 'ready' as const, error: null };
   if (entryIndex >= 0) state.workspaceEntries[entryIndex] = entry;
-  else state.workspaceEntries.push(entry);
+  else state.workspaceEntries.unshift(entry);
   syncMcpWorkspaces();
 }
 
@@ -259,8 +262,8 @@ export function workspaceDisplayNameFromPath(path: string): string {
   return normalized.split(/[\\/]/).pop() || path;
 }
 
-export async function loadWorkspaceEntry(path: string): Promise<void> {
-  await loadWorkspaceEntryUsing(path, () => loadWorkspace(path), 'direct');
+export async function loadWorkspaceEntry(path: string, options: { recordRecent?: boolean } = {}): Promise<void> {
+  await loadWorkspaceEntryUsing(path, () => loadWorkspace(path, options), 'direct');
 }
 
 export async function retryWorkspaceEntry(path: string): Promise<void> {
@@ -363,6 +366,39 @@ export function reorderedWorkspaceEntries(
   const targetIndex = reordered.findIndex((entry) => entry.path === targetPath);
   reordered.splice(before ? targetIndex : targetIndex + 1, 0, dragged);
   return reordered;
+}
+
+export type WorkspaceOrderSort = 'nameAsc' | 'nameDesc' | 'recentDesc' | 'recentAsc';
+
+export function sortedWorkspaceEntries(
+  entries: AppState['workspaceEntries'],
+  workspaces: Workspace[],
+  recentPaths: string[],
+  order: WorkspaceOrderSort,
+): AppState['workspaceEntries'] {
+  const originalIndexes = new Map(entries.map((entry, index) => [entry.path, index]));
+  const workspaceNames = new Map(workspaces.map((workspace) => [workspace.path, workspace.manifest.name]));
+  const recentIndexes = new Map(recentPaths.map((path, index) => [path, index]));
+  return [...entries].sort((left, right) => {
+    let comparison = 0;
+    if (order === 'nameAsc' || order === 'nameDesc') {
+      const leftName = workspaceNames.get(left.path) ?? left.displayName;
+      const rightName = workspaceNames.get(right.path) ?? right.displayName;
+      comparison = leftName.localeCompare(rightName);
+      if (order === 'nameDesc') comparison *= -1;
+    } else {
+      const leftIndex = recentIndexes.get(left.path);
+      const rightIndex = recentIndexes.get(right.path);
+      if (leftIndex !== undefined && rightIndex !== undefined) {
+        comparison = order === 'recentDesc' ? leftIndex - rightIndex : rightIndex - leftIndex;
+      } else if (leftIndex !== undefined) {
+        comparison = -1;
+      } else if (rightIndex !== undefined) {
+        comparison = 1;
+      }
+    }
+    return comparison || (originalIndexes.get(left.path) ?? 0) - (originalIndexes.get(right.path) ?? 0);
+  });
 }
 
 export function syncMcpWorkspaces(): void {

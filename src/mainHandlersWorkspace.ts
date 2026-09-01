@@ -5,7 +5,7 @@ import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
 import { state } from './state';
 import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
-import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, syncMcpWorkspaces, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath } from './main';
+import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
 import type { UiHandlers } from './ui';
 
 export function createWorkspaceHandlers(): Partial<UiHandlers> {
@@ -133,6 +133,14 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.recent = await saveWorkspaceOrder(entries.map((entry) => entry.path));
     state.workspaceManagerOpen = true;
     state.status = 'Reordered workspaces';
+  }, { preserveMountedDocument: true }),
+  sortWorkspaceOrder: (order: WorkspaceOrderSort) => void runBusy('Sorting workspaces...', async () => {
+    const recentPaths = state.recent.recentWorkspaces ?? state.recent.workspaces;
+    const entries = sortedWorkspaceEntries(state.workspaceEntries, state.workspaces, recentPaths, order);
+    state.workspaceEntries = entries;
+    state.recent = await saveWorkspaceOrder(entries.map((entry) => entry.path));
+    state.workspaceManagerOpen = true;
+    state.status = 'Sorted workspaces';
   }, { preserveMountedDocument: true }),
   renameWorkspace: (path, name) => void runBusy('Renaming workspace...', async () => {
     const trimmed = name.trim();

@@ -8,6 +8,7 @@ export interface UiHandlers {
   openWorkspaceManager(): void;
   closeWorkspaceManager(): void;
   reorderWorkspace(draggedPath: string, targetPath: string, before: boolean): void;
+  sortWorkspaceOrder(order: 'nameAsc' | 'nameDesc' | 'recentDesc' | 'recentAsc'): void;
   renameWorkspace(path: string, name: string): void;
   archiveWorkspace(path: string): void;
   unarchiveWorkspace(path: string): void;

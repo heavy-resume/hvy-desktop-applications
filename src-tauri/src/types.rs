@@ -154,6 +154,8 @@ struct RecentState {
     #[serde(default, alias = "galaxies")]
     workspaces: Vec<String>,
     #[serde(default)]
+    recent_workspaces: Vec<String>,
+    #[serde(default)]
     files: Vec<String>,
     #[serde(default)]
     document_modes: HashMap<String, String>,

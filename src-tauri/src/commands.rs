@@ -1434,11 +1434,18 @@ fn initialize_workspace_path(app: AppHandle, path: String) -> AppResult<Workspac
 }
 
 #[tauri::command]
-fn load_workspace(app: AppHandle, path: String, include_templates: Option<bool>) -> AppResult<Workspace> {
+fn load_workspace(
+    app: AppHandle,
+    path: String,
+    include_templates: Option<bool>,
+    record_recent: Option<bool>,
+) -> AppResult<Workspace> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
     remove_archived_workspace(&app, &path)?;
-    add_recent_workspace(&app, &path)?;
+    if record_recent.unwrap_or(false) {
+        add_recent_workspace(&app, &path)?;
+    }
     if include_templates.unwrap_or(false) {
         return load_workspace_from_path_with_options(&path, true);
     }

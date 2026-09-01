@@ -32,7 +32,7 @@ vi.mock('./main', () => ({
   updateCurrentDocumentSession: vi.fn(),
 }));
 
-import { creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
+import { creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
 import { state } from './state';
 
 describe('creationTemplate', () => {
@@ -82,6 +82,22 @@ describe('workspace ordering', () => {
   it('moves an entry after a target', () => {
     expect(reorderedWorkspaceEntries(entries, 'one', 'two', false).map((entry) => entry.path)).toEqual(['two', 'one', 'three']);
   });
+
+  it('sorts by workspace name in either direction', () => {
+    const workspaces = [
+      { path: 'one', manifest: { schemaVersion: 1 as const, name: 'Zulu', createdAt: '', updatedAt: '' }, files: [] },
+      { path: 'two', manifest: { schemaVersion: 1 as const, name: 'Alpha', createdAt: '', updatedAt: '' }, files: [] },
+      { path: 'three', manifest: { schemaVersion: 1 as const, name: 'Mike', createdAt: '', updatedAt: '' }, files: [] },
+    ];
+    expect(sortedWorkspaceEntries(entries, workspaces, [], 'nameAsc').map((entry) => entry.path)).toEqual(['two', 'three', 'one']);
+    expect(sortedWorkspaceEntries(entries, workspaces, [], 'nameDesc').map((entry) => entry.path)).toEqual(['one', 'three', 'two']);
+  });
+
+  it('sorts by recorded recency without changing the source entries', () => {
+    expect(sortedWorkspaceEntries(entries, [], ['two', 'one', 'three'], 'recentDesc').map((entry) => entry.path)).toEqual(['two', 'one', 'three']);
+    expect(sortedWorkspaceEntries(entries, [], ['two', 'one', 'three'], 'recentAsc').map((entry) => entry.path)).toEqual(['three', 'one', 'two']);
+    expect(entries.map((entry) => entry.path)).toEqual(['one', 'two', 'three']);
+  });
 });
 
 describe('workspace sidebar lifecycle', () => {
@@ -109,6 +125,36 @@ describe('workspace sidebar lifecycle', () => {
       errorMessage: 'Operation not permitted',
       errorType: 'Error',
     }));
+  });
+
+  it('loads restored workspaces without recording recent activity', async () => {
+    state.workspaces = [];
+    state.workspaceEntries = [];
+    backendMocks.loadWorkspace.mockResolvedValueOnce({
+      path: '/Work',
+      manifest: { schemaVersion: 1, name: 'Work', createdAt: '', updatedAt: '' },
+      files: [],
+    });
+
+    await loadWorkspaceEntry('/Work');
+
+    expect(backendMocks.loadWorkspace).toHaveBeenLastCalledWith('/Work', {
+      includeTemplates: false,
+      recordRecent: false,
+    });
+  });
+
+  it('puts a newly added workspace at the top of the manual order', () => {
+    state.workspaces = [];
+    state.workspaceEntries = [{ path: '/Existing', displayName: 'Existing', status: 'ready', error: null }];
+
+    upsertWorkspace({
+      path: '/New',
+      manifest: { schemaVersion: 1, name: 'New', createdAt: '', updatedAt: '' },
+      files: [],
+    });
+
+    expect(state.workspaceEntries.map((entry) => entry.path)).toEqual(['/New', '/Existing']);
   });
 
   it('retries an error entry and hydrates it in place', async () => {

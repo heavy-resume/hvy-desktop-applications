@@ -652,8 +652,14 @@ fn workspace_templates_dir_path(workspace_path: &Path) -> PathBuf {
 fn add_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
     let recent_path = recent_state_path(app)?;
     let mut state = read_recent_state(&recent_path)?;
-    push_recent(&mut state.workspaces, path);
+    push_recent(&mut state.recent_workspaces, path);
+    let normalized = path_to_string(path);
+    if !state.workspaces.contains(&normalized) {
+        state.workspaces.insert(0, normalized);
+        state.workspaces.truncate(RECENT_LIMIT);
+    }
     state.workspaces.retain(|entry| Path::new(entry).is_dir());
+    state.recent_workspaces.retain(|entry| Path::new(entry).is_dir());
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
 }
@@ -663,6 +669,7 @@ fn remove_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
     let mut state = read_recent_state(&recent_path)?;
     let normalized = path_to_string(path);
     state.workspaces.retain(|entry| entry != &normalized);
+    state.recent_workspaces.retain(|entry| entry != &normalized);
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
 }

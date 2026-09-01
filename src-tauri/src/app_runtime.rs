@@ -414,10 +414,10 @@ fn build_recent_workspaces_menu(
     recent: &RecentState,
 ) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
     let mut builder = SubmenuBuilder::with_id(app, "recent-workspaces", "Recent Workspaces");
-    if recent.workspaces.is_empty() {
+    if recent.recent_workspaces.is_empty() {
         builder = builder.item(&MenuItemBuilder::new("No Recent Workspaces").id("recent-workspaces-empty").build(app)?);
     } else {
-        for path in &recent.workspaces {
+        for path in &recent.recent_workspaces {
             builder = builder.item(
                 &MenuItemBuilder::new(menu_label(path))
                     .id(format!("recent-workspace:{path}"))

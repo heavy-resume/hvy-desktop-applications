@@ -91,6 +91,7 @@ export interface WorkspaceOpenCandidate {
 
 export interface RecentState {
   workspaces: string[];
+  recentWorkspaces?: string[];
   files: string[];
   documentModes?: Record<string, string>;
   documentColorUses?: Record<string, boolean>;
@@ -803,8 +804,12 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
   return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export function loadWorkspace(path: string, options: { includeTemplates?: boolean } = {}): Promise<Workspace> {
-  return invokeDesktop('load_workspace', { path, includeTemplates: options.includeTemplates === true });
+export function loadWorkspace(path: string, options: { includeTemplates?: boolean; recordRecent?: boolean } = {}): Promise<Workspace> {
+  return invokeDesktop('load_workspace', {
+    path,
+    includeTemplates: options.includeTemplates === true,
+    recordRecent: options.recordRecent === true,
+  });
 }
 
 export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {

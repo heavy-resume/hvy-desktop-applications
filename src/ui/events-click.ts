@@ -164,6 +164,12 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     }
     if (action === 'manage-workspaces') handlers.openWorkspaceManager();
     if (action === 'close-workspace-manager') handlers.closeWorkspaceManager();
+    if (action === 'sort-workspaces') {
+      const order = target.dataset.order;
+      if (order === 'nameAsc' || order === 'nameDesc' || order === 'recentDesc' || order === 'recentAsc') {
+        handlers.sortWorkspaceOrder(order);
+      }
+    }
     if (action === 'show-workspace-in-folder' && target.dataset.workspacePath) handlers.showFileInFolder(target.dataset.workspacePath);
     if (action === 'archive-workspace' && target.dataset.workspacePath) handlers.archiveWorkspace(target.dataset.workspacePath);
     if (action === 'unarchive-workspace' && target.dataset.workspacePath) handlers.unarchiveWorkspace(target.dataset.workspacePath);

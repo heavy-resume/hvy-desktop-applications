@@ -304,7 +304,7 @@ function buildMenu() {
         menuItem('Manage Workspaces...', 'manage-workspaces'),
         ...(process.platform === 'darwin' ? [] : [menuItem('Settings...', 'app-settings', 'CmdOrCtrl+,')]),
         menuItem('Open File', 'open-file', 'CmdOrCtrl+Shift+O'),
-        recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
+        recentSubmenu('Recent Workspaces', recentWorkspacePaths(recent), 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
         menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
@@ -482,7 +482,7 @@ function loadLaunchDocumentPaths() {
 
 function emitRecent(prefix, index) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-  const entries = prefix === 'recent-file:' ? recent.files : recent.workspaces;
+  const entries = prefix === 'recent-file:' ? recent.files : recentWorkspacePaths(recent);
   const entry = entries?.[index];
   if (entry) emitMenu(`${prefix}${entry}`);
 }
@@ -495,7 +495,7 @@ function refreshMenu() {
   }
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   refreshRecentSubmenu(menu, 'recent-file:', recent.files || [], 'No Recent Files');
-  refreshRecentSubmenu(menu, 'recent-workspace:', recent.workspaces || [], 'No Recent Workspaces');
+  refreshRecentSubmenu(menu, 'recent-workspace:', recentWorkspacePaths(recent), 'No Recent Workspaces');
   refreshFileMenuState(menu);
 }
 
@@ -621,7 +621,7 @@ async function handleCommand(command, args) {
     case 'create_workspace': return createWorkspace(args.name);
     case 'new_workspace_dialog': return newWorkspaceDialog();
     case 'initialize_workspace_path': return initializeWorkspacePath(args.path);
-    case 'load_workspace': return loadWorkspace(args.path, args.includeTemplates === true);
+    case 'load_workspace': return loadWorkspace(args.path, args.includeTemplates === true, args.recordRecent === true);
     case 'load_archived_workspaces': return loadArchivedWorkspaces();
     case 'rename_workspace': return renameWorkspace(args.path, args.name);
     case 'archive_workspace': return archiveWorkspace(args.path);
@@ -1326,10 +1326,10 @@ function initializeWorkspacePath(selectedPath) {
   return workspace;
 }
 
-function loadWorkspace(selectedPath, includeTemplates = false) {
+function loadWorkspace(selectedPath, includeTemplates = false, recordRecent = false) {
   const workspace = ensureWorkspace(selectedPath, includeTemplates);
   removeArchivedWorkspace(selectedPath);
-  addRecentWorkspace(selectedPath);
+  if (recordRecent) addRecentWorkspace(selectedPath);
   return workspace;
 }
 
@@ -2531,7 +2531,11 @@ function workspaceRootForDocument(directory) {
 
 function addRecentWorkspace(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-  recent.workspaces = pushRecent(recent.workspaces || [], entryPath);
+  const normalized = path.resolve(entryPath);
+  recent.recentWorkspaces = pushRecent(recentWorkspacePaths(recent), normalized);
+  if (!(recent.workspaces || []).some((entry) => path.resolve(entry) === normalized)) {
+    recent.workspaces = [normalized, ...(recent.workspaces || [])].slice(0, RECENT_LIMIT);
+  }
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }
@@ -2540,6 +2544,7 @@ function removeRecentWorkspace(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const normalized = path.resolve(entryPath);
   recent.workspaces = (recent.workspaces || []).filter((entry) => path.resolve(entry) !== normalized);
+  recent.recentWorkspaces = recentWorkspacePaths(recent).filter((entry) => path.resolve(entry) !== normalized);
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }
@@ -2603,6 +2608,10 @@ function removeRecentFile(entryPath) {
 function pushRecent(entries, entryPath) {
   const normalized = path.resolve(entryPath);
   return [normalized, ...entries.filter((entry) => path.resolve(entry) !== normalized)].slice(0, RECENT_LIMIT);
+}
+
+function recentWorkspacePaths(recent) {
+  return recent.recentWorkspaces || recent.workspaces || [];
 }
 
 function menuLabel(entryPath) {

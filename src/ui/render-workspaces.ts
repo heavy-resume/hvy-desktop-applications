@@ -43,7 +43,16 @@ export function renderWorkspaceManagerDialog(state: AppState): string {
       <section class="dialog wide-dialog workspace-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="workspaceManagerTitle">
         <h2 id="workspaceManagerTitle">Manage Workspaces</h2>
         <div class="workspace-manager-section">
-          <h3>Open</h3>
+          <div class="workspace-manager-section-heading">
+            <h3>Open</h3>
+            <div class="workspace-manager-sort-actions" aria-label="Sort workspaces">
+              <span>Sort:</span>
+              <button class="hvy-galaxy-button" type="button" data-action="sort-workspaces" data-order="nameAsc">A–Z</button>
+              <button class="hvy-galaxy-button" type="button" data-action="sort-workspaces" data-order="nameDesc">Z–A</button>
+              <button class="hvy-galaxy-button" type="button" data-action="sort-workspaces" data-order="recentDesc">Recent first</button>
+              <button class="hvy-galaxy-button" type="button" data-action="sort-workspaces" data-order="recentAsc">Recent last</button>
+            </div>
+          </div>
           <div class="workspace-manager-list">
             ${state.workspaces.length === 0 ? '<div class="empty-panel compact">No open workspaces.</div>' : state.workspaceEntries.flatMap((entry) => {
     const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
