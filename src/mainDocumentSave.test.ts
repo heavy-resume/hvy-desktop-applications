@@ -12,14 +12,17 @@ vi.hoisted(() => {
 
 const backendMocks = vi.hoisted(() => ({
   clearDocumentRecoveryDrafts: vi.fn(async () => undefined),
+  readDocumentFile: vi.fn(),
   saveDocumentFile: vi.fn(async () => undefined),
 }));
 
 const mainMocks = vi.hoisted(() => ({
   documentSessions: new Map(),
   markDocumentTabOpened: vi.fn(),
+  openDocument: vi.fn(async () => undefined),
   refreshRecents: vi.fn(async () => undefined),
   removeDocumentTabPath: vi.fn(),
+  rerender: vi.fn(),
   renderAllAroundDocument: vi.fn(),
   updateCurrentDocumentSession: vi.fn(),
   updateDirtyChrome: vi.fn(),
@@ -62,7 +65,7 @@ vi.mock('./documentHistory', () => ({
   recordSuccessfulDocumentSave: vi.fn(),
 }));
 
-import { saveCurrentDocument } from './mainDocumentSave';
+import { saveCurrentDocument, selectDocumentTab } from './mainDocumentSave';
 import { state } from './state';
 
 describe('saveCurrentDocument', () => {
@@ -70,6 +73,7 @@ describe('saveCurrentDocument', () => {
     vi.clearAllMocks();
     mainMocks.documentSessions.clear();
     state.busy = false;
+    state.error = null;
     state.document = null;
   });
 
@@ -104,5 +108,43 @@ describe('saveCurrentDocument', () => {
     expect(state.document.versionId).toBe(source.workingVersionId);
     expect(state.document.dirty).toBe(false);
     expect(mainMocks.renderAllAroundDocument).toHaveBeenCalledOnce();
+  });
+
+  it('reopens a clean tab from its source path instead of its runtime version id', async () => {
+    const source = {
+      documentId: 'document:example',
+      workingVersionId: 'version:example',
+      path: '/workspace/Example.hvy',
+      name: 'Example.hvy',
+      extension: '.hvy' as const,
+    };
+    const file = { ...source, bytes: [1, 2, 3] };
+    mainMocks.documentSessions.set(source.workingVersionId, {
+      source,
+      versionId: source.workingVersionId,
+      dirty: false,
+      isNew: false,
+      readOnly: false,
+    });
+    backendMocks.readDocumentFile.mockResolvedValueOnce(file);
+
+    await selectDocumentTab(source.workingVersionId);
+
+    expect(backendMocks.readDocumentFile).toHaveBeenCalledWith(source.path);
+    expect(mainMocks.openDocument).toHaveBeenCalledWith(file, {
+      source,
+      versionId: source.workingVersionId,
+    });
+    expect(mainMocks.refreshRecents).toHaveBeenCalledOnce();
+  });
+
+  it('clears a surfaced error when the active tab is selected again', async () => {
+    state.error = 'Only supported documents can be opened';
+    state.document = { versionId: 'version:example' } as never;
+
+    await selectDocumentTab('version:example');
+
+    expect(state.error).toBeNull();
+    expect(mainMocks.rerender).toHaveBeenCalledWith({ preserveMountedDocument: true });
   });
 });

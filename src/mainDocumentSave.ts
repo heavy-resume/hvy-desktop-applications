@@ -253,6 +253,8 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
 
 export async function selectDocumentTab(path: string): Promise<void> {
   state.tabStackOpen = false;
+  const previousError = state.error;
+  state.error = null;
   if (state.document?.virtual === 'versionHistory' && state.document.versionId !== path) {
     const previewPath = state.document.versionId;
     state.document.mounted?.mount.destroy();
@@ -266,6 +268,9 @@ export async function selectDocumentTab(path: string): Promise<void> {
     return;
   }
   if (state.document?.versionId === path) {
+    if (previousError) {
+      rerender({ preserveMountedDocument: true });
+    }
     return;
   }
   const session = documentSessions.get(path);
@@ -280,7 +285,14 @@ export async function selectDocumentTab(path: string): Promise<void> {
     await refreshRecents();
     return;
   }
-  await openDocument(await readDocumentFile(path));
+  if (session) {
+    await openDocument(await readDocumentFile(session.source.path), {
+      source: session.source,
+      versionId: session.versionId,
+    });
+  } else {
+    await openDocument(await readDocumentFile(path));
+  }
   await refreshRecents();
 }
 
