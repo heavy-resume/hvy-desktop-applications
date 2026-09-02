@@ -72,10 +72,18 @@ export interface Workspace {
   files: WorkspaceTreeNode[];
 }
 
+export interface WorkspaceFileRelocation {
+  previousPath: string;
+  path: string;
+  name: string;
+  extension: DocumentExtension;
+}
+
 export interface AddFilesResult {
   workspace: Workspace;
   copiedPaths: string[];
   copiedTemplatePaths?: string[];
+  relocatedArchivedFiles?: WorkspaceFileRelocation[];
 }
 
 export interface DroppedWorkspaceFile {
@@ -111,6 +119,7 @@ export interface DocumentFile {
   locked?: boolean;
   hiddenFromAI?: boolean;
   recoveryState?: string | null;
+  relocatedArchivedFiles?: WorkspaceFileRelocation[];
 }
 
 export type DocumentFileMetadata = Omit<DocumentFile, 'bytes'>;

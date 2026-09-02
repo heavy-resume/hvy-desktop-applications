@@ -65,11 +65,22 @@ struct Workspace {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct WorkspaceFileRelocation {
+    previous_path: String,
+    path: String,
+    name: String,
+    extension: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct AddFilesResult {
     workspace: Workspace,
     copied_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     copied_template_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relocated_archived_files: Vec<WorkspaceFileRelocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -184,6 +195,8 @@ struct DocumentFile {
     hidden_from_ai: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relocated_archived_files: Vec<WorkspaceFileRelocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

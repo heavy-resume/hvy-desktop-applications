@@ -21,6 +21,7 @@ const backendMocks = vi.hoisted(() => ({
 
 const mainMocks = vi.hoisted(() => ({
   captureMountScrollRatio: vi.fn(() => ({ top: 0, left: 0, topPosition: 0, leftPosition: 0 })),
+  applyArchivedFileRelocations: vi.fn(),
   backupDocumentKey: vi.fn((path: string, name: string) => `${path}:${name}`),
   documentTitle: vi.fn((name: string) => name.replace(/\.[^.]+$/, '')),
   documentSessions: new Map(),
@@ -235,6 +236,12 @@ describe('document handlers', () => {
       name: 'example-copy.hvy',
       extension: '.hvy',
       bytes: [],
+      relocatedArchivedFiles: [{
+        previousPath: '/workspace/example-copy.hvy',
+        path: '/workspace/example-copy 2.hvy',
+        name: 'example-copy 2.hvy',
+        extension: '.hvy',
+      }],
     });
     mainMocks.loadWorkspace.mockResolvedValueOnce({ path: '/workspace', name: 'Workspace', files: [] });
     const handlers = createDocumentHandlers(vi.fn());
@@ -246,6 +253,12 @@ describe('document handlers', () => {
       expect.any(Function),
       { preserveMountedDocument: true },
     ));
+    await vi.waitFor(() => expect(mainMocks.applyArchivedFileRelocations).toHaveBeenCalledWith([
+      expect.objectContaining({
+        previousPath: '/workspace/example-copy.hvy',
+        path: '/workspace/example-copy 2.hvy',
+      }),
+    ]));
   });
 
   it('preserves the mounted document when archiving a workspace file', () => {

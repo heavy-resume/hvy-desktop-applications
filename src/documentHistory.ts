@@ -20,7 +20,7 @@ const DB_VERSION = 1;
 const HISTORY_STORE = 'histories';
 const OBJECT_STORE = 'objects';
 
-interface HistoryRecord {
+export interface HistoryRecord {
   path: string;
   name: string;
   documentBytes: Blob;
@@ -73,6 +73,36 @@ export async function materializeSavedDocumentVersion(path: string, versionId: s
   ensureDocumentAttachmentStore(document).replace(attachments);
   document.attachments = attachments;
   return serializeHvy(document);
+}
+
+export async function relocateDocumentHistory(previousPath: string, path: string, name: string): Promise<void> {
+  if (!previousPath || previousPath === path || !canUseDocumentHistory()) return;
+  await documentQueues.get(previousPath);
+  await documentQueues.get(path);
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction(HISTORY_STORE, 'readwrite');
+    const store = transaction.objectStore(HISTORY_STORE);
+    const request = store.get(previousPath) as IDBRequest<HistoryRecord | undefined>;
+    request.onsuccess = () => {
+      if (!request.result) return;
+      store.put(relocatedDocumentHistoryRecord(request.result, path, name));
+      store.delete(previousPath);
+    };
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+}
+
+export function relocatedDocumentHistoryRecord(record: HistoryRecord, path: string, name: string): HistoryRecord {
+  return { ...record, path, name };
 }
 
 export function defaultRevisionAuthor(): RevisionAuthor {

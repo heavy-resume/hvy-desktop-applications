@@ -511,27 +511,52 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
     path
 }
 
-fn incoming_workspace_file_path(
+struct IncomingWorkspaceFile {
+    destination: PathBuf,
+    relocated_archived_file: Option<WorkspaceFileRelocation>,
+}
+
+fn incoming_workspace_file(
     workspace_path: &Path,
     root: &Path,
     file_name: &std::ffi::OsStr,
-) -> AppResult<PathBuf> {
+) -> AppResult<IncomingWorkspaceFile> {
     let destination = root.join(file_name);
     if !destination.exists() {
-        return Ok(destination);
+        return Ok(IncomingWorkspaceFile { destination, relocated_archived_file: None });
     }
     let Some(manifest_path) = workspace_manifest_path(workspace_path) else {
-        return Ok(unique_copy_path(root, file_name));
+        return Ok(IncomingWorkspaceFile {
+            destination: unique_copy_path(root, file_name),
+            relocated_archived_file: None,
+        });
     };
     let manifest = read_manifest(&manifest_path)?;
     let relative = relative_path(workspace_path, &destination);
     if !manifest.archived_files.iter().any(|entry| entry == &relative) {
-        return Ok(unique_copy_path(root, file_name));
+        return Ok(IncomingWorkspaceFile {
+            destination: unique_copy_path(root, file_name),
+            relocated_archived_file: None,
+        });
     }
     let archived_destination = unique_copy_path(root, file_name);
     fs::rename(&destination, &archived_destination)?;
     rename_workspace_file_manifest_entries(workspace_path, &destination, &archived_destination)?;
-    Ok(destination)
+    let archived_name = archived_destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Renamed archived document has no file name.".into()))?;
+    let extension = document_extension(&archived_destination)
+        .ok_or_else(|| AppError::Message("Renamed archived file is not a supported document.".into()))?;
+    Ok(IncomingWorkspaceFile {
+        destination,
+        relocated_archived_file: Some(WorkspaceFileRelocation {
+            previous_path: path_to_string(&root.join(file_name)),
+            path: path_to_string(&archived_destination),
+            name: archived_name.to_string(),
+            extension,
+        }),
+    })
 }
 
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
@@ -544,6 +569,7 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
         locked: metadata.locked,
         hidden_from_ai: metadata.hidden_from_ai,
         recovery_state: metadata.recovery_state,
+        relocated_archived_files: Vec::new(),
     })
 }
 

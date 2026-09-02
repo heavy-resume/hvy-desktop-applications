@@ -1,4 +1,5 @@
-import { convertWorkspaceDocumentKind, listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DocumentFile, type DroppedWorkspaceFile, type Workspace } from './backend';
+import { convertWorkspaceDocumentKind, listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DocumentFile, type DroppedWorkspaceFile, type Workspace, type WorkspaceFileRelocation } from './backend';
+import { relocateDocumentHistory } from './documentHistory';
 import { state, workspacePathForFileInWorkspaces, type AppState } from './state';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
@@ -135,6 +136,7 @@ export async function createTemporaryImportMount(
 export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePath: string, targetDirectory = ''): Promise<void> {
   const sourceWorkspacePath = workspacePathForFile(path);
   const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
+  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
   await updateHomepageDocumentPath(path, file.path);
   await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
   state.status = `Moved to ${file.name}`;
@@ -178,6 +180,7 @@ async function applyWorkspaceFileRelocation(
 }
 
 export async function finishAddingFilesToWorkspace(result: AddFilesResult, status: string): Promise<void> {
+  await applyArchivedFileRelocations(result.relocatedArchivedFiles);
   upsertWorkspace(result.workspace);
   state.selectedWorkspacePath = result.workspace.path;
   state.status = status;
@@ -187,6 +190,20 @@ export async function finishAddingFilesToWorkspace(result: AddFilesResult, statu
   if (result.copiedPaths.length !== 1) return;
   const file = await readDocumentFile(result.copiedPaths[0]);
   await openDocument(file, { deferMount: true });
+}
+
+export async function applyArchivedFileRelocations(relocations: WorkspaceFileRelocation[] = []): Promise<void> {
+  for (const relocation of relocations) {
+    updateOpenDocumentFile(relocation.previousPath, relocation);
+    if (state.selectedFilePath === relocation.previousPath) state.selectedFilePath = relocation.path;
+    await updateHomepageDocumentPath(relocation.previousPath, relocation.path);
+    await relocateDocumentHistory(relocation.previousPath, relocation.path, relocation.name);
+    await relocateRecoveryDraftsForDocument(
+      relocation.previousPath,
+      fileNameFromPath(relocation.previousPath),
+      relocation,
+    );
+  }
 }
 
 export async function droppedWorkspaceFilesFrom(files: File[]): Promise<DroppedWorkspaceFile[]> {

@@ -1586,6 +1586,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
 
     let mut copied = Vec::new();
     let mut copied_templates = Vec::new();
+    let mut relocated_archived_files = Vec::new();
     let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
     let installs_workspace_templates = destination_root == workspace_templates_dir_path(&workspace_path);
     for source in paths {
@@ -1598,7 +1599,9 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
         let is_template = installs_workspace_templates && template_extension(&source).is_some();
-        let destination = incoming_workspace_file_path(&workspace_path, &destination_root, file_name)?;
+        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let destination = incoming.destination;
+        relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
         if is_template {
             copied_templates.push(destination);
@@ -1616,6 +1619,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
         copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
+        relocated_archived_files,
     }))
 }
 
@@ -1630,6 +1634,7 @@ fn add_dropped_files_to_workspace(
     ensure_workspace(&workspace_path)?;
     let mut copied = Vec::new();
     let mut copied_templates = Vec::new();
+    let mut relocated_archived_files = Vec::new();
     let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
     let installs_workspace_templates = destination_root == workspace_templates_dir_path(&workspace_path);
 
@@ -1640,7 +1645,9 @@ fn add_dropped_files_to_workspace(
             ));
         }
         let is_template = installs_workspace_templates && template_extension(Path::new(&file.name)).is_some();
-        let destination = incoming_workspace_file_path(&workspace_path, &destination_root, std::ffi::OsStr::new(&file.name))?;
+        let incoming = incoming_workspace_file(&workspace_path, &destination_root, std::ffi::OsStr::new(&file.name))?;
+        let destination = incoming.destination;
+        relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::write(&destination, file.bytes)?;
         if is_template {
             copied_templates.push(destination);
@@ -1658,6 +1665,7 @@ fn add_dropped_files_to_workspace(
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
         copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
+        relocated_archived_files,
     })
 }
 
@@ -2287,12 +2295,15 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
     let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
-    let destination = incoming_workspace_file_path(&workspace_path, &target_root, file_name)?;
+    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let destination = incoming.destination;
     fs::copy(&path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;
-    read_document_at(&destination)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -2319,7 +2330,8 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = incoming_workspace_file_path(&workspace_path, &target_root, file_name)?;
+    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let destination = incoming.destination;
     fs::rename(&path, &destination)?;
     if let Some(source_workspace) = source_workspace {
         if fs::canonicalize(&source_workspace)? == fs::canonicalize(&workspace_path)? {
@@ -2331,7 +2343,9 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;
-    read_document_at(&destination)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -2434,6 +2448,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
         return Err(AppError::Message("No files are available to paste.".into()));
     }
     let mut copied_paths = Vec::new();
+    let mut relocated_archived_files = Vec::new();
     for source in source_paths {
         if document_extension(&source).is_none() || !source.is_file() {
             continue;
@@ -2442,7 +2457,9 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
             .file_name()
             .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
         let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
-        let destination = incoming_workspace_file_path(&workspace_path, &destination_root, file_name)?;
+        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let destination = incoming.destination;
+        relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
         add_recent_file(&app, &destination)?;
         copied_paths.push(destination.to_string_lossy().to_string());
@@ -2456,6 +2473,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths,
         copied_template_paths: Vec::new(),
+        relocated_archived_files,
     })
 }
 
@@ -2571,6 +2589,7 @@ fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile
         locked: false,
         hidden_from_ai: false,
         recovery_state: snapshot.recovery_state,
+        relocated_archived_files: Vec::new(),
     })
 }
 

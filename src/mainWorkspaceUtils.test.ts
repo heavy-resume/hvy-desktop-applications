@@ -1,11 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 
+vi.hoisted(() => {
+  const storage = {
+    getItem: () => null,
+    setItem: () => undefined,
+    removeItem: () => undefined,
+  };
+  vi.stubGlobal('localStorage', storage);
+  vi.stubGlobal('sessionStorage', storage);
+});
+
 const backendMocks = vi.hoisted(() => ({
   loadWorkspace: vi.fn(),
   reauthorizeWorkspace: vi.fn(),
   updateMcpWorkspaces: vi.fn(() => Promise.resolve()),
 }));
 const debugLogMocks = vi.hoisted(() => ({ logDebugEvent: vi.fn() }));
+const historyMocks = vi.hoisted(() => ({ relocateDocumentHistory: vi.fn() }));
 
 vi.mock('./backend', async (importOriginal) => ({
   ...await importOriginal<typeof import('./backend')>(),
@@ -15,12 +26,14 @@ vi.mock('./backend', async (importOriginal) => ({
 }));
 
 vi.mock('./debugLog', () => debugLogMocks);
+vi.mock('./documentHistory', () => historyMocks);
 
-vi.mock('./main', () => ({
+const mainMocks = vi.hoisted(() => ({
   adoptSavedAsDocument: vi.fn(),
   backupDocumentKey: vi.fn(),
   clearRecoveryDraftsForDocument: vi.fn(),
   documentSessions: new Map(),
+  fileNameFromPath: vi.fn((path: string) => path.replaceAll('\\', '/').split('/').pop() ?? ''),
   moveBackupTracking: vi.fn(),
   openDocument: vi.fn(),
   pendingMountDocument: null,
@@ -33,7 +46,9 @@ vi.mock('./main', () => ({
   updateCurrentDocumentSession: vi.fn(),
 }));
 
-import { creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
+vi.mock('./main', () => mainMocks);
+
+import { applyArchivedFileRelocations, creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
 import { state } from './state';
 
 describe('creationTemplate', () => {
@@ -70,6 +85,32 @@ hvy_version: 0.1
 title: "Notes"
 ---
 `);
+  });
+});
+
+describe('applyArchivedFileRelocations', () => {
+  it('moves history and recovery state to the archived file new path', async () => {
+    await applyArchivedFileRelocations([{
+      previousPath: '/workspace/folder/draft.hvy',
+      path: '/workspace/folder/draft 2.hvy',
+      name: 'draft 2.hvy',
+      extension: '.hvy',
+    }]);
+
+    expect(historyMocks.relocateDocumentHistory).toHaveBeenCalledWith(
+      '/workspace/folder/draft.hvy',
+      '/workspace/folder/draft 2.hvy',
+      'draft 2.hvy',
+    );
+    expect(mainMocks.updateOpenDocumentFile).toHaveBeenCalledWith(
+      '/workspace/folder/draft.hvy',
+      expect.objectContaining({ path: '/workspace/folder/draft 2.hvy', name: 'draft 2.hvy' }),
+    );
+    expect(mainMocks.relocateRecoveryDraftsForDocument).toHaveBeenCalledWith(
+      '/workspace/folder/draft.hvy',
+      'draft.hvy',
+      expect.objectContaining({ path: '/workspace/folder/draft 2.hvy', name: 'draft 2.hvy' }),
+    );
   });
 });
 

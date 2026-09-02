@@ -428,18 +428,28 @@
         fs::write(&archived, "archived").unwrap();
         update_archived_document_file(dir.path(), &archived, true).unwrap();
 
-        let destination = incoming_workspace_file_path(
+        let incoming = incoming_workspace_file(
             dir.path(),
             dir.path(),
             std::ffi::OsStr::new("draft.hvy"),
         )
         .unwrap();
+        let destination = incoming.destination;
 
         assert_eq!(destination, dir.path().join("draft.hvy"));
         assert!(!destination.exists());
         assert_eq!(fs::read_to_string(dir.path().join("draft 2.hvy")).unwrap(), "archived");
         let manifest = read_manifest(&dir.path().join(WORKSPACE_MANIFEST)).unwrap();
         assert_eq!(manifest.archived_files, vec!["draft 2.hvy"]);
+        assert_eq!(
+            incoming.relocated_archived_file,
+            Some(WorkspaceFileRelocation {
+                previous_path: path_to_string(&dir.path().join("draft.hvy")),
+                path: path_to_string(&dir.path().join("draft 2.hvy")),
+                name: "draft 2.hvy".into(),
+                extension: ".hvy".into(),
+            })
+        );
     }
 
     #[test]
