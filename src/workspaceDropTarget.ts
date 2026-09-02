@@ -4,6 +4,12 @@ export interface WorkspaceDropTarget {
   targetDirectory: string;
 }
 
+export function parentDirectoryForRelativePath(relativePath: string): string {
+  const segments = relativePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  segments.pop();
+  return segments.join('/');
+}
+
 export function workspaceDropTargetFromElement(target: Element | null): WorkspaceDropTarget | null {
   if (!target) return null;
 

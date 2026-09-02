@@ -1,6 +1,6 @@
 import { type WorkspaceFileNode, type WorkspaceTreeNode } from '../backend';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState } from '../state';
-import { workspaceDropTargetFromElement } from '../workspaceDropTarget';
+import { parentDirectoryForRelativePath, workspaceDropTargetFromElement } from '../workspaceDropTarget';
 import { workspaceFileConversionAction } from '../workspaceFileConversion';
 import { workspaceNodeName, workspaceNodeRelativePath } from './render-workspace-dialogs';
 import { normalizeTreeRelativePath } from './render-workspaces';
@@ -244,7 +244,7 @@ export function showFileContextMenu(
     if (button.dataset.menuAction === 'delete') handlers.confirmDeleteFile(path, name);
     if (button.dataset.menuAction === 'copy') handlers.copyWorkspaceFile(path, name);
     if (button.dataset.menuAction === 'cut') handlers.cutWorkspaceFile(path, name);
-    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath);
+    if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, parentDirectory);
     if (button.dataset.menuAction === 'copy-to-workspace') handlers.copyFileToWorkspace(path, name);
     if (button.dataset.menuAction === 'move-to-workspace') handlers.moveFileToWorkspace(path, name);
   });
@@ -341,12 +341,6 @@ export function showWorkspaceContextMenu(
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
   });
-}
-
-export function parentDirectoryForRelativePath(relativePath: string): string {
-  const segments = relativePath.replace(/\\/g, '/').split('/').filter(Boolean);
-  segments.pop();
-  return segments.join('/');
 }
 
 export function closeFileContextMenu(): void {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { workspaceDropTargetFromElement } from './workspaceDropTarget';
+import { parentDirectoryForRelativePath, workspaceDropTargetFromElement } from './workspaceDropTarget';
 
 function fakeElement(
   matches: Record<string, Element | null>,
@@ -70,5 +70,15 @@ describe('workspaceDropTargetFromElement', () => {
       workspacePath: '/workspaces/example',
       targetDirectory: 'templates',
     });
+  });
+});
+
+describe('parentDirectoryForRelativePath', () => {
+  it('uses the containing folder as the destination for a nested file', () => {
+    expect(parentDirectoryForRelativePath('clients/acme/notes.hvy')).toBe('clients/acme');
+  });
+
+  it('uses the workspace root as the destination for a root file', () => {
+    expect(parentDirectoryForRelativePath('notes.hvy')).toBe('');
   });
 });
