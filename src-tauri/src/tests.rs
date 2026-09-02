@@ -421,6 +421,28 @@
     }
 
     #[test]
+    fn incoming_workspace_file_keeps_name_and_renames_archived_collision() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let archived = dir.path().join("draft.hvy");
+        fs::write(&archived, "archived").unwrap();
+        update_archived_document_file(dir.path(), &archived, true).unwrap();
+
+        let destination = incoming_workspace_file_path(
+            dir.path(),
+            dir.path(),
+            std::ffi::OsStr::new("draft.hvy"),
+        )
+        .unwrap();
+
+        assert_eq!(destination, dir.path().join("draft.hvy"));
+        assert!(!destination.exists());
+        assert_eq!(fs::read_to_string(dir.path().join("draft 2.hvy")).unwrap(), "archived");
+        let manifest = read_manifest(&dir.path().join(WORKSPACE_MANIFEST)).unwrap();
+        assert_eq!(manifest.archived_files, vec!["draft 2.hvy"]);
+    }
+
+    #[test]
     fn rename_stem_strips_supported_extensions() {
         assert_eq!(normalized_rename_stem("Draft").unwrap(), "Draft");
         assert_eq!(normalized_rename_stem("Draft.hvy").unwrap(), "Draft");

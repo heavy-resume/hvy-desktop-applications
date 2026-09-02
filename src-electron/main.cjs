@@ -1440,7 +1440,7 @@ async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
-    const destination = uniqueCopyPath(destinationRoot, path.basename(source));
+    const destination = incomingWorkspaceFilePath(workspacePath, destinationRoot, path.basename(source));
     fs.copyFileSync(source, destination);
     if (isTemplate) {
       copiedTemplatePaths.push(destination);
@@ -1467,7 +1467,7 @@ function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') 
   for (const file of files || []) {
     if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
-    const destination = uniqueCopyPath(destinationRoot, file.name);
+    const destination = incomingWorkspaceFilePath(workspacePath, destinationRoot, file.name);
     writeBytes(destination, file.bytes);
     if (isTemplate) {
       copiedTemplatePaths.push(destination);
@@ -1802,7 +1802,8 @@ function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '
 function copyDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be copied.');
-  const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), path.basename(filePath));
+  const targetRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  const destination = incomingWorkspaceFilePath(workspacePath, targetRoot, path.basename(filePath));
   fs.copyFileSync(filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
@@ -1821,7 +1822,7 @@ function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') 
     addRecentFile(filePath);
     return readDocumentAt(filePath);
   }
-  const destination = uniqueCopyPath(targetRoot, path.basename(filePath));
+  const destination = incomingWorkspaceFilePath(workspacePath, targetRoot, path.basename(filePath));
   fs.renameSync(filePath, destination);
   if (sourceWorkspacePath) {
     if (path.resolve(sourceWorkspacePath) === path.resolve(workspacePath)) {
@@ -1879,7 +1880,8 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
   for (const source of sourcePaths) {
     if (!documentExtension(source)) continue;
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
-    const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), path.basename(source));
+    const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+    const destination = incomingWorkspaceFilePath(workspacePath, destinationRoot, path.basename(source));
     fs.copyFileSync(source, destination);
     copiedPaths.push(destination);
     addRecentFile(destination);
@@ -2503,6 +2505,20 @@ function uniqueCopyPath(root, fileName) {
     index += 1;
   }
   return candidate;
+}
+
+function incomingWorkspaceFilePath(workspacePath, root, fileName) {
+  const destination = path.join(root, fileName);
+  if (!fs.existsSync(destination)) return destination;
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) return uniqueCopyPath(root, fileName);
+  const manifest = readJson(manifestPath, null);
+  const relative = relativeWorkspacePath(workspacePath, destination);
+  if (!manifest?.archivedFiles?.includes(relative)) return uniqueCopyPath(root, fileName);
+  const archivedDestination = uniqueCopyPath(root, fileName);
+  fs.renameSync(destination, archivedDestination);
+  renameWorkspaceFileManifestEntries(workspacePath, destination, archivedDestination);
+  return destination;
 }
 
 function ensureTemplateFileName(name, requestedExtension = '.thvy') {

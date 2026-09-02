@@ -511,6 +511,29 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
     path
 }
 
+fn incoming_workspace_file_path(
+    workspace_path: &Path,
+    root: &Path,
+    file_name: &std::ffi::OsStr,
+) -> AppResult<PathBuf> {
+    let destination = root.join(file_name);
+    if !destination.exists() {
+        return Ok(destination);
+    }
+    let Some(manifest_path) = workspace_manifest_path(workspace_path) else {
+        return Ok(unique_copy_path(root, file_name));
+    };
+    let manifest = read_manifest(&manifest_path)?;
+    let relative = relative_path(workspace_path, &destination);
+    if !manifest.archived_files.iter().any(|entry| entry == &relative) {
+        return Ok(unique_copy_path(root, file_name));
+    }
+    let archived_destination = unique_copy_path(root, file_name);
+    fs::rename(&destination, &archived_destination)?;
+    rename_workspace_file_manifest_entries(workspace_path, &destination, &archived_destination)?;
+    Ok(destination)
+}
+
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
     let metadata = read_document_metadata_at(path)?;
     Ok(DocumentFile {

@@ -1598,7 +1598,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
         let is_template = installs_workspace_templates && template_extension(&source).is_some();
-        let destination = unique_copy_path(&destination_root, file_name);
+        let destination = incoming_workspace_file_path(&workspace_path, &destination_root, file_name)?;
         fs::copy(&source, &destination)?;
         if is_template {
             copied_templates.push(destination);
@@ -1640,7 +1640,7 @@ fn add_dropped_files_to_workspace(
             ));
         }
         let is_template = installs_workspace_templates && template_extension(Path::new(&file.name)).is_some();
-        let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file.name));
+        let destination = incoming_workspace_file_path(&workspace_path, &destination_root, std::ffi::OsStr::new(&file.name))?;
         fs::write(&destination, file.bytes)?;
         if is_template {
             copied_templates.push(destination);
@@ -2286,7 +2286,8 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, file_name);
+    let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let destination = incoming_workspace_file_path(&workspace_path, &target_root, file_name)?;
     fs::copy(&path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
@@ -2318,7 +2319,7 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = unique_copy_path(&target_root, file_name);
+    let destination = incoming_workspace_file_path(&workspace_path, &target_root, file_name)?;
     fs::rename(&path, &destination)?;
     if let Some(source_workspace) = source_workspace {
         if fs::canonicalize(&source_workspace)? == fs::canonicalize(&workspace_path)? {
@@ -2440,7 +2441,8 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-        let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, file_name);
+        let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
+        let destination = incoming_workspace_file_path(&workspace_path, &destination_root, file_name)?;
         fs::copy(&source, &destination)?;
         add_recent_file(&app, &destination)?;
         copied_paths.push(destination.to_string_lossy().to_string());
