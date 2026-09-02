@@ -15,6 +15,7 @@ const hvyMocks = vi.hoisted(() => ({
 }));
 
 const backendMocks = vi.hoisted(() => ({
+  copyDocumentToWorkspace: vi.fn(),
   renameDocumentFile: vi.fn(),
 }));
 
@@ -23,6 +24,7 @@ const mainMocks = vi.hoisted(() => ({
   backupDocumentKey: vi.fn((path: string, name: string) => `${path}:${name}`),
   documentTitle: vi.fn((name: string) => name.replace(/\.[^.]+$/, '')),
   documentSessions: new Map(),
+  loadWorkspace: vi.fn(),
   mountCurrentDocument: vi.fn(),
   mountRoot: {},
   pendingMountDocument: null,
@@ -45,6 +47,7 @@ const mainMocks = vi.hoisted(() => ({
     state.document.source.extension = file.extension;
   }),
   updateCurrentDocumentSession: vi.fn(),
+  upsertWorkspace: vi.fn(),
   workspacePathForFile: vi.fn(() => null),
   writeDocumentModePreference: vi.fn(),
   writeHotReloadSessionSnapshot: vi.fn(),
@@ -57,6 +60,7 @@ vi.mock('./hvy', () => ({
 
 vi.mock('./backend', async (importOriginal) => ({
   ...await importOriginal<typeof import('./backend')>(),
+  copyDocumentToWorkspace: backendMocks.copyDocumentToWorkspace,
   renameDocumentFile: backendMocks.renameDocumentFile,
 }));
 
@@ -97,6 +101,7 @@ describe('document handlers', () => {
     state.pendingWorkspaceFileOperation = null;
     state.workspaceFileOperationPromptOpen = false;
     state.workspaceClipboard = null;
+    backendMocks.copyDocumentToWorkspace.mockReset();
     backendMocks.renameDocumentFile.mockReset();
   });
 
@@ -216,6 +221,44 @@ describe('document handlers', () => {
     }));
     expect(state.pendingWorkspaceFileOperation).toBeNull();
     expect(state.workspaceFileOperationPromptOpen).toBe(false);
+  });
+
+  it('preserves the mounted document when pasting a copied workspace file', async () => {
+    state.document = testOpenDocument({ dirty: false });
+    state.workspaceClipboard = {
+      mode: 'copy',
+      path: '/workspace/example.hvy',
+      name: 'example.hvy',
+    };
+    backendMocks.copyDocumentToWorkspace.mockResolvedValueOnce({
+      path: '/workspace/example-copy.hvy',
+      name: 'example-copy.hvy',
+      extension: '.hvy',
+      bytes: [],
+    });
+    mainMocks.loadWorkspace.mockResolvedValueOnce({ path: '/workspace', name: 'Workspace', files: [] });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.pasteWorkspaceClipboard?.('/workspace');
+
+    await vi.waitFor(() => expect(mainMocks.runBusy).toHaveBeenCalledWith(
+      'Copying file...',
+      expect.any(Function),
+      { preserveMountedDocument: true },
+    ));
+  });
+
+  it('preserves the mounted document when archiving a workspace file', () => {
+    mainMocks.runBusy.mockImplementationOnce(async () => undefined);
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.archiveFile?.('/workspace/other.hvy', 'other.hvy');
+
+    expect(mainMocks.runBusy).toHaveBeenCalledWith(
+      'Archiving file...',
+      expect.any(Function),
+      { preserveMountedDocument: true },
+    );
   });
 
   it('updates the shared source without changing active document or version identity when renamed', async () => {

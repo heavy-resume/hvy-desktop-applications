@@ -1005,6 +1005,7 @@ export function cancelWorkspaceFilterProgressRender(): void {
 export async function runBusy(label: string, task: () => Promise<void>, options: { preserveMountedDocument?: boolean } = {}): Promise<void> {
   if (state.busy) return;
   const document = state.document?.mounted?.document;
+  const mountedBeforeTask = state.document?.mounted ?? null;
   state.busy = true;
   state.error = null;
   state.status = label;
@@ -1016,8 +1017,13 @@ export async function runBusy(label: string, task: () => Promise<void>, options:
   } finally {
     state.busy = false;
     const documentToMount = pendingMountDocument ?? state.document?.mounted?.document ?? document;
+    const preserveMountedDocument = options.preserveMountedDocument ?? (
+      mountedBeforeTask !== null
+      && state.document?.mounted === mountedBeforeTask
+      && pendingMountDocument === null
+    );
     pendingMountDocument = null;
-    if (options.preserveMountedDocument) {
+    if (preserveMountedDocument) {
       rerender({ preserveMountedDocument: true });
     } else {
       rerender();

@@ -56,7 +56,7 @@ async function executeWorkspaceFileOperation(operation: PendingWorkspaceFileOper
   state.workspaceFileOperationPromptOpen = false;
   const busyLabel = pendingWorkspaceFileOperationBusyLabel(operation);
   if (busyLabel) {
-    await runBusy(busyLabel, () => performWorkspaceFileOperation(operation));
+    await runBusy(busyLabel, () => performWorkspaceFileOperation(operation), { preserveMountedDocument: true });
     return;
   }
   await performWorkspaceFileOperation(operation);
@@ -262,7 +262,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     syncOpenDocumentWorkspaceAccess(path);
     await refreshSavedTemplates(workspace.path);
     state.status = `Archived ${currentName}`;
-  }),
+  }, { preserveMountedDocument: true }),
   restoreFile: (path, currentName) => void runBusy('Restoring file...', async () => {
     const workspace = await restoreDocumentFile(path);
     upsertWorkspace(await loadWorkspace(workspace.path));
@@ -448,7 +448,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
         return;
       }
       await moveOpenWorkspaceFileToWorkspace(transfer.sourcePath, workspacePath, targetDirectory);
-    });
+    }, { preserveMountedDocument: true });
   },
   cancelWorkspaceTransfer: () => {
     state.workspaceTransfer = null;

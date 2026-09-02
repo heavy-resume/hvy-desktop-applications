@@ -375,8 +375,10 @@ export async function boot(): Promise<void> {
     setupRecoveryLifecycle();
     if (!state.document) {
       await restoreStartupDocument();
+      await openHomepage({ force: Boolean(state.document) });
+    } else {
+      await openHomepage();
     }
-    await openHomepage();
   } catch (error) {
     showStartupError(error);
   }
@@ -608,8 +610,8 @@ export async function openDefaultGuide(options: { force?: boolean } = {}): Promi
   }
 }
 
-export async function openHomepage(): Promise<void> {
-  if (state.document || state.documentTabs.length > 0 || state.selectedFilePath) return;
+export async function openHomepage(options: { force?: boolean } = {}): Promise<void> {
+  if (!options.force && (state.document || state.documentTabs.length > 0 || state.selectedFilePath)) return;
   const homepage = state.appSettings.homepage;
   if (homepage.kind === 'none') return;
   try {
