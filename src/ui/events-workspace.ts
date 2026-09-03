@@ -21,12 +21,13 @@ export function bindWorkspaceEvents(root: HTMLElement, handlers: UiHandlers, sta
       const workspacePath = workspacePathForTreeTarget(fileButton, state);
       if (!workspacePath) return;
       event.preventDefault();
+      const encryptedFolderDocument = fileButton.dataset.encryptedFolderDocument === 'true';
       const locked = fileButton.dataset.locked === 'true';
       const hiddenFromAI = fileButton.getAttribute('data-hidden-from-ai') === 'true';
-      showFileContextMenu(event, path, name, relativePath, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0);
+      showFileContextMenu(event, path, name, relativePath, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0, encryptedFolderDocument);
       return;
     }
-    const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-target="true"]');
+    const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-action-target="true"]');
     if (folderSummary?.dataset.workspacePath) {
       event.preventDefault();
       showWorkspaceContextMenu(
@@ -37,6 +38,7 @@ export function bindWorkspaceEvents(root: HTMLElement, handlers: UiHandlers, sta
         folderSummary.dataset.targetDirectory ?? '',
         folderSummary.dataset.hiddenFromAi === 'true',
         workspaceFolderDeleteInfo(state, folderSummary.dataset.workspacePath, folderSummary.dataset.targetDirectory ?? '', folderSummary.dataset.folderName ?? ''),
+        folderSummary.dataset.encryptedFolder === 'true',
       );
       return;
     }
@@ -62,7 +64,7 @@ export function bindWorkspaceEvents(root: HTMLElement, handlers: UiHandlers, sta
   }, { signal });
   root.addEventListener('click', (event) => {
     const summary = event.target instanceof HTMLElement
-      ? event.target.closest<HTMLElement>('.tree summary[data-workspace-folder-target="true"]')
+      ? event.target.closest<HTMLElement>('.tree summary[data-workspace-folder-action-target="true"]')
       : null;
     const details = summary?.parentElement instanceof HTMLDetailsElement ? summary.parentElement : null;
     const workspacePath = summary?.dataset.workspacePath;
@@ -190,6 +192,7 @@ export function showFileContextMenu(
   clipboard: WorkspaceClipboardState | null,
   handlers: UiHandlers,
   showWorkspaceActions: boolean,
+  encryptedFolderDocument = false,
 ): void {
   void clipboard;
   closeFileContextMenu();
@@ -202,6 +205,11 @@ export function showFileContextMenu(
   menu.innerHTML = archived ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="restore">Restore</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="delete">Delete</button>
+  ` : encryptedFolderDocument ? `
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="rename">Rename</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="archive">Archive</button>
+    ${showWorkspaceActions ? '<button class="hvy-galaxy-button" type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   ` : `
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
@@ -269,6 +277,7 @@ export function showWorkspaceContextMenu(
   targetDirectory = '',
   hiddenFromAI = false,
   deleteInfo: WorkspaceFolderDeleteInfo | null = null,
+  encryptedFolder = false,
 ): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
@@ -280,8 +289,16 @@ export function showWorkspaceContextMenu(
   const deleteTitle = deleteDisabled && deleteInfo?.activeFileCount
     ? `Folder contains ${deleteInfo.activeFileCount} active file${deleteInfo.activeFileCount === 1 ? '' : 's'}`
     : 'Delete folder';
-  menu.innerHTML = `
+  menu.innerHTML = encryptedFolder ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-folder">New Folder</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="add-files">Add Files</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="import">Import</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="rename-folder">Rename</button>
+    ${targetDirectory ? `<button class="hvy-galaxy-button" type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
+  ` : `
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-folder">New Folder</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="new-encrypted-folder">New Encrypted Folder</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="add-files">Add Files</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="import">Import</button>
@@ -308,7 +325,9 @@ export function showWorkspaceContextMenu(
     if (!button || button.disabled) return;
     cleanup();
     if (button.dataset.menuAction === 'new-folder') handlers.openNewFolder(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'new-encrypted-folder') handlers.openNewFolder(workspacePath, targetDirectory, true);
     if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, targetDirectory);
+    if (button.dataset.menuAction === 'rename-folder') handlers.renameEncryptedFolder(workspacePath, targetDirectory, deleteInfo?.folderName ?? targetDirectory.split('/').filter(Boolean).at(-1) ?? 'Encrypted folder');
     if (button.dataset.menuAction === 'add-files') handlers.addFilesToWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);

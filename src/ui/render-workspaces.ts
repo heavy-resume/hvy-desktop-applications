@@ -190,6 +190,7 @@ export function renderWorkspace(
             <div class="workspace-action-popover" role="menu" ${actionsOpen ? '' : 'hidden'}>
               <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-document-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Document</button>
               <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Folder</button>
+              <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="new-encrypted-folder-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">New Encrypted Folder</button>
               <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="add-files-to-workspace" data-workspace-path="${escapeAttr(workspace.path)}" data-target-directory="${workspaceDropDirectory}">Add</button>
               <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="import-in-workspace" data-workspace-path="${escapeAttr(workspace.path)}">Import</button>
               <button class="hvy-galaxy-button" type="button" role="menuitem" data-action="open-workspace-chat" data-workspace-path="${escapeAttr(workspace.path)}">Chat Workspace</button>
@@ -317,16 +318,31 @@ export function renderNode(
     const normalizedRelativePath = normalizeTreeRelativePath(relativePath);
     const children = Array.isArray(node.children) ? node.children : [];
     const hiddenFromAI = node.hiddenFromAI === true;
+    const encryptedFolder = Boolean(node.encryptionState);
+    const encryptedFolderUnlocked = node.encryptionState === 'unlocked';
+    const encryptedFolderTitle = node.encryptionState === 'missingKey'
+      ? 'Encrypted folder key is not available'
+      : node.encryptionState === 'invalid'
+        ? 'Encrypted folder manifest is invalid or could not be authenticated'
+        : node.encryptionState === 'incomplete'
+          ? 'Encrypted folder has incomplete filesystem entries'
+          : 'Encrypted folder';
     const folderOwnsActiveFilter = activeFilter !== null && normalizeTreeRelativePath(activeFilter.targetDirectory) === normalizeTreeRelativePath(relativePath);
     const folderFilterTitle = `Filter ${name}: ${activeFilter?.query ?? ''}`;
-    const folderFilterTrigger = folderOwnsActiveFilter
+    const folderFilterTrigger = folderOwnsActiveFilter && !encryptedFolder
       ? `<button type="button" class="hvy-galaxy-button workspace-filter-trigger folder-filter-trigger is-active" data-action="open-workspace-filter" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" title="${escapeAttr(folderFilterTitle)}" aria-label="${escapeAttr(folderFilterTitle)}">${funnelIcon()}</button>`
       : '';
-    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
+    const encryptedFolderBadge = encryptedFolder
+      ? `<span class="tree-folder-encryption${encryptedFolderUnlocked ? ' is-unlocked' : ''}" title="${escapeAttr(encryptedFolderTitle)}" aria-label="${escapeAttr(encryptedFolderTitle)}">${encryptedFolderUnlocked ? '🔒' : '🔐'}</span>`
+      : '';
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${encryptedFolderBadge}${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
+    const folderTarget = encryptedFolder ? 'false' : 'true';
+    const folderActionTarget = !encryptedFolder || encryptedFolderUnlocked ? 'true' : 'false';
+    const encryptedFolderData = encryptedFolder ? 'true' : 'false';
     if (children.length === 0) {
       return `
         <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-          <div class="tree-folder-row${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
+          <div class="tree-folder-row${hiddenFromAI ? ' is-hidden-from-ai' : ''}${encryptedFolder ? ' is-encrypted-folder' : ''}" data-workspace-folder-target="${folderTarget}" data-workspace-folder-action-target="${folderActionTarget}" data-encrypted-folder="${encryptedFolderData}" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
           </div>
         </li>`;
@@ -335,7 +351,7 @@ export function renderNode(
     return `
       <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
         <details${open ? ' open' : ''}>
-          <summary class="${hiddenFromAI ? 'is-hidden-from-ai' : ''}" data-workspace-folder-target="true" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
+          <summary class="tree-folder-summary${hiddenFromAI ? ' is-hidden-from-ai' : ''}${encryptedFolder ? ' is-encrypted-folder' : ''}" data-workspace-folder-target="${folderTarget}" data-workspace-folder-action-target="${folderActionTarget}" data-encrypted-folder="${encryptedFolderData}" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
           </summary>
           <ul class="tree">${sortNodesForFilter(children, matchedDocumentIds, activeFilter).map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, folderExpanded, activeFilter, embeddingPreview)).join('')}</ul>
@@ -348,6 +364,7 @@ export function renderNode(
   const archived = node.archived === true;
   const locked = node.locked === true;
   const hiddenFromAI = node.hiddenFromAI === true;
+  const encryptedFolderDocument = Boolean(node.encryptedFolderKeyId);
   const hasEmbeddingFile = embeddingPreview?.enabled === true && embeddingPreview.sidecars[node.path] === true;
   const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
     ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
@@ -363,7 +380,7 @@ export function renderNode(
     : '';
   return `
     <li>
-      <button type="button" class="hvy-galaxy-button tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" draggable="true" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="hvy-galaxy-button tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" data-encrypted-folder-document="${encryptedFolderDocument ? 'true' : 'false'}" draggable="${encryptedFolderDocument ? 'false' : 'true'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
         ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}

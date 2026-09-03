@@ -1,6 +1,6 @@
 import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, relocateDocumentRecoveryDrafts, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup, type DocumentFileMetadata } from './backend';
 import { logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
-import { attachMatchingSidecarEmbeddingIndex, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
+import { attachMatchingSidecarEmbeddingIndex, deleteDocumentEmbeddingSidecar, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
 import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, profileHvySerializationCosts, serializeHvy, serializeMountedDocumentAsync, type VisualDocument } from './hvy';
 import { state } from './state';
 import { availableRecoveryBackups, recoverySaveConflictKind, type SaveConflictKind } from './recoveryDocuments';
@@ -11,6 +11,7 @@ import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestC
 import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
 import { updateRuntimeDocumentFile } from './runtimeDocuments';
 import { RecoveryDraftWrites } from './recoveryDraftWrites';
+import { isWholeDocumentEncrypted, recoveryStateForPersistence } from './encryptedDocumentPolicy';
 
 const BACKUP_INTERVAL_MS = 5 * 60 * 1000;
 const BACKUP_DEBOUNCE_MS = 1500;
@@ -62,7 +63,9 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       return;
     }
     const document = mounted.document;
-    if (openDocument.source.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
+    if (isWholeDocumentEncrypted(document)) {
+      await deleteDocumentEmbeddingSidecar(openDocument.source.path);
+    } else if (openDocument.source.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
       await attachMatchingSidecarEmbeddingIndex(openDocument.source.path, document, state.aiSettings);
     }
     await logSerializationCostProfile('save', openDocument.source.path, null, document);
@@ -197,6 +200,12 @@ export async function exportCurrentDocumentPdf(): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
+  if (mounted.document.encryption?.encrypted === true && !state.exportPdfPlaintextConfirmed) {
+    state.exportPdfSavePromptOpen = true;
+    state.status = 'Confirm plaintext PDF export';
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
   if (openDocument.isNew || openDocument.dirty || isMountedDocumentDirty(mounted)) {
     state.exportPdfSavePromptOpen = true;
     state.status = 'Save before exporting PDF';
@@ -209,14 +218,21 @@ export async function exportCurrentDocumentPdf(): Promise<void> {
     const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
     const savedPath = await savePdfAsDialog({ suggestedName: pdfFileName(state.document.source.name), bytes });
     state.exportedPdfPath = savedPath;
+    state.exportPdfPlaintextConfirmed = false;
     state.status = savedPath ? `Exported ${pdfFileName(state.document.source.name)}` : 'Ready';
   }, { preserveMountedDocument: true });
 }
 
 export async function saveBeforeExportPdf(): Promise<void> {
   state.exportPdfSavePromptOpen = false;
-  await saveCurrentDocument({ continuation: 'saveBeforeExportPdf' });
-  if (state.saveConflictDialogOpen) return;
+  state.exportPdfPlaintextConfirmed = true;
+  if (state.document && (state.document.isNew || state.document.dirty || (state.document.mounted && isMountedDocumentDirty(state.document.mounted)))) {
+    await saveCurrentDocument({ continuation: 'saveBeforeExportPdf' });
+  }
+  if (state.saveConflictDialogOpen) {
+    state.exportPdfPlaintextConfirmed = false;
+    return;
+  }
   if (state.document && !state.document.dirty && !state.document.isNew) {
     await exportCurrentDocumentPdf();
   }
@@ -430,7 +446,7 @@ export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Prom
       name: state.document.source.name,
       extension: state.document.source.extension,
       bytes,
-      recoveryState: getMountedRecoveryState(state.document.mounted),
+      recoveryState: recoveryStateForPersistence(state.document.mounted.document, getMountedRecoveryState(state.document.mounted)),
     });
     state.document.recoveryBackupId = backup?.id ?? null;
     return state.document.recoveryBackupId;
@@ -444,7 +460,7 @@ export async function ensureCloseDocumentRecoveryDraft(targetPath: string): Prom
     name: session.source.name,
     extension: session.source.extension,
     bytes,
-    recoveryState: session.recoveryState,
+    recoveryState: recoveryStateForPersistence(session.document, session.recoveryState),
   });
   session.recoveryBackupId = backup?.id ?? null;
   return session.recoveryBackupId;
@@ -755,7 +771,9 @@ export async function backupActiveDocument(options: { force?: boolean } = {}): P
   logDebugEvent('perf', 'recoveryDraft:documentProfile', { path, revision, ...documentProfile });
   await logSerializationCostProfile('recoveryDraft', path, revision, getMountedDocument(mounted));
   const bytes = await measureDebugAsync('perf', 'recoveryDraft:serializeMountedDocument', { path, revision }, () => serializeMountedDocumentAsync(mounted));
-  const recoveryState = measureDebug('perf', 'recoveryDraft:getRecoveryState', { path, revision }, () => getMountedRecoveryState(mounted));
+  const recoveryState = isWholeDocumentEncrypted(getMountedDocument(mounted))
+    ? null
+    : measureDebug('perf', 'recoveryDraft:getRecoveryState', { path, revision }, () => getMountedRecoveryState(mounted));
   const bytesKey = measureDebug('perf', 'recoveryDraft:hashBytes', { path, revision, byteCount: bytes.length }, () => backupBytesKey(bytes));
   if (previousBackup?.bytesKey === bytesKey) {
     const currentDocumentKey = backupDocumentKey(source.path, source.name);

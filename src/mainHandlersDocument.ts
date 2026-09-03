@@ -1,10 +1,15 @@
-import { archiveDocumentFile, chooseWorkspaceFolder, copyDocumentToWorkspace, deleteDocumentFile, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
+import { archiveDocumentFile, chooseWorkspaceFolder, copyDocumentToWorkspace, deleteDocumentFile, deleteEncryptedFolderDocument, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
-import { applyMountedRecoveryState, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, serializeHvy } from './hvy';
-import { state, type PendingWorkspaceFileOperation } from './state';
+import { applyMountedRecoveryState, encryptMountedDocumentAsync, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, removeMountedDocumentEncryption, serializeHvy } from './hvy';
+import { findFileInWorkspace, state, type PendingWorkspaceFileOperation } from './state';
 import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, updateOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, relocateRecoveryDraftsForDocument, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, applyArchivedFileRelocations, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath } from './main';
 import type { UiHandlers } from './ui';
+import { clearDocumentHistory } from './documentHistory';
+import { deleteDocumentEmbeddingSidecar, removeDocumentEmbeddingAttachments } from './embeddingIndex';
+import { isWholeDocumentEncrypted } from './encryptedDocumentPolicy';
+import { documentEncryptionKeyring } from './documentKeys';
+import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename } from './encryptedFolders';
 
 function pendingWorkspaceFileOperationBusyLabel(operation: PendingWorkspaceFileOperation): string | null {
   if (operation.kind === 'pasteCopy') return 'Copying file...';
@@ -104,6 +109,49 @@ function selectWorkspaceFile(path: string): void {
 
 export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace']): Partial<UiHandlers> {
   return {
+  requestDocumentEncryption: (action) => {
+    const document = state.document;
+    if (!document?.mounted || document.readOnly || document.source.extension === '.md' || document.mode === 'hvy') return;
+    const encrypted = document.mounted.document.encryption?.encrypted === true;
+    if ((action === 'encrypt' && encrypted) || (action === 'decrypt' && !encrypted)) return;
+    state.documentEncryptionAction = action;
+    state.documentEncryptionDialogOpen = true;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  confirmDocumentEncryption: () => {
+    const action = state.documentEncryptionAction;
+    state.documentEncryptionDialogOpen = false;
+    state.documentEncryptionAction = null;
+    if (!action) return;
+    void runBusy(action === 'encrypt' ? 'Enabling document encryption...' : 'Removing document encryption...', async () => {
+      const openDocument = state.document;
+      const mounted = openDocument?.mounted;
+      if (!mounted) throw new Error('No mounted document is available.');
+      if (action === 'encrypt') {
+        await encryptMountedDocumentAsync(mounted);
+        removeDocumentEmbeddingAttachments(mounted.document);
+        await clearDocumentHistory(openDocument.source.path);
+        await clearRecoveryDraftsForDocument(openDocument.source.path, openDocument.source.name);
+        await deleteDocumentEmbeddingSidecar(openDocument.source.path);
+        openDocument.hiddenFromAI = true;
+        if (openDocument.mode === 'ai') openDocument.mode = 'viewer';
+        state.status = 'Document encryption enabled; save to write the encrypted file';
+      } else {
+        removeMountedDocumentEncryption(mounted);
+        openDocument.hiddenFromAI = workspaceFileAiAccess(openDocument.source.path).hiddenFromAI;
+        state.status = 'Document encryption removed; save to write the plaintext file';
+      }
+      setDocumentDirty(true, { preserveStatus: true });
+      rerender({ preserveMountedDocument: true });
+    }, { preserveMountedDocument: true });
+  },
+  cancelDocumentEncryption: () => {
+    state.documentEncryptionDialogOpen = false;
+    state.documentEncryptionAction = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   restoreBackup: (id) => void runBusy('Restoring unsaved edits...', async () => {
     const file = await measureDebugAsync('load', 'recovery:restoreBackup', { backupId: id }, () => restoreDocumentBackup(id));
     if (file.path) {
@@ -301,7 +349,30 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.deleteFilePath = null;
     state.deleteFileName = null;
     void runBusy('Deleting file...', async () => {
-      const workspace = await deleteDocumentFile(path);
+      const workspacePath = workspacePathForFile(path);
+      const currentWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const workspaceFile = currentWorkspace ? findFileInWorkspace(currentWorkspace, path) : null;
+      const workspace = workspacePath && currentWorkspace && workspaceFile?.encryptedFolderKeyId
+        ? await (async () => {
+          const parts = workspaceFile.relativePath.replaceAll('\\', '/').split('/');
+          const physicalName = parts.pop() ?? '';
+          const parentDirectory = parts.join('/');
+          const entryId = physicalName.slice(0, Math.max(0, physicalName.length - workspaceFile.extension.length));
+          const folder = findEncryptedFolder(currentWorkspace, parentDirectory);
+          if (!folder || (workspaceFile.extension !== '.hvy' && workspaceFile.extension !== '.phvy')) {
+            throw new Error('Encrypted parent folder was not found.');
+          }
+          const mutation = await prepareEncryptedFolderEntryRemoval(folder, entryId, documentEncryptionKeyring());
+          return deleteEncryptedFolderDocument({
+            workspacePath,
+            folderDirectory: parentDirectory,
+            documentId: entryId,
+            extension: workspaceFile.extension,
+            previousManifestBytes: mutation.previousManifestBytes,
+            manifestBytes: mutation.manifestBytes,
+          });
+        })()
+        : await deleteDocumentFile(path);
       if (workspace) {
         upsertWorkspace(await loadWorkspace(workspace.path));
         await refreshSavedTemplates(workspace.path);
@@ -376,10 +447,36 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     void runBusy('Renaming file...', async () => {
       preserveCurrentDocumentSession();
       const workspacePath = workspacePathForFile(path);
+      const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const workspaceFile = workspace ? findFileInWorkspace(workspace, path) : null;
       const currentDocument = state.document?.source.path === path && state.document.virtual !== 'versionHistory'
         ? state.document
         : null;
       const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
+      if (workspacePath && workspace && workspaceFile?.encryptedFolderKeyId) {
+        const relativePath = workspaceFile.relativePath ?? '';
+        const parts = relativePath.replaceAll('\\', '/').split('/');
+        const physicalName = parts.pop() ?? '';
+        const parentDirectory = parts.join('/');
+        const entryId = physicalName.slice(0, Math.max(0, physicalName.length - workspaceFile.extension.length));
+        const encryptedFolder = findEncryptedFolder(workspace, parentDirectory);
+        if (!encryptedFolder) throw new Error('Encrypted parent folder was not found.');
+        const logicalName = `${trimmed}${workspaceFile.extension}`;
+        const mutation = await prepareEncryptedFolderEntryRename(encryptedFolder, entryId, logicalName, documentEncryptionKeyring());
+        const updatedWorkspace = await updateEncryptedFolderManifest({
+          workspacePath,
+          folderDirectory: parentDirectory,
+          previousManifestBytes: mutation.previousManifestBytes,
+          manifestBytes: mutation.manifestBytes,
+        });
+        const renamedFile = { path, name: logicalName, extension: workspaceFile.extension };
+        updateOpenDocumentFile(path, renamedFile);
+        await relocateRecoveryDraftsForDocument(path, currentName, renamedFile);
+        upsertWorkspace(updatedWorkspace);
+        state.status = `Renamed to ${logicalName}`;
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
       const file = await renameDocumentFile({ path, name: trimmed });
       await updateHomepageDocumentPath(path, file.path);
       const renamedOpenTemplateMetadata = Boolean(
@@ -461,6 +558,12 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     if (!state.document) return;
     if (state.document.readOnly && mode !== 'viewer') {
       state.status = 'This document is read-only';
+      rerender();
+      void mountCurrentDocument();
+      return;
+    }
+    if (isWholeDocumentEncrypted(state.document.mounted?.document) && mode === 'ai') {
+      state.status = 'Encrypted documents are not available to AI';
       rerender();
       void mountCurrentDocument();
       return;
@@ -604,6 +707,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   saveBeforeExportPdf: () => void saveBeforeExportPdf(),
   cancelExportPdfSavePrompt: () => {
     state.exportPdfSavePromptOpen = false;
+    state.exportPdfPlaintextConfirmed = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },

@@ -14,6 +14,7 @@ import {
   type RevisionDoc,
   type SavedVersion,
 } from './revisionModel';
+import { isWholeDocumentEncrypted } from './encryptedDocumentPolicy';
 
 const DB_NAME = 'hvy-galaxy-document-history';
 const DB_VERSION = 1;
@@ -35,7 +36,7 @@ interface ObjectRecord {
 const documentQueues = new Map<string, Promise<void>>();
 
 export function initializeDocumentHistory(path: string, name: string, document: VisualDocument): void {
-  if (!path || document.encryption?.encrypted === true || !canUseDocumentHistory()) return;
+  if (!path || isWholeDocumentEncrypted(document) || !canUseDocumentHistory()) return;
   queueMicrotask(() => {
     const snapshot = captureDocumentSnapshot(document);
     enqueueHistoryWork(path, () => recordVersion(path, name, snapshot));
@@ -43,7 +44,7 @@ export function initializeDocumentHistory(path: string, name: string, document: 
 }
 
 export function recordSuccessfulDocumentSave(path: string, name: string, document: VisualDocument): void {
-  if (!path || document.encryption?.encrypted === true || !canUseDocumentHistory()) return;
+  if (!path || isWholeDocumentEncrypted(document) || !canUseDocumentHistory()) return;
   queueMicrotask(() => {
     const snapshot = captureDocumentSnapshot(document);
     enqueueHistoryWork(path, () => recordVersion(path, name, snapshot));
@@ -73,6 +74,22 @@ export async function materializeSavedDocumentVersion(path: string, versionId: s
   ensureDocumentAttachmentStore(document).replace(attachments);
   document.attachments = attachments;
   return serializeHvy(document);
+}
+
+export async function clearDocumentHistory(path: string): Promise<void> {
+  if (!path || !canUseDocumentHistory()) return;
+  await Promise.all(documentQueues.values());
+  await requestFromStore(HISTORY_STORE, 'readwrite', (store) => store.delete(path));
+  const histories = await requestFromStore<HistoryRecord[]>(HISTORY_STORE, 'readonly', (store) => store.getAll());
+  const referencedObjects = new Set<string>();
+  for (const history of histories) {
+    const revision = await readRevisionDocument(history.documentBytes);
+    for (const attachment of Object.values(revision.attachments)) referencedObjects.add(attachment.objectId);
+  }
+  const objects = await requestFromStore<ObjectRecord[]>(OBJECT_STORE, 'readonly', (store) => store.getAll());
+  await Promise.all(objects
+    .filter((object) => !referencedObjects.has(object.id))
+    .map((object) => requestFromStore(OBJECT_STORE, 'readwrite', (store) => store.delete(object.id))));
 }
 
 export async function relocateDocumentHistory(previousPath: string, path: string, name: string): Promise<void> {

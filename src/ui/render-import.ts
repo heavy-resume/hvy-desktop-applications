@@ -7,6 +7,7 @@ import { deserializeDocumentBytes } from '../../../heavy-file-format/src/seriali
 import appIconUrl from '../../src-tauri/icons/Square310x310Logo.png';
 import { type DocumentCreationType, type DocumentExtension, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
 import { currentDocumentWorkspacePath } from '../fileActions';
+import { findEncryptedFolder } from '../encryptedFolders';
 import type { VisualDocument } from '../hvy';
 import { type AppState } from '../state';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from '../templates';
@@ -21,6 +22,7 @@ export function renderNewDocumentDialog(state: AppState): string {
     return '';
   }
   const workspace = state.workspaces.find((candidate) => candidate.path === state.newDocumentWorkspacePath) ?? null;
+  const encryptedFolder = findEncryptedFolder(workspace, state.newDocumentDirectory);
   const visibility = workspaceTemplateVisibility(workspace);
   const templates = templatesForDocumentType(mergeSavedTemplates(state.savedTemplates), state.newDocumentType, visibility);
   const showTemplatePicker = state.newDocumentType === 'hvy';
@@ -28,8 +30,8 @@ export function renderNewDocumentDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-document">
         <h2>New Document</h2>
-        ${renderDocumentTypeControl('new', state.newDocumentType, visibility)}
-        ${workspace ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
+        ${encryptedFolder ? '<p class="dialog-note">This document will be encrypted automatically with the folder key.</p>' : renderDocumentTypeControl('new', state.newDocumentType, visibility)}
+        ${workspace && !encryptedFolder ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
         <label>
           <span>Name</span>
           <input class="hvy-galaxy-input" name="documentName" type="text" autocomplete="off" autofocus required>
@@ -346,12 +348,14 @@ export function updateImportSubmit(form: HTMLFormElement): void {
 
 export function renderExportPdfSavePrompt(state: AppState): string {
   if (!state.exportPdfSavePromptOpen || !state.document) return '';
-  const saveLabel = state.document.isNew ? 'Save As' : 'Save';
+  const needsSave = state.document.isNew || state.document.dirty;
+  const saveLabel = needsSave ? (state.document.isNew ? 'Save As' : 'Save') : 'Continue';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog" role="dialog" aria-modal="true" aria-label="Save before PDF export">
         <h2>Export PDF</h2>
-        <p class="dialog-note">Save ${escapeHtml(state.document.source.name)} before exporting it to PDF.</p>
+        ${needsSave ? `<p class="dialog-note">Save ${escapeHtml(state.document.source.name)} before exporting it to PDF.</p>` : ''}
+        <p class="dialog-note" data-state="${state.document.mounted?.document.encryption?.encrypted === true ? 'error' : 'neutral'}">The exported PDF is plaintext and is not protected by HVY document encryption.</p>
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-export-pdf-save-prompt">Cancel</button>
           <button class="hvy-galaxy-button" type="button" data-action="save-before-export-pdf" ${state.busy ? 'disabled' : ''}>${saveLabel}</button>
@@ -368,6 +372,7 @@ export function renderExportedPdfDialog(state: AppState): string {
       <section class="dialog" role="dialog" aria-modal="true" aria-label="PDF exported">
         <h2>PDF Exported</h2>
         <p class="dialog-note">${escapeHtml(name)}</p>
+        <p class="dialog-note">PDF exports are plaintext and are not protected by HVY document encryption.</p>
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="open-exported-pdf">Open</button>
           <button class="hvy-galaxy-button" type="button" data-action="reveal-exported-pdf">${escapeHtml(revealMenuLabel())}</button>

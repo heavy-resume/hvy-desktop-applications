@@ -35,8 +35,13 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
       handlers.createWorkspaceFolder(
         String(data.get('workspacePath') ?? ''),
         String(data.get('parentDirectory') ?? ''),
-        String(data.get('folderName') ?? '')
+        String(data.get('folderName') ?? ''),
+        data.get('encrypted') === 'true'
       );
+    }
+    if (form.dataset.form === 'rename-encrypted-folder') {
+      const data = new FormData(form);
+      handlers.submitRenameEncryptedFolder(String(data.get('folderName') ?? ''));
     }
     if (form.dataset.form === 'import-document') {
       commitImportTagEditorDrafts(form, handlers);

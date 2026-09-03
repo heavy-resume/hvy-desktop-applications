@@ -1,4 +1,4 @@
-import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, emptyDocumentKeyVaultStatus, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentKeyMetadata, type DocumentKeyVaultStatus, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
 import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
@@ -8,6 +8,7 @@ import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
 import type { IntegrationStructuredSource } from './integrationBrowser';
 import type { RuntimeDocument } from './runtimeDocuments';
+import type { ReviewedDocumentKey } from './documentKeys';
 export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
 export interface OpenDocument {
@@ -74,6 +75,7 @@ export interface AppState {
   workspacesSectionExpanded: boolean;
   newFolderWorkspacePath: string | null;
   newFolderParentDirectory: string;
+  newFolderEncrypted: boolean;
   workspaceExpanded: Record<string, boolean>;
   workspaceFolderExpanded: Record<string, Record<string, boolean>>;
   newWorkspaceLocation: 'managed' | 'choose';
@@ -96,6 +98,7 @@ export interface AppState {
   saveAsKind: 'document' | 'template';
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
+  exportPdfPlaintextConfirmed: boolean;
   exportedPdfPath: string | null;
   appSettingsDialogOpen: boolean;
   integrationsDialogOpen: boolean;
@@ -103,6 +106,14 @@ export interface AppState {
   integrationInspectionResult: unknown;
   integrationVaultStatus: IntegrationVaultStatus | null;
   integrationVaultResetDialogOpen: boolean;
+  documentKeyImportDialogOpen: boolean;
+  documentKeyManagerDialogOpen: boolean;
+  documentKeyImportKeys: ReviewedDocumentKey[];
+  documentKeyMetadata: DocumentKeyMetadata[];
+  documentKeyVaultStatus: DocumentKeyVaultStatus;
+  documentKeyDeleteId: string | null;
+  documentEncryptionDialogOpen: boolean;
+  documentEncryptionAction: 'encrypt' | 'decrypt' | null;
   integrationRegistry: IntegrationRegistry;
   addIntegrationPageDialogOpen: boolean;
   integrationReadyChecksDialogOpen: boolean;
@@ -216,6 +227,9 @@ export interface AppState {
   pendingWorkspaceFileOperation: PendingWorkspaceFileOperation | null;
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
+  renameEncryptedFolderWorkspacePath: string | null;
+  renameEncryptedFolderDirectory: string;
+  renameEncryptedFolderCurrentName: string | null;
   deleteFilePath: string | null;
   deleteFileName: string | null;
   deleteFolderWorkspacePath: string | null;
@@ -357,6 +371,7 @@ export const state: AppState = {
   workspacesSectionExpanded: true,
   newFolderWorkspacePath: null,
   newFolderParentDirectory: '',
+  newFolderEncrypted: false,
   workspaceExpanded: {},
   workspaceFolderExpanded: {},
   newWorkspaceLocation: 'managed',
@@ -379,6 +394,7 @@ export const state: AppState = {
   saveAsKind: 'document',
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
+  exportPdfPlaintextConfirmed: false,
   exportedPdfPath: null,
   appSettingsDialogOpen: false,
   integrationsDialogOpen: false,
@@ -386,6 +402,14 @@ export const state: AppState = {
   integrationInspectionResult: null,
   integrationVaultStatus: null,
   integrationVaultResetDialogOpen: false,
+  documentKeyImportDialogOpen: false,
+  documentKeyManagerDialogOpen: false,
+  documentKeyImportKeys: [],
+  documentKeyMetadata: [],
+  documentKeyVaultStatus: emptyDocumentKeyVaultStatus(),
+  documentKeyDeleteId: null,
+  documentEncryptionDialogOpen: false,
+  documentEncryptionAction: null,
   integrationRegistry: loadIntegrationRegistry(),
   addIntegrationPageDialogOpen: false,
   integrationReadyChecksDialogOpen: false,
@@ -499,6 +523,9 @@ export const state: AppState = {
   pendingWorkspaceFileOperation: null,
   renameFilePath: null,
   renameFileCurrentName: null,
+  renameEncryptedFolderWorkspacePath: null,
+  renameEncryptedFolderDirectory: '',
+  renameEncryptedFolderCurrentName: null,
   deleteFilePath: null,
   deleteFileName: null,
   deleteFolderWorkspacePath: null,

@@ -1,8 +1,10 @@
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createWorkspace, createWorkspaceFolder, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, unarchiveWorkspace, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
+import { documentEncryptionKeyring, generateStoredDocumentKey } from './documentKeys';
+import { encryptFolderManifest, findEncryptedFolder, prepareEncryptedFolderChildMutation, prepareEncryptedFolderDocumentMutation, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename, prepareEncryptedFolderImportedDocumentMutation, prepareEncryptedFolderSelfRename } from './encryptedFolders';
 import { state } from './state';
 import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
 import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
@@ -38,7 +40,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.workspacesSectionExpanded = expanded;
     rerender({ preserveMountedDocument: true });
   },
-  createWorkspaceFolder: (workspacePath, parentDirectory, name) => void runBusy('Creating folder...', async () => {
+  createWorkspaceFolder: (workspacePath, parentDirectory, name, encrypted) => void runBusy(`Creating ${encrypted ? 'encrypted ' : ''}folder...`, async () => {
     const trimmed = name.trim();
     if (!workspacePath || !trimmed) {
       state.newFolderWorkspacePath = workspacePath || null;
@@ -46,18 +48,101 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       state.status = 'Folder name is required';
       return;
     }
-    const workspace = await createWorkspaceFolder({ workspacePath, parentDirectory, name: trimmed });
+    const currentWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+    const encryptedParent = findEncryptedFolder(currentWorkspace, parentDirectory);
+    let workspace: Awaited<ReturnType<typeof createWorkspaceFolder>>;
+    if (encryptedParent) {
+      const mutation = await prepareEncryptedFolderChildMutation(encryptedParent, trimmed, documentEncryptionKeyring());
+      workspace = await createEncryptedFolderChild({
+        workspacePath,
+        folderDirectory: parentDirectory,
+        childFolderId: mutation.childFolderId,
+        childManifestBytes: mutation.childManifestBytes,
+        previousManifestBytes: mutation.previousManifestBytes,
+        manifestBytes: mutation.manifestBytes,
+      });
+    } else {
+      let encryptedRequest: import('./backend').WorkspaceFolderRequest['encrypted'];
+      if (encrypted) {
+      const folderId = crypto.randomUUID();
+      const folderKey = await generateStoredDocumentKey(trimmed);
+      const manifestBytes = await encryptFolderManifest({
+        version: 1,
+        folderId,
+        name: trimmed,
+        entries: {},
+      }, folderKey.keyId, folderKey.key);
+      encryptedRequest = { folderId, manifestBytes };
+      }
+      workspace = await createWorkspaceFolder({
+        workspacePath,
+        parentDirectory,
+        name: trimmed,
+        ...(encryptedRequest ? { encrypted: encryptedRequest } : {}),
+      });
+    }
     state.newFolderWorkspacePath = null;
     state.newFolderParentDirectory = '';
+    state.newFolderEncrypted = false;
     showWorkspaceDocumentsView(workspacePath);
     upsertWorkspace(workspace);
     state.selectedWorkspacePath = workspacePath;
     state.status = `Created ${trimmed}`;
   }),
-  openNewFolder: (workspacePath, parentDirectory = '') => {
+  renameEncryptedFolder: (workspacePath, targetDirectory, currentName) => {
+    state.renameEncryptedFolderWorkspacePath = workspacePath;
+    state.renameEncryptedFolderDirectory = targetDirectory;
+    state.renameEncryptedFolderCurrentName = currentName;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  submitRenameEncryptedFolder: (name) => void runBusy('Renaming encrypted folder...', async () => {
+    const workspacePath = state.renameEncryptedFolderWorkspacePath;
+    const targetDirectory = state.renameEncryptedFolderDirectory;
+    const currentName = state.renameEncryptedFolderCurrentName;
+    const trimmed = name.trim();
+    if (!workspacePath || !targetDirectory || !currentName) return;
+    if (!trimmed) throw new Error('Folder name is required.');
+    if (trimmed === currentName) {
+      state.renameEncryptedFolderWorkspacePath = null;
+      state.renameEncryptedFolderDirectory = '';
+      state.renameEncryptedFolderCurrentName = null;
+      return;
+    }
+    const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+    const folder = findEncryptedFolder(workspace, targetDirectory);
+    if (!workspace || !folder) throw new Error('Encrypted folder was not found.');
+    const parts = targetDirectory.replaceAll('\\', '/').split('/');
+    const entryId = parts.pop() ?? '';
+    const parentDirectory = parts.join('/');
+    const parent = findEncryptedFolder(workspace, parentDirectory);
+    const mutation = parent
+      ? await prepareEncryptedFolderEntryRename(parent, entryId, trimmed, documentEncryptionKeyring())
+      : await prepareEncryptedFolderSelfRename(folder, trimmed, documentEncryptionKeyring());
+    const updated = await updateEncryptedFolderManifest({
+      workspacePath,
+      folderDirectory: parent ? parentDirectory : targetDirectory,
+      previousManifestBytes: mutation.previousManifestBytes,
+      manifestBytes: mutation.manifestBytes,
+    });
+    state.renameEncryptedFolderWorkspacePath = null;
+    state.renameEncryptedFolderDirectory = '';
+    state.renameEncryptedFolderCurrentName = null;
+    upsertWorkspace(updated);
+    state.status = `Renamed to ${trimmed}`;
+  }, { preserveMountedDocument: true }),
+  cancelRenameEncryptedFolder: () => {
+    state.renameEncryptedFolderWorkspacePath = null;
+    state.renameEncryptedFolderDirectory = '';
+    state.renameEncryptedFolderCurrentName = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  openNewFolder: (workspacePath, parentDirectory = '', encrypted = false) => {
     state.openWorkspaceActionsPath = null;
     state.newFolderWorkspacePath = workspacePath;
     state.newFolderParentDirectory = parentDirectory;
+    state.newFolderEncrypted = encrypted;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
     requestAnimationFrame(() => {
@@ -67,6 +152,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   cancelNewFolder: () => {
     state.newFolderWorkspacePath = null;
     state.newFolderParentDirectory = '';
+    state.newFolderEncrypted = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -77,7 +163,24 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.deleteFolderName = null;
     state.deleteFolderArchivedFiles = [];
     void runBusy('Deleting folder...', async () => {
-      const workspace = await deleteWorkspaceFolder({ workspacePath, targetDirectory });
+      const currentWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const encryptedFolder = findEncryptedFolder(currentWorkspace, targetDirectory);
+      const parts = targetDirectory.replaceAll('\\', '/').split('/');
+      const childFolderId = parts.pop() ?? '';
+      const parentDirectory = parts.join('/');
+      const encryptedParent = findEncryptedFolder(currentWorkspace, parentDirectory);
+      const workspace = encryptedFolder && encryptedParent
+        ? await (async () => {
+          const mutation = await prepareEncryptedFolderEntryRemoval(encryptedParent, childFolderId, documentEncryptionKeyring());
+          return deleteEncryptedFolderChild({
+            workspacePath,
+            folderDirectory: parentDirectory,
+            childFolderId,
+            previousManifestBytes: mutation.previousManifestBytes,
+            manifestBytes: mutation.manifestBytes,
+          });
+        })()
+        : await deleteWorkspaceFolder({ workspacePath, targetDirectory });
       upsertWorkspace(await loadWorkspace(workspace.path));
       clearWorkspaceFilterDocumentCache(workspace.path);
       await refreshSavedTemplates(workspace.path);
@@ -290,11 +393,34 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const template = creationTemplate(workspacePath, state.newDocumentType, templateId, documentTitle(fileName));
     state.newDocumentWorkspacePath = null;
     state.newDocumentDirectory = '';
-    const file = await createDocumentFile({
-      workspacePath,
-      relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
-      template,
-    });
+    const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+    const encryptedFolder = findEncryptedFolder(workspace, targetDirectory);
+    const file = encryptedFolder
+      ? await (async () => {
+        const extension = fileName.toLowerCase().endsWith('.phvy') ? '.phvy' : fileName.toLowerCase().endsWith('.hvy') ? '.hvy' : null;
+        if (!extension) throw new Error('Encrypted folders currently support HVY and PHVY documents.');
+        const mutation = await prepareEncryptedFolderDocumentMutation(
+          encryptedFolder,
+          fileName,
+          extension,
+          new TextEncoder().encode(template),
+          documentEncryptionKeyring(),
+        );
+        return createEncryptedFolderDocument({
+          workspacePath,
+          folderDirectory: targetDirectory,
+          documentId: mutation.documentId,
+          extension,
+          documentBytes: mutation.documentBytes,
+          previousManifestBytes: mutation.previousManifestBytes,
+          manifestBytes: mutation.manifestBytes,
+        });
+      })()
+      : await createDocumentFile({
+        workspacePath,
+        relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
+        template,
+      });
     showWorkspaceDocumentsView(workspacePath);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
@@ -419,11 +545,14 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.importProgressDialogOpen = true;
     rerender({ preserveMountedDocument: true });
     try {
-    const file = await createDocumentFile({
-      workspacePath,
-      relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
-      template,
-    });
+    const encryptedFolder = findEncryptedFolder(state.workspaces.find((candidate) => candidate.path === workspacePath), targetDirectory);
+    const file = encryptedFolder
+      ? await createEncryptedDocumentInFolder(workspacePath, targetDirectory, encryptedFolder, fileName, new TextEncoder().encode(template))
+      : await createDocumentFile({
+        workspacePath,
+        relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
+        template,
+      });
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
     await openDocument(file, { deferMount: true });
@@ -591,6 +720,14 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   },
   addFilesToWorkspace: (workspacePath, targetDirectory = '') => void runBusy('Adding files...', async () => {
     state.openWorkspaceActionsPath = null;
+    const encryptedFolder = findEncryptedFolder(state.workspaces.find((candidate) => candidate.path === workspacePath), targetDirectory);
+    if (encryptedFolder) {
+      const files = await selectWorkspaceDocumentFiles();
+      if (!files) return;
+      await addDocumentsToEncryptedFolder(workspacePath, targetDirectory, files);
+      await refreshRecents();
+      return;
+    }
     const result = await addFilesToWorkspace(workspacePath, targetDirectory);
     if (!result) return;
     await finishAddingFilesToWorkspace(result, 'Added files to workspace');
@@ -603,6 +740,11 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       fileNames: files.map((file) => file.name),
     }, async () => {
       const droppedFiles = await droppedWorkspaceFilesFrom(files);
+      if (findEncryptedFolder(state.workspaces.find((candidate) => candidate.path === workspacePath), targetDirectory)) {
+        await addDocumentsToEncryptedFolder(workspacePath, targetDirectory, droppedFiles);
+        await refreshRecents();
+        return;
+      }
       const result = await addDroppedFilesToWorkspace(workspacePath, droppedFiles, targetDirectory);
       await finishAddingFilesToWorkspace(result, 'Added dropped files to workspace');
       await refreshRecents();
@@ -770,6 +912,77 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   submitWorkspaceFilter: () => void submitWorkspaceFilter(),
   clearWorkspaceFilter: () => void clearWorkspaceFilter(),
   };
+}
+
+async function createEncryptedDocumentInFolder(
+  workspacePath: string,
+  targetDirectory: string,
+  folder: import('./backend').WorkspaceFolderNode,
+  fileName: string,
+  plaintextBytes: Uint8Array,
+): Promise<DocumentFile> {
+  const lowerName = fileName.toLowerCase();
+  const extension = lowerName.endsWith('.phvy') ? '.phvy' : lowerName.endsWith('.hvy') ? '.hvy' : null;
+  if (!extension) throw new Error('Encrypted folders support .hvy and .phvy documents.');
+  const mutation = await prepareEncryptedFolderDocumentMutation(
+    folder,
+    fileName,
+    extension,
+    plaintextBytes,
+    documentEncryptionKeyring(),
+  );
+  const file = await createEncryptedFolderDocument({
+    workspacePath,
+    folderDirectory: targetDirectory,
+    documentId: mutation.documentId,
+    extension,
+    documentBytes: mutation.documentBytes,
+    previousManifestBytes: mutation.previousManifestBytes,
+    manifestBytes: mutation.manifestBytes,
+  });
+  return { ...file, name: fileName, extension };
+}
+
+async function addDocumentsToEncryptedFolder(
+  workspacePath: string,
+  targetDirectory: string,
+  files: DroppedWorkspaceFile[],
+): Promise<void> {
+  const importedFiles: Array<{ path: string; name: string; extension: '.hvy' | '.phvy' }> = [];
+  for (const source of files) {
+    const lowerName = source.name.toLowerCase();
+    const extension = lowerName.endsWith('.phvy') ? '.phvy' : lowerName.endsWith('.hvy') ? '.hvy' : null;
+    if (!extension) throw new Error('Encrypted folders support .hvy and .phvy documents.');
+    const workspace = await loadWorkspace(workspacePath);
+    const folder = findEncryptedFolder(workspace, targetDirectory);
+    if (!folder) throw new Error('Encrypted folder was not found.');
+    const mutation = await prepareEncryptedFolderImportedDocumentMutation(
+      folder,
+      source.name,
+      extension,
+      Uint8Array.from(source.bytes),
+      documentEncryptionKeyring(),
+    );
+    const file = await createEncryptedFolderDocument({
+      workspacePath,
+      folderDirectory: targetDirectory,
+      documentId: mutation.documentId,
+      extension,
+      documentBytes: mutation.documentBytes,
+      previousManifestBytes: mutation.previousManifestBytes,
+      manifestBytes: mutation.manifestBytes,
+    });
+    importedFiles.push({ path: file.path, name: source.name, extension });
+  }
+  const workspace = await loadWorkspace(workspacePath);
+  upsertWorkspace(workspace);
+  state.selectedWorkspacePath = workspacePath;
+  state.status = 'Added files to encrypted folder';
+  if (importedFiles.length === 1) {
+    const imported = importedFiles[0];
+    const physical = await readDocumentFile(imported.path);
+    await openDocument({ ...physical, name: imported.name, extension: imported.extension }, { deferMount: true });
+  }
 }
 
 async function refreshWorkspaceEmbeddingPreview(workspacePath: string): Promise<void> {

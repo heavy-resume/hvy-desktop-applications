@@ -51,6 +51,12 @@ pub fn run() {
             load_integration_vault_status,
             setup_integration_vault,
             reset_integration_vault,
+            load_document_key_vault_status,
+            load_document_keys,
+            list_document_key_metadata,
+            store_document_keys,
+            delete_document_key,
+            open_document_key_file_dialog,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             mcp::load_mcp_server_status,
@@ -77,6 +83,7 @@ pub fn run() {
             create_workspace_folder,
             add_files_to_workspace,
             add_dropped_files_to_workspace,
+            select_workspace_document_files,
             open_file_dialog,
             open_import_source_dialog,
             load_launch_document_paths,
@@ -103,10 +110,15 @@ pub fn run() {
             save_color_theme_as_dialog,
             update_file_menu_state,
             create_document_file,
+            create_encrypted_folder_document,
+            create_encrypted_folder_child,
+            update_encrypted_folder_manifest,
             reveal_document_file,
             open_document_file,
             rename_document_file,
             archive_document_file,
+            delete_encrypted_folder_document,
+            delete_encrypted_folder_child,
             restore_document_file,
             delete_document_file,
             delete_workspace_folder,
@@ -253,6 +265,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Encrypt Document...").id("encrypt-document").enabled(false).build(app)?)
+        .item(&MenuItemBuilder::new("Remove Document Encryption...").id("decrypt-document").enabled(false).build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Import Encryption Key...").id("import-encryption-key").build(app)?)
+        .item(&MenuItemBuilder::new("Manage Encryption Keys...").id("manage-encryption-keys").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
         .item(&MenuItemBuilder::new("Version History...").id("version-history").build(app)?);

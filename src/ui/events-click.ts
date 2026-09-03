@@ -54,6 +54,16 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.closeDebugLog();
           return;
         }
+        if (backdrop.querySelector('.document-key-dialog')) {
+          if (state.documentKeyImportDialogOpen) handlers.cancelImportDocumentKeys();
+          else if (state.documentKeyDeleteId) handlers.cancelDeleteDocumentKey();
+          else handlers.closeDocumentKeyManager();
+          return;
+        }
+        if (backdrop.querySelector('.document-encryption-dialog')) {
+          handlers.cancelDocumentEncryption();
+          return;
+        }
         if (backdrop.querySelector('.scripting-review-dialog')) {
           handlers.closeScriptingReview();
           return;
@@ -120,6 +130,10 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.cancelRenameFile();
           return;
         }
+        if (backdrop.querySelector('form[data-form="rename-encrypted-folder"]')) {
+          handlers.cancelRenameEncryptedFolder();
+          return;
+        }
         if (backdrop.querySelector('form[data-form="new-folder"]')) {
           handlers.cancelNewFolder();
           return;
@@ -184,7 +198,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       handlers.setWorkspaceExpanded(target.dataset.workspacePath, expanded);
       if (expanded) handlers.refreshWorkspace(target.dataset.workspacePath);
     }
-    if (action === 'new-folder-in-workspace' || action === 'new-document-in-workspace') {
+    if (action === 'new-folder-in-workspace' || action === 'new-encrypted-folder-in-workspace' || action === 'new-document-in-workspace') {
       event.stopPropagation();
     }
     if (action === 'set-new-workspace-location' && isNewWorkspaceLocation(target.dataset.location)) {
@@ -194,6 +208,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'confirm-workspace-initialization') handlers.confirmWorkspaceInitialization();
     if (action === 'cancel-workspace-initialization') handlers.cancelWorkspaceInitialization();
     if (action === 'new-folder-in-workspace' && target.dataset.workspacePath) handlers.openNewFolder(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
+    if (action === 'new-encrypted-folder-in-workspace' && target.dataset.workspacePath) handlers.openNewFolder(target.dataset.workspacePath, target.dataset.targetDirectory ?? '', true);
     if (action === 'new-document-in-workspace' && target.dataset.workspacePath) handlers.newDocumentInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
     if (action === 'set-new-document-type' && isDocumentCreationType(target.dataset.documentType)) handlers.setNewDocumentType(target.dataset.documentType);
     if (action === 'import-in-workspace' && target.dataset.workspacePath) handlers.openImportInWorkspace(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');
@@ -352,6 +367,16 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'request-reset-integration-vault') handlers.requestResetIntegrationVault();
     if (action === 'confirm-reset-integration-vault') handlers.confirmResetIntegrationVault();
     if (action === 'cancel-reset-integration-vault') handlers.cancelResetIntegrationVault();
+    if (action === 'choose-document-key-files') handlers.chooseDocumentKeyFiles();
+    if (action === 'confirm-import-document-keys') handlers.confirmImportDocumentKeys();
+    if (action === 'cancel-import-document-keys') handlers.cancelImportDocumentKeys();
+    if (action === 'export-document-key') handlers.exportDocumentKey(target.dataset.keyId ?? '');
+    if (action === 'request-delete-document-key') handlers.requestDeleteDocumentKey(target.dataset.keyId ?? '');
+    if (action === 'confirm-delete-document-key') handlers.confirmDeleteDocumentKey();
+    if (action === 'cancel-delete-document-key') handlers.cancelDeleteDocumentKey();
+    if (action === 'close-document-key-manager') handlers.closeDocumentKeyManager();
+    if (action === 'confirm-document-encryption') handlers.confirmDocumentEncryption();
+    if (action === 'cancel-document-encryption') handlers.cancelDocumentEncryption();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
     if (action === 'open-homepage-picker') {
@@ -526,6 +551,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'select-saved-version' && target.dataset.versionId) handlers.selectSavedVersion(target.dataset.versionId);
     if (action === 'close-version-history') handlers.closeVersionHistory();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
+    if (action === 'cancel-rename-encrypted-folder') handlers.cancelRenameEncryptedFolder();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();

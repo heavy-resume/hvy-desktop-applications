@@ -12,7 +12,10 @@ import {
   type HvyEmbeddingIndexVector,
   type HvySerializedEmbeddingIndex,
 } from '../../heavy-file-format/src/chat/embedding-context';
-import { setAttachment } from '../../heavy-file-format/src/attachments';
+import { removeAttachment, setAttachment } from '../../heavy-file-format/src/attachments';
+import { ensureDocumentAttachmentStore } from '../../heavy-file-format/src/attachment-store';
+import { extractDocumentEnvelopeKeyId } from './documentKeys';
+import { isWholeDocumentEncrypted } from './encryptedDocumentPolicy';
 
 const SIDECAR_SCHEMA_VERSION = 1;
 const SIDECAR_EXTENSION = '.emb';
@@ -291,6 +294,10 @@ async function readOrBuildEmbeddingIndex(
 ): Promise<EmbeddingIndexedFile | null> {
   const documentFile = await readDocumentFile(file.path);
   const bytes = new Uint8Array(documentFile.bytes);
+  if (extractDocumentEnvelopeKeyId(bytes)) {
+    await deleteDocumentEmbeddingSidecar(file.path);
+    return null;
+  }
   const sourceHash = hashBytes(bytes);
   const embedded = readMatchingEmbeddedIndex(bytes, settings);
   if (embedded) {
@@ -509,6 +516,10 @@ function defaultMaxCandidateDocuments(fileCount: number): number {
 }
 
 export async function attachMatchingSidecarEmbeddingIndex(documentPath: string, document: VisualDocument, settings: AiSettings): Promise<boolean> {
+  if (isWholeDocumentEncrypted(document)) {
+    await deleteDocumentEmbeddingSidecar(documentPath);
+    return false;
+  }
   const sidecar = await readEmbeddingSidecar(documentPath);
   if (!sidecar || !sidecarMatchesSettings(sidecar, settings)) return false;
   const plan = planEmbeddingIndexUpdate({
@@ -538,7 +549,10 @@ export async function attachMatchingSidecarEmbeddingIndex(documentPath: string, 
 }
 
 export async function writePreparedDocumentEmbeddingSidecar(documentPath: string, document: VisualDocument, settings: AiSettings): Promise<boolean> {
-  if (document.extension !== '.hvy') return false;
+  if (document.extension !== '.hvy' || isWholeDocumentEncrypted(document)) {
+    await deleteDocumentEmbeddingSidecar(documentPath);
+    return false;
+  }
   materializePreparedEmbeddingAttachments(document);
   const bytes = await serializeHvy(document);
   const index = readMatchingEmbeddedIndex(bytes, settings);
@@ -560,6 +574,18 @@ export async function writePreparedDocumentEmbeddingSidecar(documentPath: string
 export async function deleteSidecarIfSavedDocumentContainsMatchingIndex(documentPath: string, bytes: Uint8Array, settings: AiSettings): Promise<void> {
   if (!readMatchingEmbeddedIndex(bytes, settings)) return;
   await deleteSidecarFile(embeddingSidecarPath(documentPath)).catch(() => undefined);
+}
+
+export async function deleteDocumentEmbeddingSidecar(documentPath: string): Promise<void> {
+  await deleteSidecarFile(embeddingSidecarPath(documentPath)).catch(() => undefined);
+}
+
+export function removeDocumentEmbeddingAttachments(document: VisualDocument): void {
+  const store = ensureDocumentAttachmentStore(document);
+  for (const attachment of store.list()) {
+    if (attachment.meta.mediaType === EMBEDDING_ATTACHMENT_MEDIA_TYPE) removeAttachment(document, attachment.id);
+  }
+  document.attachments = store.list();
 }
 
 function serializeEmbeddingIndex(index: { model: string; dimensions?: number; chunks: HvyEmbeddingIndexChunk[]; vectors: HvyEmbeddingIndexVector[] }): Uint8Array {

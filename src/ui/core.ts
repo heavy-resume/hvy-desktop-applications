@@ -12,7 +12,8 @@ import { renderAboutDialog, renderExportedPdfDialog, renderExportPdfSavePrompt, 
 import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog } from './render-integrations';
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
 import { renderColorThemeDialog } from './render-theme';
-import { renderDeleteFileDialog, renderDeleteFolderDialog, renderNewFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
+import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
+import { renderDeleteFileDialog, renderDeleteFolderDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
 import { bindWorkspaceManagerReordering, renderEmptyState, renderNewWorkspaceDialog, renderWorkspaceInitializationDialog, renderWorkspaceManagerDialog, renderWorkspaces, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
 import { UiHandlers } from './types';
@@ -281,6 +282,10 @@ export function renderModals(state: AppState): void {
     ${renderMcpSettingsDialog(state)}
     ${renderMcpSettingsDiscardDialog(state)}
     ${renderColorThemeDialog(state)}
+      ${renderDocumentKeyImportDialog(state)}
+      ${renderDocumentKeyManagerDialog(state)}
+      ${renderDocumentKeyDeleteDialog(state)}
+      ${renderDocumentEncryptionDialog(state)}
     ${renderRecoveryDialog(state)}
     ${renderVersionHistoryDialog(state)}
     ${renderTabStackPopover(state)}
@@ -290,6 +295,7 @@ export function renderModals(state: AppState): void {
     ${renderSaveConflictDialog(state)}
     ${renderAppCloseDialog(state)}
     ${renderRenameFileDialog(state)}
+    ${renderRenameEncryptedFolderDialog(state)}
     ${renderDeleteFileDialog(state)}
     ${renderDeleteFolderDialog(state)}
     ${renderWorkspaceTransferDialog(state)}

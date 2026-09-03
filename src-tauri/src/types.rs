@@ -97,6 +97,68 @@ struct WorkspaceFolderRequest {
     #[serde(default)]
     parent_directory: String,
     name: String,
+    #[serde(default)]
+    encrypted: Option<EncryptedWorkspaceFolderRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedWorkspaceFolderRequest {
+    folder_id: String,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateEncryptedFolderDocumentRequest {
+    workspace_path: String,
+    folder_directory: String,
+    document_id: String,
+    extension: String,
+    document_bytes: Vec<u8>,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateEncryptedFolderChildRequest {
+    workspace_path: String,
+    folder_directory: String,
+    child_folder_id: String,
+    child_manifest_bytes: Vec<u8>,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct UpdateEncryptedFolderManifestRequest {
+    workspace_path: String,
+    folder_directory: String,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DeleteEncryptedFolderDocumentRequest {
+    workspace_path: String,
+    folder_directory: String,
+    document_id: String,
+    extension: String,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DeleteEncryptedFolderChildRequest {
+    workspace_path: String,
+    folder_directory: String,
+    child_folder_id: String,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,6 +185,8 @@ enum WorkspaceTreeNode {
         relative_path: String,
         #[serde(rename = "hiddenFromAI")]
         hidden_from_ai: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encrypted_folder_manifest: Option<Vec<u8>>,
         children: Vec<WorkspaceTreeNode>,
     },
     File {
@@ -262,6 +326,8 @@ struct FileMenuState {
     save_to_workspace: bool,
     export_pdf: bool,
     import_current: bool,
+    encrypt_document: bool,
+    decrypt_document: bool,
 }
 
 #[derive(Default)]

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { defineConfig, type Plugin } from 'vite';
+import type { Plugin } from 'vite';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { createBrythonMinimalVfsPlugin } from 'heavy-file-format-ref-impl/brython-minimal-vfs-plugin';
 
 const require = createRequire(import.meta.url);
@@ -131,6 +132,16 @@ export default defineConfig({
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   optimizeDeps: {
     entries: ['index.html', 'plugin-builder.html'],
+  },
+  test: {
+    setupFiles: ['./src/test/vitest.setup.ts'],
+    exclude: [
+      ...configDefaults.exclude,
+      '**/.electron-dev/**',
+      '**/dist-electron/**',
+      '**/src-tauri/target/**',
+      'src/integration-inspector.test.ts',
+    ],
   },
   resolve: {
     alias: {

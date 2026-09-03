@@ -193,6 +193,8 @@ fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuSta
     set_submenu_item_enabled(&file, "save-to-workspace", state.save_to_workspace)?;
     set_submenu_item_enabled(&file, "export-pdf", state.export_pdf)?;
     set_submenu_item_enabled(&file, "import-current", state.import_current)?;
+    set_submenu_item_enabled(&file, "encrypt-document", state.encrypt_document)?;
+    set_submenu_item_enabled(&file, "decrypt-document", state.decrypt_document)?;
     Ok(())
 }
 

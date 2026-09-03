@@ -29,6 +29,18 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
       handlers.closeDebugLog();
       return;
     }
+    if (root.querySelector('.document-key-dialog')) {
+      event.preventDefault();
+      if (state.documentKeyImportDialogOpen) handlers.cancelImportDocumentKeys();
+      else if (state.documentKeyDeleteId) handlers.cancelDeleteDocumentKey();
+      else handlers.closeDocumentKeyManager();
+      return;
+    }
+    if (root.querySelector('.document-encryption-dialog')) {
+      event.preventDefault();
+      handlers.cancelDocumentEncryption();
+      return;
+    }
     if (root.querySelector('.scripting-review-dialog')) {
       event.preventDefault();
       handlers.closeScriptingReview();
@@ -86,6 +98,11 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
     if (root.querySelector('form[data-form="rename-file"]')) {
       event.preventDefault();
       handlers.cancelRenameFile();
+      return;
+    }
+    if (root.querySelector('form[data-form="rename-encrypted-folder"]')) {
+      event.preventDefault();
+      handlers.cancelRenameEncryptedFolder();
       return;
     }
     if (root.querySelector('form[data-form="new-folder"]')) {

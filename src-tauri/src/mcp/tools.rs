@@ -787,6 +787,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 path,
                 relative_path,
                 hidden_from_ai,
+                encrypted_folder_manifest,
                 children,
             } => {
                 if *hidden_from_ai {
@@ -798,6 +799,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                     path: path.clone(),
                     relative_path: relative_path.clone(),
                     hidden_from_ai: *hidden_from_ai,
+                    encrypted_folder_manifest: encrypted_folder_manifest.clone(),
                     children,
                 })
             }

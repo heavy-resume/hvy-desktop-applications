@@ -923,3 +923,113 @@
   margin: 0;
   padding: 10px;
 }
+.document-key-dialog {
+  max-width: 46rem;
+}
+
+.document-encryption-dialog {
+  max-width: 36rem;
+}
+
+.encryption-key-import-list {
+  display: grid;
+  gap: 0.75rem;
+  max-height: min(24rem, 50vh);
+  overflow: auto;
+}
+
+.encryption-key-import-row {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+  border: 1px solid var(--hvy-border-color, #d8d8d8);
+  border-radius: 0.65rem;
+}
+
+.encryption-key-import-row small {
+  display: block;
+  margin-top: 0.2rem;
+  opacity: 0.72;
+}
+
+.encryption-key-import-row dl {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.encryption-key-import-row dl div {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.encryption-key-import-row dt {
+  opacity: 0.72;
+}
+
+.encryption-key-import-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.document-key-session-list {
+  margin-top: 1rem;
+}
+
+.document-key-session-list ul {
+  max-height: 14rem;
+  margin: 0.6rem 0 0;
+  overflow: auto;
+}
+
+.document-key-session-list li {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.document-key-metadata {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.document-key-metadata code {
+  overflow-wrap: anywhere;
+}
+
+.document-key-metadata small {
+  opacity: 0.72;
+}
+
+.document-key-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.document-key-delete-summary {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.document-key-delete-summary > div {
+  display: grid;
+  gap: 3px;
+}
+
+.document-key-delete-summary dt {
+  color: var(--muted-text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.document-key-delete-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

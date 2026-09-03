@@ -16,6 +16,7 @@ import { syncFileMenuState } from './mainWorkspaceUtils';
 import { documentStorageKey, normalizeAiMaxContextChars, normalizeDocumentMode, normalizeImageAttachmentMaxDimensions } from './mainUtilities';
 import { currentWorkspaceChatDocumentName, currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath } from './workspaceChat';
 import { initializeDocumentHistory } from './documentHistory';
+import { isWholeDocumentEncrypted, recoveryStateForPersistence } from './encryptedDocumentPolicy';
 import { recordDocumentNavigation } from './documentNavigationHistory';
 import { captureDocumentViewState, restoreDocumentViewState, type DocumentViewState } from './documentViewState';
 import { documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentTabName } from './recoveryDocuments';
@@ -316,13 +317,14 @@ export async function openDocument(file: DocumentFile, options: { source?: Runti
         readOnly: file.locked === true || workspaceAccess.readOnly,
       };
   const readOnly = session?.readOnly ?? (options.readOnly === true || access.readOnly || options.defaultDocument === true);
-  const hiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
+  const configuredHiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
   const document = session?.document ?? cachedFilterDocument ?? await measureDebugAsync(
     'load',
     'openDocument:deserialize',
     { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
     () => deserializeHvy(bytes, file.extension),
   );
+  const hiddenFromAI = configuredHiddenFromAI || isWholeDocumentEncrypted(document);
   if (!hiddenFromAI && file.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
     const attached = await measureDebugAsync(
       'load',
@@ -437,7 +439,7 @@ export function preserveCurrentDocumentSession(): void {
     : openDocument.dirty;
   openDocument.dirty = dirty;
   const scrollRatioValue = measurePerf('session:captureMountScrollRatio', { path: openDocument.source.path }, () => captureMountScrollRatio(mountRoot));
-  const recoveryStateValue = openDocument.mounted
+  const recoveryStateValue = openDocument.mounted && !isWholeDocumentEncrypted(document)
     ? measurePerf('session:getRecoveryState', { path: openDocument.source.path }, () => getMountedRecoveryState(openDocument.mounted!))
     : null;
   documentSessions.set(openDocument.versionId, {
@@ -470,7 +472,7 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     writeDocumentModePreference(openDocument.source.path, openDocument.mode);
   });
   const scrollRatioValue = measurePerf('session:update:captureMountScrollRatio', { path: openDocument.source.path }, () => captureMountScrollRatio(mountRoot));
-  const recoveryStateValue = openDocument.mounted
+  const recoveryStateValue = openDocument.mounted && !isWholeDocumentEncrypted(document)
     ? measurePerf('session:update:getRecoveryState', { path: openDocument.source.path }, () => getMountedRecoveryState(openDocument.mounted!))
     : null;
   documentSessions.set(openDocument.versionId, {
@@ -1120,7 +1122,7 @@ export function writeHotReloadSessionSnapshot(): void {
         mode: session.mode,
         metaOpen: session.metaOpen,
         scrollRatio: session.scrollRatio,
-        recoveryState: session.recoveryState,
+        recoveryState: recoveryStateForPersistence(session.document, session.recoveryState),
       });
     }
     for (const versionId of openedDocumentTabOrder) {
@@ -1145,7 +1147,10 @@ export function writeHotReloadSessionSnapshot(): void {
         mode: state.document.mode,
         metaOpen: state.document.metaOpen,
         scrollRatio: captureMountScrollRatio(mountRoot),
-        recoveryState: state.document.mounted ? getMountedRecoveryState(state.document.mounted) : pendingMountRecoveryState,
+        recoveryState: recoveryStateForPersistence(
+          state.document.mounted?.document,
+          state.document.mounted ? getMountedRecoveryState(state.document.mounted) : pendingMountRecoveryState,
+        ),
       });
     }
     const snapshot: HotReloadSessionSnapshot = {

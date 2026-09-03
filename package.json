@@ -28,7 +28,9 @@
     "preview": "vite preview",
     "tauri": "node scripts/tauri-cli.mjs",
     "smoke:frontend": "node scripts/smoke-frontend.mjs",
-    "test:unit": "vitest run"
+    "test": "npm run test:unit && npm run test:browser",
+    "test:unit": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
     "@automerge/automerge": "^3.3.2",

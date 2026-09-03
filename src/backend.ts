@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { resolveEncryptedWorkspace } from './encryptedFolders';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
@@ -52,6 +53,7 @@ export interface WorkspaceFileNode {
   archived?: boolean;
   locked?: boolean;
   hiddenFromAI?: boolean;
+  encryptedFolderKeyId?: string;
 }
 
 export interface WorkspaceFolderNode {
@@ -60,6 +62,10 @@ export interface WorkspaceFolderNode {
   relativePath: string;
   hiddenFromAI?: boolean;
   children: WorkspaceTreeNode[];
+  encryptedFolderManifest?: number[];
+  encryptedFolderKeyId?: string;
+  encryptionState?: 'unlocked' | 'missingKey' | 'invalid' | 'incomplete';
+  encryptedFolderIssues?: string[];
 }
 
 export type WorkspaceTreeNode =
@@ -89,6 +95,10 @@ export interface AddFilesResult {
 export interface DroppedWorkspaceFile {
   name: string;
   bytes: number[];
+}
+
+export function selectWorkspaceDocumentFiles(): Promise<DroppedWorkspaceFile[] | null> {
+  return invokeDesktop('select_workspace_document_files');
 }
 
 export interface WorkspaceOpenCandidate {
@@ -183,6 +193,41 @@ export interface ThemeFile {
   bytes: number[];
 }
 
+export interface DocumentKeyVaultStatus {
+  configured: boolean;
+  hasVault: boolean;
+  storageMode: 'safeStorageVault' | 'nativeKeyringVault';
+  state: 'empty' | 'ready' | 'unavailable' | 'denied' | 'incomplete' | 'corrupt';
+  message?: string;
+}
+
+export function emptyDocumentKeyVaultStatus(): DocumentKeyVaultStatus {
+  return { configured: false, hasVault: false, storageMode: 'safeStorageVault', state: 'empty' };
+}
+
+export interface StoredDocumentKeyInput {
+  keyId: string;
+  key: string;
+  createdAt?: string;
+  source: 'generated' | 'imported';
+  label?: string;
+  bundleLabel?: string;
+}
+
+export interface DocumentKeyMetadata {
+  keyId: string;
+  createdAt: string;
+  source: 'generated' | 'imported';
+  label?: string;
+  bundleLabels?: string[];
+}
+
+export interface DocumentKeyFileSource {
+  path: string;
+  name: string;
+  text: string;
+}
+
 export interface SaveThemeAsRequest {
   suggestedName: string;
   bytes: number[];
@@ -195,12 +240,49 @@ export interface FileMenuState {
   saveToWorkspace: boolean;
   exportPdf: boolean;
   importCurrent: boolean;
+  encryptDocument: boolean;
+  decryptDocument: boolean;
 }
 
 export interface CreateDocumentRequest {
   workspacePath: string;
   relativePath: string;
   template: string;
+}
+
+export interface CreateEncryptedFolderDocumentRequest {
+  workspacePath: string;
+  folderDirectory: string;
+  documentId: string;
+  extension: '.hvy' | '.phvy';
+  documentBytes: number[] | Uint8Array;
+  previousManifestBytes: number[] | Uint8Array;
+  manifestBytes: number[] | Uint8Array;
+}
+
+export interface CreateEncryptedFolderChildRequest {
+  workspacePath: string;
+  folderDirectory: string;
+  childFolderId: string;
+  childManifestBytes: number[] | Uint8Array;
+  previousManifestBytes: number[] | Uint8Array;
+  manifestBytes: number[] | Uint8Array;
+}
+
+export interface UpdateEncryptedFolderManifestRequest {
+  workspacePath: string;
+  folderDirectory: string;
+  previousManifestBytes: number[] | Uint8Array;
+  manifestBytes: number[] | Uint8Array;
+}
+
+export interface DeleteEncryptedFolderDocumentRequest extends UpdateEncryptedFolderManifestRequest {
+  documentId: string;
+  extension: '.hvy' | '.phvy';
+}
+
+export interface DeleteEncryptedFolderChildRequest extends UpdateEncryptedFolderManifestRequest {
+  childFolderId: string;
 }
 
 export interface RenameDocumentRequest {
@@ -231,6 +313,10 @@ export interface WorkspaceFolderRequest {
   workspacePath: string;
   parentDirectory?: string;
   name: string;
+  encrypted?: {
+    folderId: string;
+    manifestBytes: number[] | Uint8Array;
+  };
 }
 
 export interface DeleteWorkspaceFolderRequest {
@@ -603,6 +689,30 @@ export function resetIntegrationVault(): Promise<IntegrationVaultStatus> {
   return invokeDesktop('reset_integration_vault');
 }
 
+export function loadDocumentKeyVaultStatus(): Promise<DocumentKeyVaultStatus> {
+  return invokeDesktop('load_document_key_vault_status');
+}
+
+export function loadDocumentKeys(keyIds: string[]): Promise<Record<string, string>> {
+  return invokeDesktop('load_document_keys', { keyIds });
+}
+
+export function listDocumentKeyMetadata(): Promise<DocumentKeyMetadata[]> {
+  return invokeDesktop('list_document_key_metadata');
+}
+
+export function storeDocumentKeys(entries: StoredDocumentKeyInput[]): Promise<DocumentKeyVaultStatus> {
+  return invokeDesktop('store_document_keys', { entries });
+}
+
+export function deleteDocumentKey(keyId: string): Promise<DocumentKeyVaultStatus> {
+  return invokeDesktop('delete_document_key', { keyId });
+}
+
+export function openDocumentKeyFileDialog(): Promise<DocumentKeyFileSource[]> {
+  return invokeDesktop('open_document_key_file_dialog');
+}
+
 export function loadMcpSettings(): Promise<McpSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultMcpSettings());
@@ -821,12 +931,13 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
   return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export function loadWorkspace(path: string, options: { includeTemplates?: boolean; recordRecent?: boolean } = {}): Promise<Workspace> {
-  return invokeDesktop('load_workspace', {
+export async function loadWorkspace(path: string, options: { includeTemplates?: boolean; recordRecent?: boolean } = {}): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('load_workspace', {
     path,
     includeTemplates: options.includeTemplates === true,
     recordRecent: options.recordRecent === true,
   });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
 }
 
 export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {
@@ -848,8 +959,9 @@ export function unarchiveWorkspace(path: string): Promise<Workspace> {
   return invokeDesktop('unarchive_workspace', { path });
 }
 
-export function createWorkspaceFolder(request: WorkspaceFolderRequest): Promise<Workspace> {
-  return invokeDesktop('create_workspace_folder', { request });
+export async function createWorkspaceFolder(request: WorkspaceFolderRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('create_workspace_folder', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
 }
 
 export function addFilesToWorkspace(workspacePath: string, targetDirectory = ''): Promise<AddFilesResult | null> {
@@ -990,6 +1102,20 @@ export function createDocumentFile(request: CreateDocumentRequest): Promise<Docu
   });
 }
 
+export function createEncryptedFolderDocument(request: CreateEncryptedFolderDocumentRequest): Promise<DocumentFile> {
+  return invokeDesktop('create_encrypted_folder_document', { request });
+}
+
+export async function createEncryptedFolderChild(request: CreateEncryptedFolderChildRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('create_encrypted_folder_child', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export async function updateEncryptedFolderManifest(request: UpdateEncryptedFolderManifestRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('update_encrypted_folder_manifest', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
 export function revealDocumentFile(path: string): Promise<void> {
   return invokeDesktop('reveal_document_file', { path });
 }
@@ -1019,6 +1145,16 @@ export function restoreDocumentFile(path: string): Promise<Workspace> {
 
 export function deleteDocumentFile(path: string): Promise<Workspace | null> {
   return invokeDesktop('delete_document_file', { path });
+}
+
+export async function deleteEncryptedFolderDocument(request: DeleteEncryptedFolderDocumentRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('delete_encrypted_folder_document', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export async function deleteEncryptedFolderChild(request: DeleteEncryptedFolderChildRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('delete_encrypted_folder_child', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
 }
 
 export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Promise<Workspace> {

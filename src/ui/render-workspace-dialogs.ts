@@ -210,6 +210,25 @@ export function renderRenameFileDialog(state: AppState): string {
     </div>`;
 }
 
+export function renderRenameEncryptedFolderDialog(state: AppState): string {
+  if (!state.renameEncryptedFolderWorkspacePath || !state.renameEncryptedFolderDirectory || !state.renameEncryptedFolderCurrentName) return '';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="dialog" data-form="rename-encrypted-folder">
+        <h2>Rename Encrypted Folder</h2>
+        <p class="dialog-note">Only encrypted folder metadata changes. The opaque filesystem directory name remains the same.</p>
+        <label>
+          <span>Name</span>
+          <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" value="${escapeAttr(state.renameEncryptedFolderCurrentName)}" required>
+        </label>
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-rename-encrypted-folder">Cancel</button>
+          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
+        </div>
+      </form>
+    </div>`;
+}
+
 export function renderDeleteFileDialog(state: AppState): string {
   if (!state.deleteFilePath || !state.deleteFileName) {
     return '';
@@ -254,14 +273,16 @@ export function renderNewFolderDialog(state: AppState): string {
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-folder">
-        <h2>New Folder</h2>
+        <h2>${state.newFolderEncrypted ? 'New Encrypted Folder' : 'New Folder'}</h2>
         <input class="hvy-galaxy-input" name="workspacePath" type="hidden" value="${escapeAttr(state.newFolderWorkspacePath)}">
         <input class="hvy-galaxy-input" name="parentDirectory" type="hidden" value="${escapeAttr(state.newFolderParentDirectory)}">
+        <input name="encrypted" type="hidden" value="${state.newFolderEncrypted ? 'true' : 'false'}">
         <p class="dialog-note">${escapeHtml(workspace?.manifest.name ?? 'Workspace')} / ${escapeHtml(parentLabel)}</p>
         <label>
           <span>Name</span>
           <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" required>
         </label>
+        ${state.newFolderEncrypted ? '<p class="dialog-note">Names and documents placed in this folder will use one encryption key. The folder is stored on disk under an opaque ID.</p>' : ''}
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-new-folder">Cancel</button>
           <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Create</button>

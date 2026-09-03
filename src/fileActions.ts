@@ -7,6 +7,8 @@ export interface FileActionAvailability {
   saveToWorkspace: boolean;
   exportPdf: boolean;
   importCurrent: boolean;
+  encryptDocument: boolean;
+  decryptDocument: boolean;
 }
 
 export function getFileActionAvailability(state: AppState): FileActionAvailability {
@@ -17,6 +19,8 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const historyPreview = document?.virtual === 'versionHistory';
   const editableTemplateDocument = Boolean(document && editableDocument && isWorkspaceTemplatePath(state, document.source.path));
   const editableHvyDocument = Boolean(document && editableDocument && document.source.extension !== '.md');
+  const documentEncryptionAvailable = Boolean(mountedEditableDocument && editableHvyDocument && document?.mode !== 'hvy');
+  const documentEncrypted = document?.mounted?.document.encryption?.encrypted === true;
   const documentWorkspacePath = currentDocumentWorkspacePath(state);
   const hasWorkspaceDestination = state.workspaces.some((workspace) => workspace.path !== documentWorkspacePath);
 
@@ -27,6 +31,8 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
     saveToWorkspace: Boolean(mountedEditableDocument && hasWorkspaceDestination),
     exportPdf: Boolean(document?.source.extension === '.phvy' && mountedEditableDocument && !editableTemplateDocument),
     importCurrent: editableHvyDocument,
+    encryptDocument: documentEncryptionAvailable && !documentEncrypted,
+    decryptDocument: documentEncryptionAvailable && documentEncrypted,
   };
 }
 

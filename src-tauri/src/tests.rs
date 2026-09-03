@@ -4,6 +4,32 @@
     use zip::write::FileOptions;
 
     #[test]
+    fn document_key_vault_recovers_persisted_key_after_reopen() {
+        let directory = tempdir().unwrap();
+        let vault_path = directory.path().join("document-key-vault-v1.json");
+        let wrapping_key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+        let key_id = "11111111-1111-4111-8111-111111111111";
+        let document_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+        let mut keys = HashMap::new();
+        keys.insert(key_id.into(), StoredDocumentKey {
+            key: document_key.into(),
+            created_at: "2026-09-02T12:00:00Z".into(),
+            source: "generated".into(),
+            label: None,
+            bundle_labels: vec!["Quarterly planning".into()],
+        });
+        write_document_key_vault_at(&vault_path, &wrapping_key, &DocumentKeyVault { version: 1, keys }).unwrap();
+
+        let persisted_bytes = fs::read(&vault_path).unwrap();
+        assert!(!persisted_bytes.windows(document_key.len()).any(|window| window == document_key.as_bytes()));
+        let reopened = read_document_key_vault_at(&vault_path, &wrapping_key).unwrap();
+        assert_eq!(reopened.keys.get(key_id).unwrap().key, document_key);
+        assert_eq!(reopened.keys.get(key_id).unwrap().bundle_labels, vec!["Quarterly planning"]);
+        delete_document_key_from_vault_at(&vault_path, &wrapping_key, key_id).unwrap();
+        assert!(!read_document_key_vault_at(&vault_path, &wrapping_key).unwrap().keys.contains_key(key_id));
+    }
+
+    #[test]
     fn recovery_draft_is_hidden_only_when_saved_bytes_match() {
         let dir = tempdir().unwrap();
         let document_path = dir.path().join("Notes.hvy");
@@ -406,6 +432,324 @@
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
         assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));
+    }
+
+    #[test]
+    fn scans_encrypted_folder_manifest_bytes_without_listing_the_marker() {
+        let dir = tempdir().unwrap();
+        let encrypted = dir.path().join("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        fs::create_dir(&encrypted).unwrap();
+        fs::write(encrypted.join(".hvy-folder"), b"encrypted manifest envelope").unwrap();
+        fs::write(encrypted.join("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.hvy"), b"ciphertext").unwrap();
+        let manifest = WorkspaceManifest {
+            schema_version: 1,
+            name: "Test".into(),
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+            root_files: Vec::new(),
+            expanded_paths: Vec::new(),
+            template_visibility: WorkspaceTemplateVisibility::default(),
+            archived_files: Vec::new(),
+            locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
+            hidden_from_ai_files: Vec::new(),
+        };
+
+        let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
+        assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder {
+            encrypted_folder_manifest: Some(bytes),
+            children,
+            ..
+        } if bytes == b"encrypted manifest envelope" && children.len() == 1));
+    }
+
+    #[test]
+    fn creates_encrypted_folder_atomically_under_opaque_id() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let manifest_bytes = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"nonce","ciphertext":"ciphertext"}}"#).into_bytes();
+        let encrypted = EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes,
+        };
+
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).unwrap();
+
+        let folder = dir.path().join(folder_id);
+        assert!(folder.is_dir());
+        assert_eq!(fs::read(folder.join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), encrypted.manifest_bytes);
+        assert!(!dir.path().join("Private Plans").exists());
+        assert!(!dir.path().join(format!(".{folder_id}.creating")).exists());
+    }
+
+    #[test]
+    fn rejects_invalid_encrypted_folder_identity_before_writing() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let encrypted = EncryptedWorkspaceFolderRequest {
+            folder_id: "../outside".into(),
+            manifest_bytes: b"encrypted manifest envelope".to_vec(),
+        };
+
+        assert!(create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).is_err());
+        assert!(!dir.path().join("outside").exists());
+    }
+
+    #[test]
+    fn rejects_encrypted_manifest_for_a_different_folder_identity() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let encrypted = EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: br#"{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","nonce":"nonce","ciphertext":"ciphertext"}"#.to_vec(),
+        };
+
+        assert!(create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).is_err());
+        assert!(!dir.path().join(folder_id).exists());
+    }
+
+    #[test]
+    fn creates_encrypted_document_before_committing_matching_manifest() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let previous = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"old","ciphertext":"old"}}"#).into_bytes();
+        let next = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"new","ciphertext":"new"}}"#).into_bytes();
+        let encrypted_folder = EncryptedWorkspaceFolderRequest { folder_id: folder_id.into(), manifest_bytes: previous.clone() };
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted_folder)).unwrap();
+        let request = CreateEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            document_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into(),
+            extension: ".hvy".into(),
+            document_bytes: b"encrypted document".to_vec(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: next.clone(),
+        };
+
+        let document_path = create_encrypted_folder_document_at(dir.path(), &request).unwrap();
+
+        assert_eq!(fs::read(document_path).unwrap(), b"encrypted document");
+        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(folder_id).join(format!(".{}.hvy.creating", request.document_id)).exists());
+    }
+
+    #[test]
+    fn rejects_stale_encrypted_folder_document_mutation_without_writing_document() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let current = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"current","ciphertext":"current"}}"#).into_bytes();
+        let stale = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"stale","ciphertext":"stale"}}"#).into_bytes();
+        let encrypted_folder = EncryptedWorkspaceFolderRequest { folder_id: folder_id.into(), manifest_bytes: current };
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted_folder)).unwrap();
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let request = CreateEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            document_id: document_id.into(),
+            extension: ".hvy".into(),
+            document_bytes: b"encrypted document".to_vec(),
+            previous_manifest_bytes: stale.clone(),
+            manifest_bytes: stale,
+        };
+
+        assert!(create_encrypted_folder_document_at(dir.path(), &request).is_err());
+        assert!(!dir.path().join(folder_id).join(format!("{document_id}.hvy")).exists());
+    }
+
+    #[test]
+    fn creates_encrypted_child_folder_before_committing_parent_manifest() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let child_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |id: &str, nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let previous = envelope(folder_id, "old");
+        let next = envelope(folder_id, "new");
+        let child = envelope(child_id, "child");
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: previous.clone(),
+        })).unwrap();
+        let request = CreateEncryptedFolderChildRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            child_folder_id: child_id.into(),
+            child_manifest_bytes: child.clone(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: next.clone(),
+        };
+
+        create_encrypted_folder_child_at(dir.path(), &request).unwrap();
+
+        let child_path = dir.path().join(folder_id).join(child_id);
+        assert_eq!(fs::read(child_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), child);
+        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(folder_id).join(format!(".{child_id}.creating")).exists());
+    }
+
+    #[test]
+    fn rejects_stale_encrypted_child_folder_mutation_without_leaving_a_directory() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let child_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |id: &str, nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let current = envelope(folder_id, "current");
+        let stale = envelope(folder_id, "stale");
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: current,
+        })).unwrap();
+        let request = CreateEncryptedFolderChildRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            child_folder_id: child_id.into(),
+            child_manifest_bytes: envelope(child_id, "child"),
+            previous_manifest_bytes: stale.clone(),
+            manifest_bytes: stale,
+        };
+
+        assert!(create_encrypted_folder_child_at(dir.path(), &request).is_err());
+        assert!(!dir.path().join(folder_id).join(child_id).exists());
+    }
+
+    #[test]
+    fn updates_encrypted_folder_manifest_only_when_expected_bytes_match() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{folder_id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let previous = envelope("old");
+        let next = envelope("new");
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: previous.clone(),
+        })).unwrap();
+
+        update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            previous_manifest_bytes: previous.clone(),
+            manifest_bytes: next.clone(),
+        }).unwrap();
+        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+
+        assert!(update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: envelope("later"),
+        }).is_err());
+    }
+
+    #[test]
+    fn deletes_encrypted_document_only_with_its_matching_manifest_update() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{folder_id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let previous = envelope("old");
+        let next = envelope("new");
+        create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(), manifest_bytes: previous.clone(),
+        })).unwrap();
+        let document_path = dir.path().join(folder_id).join(format!("{document_id}.hvy"));
+        fs::write(&document_path, b"encrypted").unwrap();
+
+        delete_encrypted_folder_document_at(dir.path(), &DeleteEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            document_id: document_id.into(),
+            extension: ".hvy".into(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: next.clone(),
+        }).unwrap();
+
+        assert!(!document_path.exists());
+        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(folder_id).join(format!(".{document_id}.hvy.deleting")).exists());
+    }
+
+    #[test]
+    fn restores_staged_encrypted_document_when_delete_manifest_is_stale() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{folder_id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(), manifest_bytes: envelope("current"),
+        })).unwrap();
+        let document_path = dir.path().join(folder_id).join(format!("{document_id}.hvy"));
+        fs::write(&document_path, b"encrypted").unwrap();
+
+        assert!(delete_encrypted_folder_document_at(dir.path(), &DeleteEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            document_id: document_id.into(),
+            extension: ".hvy".into(),
+            previous_manifest_bytes: envelope("stale"),
+            manifest_bytes: envelope("next"),
+        }).is_err());
+
+        assert_eq!(fs::read(document_path).unwrap(), b"encrypted");
+        assert!(!dir.path().join(folder_id).join(format!(".{document_id}.hvy.deleting")).exists());
+    }
+
+    #[test]
+    fn restores_staged_encrypted_child_when_delete_manifest_is_stale() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let child_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |id: &str, nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(), manifest_bytes: envelope(folder_id, "current"),
+        })).unwrap();
+        let child_path = dir.path().join(folder_id).join(child_id);
+        fs::create_dir(&child_path).unwrap();
+        fs::write(child_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE), envelope(child_id, "child")).unwrap();
+
+        assert!(delete_encrypted_folder_child_at(dir.path(), &DeleteEncryptedFolderChildRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: folder_id.into(),
+            child_folder_id: child_id.into(),
+            previous_manifest_bytes: envelope(folder_id, "stale"),
+            manifest_bytes: envelope(folder_id, "next"),
+        }).is_err());
+
+        assert!(child_path.is_dir());
+        assert!(!dir.path().join(folder_id).join(format!(".{child_id}.deleting")).exists());
+    }
+
+    #[test]
+    fn workspace_scan_restores_interrupted_encrypted_delete_staging() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let folder = dir.path().join(folder_id);
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join(ENCRYPTED_FOLDER_MANIFEST_FILE), b"encrypted manifest").unwrap();
+        let staging = folder.join(format!(".{document_id}.hvy.deleting"));
+        fs::write(&staging, b"encrypted document").unwrap();
+
+        load_workspace_from_path(dir.path()).unwrap();
+
+        assert!(!staging.exists());
+        assert_eq!(fs::read(folder.join(format!("{document_id}.hvy"))).unwrap(), b"encrypted document");
     }
 
     #[test]

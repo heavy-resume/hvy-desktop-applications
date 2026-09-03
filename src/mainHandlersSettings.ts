@@ -1,18 +1,32 @@
 import { installAiChatClient } from './aiClient';
-import { installMcpClient, installPluginPackage, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
+import { installMcpClient, installPluginPackage, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { findFileInWorkspaces, state } from './state';
-import { applyAppColorTheme, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
+import { applyAppColorTheme, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
-import { loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
+import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
+import { openDocumentKeyFileDialog } from './backend';
+import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, serializeDocumentKeyFile } from './documentKeys';
+import { serializeHvy, type VisualDocument } from './hvy';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 
 interface DocumentColorTheme {
   name: string;
   colors: Record<string, string>;
+}
+
+async function openDocumentNamesUsingKey(keyId: string): Promise<string[]> {
+  const documents = new Map<VisualDocument, string>();
+  if (state.document?.mounted) documents.set(state.document.mounted.document, state.document.source.name);
+  for (const session of documentSessions.values()) documents.set(session.document, session.source.name);
+  const names: string[] = [];
+  for (const [document, name] of documents) {
+    if (extractEncryptionKeyIds(await serializeHvy(document)).includes(keyId)) names.push(name);
+  }
+  return [...new Set(names)];
 }
 
 function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'): string {
@@ -309,6 +323,76 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   };
   return {
+    chooseDocumentKeyFiles: () => void runBusy('Reading encryption key files...', async () => {
+      const sources = await openDocumentKeyFileDialog();
+      if (sources.length === 0) return;
+      state.documentKeyImportKeys = parseDocumentKeyFiles(sources);
+      state.documentKeyManagerDialogOpen = false;
+      state.documentKeyImportDialogOpen = true;
+      state.status = `Review ${state.documentKeyImportKeys.length} encryption ${state.documentKeyImportKeys.length === 1 ? 'key' : 'keys'}`;
+    }, { preserveMountedDocument: true }),
+    confirmImportDocumentKeys: () => void runBusy('Importing encryption keys...', async () => {
+      const keys = [...state.documentKeyImportKeys];
+      await importReviewedDocumentKeys(keys);
+      state.documentKeyImportDialogOpen = false;
+      state.documentKeyImportKeys = [];
+      state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
+      state.status = `Imported ${keys.length} encryption ${keys.length === 1 ? 'key' : 'keys'}`;
+    }, { preserveMountedDocument: true }),
+    cancelImportDocumentKeys: () => {
+      state.documentKeyImportDialogOpen = false;
+      state.documentKeyImportKeys = [];
+      state.status = 'Ready';
+      rerender({ preserveMountedDocument: true });
+    },
+    exportDocumentKey: (keyId) => void runBusy('Exporting encryption key...', async () => {
+      await ensureDocumentKeysLoaded([keyId]);
+      const key = documentEncryptionKeyring()[keyId];
+      if (!key) throw new Error(`Encryption key ${keyId} is not loaded.`);
+      const savedPath = await saveBinaryAsDialog({
+        suggestedName: `hvy-key-${keyId}.hvykey`,
+        bytes: Array.from(serializeDocumentKeyFile([{ keyId, algorithm: 'fernet', key }])),
+      });
+      if (savedPath) state.status = 'Exported encryption key file';
+    }, { preserveMountedDocument: true }),
+    requestDeleteDocumentKey: (keyId) => void runBusy('Checking encryption key use...', async () => {
+      const openNames = await openDocumentNamesUsingKey(keyId);
+      if (openNames.length > 0) {
+        throw new Error(`Close ${openNames.join(', ')} before removing this encryption key from the device.`);
+      }
+      state.documentKeyDeleteId = keyId;
+      state.documentKeyManagerDialogOpen = false;
+      state.status = 'Ready';
+    }, { preserveMountedDocument: true }),
+    confirmDeleteDocumentKey: () => void runBusy('Removing encryption key...', async () => {
+      const keyId = state.documentKeyDeleteId;
+      if (!keyId) return;
+      await permanentlyDeleteDocumentKey(keyId);
+      state.documentKeyDeleteId = null;
+      state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
+      state.documentKeyMetadata = await listDocumentKeyMetadata();
+      state.documentKeyManagerDialogOpen = true;
+      state.status = 'Encryption key removed from this device';
+    }, { preserveMountedDocument: true }),
+    cancelDeleteDocumentKey: () => {
+      state.documentKeyDeleteId = null;
+      state.documentKeyManagerDialogOpen = true;
+      state.status = 'Ready';
+      rerender({ preserveMountedDocument: true });
+    },
+    openDocumentKeyManager: () => void runBusy('Loading encryption keys...', async () => {
+      state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
+      state.documentKeyMetadata = state.documentKeyVaultStatus.state === 'ready'
+        ? await listDocumentKeyMetadata()
+        : [];
+      state.documentKeyManagerDialogOpen = true;
+      state.status = 'Ready';
+    }, { preserveMountedDocument: true }),
+    closeDocumentKeyManager: () => {
+      state.documentKeyManagerDialogOpen = false;
+      state.status = 'Ready';
+      rerender({ preserveMountedDocument: true });
+    },
   discoverIntegrationSources: (integrationId, pageId) => {
     const { page, profile } = integrationPageContext(integrationId, pageId);
     state.integrationStructuredSourcePending = true;

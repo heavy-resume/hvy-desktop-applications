@@ -445,6 +445,11 @@ const INTEGRATION_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.integration-
 const INTEGRATION_VAULT_ACCOUNT: &str = "default";
 const INTEGRATION_VAULT_FILE: &str = "integration-cookie-vault-tauri.json";
 const INTEGRATION_VAULT_AAD: &[u8] = b"hvy-galaxy-integration-vault-v1";
+const DOCUMENT_KEY_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.document-keys";
+const DOCUMENT_KEY_VAULT_ACCOUNT: &str = "vault-wrapping-key-v1";
+const DOCUMENT_KEY_VAULT_FILE: &str = "document-key-vault-v1.json";
+const DOCUMENT_KEY_VAULT_AAD: &[u8] = b"hvy-galaxy-document-key-vault-v1";
+static DOCUMENT_KEY_VAULT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
@@ -549,6 +554,65 @@ struct IntegrationVaultEnvelope {
     algorithm: String,
     nonce: String,
     ciphertext: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyVaultStatus {
+    configured: bool,
+    has_vault: bool,
+    storage_mode: String,
+    state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredDocumentKey {
+    key: String,
+    created_at: String,
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bundle_labels: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DocumentKeyVault {
+    version: u8,
+    keys: HashMap<String, StoredDocumentKey>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreDocumentKeyEntry {
+    key_id: String,
+    key: String,
+    created_at: Option<String>,
+    source: Option<String>,
+    label: Option<String>,
+    bundle_label: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DocumentKeyFileSource {
+    path: String,
+    name: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMetadata {
+    key_id: String,
+    created_at: String,
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bundle_labels: Vec<String>,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -756,6 +820,224 @@ async fn reset_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultSt
         .map_err(|error| AppError::Message(error.to_string()))? = None;
     load_integration_vault_status(app)
     }
+}
+
+fn document_key_vault_entry() -> AppResult<keyring::Entry> {
+    keyring::Entry::new(DOCUMENT_KEY_VAULT_SERVICE, DOCUMENT_KEY_VAULT_ACCOUNT)
+        .map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn document_key_vault_path(app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join(DOCUMENT_KEY_VAULT_FILE))
+}
+
+fn write_document_key_vault(app: &AppHandle, key: &[u8], vault: &DocumentKeyVault) -> AppResult<()> {
+    write_document_key_vault_at(&document_key_vault_path(app)?, key, vault)
+}
+
+fn write_document_key_vault_at(path: &Path, key: &[u8], vault: &DocumentKeyVault) -> AppResult<()> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let plaintext = serde_json::to_vec(vault)?;
+    let ciphertext = cipher.encrypt(&nonce, aes_gcm::aead::Payload { msg: &plaintext, aad: DOCUMENT_KEY_VAULT_AAD })
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    write_json_atomically(path, &IntegrationVaultEnvelope {
+        version: 1,
+        algorithm: "AES-256-GCM".into(),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(ciphertext),
+    })
+}
+
+fn read_document_key_vault(app: &AppHandle, key: &[u8]) -> AppResult<DocumentKeyVault> {
+    read_document_key_vault_at(&document_key_vault_path(app)?, key)
+}
+
+fn read_document_key_vault_at(path: &Path, key: &[u8]) -> AppResult<DocumentKeyVault> {
+    let envelope: IntegrationVaultEnvelope = serde_json::from_slice(&fs::read(path)?)?;
+    if envelope.version != 1 || envelope.algorithm != "AES-256-GCM" {
+        return Err(AppError::Message("Unsupported document key vault format.".into()));
+    }
+    let nonce = BASE64.decode(envelope.nonce).map_err(|error| AppError::Message(error.to_string()))?;
+    let ciphertext = BASE64.decode(envelope.ciphertext).map_err(|error| AppError::Message(error.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let plaintext = cipher.decrypt(aes_gcm::Nonce::from_slice(&nonce), aes_gcm::aead::Payload { msg: &ciphertext, aad: DOCUMENT_KEY_VAULT_AAD })
+        .map_err(|_| AppError::Message("Could not decrypt the document key vault.".into()))?;
+    let vault: DocumentKeyVault = serde_json::from_slice(&plaintext)?;
+    if vault.version != 1 {
+        return Err(AppError::Message("Unsupported document key vault format.".into()));
+    }
+    Ok(vault)
+}
+
+fn delete_document_key_from_vault_at(path: &Path, key: &[u8], key_id: &str) -> AppResult<()> {
+    let mut vault = read_document_key_vault_at(path, key)?;
+    if vault.keys.remove(key_id).is_none() {
+        return Err(AppError::Message(format!("Encryption key {key_id} is not stored on this device.")));
+    }
+    write_document_key_vault_at(path, key, &vault)
+}
+
+fn document_key_vault_status(app: &AppHandle) -> AppResult<DocumentKeyVaultStatus> {
+    let has_vault = document_key_vault_path(app)?.exists();
+    let status = |configured: bool, state: &str, message: Option<&str>| DocumentKeyVaultStatus {
+        configured,
+        has_vault,
+        storage_mode: "nativeKeyringVault".into(),
+        state: state.into(),
+        message: message.map(str::to_owned),
+    };
+    match document_key_vault_entry()?.get_secret() {
+        Ok(key) => {
+            if !has_vault {
+                return Ok(status(true, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match.")));
+            }
+            if key.len() != 32 || read_document_key_vault(app, &key).is_err() {
+                return Ok(status(true, "corrupt", Some("The protected local vault could not be read or decrypted.")));
+            }
+            Ok(status(true, "ready", None))
+        }
+        Err(keyring::Error::NoEntry) if has_vault => Ok(status(false, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match."))),
+        Err(keyring::Error::NoEntry) => Ok(status(false, "empty", None)),
+        Err(keyring::Error::NoStorageAccess(_)) => Ok(status(false, "denied", Some("Access to operating-system protected storage was denied or the store is locked."))),
+        Err(keyring::Error::PlatformFailure(_)) => Ok(status(false, "unavailable", Some("Operating-system protected storage is unavailable."))),
+        Err(_) => Ok(status(false, "corrupt", Some("The protected local vault could not be read."))),
+    }
+}
+
+fn require_usable_document_key_vault(status: &DocumentKeyVaultStatus) -> AppResult<()> {
+    if status.state == "ready" {
+        return Ok(());
+    }
+    Err(AppError::Message(status.message.clone().unwrap_or_else(|| format!("The protected local vault is {}.", status.state))))
+}
+
+#[tauri::command]
+fn load_document_key_vault_status(app: AppHandle) -> AppResult<DocumentKeyVaultStatus> {
+    document_key_vault_status(&app)
+}
+
+#[tauri::command]
+fn load_document_keys(app: AppHandle, key_ids: Vec<String>) -> AppResult<HashMap<String, String>> {
+    if key_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let status = document_key_vault_status(&app)?;
+    if status.state == "empty" {
+        return Ok(HashMap::new());
+    }
+    require_usable_document_key_vault(&status)?;
+    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    let vault = read_document_key_vault(&app, &key)?;
+    Ok(key_ids.into_iter().filter_map(|key_id| vault.keys.get(&key_id).map(|entry| (key_id, entry.key.clone()))).collect())
+}
+
+#[tauri::command]
+fn list_document_key_metadata(app: AppHandle) -> AppResult<Vec<DocumentKeyMetadata>> {
+    let status = document_key_vault_status(&app)?;
+    if status.state == "empty" {
+        return Ok(Vec::new());
+    }
+    require_usable_document_key_vault(&status)?;
+    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    let vault = read_document_key_vault(&app, &key)?;
+    let mut metadata: Vec<DocumentKeyMetadata> = vault.keys.into_iter().map(|(key_id, entry)| DocumentKeyMetadata {
+        key_id,
+        created_at: entry.created_at,
+        source: entry.source,
+        label: entry.label,
+        bundle_labels: entry.bundle_labels,
+    }).collect();
+    metadata.sort_by(|left, right| left.key_id.cmp(&right.key_id));
+    Ok(metadata)
+}
+
+#[tauri::command]
+fn store_document_keys(app: AppHandle, entries: Vec<StoreDocumentKeyEntry>) -> AppResult<DocumentKeyVaultStatus> {
+    if entries.is_empty() {
+        return document_key_vault_status(&app);
+    }
+    let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let status = document_key_vault_status(&app)?;
+    if status.state != "empty" {
+        require_usable_document_key_vault(&status)?;
+    }
+    let (key, mut vault) = if status.state == "ready" {
+        let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+        let vault = read_document_key_vault(&app, &key)?;
+        (key, vault)
+    } else {
+        let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+        document_key_vault_entry()?.set_secret(&key).map_err(|error| AppError::Message(error.to_string()))?;
+        (key, DocumentKeyVault { version: 1, keys: HashMap::new() })
+    };
+    for entry in entries {
+        if entry.key_id.trim().is_empty() || entry.key.trim().is_empty() {
+            return Err(AppError::Message("Invalid document key entry.".into()));
+        }
+        if let Some(existing) = vault.keys.get_mut(&entry.key_id) {
+            if existing.key != entry.key {
+                return Err(AppError::Message(format!("A different key is already stored for {}.", entry.key_id)));
+            }
+            if let Some(bundle_label) = entry.bundle_label.filter(|label| !label.trim().is_empty()) {
+                let bundle_label = bundle_label.trim().to_string();
+                if !existing.bundle_labels.contains(&bundle_label) {
+                    existing.bundle_labels.push(bundle_label);
+                }
+            }
+            continue;
+        }
+        let source = if entry.source.as_deref() == Some("generated") { "generated" } else { "imported" };
+        vault.keys.insert(entry.key_id, StoredDocumentKey {
+            key: entry.key,
+            created_at: entry.created_at.unwrap_or_else(|| Utc::now().to_rfc3339()),
+            source: source.into(),
+            label: entry.label.filter(|label| !label.trim().is_empty()),
+            bundle_labels: entry.bundle_label.filter(|label| !label.trim().is_empty()).map(|label| vec![label.trim().to_string()]).unwrap_or_default(),
+        });
+    }
+    write_document_key_vault(&app, &key, &vault)?;
+    document_key_vault_status(&app)
+}
+
+#[tauri::command]
+fn delete_document_key(app: AppHandle, key_id: String) -> AppResult<DocumentKeyVaultStatus> {
+    if key_id.trim().is_empty() {
+        return Err(AppError::Message("Invalid document key ID.".into()));
+    }
+    let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let status = document_key_vault_status(&app)?;
+    require_usable_document_key_vault(&status)?;
+    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    delete_document_key_from_vault_at(&document_key_vault_path(&app)?, &key, &key_id)?;
+    document_key_vault_status(&app)
+}
+
+#[tauri::command]
+fn open_document_key_file_dialog() -> AppResult<Vec<DocumentKeyFileSource>> {
+    let Some(paths) = rfd::FileDialog::new()
+        .add_filter("HVY encryption keys", &["hvykey"])
+        .pick_files()
+    else {
+        return Ok(Vec::new());
+    };
+    paths.into_iter().map(|path| {
+        if path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("hvykey")) != Some(true) {
+            return Err(AppError::Message("Only .hvykey files can be imported.".into()));
+        }
+        let bytes = fs::read(&path)?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(AppError::Message("HVY key files must not exceed 1 MB.".into()));
+        }
+        let text = String::from_utf8(bytes).map_err(|_| AppError::Message("HVY key files must be UTF-8 JSON.".into()))?;
+        Ok(DocumentKeyFileSource {
+            path: path_to_string(&path),
+            name: path.file_name().and_then(|value| value.to_str()).unwrap_or("key.hvykey").into(),
+            text,
+        })
+    }).collect()
 }
 const INTEGRATION_INSPECTOR: &str = include_str!("../../src/integration-inspector.js");
 
@@ -1558,15 +1840,9 @@ fn unarchive_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
 
 #[tauri::command]
 fn create_workspace_folder(app: AppHandle, request: WorkspaceFolderRequest) -> AppResult<Workspace> {
-    let workspace_path = PathBuf::from(request.workspace_path);
+    let workspace_path = PathBuf::from(&request.workspace_path);
     ensure_workspace(&workspace_path)?;
-    let parent = workspace_target_directory(&workspace_path, &request.parent_directory)?;
-    let folder_path = parent.join(normalized_folder_name(&request.name)?);
-    if folder_path.exists() {
-        return Err(AppError::Message("A folder already exists at that path.".into()));
-    }
-    fs::create_dir(&folder_path)?;
-    touch_workspace_manifest(&workspace_path)?;
+    create_workspace_folder_at(&workspace_path, &request.parent_directory, &request.name, request.encrypted.as_ref())?;
     add_recent_workspace(&app, &workspace_path)?;
     load_workspace_from_path(&workspace_path)
 }
@@ -1621,6 +1897,32 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
         copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
         relocated_archived_files,
     }))
+}
+
+#[tauri::command]
+fn select_workspace_document_files() -> AppResult<Option<Vec<DroppedWorkspaceFile>>> {
+    let Some(paths) = rfd::FileDialog::new()
+        .add_filter("Encrypted-folder documents", &["hvy", "phvy"])
+        .pick_files()
+    else {
+        return Ok(None);
+    };
+    let mut files = Vec::with_capacity(paths.len());
+    for source in paths {
+        let extension = document_extension(&source);
+        if !matches!(extension.as_deref(), Some(".hvy" | ".phvy")) {
+            return Err(AppError::Message(
+                "Encrypted folders support .hvy and .phvy documents.".into(),
+            ));
+        }
+        let name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| AppError::Message("Selected file has no valid file name.".into()))?
+            .to_string();
+        files.push(DroppedWorkspaceFile { name, bytes: fs::read(source)? });
+    }
+    Ok(Some(files))
 }
 
 #[tauri::command]
@@ -2045,6 +2347,38 @@ fn create_document_file(
 }
 
 #[tauri::command]
+fn create_encrypted_folder_document(
+    app: AppHandle,
+    request: CreateEncryptedFolderDocumentRequest,
+) -> AppResult<DocumentFile> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let path = create_encrypted_folder_document_at(&workspace_path, &request)?;
+    add_recent_file(&app, &path)?;
+    read_document_at(&path)
+}
+
+#[tauri::command]
+fn create_encrypted_folder_child(
+    request: CreateEncryptedFolderChildRequest,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    create_encrypted_folder_child_at(&workspace_path, &request)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn update_encrypted_folder_manifest(
+    request: UpdateEncryptedFolderManifestRequest,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    update_encrypted_folder_manifest_at(&workspace_path, &request)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
 fn reveal_document_file(path: String) -> AppResult<()> {
     let path = PathBuf::from(path);
     if !path.exists() {
@@ -2136,6 +2470,44 @@ fn archive_document_file(path: String) -> AppResult<Workspace> {
     let workspace_path = workspace_root_for_document(parent)
         .ok_or_else(|| AppError::Message("Document must be inside a workspace.".into()))?;
     update_archived_document_file(&workspace_path, &path, true)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn delete_encrypted_folder_document(app: AppHandle, request: DeleteEncryptedFolderDocumentRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let deleted_path = delete_encrypted_folder_document_at(&workspace_path, &request)?;
+    update_archived_document_file(&workspace_path, &deleted_path, false)?;
+    update_workspace_file_ai_access_at(
+        &workspace_path,
+        &deleted_path,
+        WorkspaceFileAiAccessUpdate { locked: Some(false), hidden_from_ai: Some(false) },
+    )?;
+    remove_recent_file(&app, &deleted_path)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn delete_encrypted_folder_child(request: DeleteEncryptedFolderChildRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    delete_encrypted_folder_child_at(&workspace_path, &request)?;
+    let deleted_relative = format!(
+        "{}/{}",
+        request.folder_directory.trim().replace('\\', "/"),
+        request.child_folder_id,
+    );
+    let manifest_path = workspace_manifest_path(&workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let outside_deleted = |entry: &String| entry != &deleted_relative && !entry.starts_with(&format!("{deleted_relative}/"));
+    manifest.archived_files.retain(outside_deleted);
+    manifest.locked_files.retain(outside_deleted);
+    manifest.hidden_from_ai_files.retain(outside_deleted);
+    manifest.hidden_from_ai_folders.retain(outside_deleted);
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)?;
     load_workspace_from_path(&workspace_path)
 }
 

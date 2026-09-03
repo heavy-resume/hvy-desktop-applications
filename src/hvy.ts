@@ -26,6 +26,13 @@ import type {
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
 import type { HvyChatContextProvider } from '../../heavy-file-format/src/types';
+import {
+  documentEncryptionKeyring,
+  ensureDocumentKeysLoaded,
+  extractEncryptionKeyIds,
+  flushDocumentKeyPersistence,
+  queueGeneratedDocumentKey,
+} from './documentKeys';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
@@ -36,6 +43,7 @@ type HvyRecoveryStateMount = {
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
 type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState' | 'setThemeOverrides'> & {
+  encryptDocumentAsync?: HvyEmbedMount['encryptDocumentAsync'];
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
@@ -146,13 +154,22 @@ function ensureReferenceSemanticFilterProvider(): void {
 }
 
 export async function deserializeHvy(bytes: Uint8Array, extension: DocumentExtension): Promise<VisualDocument> {
-  const { deserializeDocumentBytes } = await loadHvyEmbed();
-  return deserializeDocumentBytes(bytes, extension);
+  const { deserializeDocumentBytesAsync } = await loadHvyEmbed();
+  await ensureDocumentKeysLoaded(extractEncryptionKeyIds(bytes));
+  return deserializeDocumentBytesAsync(bytes, extension, {
+    encryption: { keyring: documentEncryptionKeyring() },
+  });
 }
 
 export async function serializeHvy(document: VisualDocument): Promise<Uint8Array> {
-  const { serializeDocumentBytesAsync } = await loadHvyEmbed();
-  return serializeDocumentBytesAsync(document);
+  const { encryptDocumentBytes, serializeDocumentBytesAsync } = await loadHvyEmbed();
+  await flushDocumentKeyPersistence();
+  const encryption = { keyring: documentEncryptionKeyring() };
+  const bytes = await serializeDocumentBytesAsync(document, null, { encryption });
+  if (document.encryption?.encrypted !== true || document.encryption.algorithm !== 'fernet') return bytes;
+  const key = documentEncryptionKeyring()[document.encryption.keyId];
+  if (!key) throw new Error(`Missing Fernet key for encrypted HVY document: ${document.encryption.keyId}`);
+  return (await encryptDocumentBytes(bytes, { keyId: document.encryption.keyId, key })).bytes;
 }
 
 export async function profileHvySerializationCosts(document: VisualDocument): Promise<HvySerializationCostProfile> {
@@ -279,6 +296,7 @@ export async function mountHvyDocument(
     ...activeBuiltInPlugins,
     ...downloadedPlugins.filter((plugin) => !activeBuiltInPlugins.some((builtIn) => builtIn.id === plugin.id)),
   ];
+  const mountKeyring = { ...documentEncryptionKeyring() };
   const mount = mountHvy({
     root,
     document,
@@ -318,6 +336,11 @@ export async function mountHvyDocument(
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     semanticFilterConcurrency: state.aiSettings.maxConcurrentSemanticFilters,
     editorClipboard: editorClipboardHost,
+    encryption: {
+      keyring: mountKeyring,
+      onKeyGenerated: ({ keyId, key }) => queueGeneratedDocumentKey(keyId, key),
+    },
+    showComponentEncryptionControls: true,
     storageKey: null,
     powerScripts: options.powerScripts ?? 'prompt',
     getPowerScriptAcceptance: options.getPowerScriptAcceptance,
@@ -1486,8 +1509,22 @@ export function serializeMountedDocument(mounted: MountedDocument): Uint8Array {
   return mounted.mount.serializeDocumentBytes();
 }
 
-export function serializeMountedDocumentAsync(mounted: MountedDocument): Promise<Uint8Array> {
+export async function serializeMountedDocumentAsync(mounted: MountedDocument): Promise<Uint8Array> {
+  await flushDocumentKeyPersistence();
   return mounted.mount.serializeDocumentBytesAsync();
+}
+
+export async function encryptMountedDocumentAsync(mounted: MountedDocument): Promise<string> {
+  if (!mounted.mount.encryptDocumentAsync) throw new Error('Document encryption is unavailable in the current mode.');
+  const generated = await mounted.mount.encryptDocumentAsync();
+  await flushDocumentKeyPersistence();
+  return generated.keyId;
+}
+
+export function removeMountedDocumentEncryption(mounted: MountedDocument): string | null {
+  const keyId = mounted.document.encryption?.encrypted === true ? mounted.document.encryption.keyId : null;
+  mounted.document.encryption = undefined;
+  return keyId;
 }
 
 export function getMountedRecoveryState(mounted: MountedDocument): string | null {
