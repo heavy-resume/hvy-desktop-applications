@@ -65,7 +65,7 @@ export function renderToolbar(state: AppState): string {
   return `
     <div class="toolbar-title">
       <strong title="${escapeAttr(document.source.path)}">${escapeHtml(document.source.name)}</strong>
-      <span>${document.readOnly ? 'Read-only document' : document.virtual === 'recoveryDraft' ? 'Recovered unsaved copy' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
+      <span>${document.readOnly ? 'Read-only document' : document.virtual === 'versionHistory' ? 'History snapshot — saves as new document' : document.virtual === 'recoveryDraft' ? 'Recovered unsaved copy' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>

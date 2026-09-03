@@ -1,4 +1,5 @@
 import type { DocumentBackup, Workspace } from './backend';
+import type { OpenDocument } from './state';
 import { workspaceFileAccessInWorkspaces } from './workspaceFiles';
 
 export type SaveConflictKind = 'discardRecoveryDraft' | 'overwriteRecoveryChanges' | 'overwriteOriginalChanges';
@@ -9,6 +10,15 @@ export function recoveryDocumentId(backupId: string): string {
 
 export function recoveryDocumentTabName(name: string): string {
   return `${name} — Unsaved copy`;
+}
+
+export function recoveryDraftIdentity(
+  document: Pick<OpenDocument, 'source' | 'displayName' | 'virtual'>,
+): { path: string; name: string } {
+  if (document.virtual === 'versionHistory') {
+    return { path: '', name: document.displayName ?? document.source.name };
+  }
+  return { path: document.source.path, name: document.source.name };
 }
 
 export function mountedDocumentDirtyAfterMount(startedDirty: boolean, isNew: boolean, mountedDirty: boolean): boolean {

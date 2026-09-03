@@ -37,31 +37,35 @@ export function renderRecoveryDialog(state: AppState): string {
     </div>`;
 }
 
-export function renderVersionHistoryDialog(state: AppState): string {
-  if (!state.versionHistoryDialogOpen) return '';
+export function renderVersionHistorySidebar(state: AppState): string {
   const versions = state.savedDocumentVersions;
+  const selectedVersionId = state.document?.virtual === 'versionHistory'
+    ? state.document.historyVersionId
+    : state.selectedSavedVersionId;
   return `
-    <div class="modal-backdrop" role="presentation">
-      <section class="dialog wide-dialog recovery-dialog" role="dialog" aria-modal="true" aria-labelledby="versionHistoryTitle">
-        <h2 id="versionHistoryTitle">Version History</h2>
-        <p class="dialog-note">Choose a saved version to review it. Saving while reviewing creates a new document and does not change the current document.</p>
+    <section class="history-sidebar-section" aria-labelledby="historySidebarTitle">
+      <div class="history-sidebar-heading">
+        <div class="history-sidebar-title-group">
+          <h2 class="history-sidebar-title" id="historySidebarTitle">Version History</h2>
+          <span class="history-sidebar-document-name" title="${escapeAttr(state.versionHistorySourcePath ?? '')}">${escapeHtml(state.versionHistorySourceName ?? 'Document')}</span>
+        </div>
+        <button type="button" class="hvy-galaxy-button icon-button history-sidebar-close" data-action="close-version-history" title="Close version history" aria-label="Close version history">&times;</button>
+      </div>
+      <p class="history-sidebar-note">Select a saved version to review or edit it. Saving creates a new document.</p>
+      <nav class="history-sidebar-list" aria-label="Saved versions">
         ${versions.length === 0
       ? '<div class="empty-panel compact">No saved versions are available yet.</div>'
-      : `<div class="recovery-list">
-          ${versions.map((version, index) => `
-            <article class="recovery-item${version.id === state.selectedSavedVersionId ? ' is-selected' : ''}">
-              <button type="button" class="hvy-galaxy-button version-history-select" data-action="select-saved-version" data-version-id="${escapeAttr(version.id)}" aria-current="${version.id === state.selectedSavedVersionId ? 'true' : 'false'}">
-                <strong>${index === 0 ? 'Latest saved version' : 'Saved version'}</strong>
-                <span>${escapeHtml(formatBackupTimestamp(version.createdAt))}</span>
-                <small>${escapeHtml(version.displayName)}</small>
-              </button>
-            </article>`).join('')}
-        </div>`}
-        <div class="dialog-actions">
-          <button class="hvy-galaxy-button" type="button" data-action="close-version-history">Close</button>
-        </div>
-      </section>
-    </div>`;
+      : versions.map((version, index) => {
+        const selected = version.id === selectedVersionId;
+        return `
+          <button type="button" class="hvy-galaxy-button history-sidebar-version${selected ? ' is-selected' : ''}" data-action="select-saved-version" data-version-id="${escapeAttr(version.id)}" aria-current="${selected ? 'true' : 'false'}">
+            <strong>${index === 0 ? 'Latest saved version' : 'Saved version'}</strong>
+            <span class="history-sidebar-version-time">${escapeHtml(formatBackupTimestamp(version.createdAt))}</span>
+            <small class="history-sidebar-version-author">${escapeHtml(version.displayName)}</small>
+          </button>`;
+      }).join('')}
+      </nav>
+    </section>`;
 }
 
 export function renderCloseDocumentDialog(state: AppState): string {

@@ -11,6 +11,7 @@ import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, documentSessions, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
 import { logDebugEvent } from './debugLog';
+import { recoveryDraftIdentity } from './recoveryDocuments';
 
 let lastFileMenuStateKey: string | null = null;
 
@@ -68,7 +69,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
   const mounted = state.document.mounted;
   const document = getMountedDocument(mounted);
   const previousPath = state.document.source.path;
-  const previousName = state.document.source.name;
+  const previousRecoveryIdentity = recoveryDraftIdentity(state.document);
   const previousMode = state.document.mode;
   const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const bytes = await serializeMountedDocumentAsync(mounted);
@@ -84,7 +85,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
   state.selectedWorkspacePath = workspacePath;
   upsertWorkspace(await loadWorkspace(workspacePath));
   await refreshRecents();
-  await clearRecoveryDraftsForDocument(previousPath, previousName);
+  await clearRecoveryDraftsForDocument(previousRecoveryIdentity.path, previousRecoveryIdentity.name);
   await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;
   rerender({ preserveMountedDocument: true });

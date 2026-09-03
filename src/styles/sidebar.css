@@ -165,6 +165,82 @@
   scrollbar-gutter: stable;
 }
 
+.history-sidebar-section {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-sidebar-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-sidebar-title-group {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.history-sidebar-title {
+  margin: 0;
+  color: var(--hvy-text, #152223);
+  font-size: 15px;
+}
+
+.history-sidebar-document-name {
+  overflow: hidden;
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-sidebar-close {
+  flex: 0 0 auto;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.history-sidebar-note {
+  margin: 0;
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.history-sidebar-list {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+  padding-right: var(--workspace-scrollbar-gutter);
+  scrollbar-gutter: stable;
+}
+
+.history-sidebar-version {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.history-sidebar-version.is-selected {
+  border-color: var(--hvy-accent-1, #477d7c);
+  background: color-mix(in srgb, var(--hvy-accent-1, #477d7c) 12%, var(--hvy-surface, #ffffff));
+}
+
+.history-sidebar-version-time,
+.history-sidebar-version-author {
+  color: var(--hvy-muted, #5d6b66);
+}
+
 .integrations-section-body[hidden],
 .workspaces-scroll-body[hidden] {
   display: none;

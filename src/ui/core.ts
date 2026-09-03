@@ -7,7 +7,7 @@ import { applyWorkspaceSidebarWidth, bindEscapeEvents, bindWorkspaceSidebarResiz
 import { bindWorkspaceEvents } from './events-workspace';
 import { renderAiSettingsDialog, renderAiSettingsDiscardDialog, renderMcpSettingsDialog, renderMcpSettingsDiscardDialog, syncAiRangeFields } from './render-ai-mcp';
 import { renderAppSettingsDialog, renderAppSettingsDiscardDialog, renderDebugLogDialog, renderHomepageErrorDialog, renderHomepagePickerDialog, renderScriptingReviewDialog } from './render-app-settings';
-import { renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistoryDialog, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
+import { renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
 import { renderAboutDialog, renderExportedPdfDialog, renderExportPdfSavePrompt, renderImportDialog, renderImportProgressDialog, renderNewDocumentDialog, updateImportSubmit } from './render-import';
 import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog } from './render-integrations';
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
@@ -41,6 +41,12 @@ export let integrationActionBuilderScrollTop = 0;
 
 export let integrationActionBuilderDialogScrollTop = 0;
 
+let workspaceSidebarScrollTop = 0;
+
+let integrationSidebarScrollTop = 0;
+
+let historySidebarScrollTop = 0;
+
 export const MIN_PASTED_IMPORT_CHARS = 50;
 
 export const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
@@ -56,8 +62,9 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
 
 export function renderLeftPanel(state: AppState): void {
   const leftPanel = leftPanelRoot();
-  const workspaceScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-scroll-body')?.scrollTop ?? 0;
-  const integrationScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section')?.scrollTop ?? 0;
+  workspaceSidebarScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-scroll-body')?.scrollTop ?? workspaceSidebarScrollTop;
+  integrationSidebarScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section')?.scrollTop ?? integrationSidebarScrollTop;
+  historySidebarScrollTop = leftPanel.querySelector<HTMLElement>('.history-sidebar-list')?.scrollTop ?? historySidebarScrollTop;
   const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view-launcher[open]')).map((details) => details.dataset.quickViewId ?? ''));
   const expandedIntegrationFilters = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-profile-filter[open]')).map((details) => details.dataset.quickViewId ?? ''));
   leftPanel.innerHTML = `
@@ -71,6 +78,7 @@ export function renderLeftPanel(state: AppState): void {
     <div class="sidebar-actions">
       <button class="hvy-galaxy-button" type="button" data-action="open-file">Open File</button>
     </div>
+    ${state.versionHistorySidebarOpen ? renderVersionHistorySidebar(state) : `
     <section class="integrations-section${state.integrationsSectionExpanded ? '' : ' is-collapsed'}">
       <div class="sidebar-section-heading">
         <h2>
@@ -100,16 +108,20 @@ export function renderLeftPanel(state: AppState): void {
       <div class="workspaces-scroll-body" ${state.workspacesSectionExpanded ? '' : 'hidden'}>
         ${renderWorkspaces(state)}
       </div>
-    </section>
+    </section>`}
     <div class="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize workspaces pane"></div>`;
   applyWorkspaceSidebarWidth(appRoot);
   const nextWorkspacesScrollBody = leftPanel.querySelector<HTMLElement>('.workspaces-scroll-body');
   if (nextWorkspacesScrollBody) {
-    nextWorkspacesScrollBody.scrollTop = workspaceScrollTop;
+    nextWorkspacesScrollBody.scrollTop = workspaceSidebarScrollTop;
   }
   const nextIntegrationsSection = leftPanel.querySelector<HTMLElement>('.integrations-section');
   if (nextIntegrationsSection) {
-    nextIntegrationsSection.scrollTop = integrationScrollTop;
+    nextIntegrationsSection.scrollTop = integrationSidebarScrollTop;
+  }
+  const nextHistorySidebarList = leftPanel.querySelector<HTMLElement>('.history-sidebar-list');
+  if (nextHistorySidebarList) {
+    nextHistorySidebarList.scrollTop = historySidebarScrollTop;
   }
 }
 
@@ -288,7 +300,6 @@ export function renderModals(state: AppState): void {
       ${renderDocumentKeyDeleteDialog(state)}
       ${renderDocumentEncryptionDialog(state)}
     ${renderRecoveryDialog(state)}
-    ${renderVersionHistoryDialog(state)}
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
     ${renderCloseDocumentDraftDialog(state)}

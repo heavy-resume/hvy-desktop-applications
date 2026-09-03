@@ -207,7 +207,9 @@ export interface AppState {
   debugLogDialogOpen: boolean;
   debugLogEntries: DebugLogEntry[];
   recoveryDialogOpen: boolean;
-  versionHistoryDialogOpen: boolean;
+  versionHistorySidebarOpen: boolean;
+  versionHistorySourcePath: string | null;
+  versionHistorySourceName: string | null;
   savedDocumentVersions: SavedVersion[];
   selectedSavedVersionId: string | null;
   closeDocumentDialogOpen: boolean;
@@ -511,7 +513,9 @@ export const state: AppState = {
   debugLogDialogOpen: false,
   debugLogEntries: [],
   recoveryDialogOpen: false,
-  versionHistoryDialogOpen: false,
+  versionHistorySidebarOpen: false,
+  versionHistorySourcePath: null,
+  versionHistorySourceName: null,
   savedDocumentVersions: [],
   selectedSavedVersionId: null,
   closeDocumentDialogOpen: false,

@@ -1,12 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { DocumentBackup, Workspace } from './backend';
-import { availableRecoveryBackups, documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentId, recoveryDocumentTabName, recoverySaveConflictKind } from './recoveryDocuments';
+import { availableRecoveryBackups, documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentId, recoveryDocumentTabName, recoveryDraftIdentity, recoverySaveConflictKind } from './recoveryDocuments';
 
 describe('recovery document identity', () => {
   it('uses a distinct tab identity and label for an unsaved copy', () => {
     expect(recoveryDocumentId('draft-123')).toBe('recovery-draft:draft-123');
     expect(recoveryDocumentId('draft-123')).not.toBe('/tmp/work/Notes.hvy');
     expect(recoveryDocumentTabName('Notes.hvy')).toBe('Notes.hvy — Unsaved copy');
+  });
+
+  it('backs up an edited history snapshot as an untitled copy', () => {
+    expect(recoveryDraftIdentity({
+      source: {
+        documentId: 'history-document',
+        workingVersionId: 'history-version',
+        path: 'version-history:%2Ftmp%2Fwork%2FNotes.hvy:saved-version',
+        name: 'Notes.hvy — saved version',
+        extension: '.hvy',
+      },
+      displayName: 'Notes.hvy — September 2, 2026',
+      virtual: 'versionHistory',
+    })).toEqual({
+      path: '',
+      name: 'Notes.hvy — September 2, 2026',
+    });
   });
 
   it('keeps a recovered document dirty when mounting reports its clean internal baseline', () => {

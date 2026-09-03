@@ -62,7 +62,10 @@ export interface DocumentSession {
   viewState: DocumentViewState | null;
   recoveryState: string | null;
   recoveryBackupId: string | null;
-  virtual?: 'recoveryDraft' | 'defaultDocument';
+  virtual?: 'versionHistory' | 'recoveryDraft' | 'defaultDocument';
+  historySourcePath?: string;
+  historySourceName?: string;
+  historyVersionId?: string;
   recoveryModified: boolean;
 }
 export interface HotReloadDocumentSnapshot {
@@ -304,7 +307,9 @@ export async function openDocument(file: DocumentFile, options: { source?: Runti
   });
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(versionId);
   const viewSession = storedSession;
-  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly ? storedSession : null;
+  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory'
+    ? storedSession
+    : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
   const workspaceAccess = workspaceFileAiAccess(file.path);
@@ -358,9 +363,9 @@ export async function openDocument(file: DocumentFile, options: { source?: Runti
     recoveryModified: session?.recoveryModified ?? false,
     virtual: options.historyPreview ? 'versionHistory' : options.defaultDocument ? 'defaultDocument' : options.recovered ? 'recoveryDraft' : session?.virtual,
     includedDocumentId: options.includedDocumentId,
-    historySourcePath: options.historyPreview?.sourcePath,
-    historySourceName: options.historyPreview?.sourceName,
-    historyVersionId: options.historyPreview?.versionId,
+    historySourcePath: options.historyPreview?.sourcePath ?? session?.historySourcePath,
+    historySourceName: options.historyPreview?.sourceName ?? session?.historySourceName,
+    historyVersionId: options.historyPreview?.versionId ?? session?.historyVersionId,
   };
   logDebugEvent('load', 'openDocument:stateInitialized', {
     path: file.path,
@@ -379,7 +384,7 @@ export async function openDocument(file: DocumentFile, options: { source?: Runti
     markRestoredBackupSuppression(state.document.source.path, state.document.source.name);
   }
   state.selectedFilePath = options.defaultDocument ? null : file.path;
-  if (!options.defaultDocument && !options.isNew && !options.historyPreview && file.path) {
+  if (!options.defaultDocument && !options.isNew && !options.historyPreview && session?.virtual !== 'versionHistory' && file.path) {
     initializeDocumentHistory(file.path, file.name, document);
   }
   const defaultDocumentLabel = options.defaultDocumentLabel ?? 'HVY Galaxy guide';
@@ -460,7 +465,10 @@ export function preserveCurrentDocumentSession(): void {
     viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
-    virtual: openDocument.virtual === 'recoveryDraft' || openDocument.virtual === 'defaultDocument' ? openDocument.virtual : undefined,
+    virtual: openDocument.virtual === 'versionHistory' || openDocument.virtual === 'recoveryDraft' || openDocument.virtual === 'defaultDocument' ? openDocument.virtual : undefined,
+    historySourcePath: openDocument.historySourcePath,
+    historySourceName: openDocument.historySourceName,
+    historyVersionId: openDocument.historyVersionId,
     recoveryModified: openDocument.recoveryModified,
   });
   measurePerf('session:writeHotReloadSessionSnapshot', { path: openDocument.source.path }, () => writeHotReloadSessionSnapshot());
@@ -493,7 +501,10 @@ export function updateCurrentDocumentSession(document: VisualDocument): void {
     viewState: captureDocumentViewState(mountRoot),
     recoveryState: recoveryStateValue,
     recoveryBackupId: openDocument.recoveryBackupId,
-    virtual: openDocument.virtual === 'recoveryDraft' || openDocument.virtual === 'defaultDocument' ? openDocument.virtual : undefined,
+    virtual: openDocument.virtual === 'versionHistory' || openDocument.virtual === 'recoveryDraft' || openDocument.virtual === 'defaultDocument' ? openDocument.virtual : undefined,
+    historySourcePath: openDocument.historySourcePath,
+    historySourceName: openDocument.historySourceName,
+    historyVersionId: openDocument.historyVersionId,
     recoveryModified: openDocument.recoveryModified,
   });
   measurePerf('session:update:writeHotReloadSessionSnapshot', { path: openDocument.source.path }, () => writeHotReloadSessionSnapshot());
@@ -637,7 +648,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
           rerender({ preserveMountedDocument: true });
         });
     },
-    onEmbeddingIndexPrepared: currentDocument.source.extension === '.hvy' && !currentDocument.hiddenFromAI && state.aiSettings.embeddings.enabled
+    onEmbeddingIndexPrepared: currentDocument.virtual !== 'versionHistory' && currentDocument.source.extension === '.hvy' && !currentDocument.hiddenFromAI && state.aiSettings.embeddings.enabled
       ? async () => {
           const written = await measureDebugAsync(
             'load',
@@ -844,7 +855,7 @@ export function updateDirtyChrome(): void {
   const openDocument = state.document;
   if (!openDocument) return;
   syncDocumentTabs();
-  const label = openDocument.virtual === 'versionHistory' ? 'Saved version' : openDocument.readOnly ? 'Read only' : openDocument.dirty ? 'Unsaved' : 'Saved';
+  const label = openDocument.readOnly ? 'Read only' : openDocument.dirty ? 'Unsaved' : openDocument.virtual === 'versionHistory' ? 'Saved version' : 'Saved';
   const indicator = document.querySelector<HTMLElement>('.dirty-indicator');
   indicator?.replaceChildren(document.createTextNode(label));
   indicator?.setAttribute('data-state', openDocument.readOnly ? 'read-only' : openDocument.dirty ? 'dirty' : 'clean');
@@ -1112,11 +1123,11 @@ export function writeHotReloadSessionSnapshot(): void {
       if (readOnly || tabPaths.includes(path)) return;
       tabPaths.push(path);
     };
-    if (state.document && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft') {
+    if (state.document && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft' && state.document.virtual !== 'versionHistory') {
       addTabPath(state.document.source.path, state.document.readOnly);
     }
     for (const session of documentSessions.values()) {
-      if (session.readOnly || session.virtual === 'recoveryDraft') continue;
+      if (session.readOnly || session.virtual === 'recoveryDraft' || session.virtual === 'versionHistory') continue;
       addTabPath(session.source.path, false);
       documents.set(session.source.path, {
         path: session.source.path,
@@ -1129,7 +1140,7 @@ export function writeHotReloadSessionSnapshot(): void {
     for (const versionId of openedDocumentTabOrder) {
       if (isWorkspaceChatDocumentPath(versionId)) continue;
       const session = documentSessions.get(versionId);
-      if (session?.virtual === 'recoveryDraft') continue;
+      if (session?.virtual === 'recoveryDraft' || session?.virtual === 'versionHistory') continue;
       if (session) addTabPath(session.source.path, session.readOnly);
     }
     if (tabPaths.length === 0) {
@@ -1142,7 +1153,7 @@ export function writeHotReloadSessionSnapshot(): void {
       sessionStorage.setItem(HOT_RELOAD_SESSION_STORAGE_KEY, serialized);
       return;
     }
-    if (state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft') {
+    if (state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft' && state.document.virtual !== 'versionHistory') {
       documents.set(state.document.source.path, {
         path: state.document.source.path,
         mode: state.document.mode,
@@ -1155,7 +1166,7 @@ export function writeHotReloadSessionSnapshot(): void {
       });
     }
     const snapshot: HotReloadSessionSnapshot = {
-      activePath: state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft' ? state.document.source.path : tabPaths[0] ?? null,
+      activePath: state.document && !state.document.readOnly && state.document.virtual !== 'workspaceChat' && state.document.virtual !== 'recoveryDraft' && state.document.virtual !== 'versionHistory' ? state.document.source.path : tabPaths[0] ?? null,
       tabPaths,
       documents: Array.from(documents.values()).filter((entry) => tabPaths.includes(entry.path)),
     };

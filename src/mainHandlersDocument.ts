@@ -184,7 +184,10 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   openVersionHistory: () => void openVersionHistory(),
   selectSavedVersion: (id) => void openSavedVersionPreview(id),
   closeVersionHistory: () => {
-    state.versionHistoryDialogOpen = false;
+    state.versionHistorySidebarOpen = false;
+    state.versionHistorySourcePath = null;
+    state.versionHistorySourceName = null;
+    state.savedDocumentVersions = [];
     state.selectedSavedVersionId = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });

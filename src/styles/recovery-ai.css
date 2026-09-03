@@ -22,25 +22,6 @@
   gap: 3px;
 }
 
-.version-history-select {
-  display: grid;
-  grid-column: 1 / -1;
-  min-width: 0;
-  gap: 3px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  padding: 0;
-  text-align: left;
-  cursor: pointer;
-}
-
-.recovery-item.is-selected {
-  border-color: var(--hvy-accent, #2f6968);
-  background: color-mix(in srgb, var(--hvy-accent, #2f6968) 10%, var(--hvy-surface, #ffffff));
-  box-shadow: 0 0 0 1px var(--hvy-accent, #2f6968);
-}
-
 .recovery-item-actions {
   display: flex;
   gap: 8px;
@@ -239,4 +220,3 @@
   justify-content: end;
   gap: 8px;
 }
-
