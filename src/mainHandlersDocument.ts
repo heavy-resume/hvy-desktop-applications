@@ -7,7 +7,6 @@ import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, 
 import type { UiHandlers } from './ui';
 import { clearDocumentHistory } from './documentHistory';
 import { deleteDocumentEmbeddingSidecar, removeDocumentEmbeddingAttachments } from './embeddingIndex';
-import { isWholeDocumentEncrypted } from './encryptedDocumentPolicy';
 import { documentEncryptionKeyring } from './documentKeys';
 import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename } from './encryptedFolders';
 
@@ -16,6 +15,12 @@ function pendingWorkspaceFileOperationBusyLabel(operation: PendingWorkspaceFileO
   if (operation.kind === 'pasteCut' || operation.kind === 'moveToFolder') return 'Moving file...';
   if (operation.kind === 'convert') return operation.toTemplate ? 'Converting to template...' : 'Converting to document...';
   return null;
+}
+
+async function reloadWorkspace(path: string, unlockEncryptedFolders: boolean): Promise<void> {
+  await loadWorkspaceEntry(path, { unlockEncryptedFolders });
+  if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
+  await refreshRecents();
 }
 
 async function performWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
@@ -287,10 +292,13 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   }),
   selectFile: (path) => selectWorkspaceFile(path),
   refreshWorkspace: (path) => void (async () => {
-    await loadWorkspaceEntry(path);
-    if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
-    await refreshRecents();
+    const workspace = state.workspaces.find((candidate) => candidate.path === path);
+    const hasDeferredEncryptedFolders = workspace?.files.some(function hasDeferred(nodes): boolean {
+      return nodes.kind === 'folder' && (nodes.encryptionState === 'locked' || nodes.children.some(hasDeferred));
+    }) === true;
+    await reloadWorkspace(path, !hasDeferredEncryptedFolders);
   })(),
+  unlockEncryptedFolders: (path) => void reloadWorkspace(path, true),
   retryWorkspace: (path) => void retryWorkspaceEntry(path),
   showFileInFolder: (path) => void runBusy('Showing file...', async () => {
     await revealDocumentFile(path);
@@ -359,7 +367,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
           const parentDirectory = parts.join('/');
           const entryId = physicalName.slice(0, Math.max(0, physicalName.length - workspaceFile.extension.length));
           const folder = findEncryptedFolder(currentWorkspace, parentDirectory);
-          if (!folder || (workspaceFile.extension !== '.hvy' && workspaceFile.extension !== '.phvy')) {
+          if (!folder || (workspaceFile.extension !== '.hvy' && workspaceFile.extension !== '.thvy' && workspaceFile.extension !== '.phvy')) {
             throw new Error('Encrypted parent folder was not found.');
           }
           const mutation = await prepareEncryptedFolderEntryRemoval(folder, entryId, documentEncryptionKeyring());
@@ -562,13 +570,23 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       void mountCurrentDocument();
       return;
     }
-    if (isWholeDocumentEncrypted(state.document.mounted?.document) && mode === 'ai') {
-      state.status = 'Encrypted documents are not available to AI';
-      rerender();
-      void mountCurrentDocument();
-      return;
-    }
     if (state.document.hiddenFromAI && mode === 'ai') {
+      const workspacePath = workspacePathForFile(state.document.source.path);
+      const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const workspaceFile = workspace ? findFileInWorkspace(workspace, state.document.source.path) : null;
+      if (workspacePath && workspaceFile?.encryptedFolderKeyId) {
+        state.encryptedAIAccessPrompt = {
+          kind: 'file',
+          workspacePath,
+          targetDirectory: '',
+          path: workspaceFile.path,
+          name: workspaceFile.name,
+          openAIWhenEnabled: true,
+        };
+        state.status = 'AI access requires confirmation';
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
       state.status = 'This document is hidden from AI';
       rerender();
       void mountCurrentDocument();

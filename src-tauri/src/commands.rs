@@ -450,6 +450,7 @@ const DOCUMENT_KEY_VAULT_ACCOUNT: &str = "vault-wrapping-key-v1";
 const DOCUMENT_KEY_VAULT_FILE: &str = "document-key-vault-v1.json";
 const DOCUMENT_KEY_VAULT_AAD: &[u8] = b"hvy-galaxy-document-key-vault-v1";
 static DOCUMENT_KEY_VAULT_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static DOCUMENT_KEY_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
@@ -827,6 +828,29 @@ fn document_key_vault_entry() -> AppResult<keyring::Entry> {
         .map_err(|error| AppError::Message(error.to_string()))
 }
 
+fn document_key_vault_key(allow_interaction: bool) -> AppResult<Vec<u8>> {
+    let cache = DOCUMENT_KEY_VAULT_KEY_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cached_key = cache.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    if let Some(key) = cached_key.clone() {
+        return Ok(key);
+    }
+    #[cfg(target_os = "macos")]
+    let _interaction_lock = if allow_interaction {
+        None
+    } else {
+        Some(security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+            .map_err(|error| AppError::Message(error.to_string()))?)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let _ = allow_interaction;
+    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::Message("The document key vault wrapping key is invalid.".into()));
+    }
+    *cached_key = Some(key.clone());
+    Ok(key)
+}
+
 fn document_key_vault_path(app: &AppHandle) -> AppResult<PathBuf> {
     Ok(app.path().app_data_dir()
         .map_err(|error| AppError::Message(error.to_string()))?
@@ -889,6 +913,20 @@ fn document_key_vault_status(app: &AppHandle) -> AppResult<DocumentKeyVaultStatu
         state: state.into(),
         message: message.map(str::to_owned),
     };
+    if let Some(key) = DOCUMENT_KEY_VAULT_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .clone()
+    {
+        if !has_vault {
+            return Ok(status(true, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match.")));
+        }
+        if read_document_key_vault(app, &key).is_err() {
+            return Ok(status(true, "corrupt", Some("The protected local vault could not be read or decrypted.")));
+        }
+        return Ok(status(true, "ready", None));
+    }
     match document_key_vault_entry()?.get_secret() {
         Ok(key) => {
             if !has_vault {
@@ -897,6 +935,10 @@ fn document_key_vault_status(app: &AppHandle) -> AppResult<DocumentKeyVaultStatu
             if key.len() != 32 || read_document_key_vault(app, &key).is_err() {
                 return Ok(status(true, "corrupt", Some("The protected local vault could not be read or decrypted.")));
             }
+            *DOCUMENT_KEY_VAULT_KEY_CACHE
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map_err(|error| AppError::Message(error.to_string()))? = Some(key);
             Ok(status(true, "ready", None))
         }
         Err(keyring::Error::NoEntry) if has_vault => Ok(status(false, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match."))),
@@ -929,9 +971,22 @@ fn load_document_keys(app: AppHandle, key_ids: Vec<String>) -> AppResult<HashMap
         return Ok(HashMap::new());
     }
     require_usable_document_key_vault(&status)?;
-    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    let key = document_key_vault_key(true)?;
     let vault = read_document_key_vault(&app, &key)?;
     Ok(key_ids.into_iter().filter_map(|key_id| vault.keys.get(&key_id).map(|entry| (key_id, entry.key.clone()))).collect())
+}
+
+#[tauri::command]
+fn try_load_document_keys(app: AppHandle, key_ids: Vec<String>) -> AppResult<Option<HashMap<String, String>>> {
+    if key_ids.is_empty() || !document_key_vault_path(&app)?.exists() {
+        return Ok(Some(HashMap::new()));
+    }
+    let key = match document_key_vault_key(false) {
+        Ok(key) => key,
+        Err(_) => return Ok(None),
+    };
+    let vault = read_document_key_vault(&app, &key)?;
+    Ok(Some(key_ids.into_iter().filter_map(|key_id| vault.keys.get(&key_id).map(|entry| (key_id, entry.key.clone()))).collect()))
 }
 
 #[tauri::command]
@@ -941,7 +996,7 @@ fn list_document_key_metadata(app: AppHandle) -> AppResult<Vec<DocumentKeyMetada
         return Ok(Vec::new());
     }
     require_usable_document_key_vault(&status)?;
-    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    let key = document_key_vault_key(true)?;
     let vault = read_document_key_vault(&app, &key)?;
     let mut metadata: Vec<DocumentKeyMetadata> = vault.keys.into_iter().map(|(key_id, entry)| DocumentKeyMetadata {
         key_id,
@@ -965,12 +1020,16 @@ fn store_document_keys(app: AppHandle, entries: Vec<StoreDocumentKeyEntry>) -> A
         require_usable_document_key_vault(&status)?;
     }
     let (key, mut vault) = if status.state == "ready" {
-        let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+        let key = document_key_vault_key(true)?;
         let vault = read_document_key_vault(&app, &key)?;
         (key, vault)
     } else {
         let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
         document_key_vault_entry()?.set_secret(&key).map_err(|error| AppError::Message(error.to_string()))?;
+        *DOCUMENT_KEY_VAULT_KEY_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map_err(|error| AppError::Message(error.to_string()))? = Some(key.clone());
         (key, DocumentKeyVault { version: 1, keys: HashMap::new() })
     };
     for entry in entries {
@@ -1010,7 +1069,7 @@ fn delete_document_key(app: AppHandle, key_id: String) -> AppResult<DocumentKeyV
     let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
     let status = document_key_vault_status(&app)?;
     require_usable_document_key_vault(&status)?;
-    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    let key = document_key_vault_key(true)?;
     delete_document_key_from_vault_at(&document_key_vault_path(&app)?, &key, &key_id)?;
     document_key_vault_status(&app)
 }
@@ -1902,7 +1961,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
 #[tauri::command]
 fn select_workspace_document_files() -> AppResult<Option<Vec<DroppedWorkspaceFile>>> {
     let Some(paths) = rfd::FileDialog::new()
-        .add_filter("Encrypted-folder documents", &["hvy", "phvy"])
+        .add_filter("Encrypted-folder documents", &["hvy", "thvy", "phvy"])
         .pick_files()
     else {
         return Ok(None);
@@ -1910,9 +1969,9 @@ fn select_workspace_document_files() -> AppResult<Option<Vec<DroppedWorkspaceFil
     let mut files = Vec::with_capacity(paths.len());
     for source in paths {
         let extension = document_extension(&source);
-        if !matches!(extension.as_deref(), Some(".hvy" | ".phvy")) {
+        if !matches!(extension.as_deref(), Some(".hvy" | ".thvy" | ".phvy")) {
             return Err(AppError::Message(
-                "Encrypted folders support .hvy and .phvy documents.".into(),
+                "Encrypted folders support .hvy, .thvy, and .phvy documents.".into(),
             ));
         }
         let name = source

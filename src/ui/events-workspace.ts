@@ -39,6 +39,7 @@ export function bindWorkspaceEvents(root: HTMLElement, handlers: UiHandlers, sta
         folderSummary.dataset.hiddenFromAi === 'true',
         workspaceFolderDeleteInfo(state, folderSummary.dataset.workspacePath, folderSummary.dataset.targetDirectory ?? '', folderSummary.dataset.folderName ?? ''),
         folderSummary.dataset.encryptedFolder === 'true',
+        folderSummary.dataset.folderName ?? 'Encrypted folder',
       );
       return;
     }
@@ -207,6 +208,7 @@ export function showFileContextMenu(
     <button class="hvy-galaxy-button" type="button" data-menu-action="delete">Delete</button>
   ` : encryptedFolderDocument ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'enable-encrypted-ai' : 'disable-encrypted-ai'}">${hiddenFromAI ? 'Enable AI Access' : 'Disable AI Access'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="rename">Rename</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="archive">Archive</button>
     ${showWorkspaceActions ? '<button class="hvy-galaxy-button" type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
@@ -249,6 +251,8 @@ export function showFileContextMenu(
     if (button.dataset.menuAction === 'unlock') handlers.setFileLocked(path, name, false);
     if (button.dataset.menuAction === 'hide-from-ai') handlers.setFileHiddenFromAI(path, name, true);
     if (button.dataset.menuAction === 'unhide-from-ai') handlers.setFileHiddenFromAI(path, name, false);
+    if (button.dataset.menuAction === 'enable-encrypted-ai') handlers.setEncryptedFileAIAllowed(workspacePath, path, name, true);
+    if (button.dataset.menuAction === 'disable-encrypted-ai') handlers.setEncryptedFileAIAllowed(workspacePath, path, name, false);
     if (button.dataset.menuAction === 'delete') handlers.confirmDeleteFile(path, name);
     if (button.dataset.menuAction === 'copy') handlers.copyWorkspaceFile(path, name);
     if (button.dataset.menuAction === 'cut') handlers.cutWorkspaceFile(path, name);
@@ -278,6 +282,7 @@ export function showWorkspaceContextMenu(
   hiddenFromAI = false,
   deleteInfo: WorkspaceFolderDeleteInfo | null = null,
   encryptedFolder = false,
+  encryptedFolderName = 'Encrypted folder',
 ): void {
   closeFileContextMenu();
   const menu = document.createElement('div');
@@ -292,6 +297,7 @@ export function showWorkspaceContextMenu(
   menu.innerHTML = encryptedFolder ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-folder">New Folder</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'enable-encrypted-ai' : 'disable-encrypted-ai'}">${hiddenFromAI ? 'Enable AI Access' : 'Disable AI Access'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="add-files">Add Files</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="import">Import</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="rename-folder">Rename</button>
@@ -341,6 +347,8 @@ export function showWorkspaceContextMenu(
       if (targetDirectory) handlers.setWorkspaceFolderHiddenFromAI(workspacePath, targetDirectory, false);
       else handlers.setWorkspaceHiddenFromAI(workspacePath, false);
     }
+    if (button.dataset.menuAction === 'enable-encrypted-ai') handlers.setEncryptedFolderAIAllowed(workspacePath, targetDirectory, encryptedFolderName, true);
+    if (button.dataset.menuAction === 'disable-encrypted-ai') handlers.setEncryptedFolderAIAllowed(workspacePath, targetDirectory, encryptedFolderName, false);
     if (button.dataset.menuAction === 'delete-folder') {
       if (deleteInfo && deleteInfo.archivedFiles.length > 0) {
         handlers.confirmDeleteWorkspaceFolder(workspacePath, targetDirectory, deleteInfo.folderName, deleteInfo.archivedFiles);

@@ -52,6 +52,7 @@ The integration vault is an architectural precedent, not a document-key store. I
 21. Encrypted-folder import through the existing import experience, file picker, and drag/drop. Existing encrypted documents are authenticated and rewrapped with the destination folder key; source logical names never become physical paths.
 22. Encrypted-document archive/restore using the existing workspace experience, plus permanent document and nested-folder deletion. Destructive native mutations stage the opaque entry, compare-and-swap the encrypted manifest, and restore the staged entry if the manifest changed or could not be written. Workspace scanning also restores a deletion staging entry left by process interruption; if the manifest had already committed, the restored orphan is surfaced as an integrity condition rather than silently discarded.
 23. Document moves into and across encrypted folders rewrap the document with the destination key. Moves out preserve whole-document encryption. The destination is durably published before the source is removed, so an interrupted cross-folder move can leave a duplicate but does not discard the only copy.
+24. Startup key access on macOS/Tauri is non-interactive. Galaxy silently restores encrypted folders and recent or homepage documents only when Keychain already authorizes access; otherwise they remain locked until an explicit open. A successful wrapping-key read is cached in process memory so one user-approved access serves the rest of the application session.
 
 ## Remaining product work
 
@@ -174,14 +175,14 @@ An encrypted folder uses one Fernet key ID for the folder tree. That key is prov
 
 ### Filesystem representation
 
-Physical filesystem names are opaque, stable ID codes rather than logical names. A representative directory could look like:
+Physical filesystem names are opaque, stable ID codes rather than logical names. Encrypted directory names use the explicit `hvy-encrypted-folder-` label so a person viewing a synced workspace can recognize them as app-managed encrypted storage rather than unexplained UUID folders. The full UUID remains in the physical name to preserve globally unique identity; Galaxy shows only a short ID when the logical name cannot be decrypted. Existing UUID-only directories remain supported. A representative directory could look like:
 
 ```text
-project-folder/
+hvy-encrypted-folder-0195cbb8-52da-7e44-8db2-13007ec38a8f/
   .hvy-folder
   0195cbb8-5c2d-7d4d-a274-6bf833dbcf13.hvy
   0195cbb8-6ee0-72d6-b558-647420ca1e55.hvy
-  0195cbb8-72c4-7917-b132-0aeea9e917f4/
+  hvy-encrypted-folder-0195cbb8-72c4-7917-b132-0aeea9e917f4/
     .hvy-folder
     0195cbb8-79df-747d-8a24-05964d28bc12.hvy
 ```
@@ -194,10 +195,12 @@ Each `.hvy-folder` file has a small plaintext envelope containing only format/ve
 interface EncryptedFolderManifestV1 {
   version: 1;
   name: string;
+  aiAllowed?: boolean;
   entries: Record<string, {
     name: string;
     kind: 'document' | 'folder';
-    documentExtension?: '.hvy' | '.phvy';
+    documentExtension?: '.hvy' | '.thvy' | '.phvy';
+    aiAllowed?: boolean;
   }>;
 }
 ```
@@ -212,6 +215,8 @@ The filesystem continues to reveal approximate item counts, directory shape, mod
 
 Opening an encrypted folder first loads its exact folder key ID from the local vault, then decrypts the manifest and presents logical names in Galaxy. Filesystem paths, recent-file labels, tabs, search results, and workspace navigation should use logical names in the UI while native reads and writes use opaque physical paths.
 
+Keys loaded while resolving a workspace populate the same renderer-session keyring used by encrypted document creation and folder mutations. Unlocking a folder therefore makes its key immediately available to those operations without a second vault read or prompt.
+
 Every document in the folder is whole-document encrypted with the folder key. Galaxy assigns the folder key ID when a document is created or moved into the folder and uses encryption-aware serialization for every normal save, recovery write, version, and temporary replacement file. Per-component encryption may still use separate keys inside the whole-document envelope.
 
 The existing provisioning model applies when the folder key is unavailable. Galaxy cannot resolve the logical names, so it shows the folder as locked using the existing error/status surface; it does not prompt for a key during navigation. After the key bundle is imported, reopening or refreshing the workspace loads the folder normally.
@@ -221,6 +226,7 @@ The existing provisioning model applies when the folder key is unavailable. Gala
 Folder operations need transaction semantics across the manifest and physical entries:
 
 - Creating an entry writes its encrypted document or child manifest before publishing the name mapping.
+- Creating or renaming a sibling uses one case-insensitive logical namespace across plaintext files, plaintext folders, and encrypted folders, even though their physical paths differ.
 - Renaming changes only the authenticated manifest entry.
 - Deleting removes the manifest mapping and then follows the existing recoverable file-deletion behavior for the opaque entry.
 - Moving within the same encrypted tree preserves the entry ID where possible and atomically updates the affected manifests.
@@ -251,6 +257,7 @@ Considerations:
 
 - Stable code signing, team identity, bundle identity, and Keychain service/account identifiers matter across updates. Electron documents that inconsistent signing can cause repeated Keychain permission prompts.
 - Keychain access can block or display an OS prompt. The key-service API must remain asynchronous and the Galaxy UI must tolerate a pending unlock.
+- Startup uses a non-interactive Keychain read. If macOS reports that interaction is required, Galaxy leaves encrypted content locked and performs the normal interactive read only after an explicit open.
 - A local Keychain item is not a cross-device recovery mechanism. iCloud synchronization should not be assumed or silently enabled.
 - Reinstalling an application and deleting its app-data vault are different operations from deleting its Keychain item. Reset/uninstall behavior must treat the wrapping key and vault as one pair.
 - Keychain protection is at rest. Once loaded, Fernet keys and decrypted document content exist in Galaxy process memory.
@@ -324,14 +331,14 @@ Whole-document encryption protects the saved HVY bytes. Once opened, Galaxy nece
 | --- | --- |
 | Viewer/editor/raw mode | Allowed in memory while the document is open. Heavy session persistence remains disabled, and Galaxy does not persist raw/editor recovery state for encrypted documents. |
 | PDF export | Allowed only as an explicit user export. The Galaxy modal states that the resulting PDF is plaintext and not protected by HVY encryption. |
-| AI and workspace chat | Blocked for encrypted documents because their plaintext would cross the local document boundary to an AI provider. |
+| AI and workspace chat | Blocked by default. A user may explicitly enable access for an encrypted folder or one document after a warning that decrypted content may be sent to the configured AI provider. Folder permission is inherited by encrypted descendants; a document-level setting can override it. The permission is stored inside the authenticated encrypted-folder manifest. |
 | Embedding indexes | Not generated, attached, or read for encrypted documents. Existing plaintext `.emb` sidecars are removed when encryption is enabled or an encrypted file is encountered. |
 | Local workspace text search | May decrypt and search in memory after the required key is loaded; results are not persisted as a plaintext index. Semantic/embedding search excludes the document. |
 | Recovery drafts | Serialized document bytes retain whole-document encryption. Plaintext editor/view recovery-state JSON is omitted. |
 | Saved versions/history | New history is disabled. When encryption is enabled, existing plaintext history for that path is removed and unreferenced attachment objects are pruned. |
 | Previews and open tabs | Allowed in memory. Hot-reload persistence retains path/mode/layout metadata but omits plaintext recovery state. |
 
-This policy is represented in shared frontend code so the relevant paths do not define conflicting rules independently. Encrypted-folder documents inherit the same policy because they are whole-document encrypted with the folder key.
+This policy is represented in shared frontend code so the relevant paths do not define conflicting rules independently. Encrypted-folder documents remain unavailable to AI until the encrypted manifest contains explicit consent. Enabling AI does not enable plaintext embedding sidecars, history, or plaintext recovery state.
 
 ## Key exchange and portability
 
@@ -484,9 +491,12 @@ The implemented first slice uses automatic local unlock. Moving to the hybrid mo
 - [x] Whole-document encryption and removal use explicit modals, preserve historical keys, and flow through normal document saving.
 - [x] Discover encrypted folders in both native hosts and resolve authenticated logical workspace trees without exposing manifest plaintext to the filesystem.
 - [x] Create empty encrypted folders with persisted keys, opaque physical names, and atomically published manifests in both native hosts.
+- [x] Label new physical encrypted-folder directories as Galaxy-managed storage, retain full unique IDs, and continue reading UUID-only directories.
+- [x] Share workspace-unlock keys with encrypted mutations and reject duplicate logical sibling names across encrypted and plaintext entries.
 - [x] Create new encrypted-folder documents with opaque physical names, automatic whole-document encryption, and stale-manifest conflict detection.
 - [x] Implement encrypted-folder nested creation, import, rename, archive/restore, move, and delete with optimistic manifest updates and staged rollback for destructive mutations.
 - [x] Add native-host restart tests that recover a generated key and decrypt its payload.
 - [x] Retain Heavy's existing missing-key error and locked-component behavior without a Galaxy key-acquisition prompt.
 - [x] Surface native-store unavailable, denied, incomplete, corrupt, and requested-key-absent states distinctly in the UI.
+- [x] Probe macOS/Tauri Keychain access without UI at startup, preserve locked content when interaction is required, and cache one successful wrapping-key read for the application session.
 - [ ] Reject Electron's `basic_text` backend before Linux support; configure and test a persistent production keyring feature before enabling Tauri Linux.

@@ -30,8 +30,9 @@ export function renderNewDocumentDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-document">
         <h2>New Document</h2>
-        ${encryptedFolder ? '<p class="dialog-note">This document will be encrypted automatically with the folder key.</p>' : renderDocumentTypeControl('new', state.newDocumentType, visibility)}
-        ${workspace && !encryptedFolder ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
+        ${renderDocumentTypeControl('new', state.newDocumentType, visibility)}
+        ${workspace ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
+        ${encryptedFolder ? '<p class="dialog-note">This document will be encrypted automatically with the folder key.</p>' : ''}
         <label>
           <span>Name</span>
           <input class="hvy-galaxy-input" name="documentName" type="text" autocomplete="off" autofocus required>

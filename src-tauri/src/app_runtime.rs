@@ -53,6 +53,7 @@ pub fn run() {
             reset_integration_vault,
             load_document_key_vault_status,
             load_document_keys,
+            try_load_document_keys,
             list_document_key_metadata,
             store_document_keys,
             delete_document_key,

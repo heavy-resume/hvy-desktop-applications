@@ -1,6 +1,6 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
-import { deleteDocumentKey, loadDocumentKeys, storeDocumentKeys, type DocumentKeyFileSource, type StoredDocumentKeyInput } from './backend';
+import { deleteDocumentKey, loadedDocumentKeys, loadDocumentKeys, storeDocumentKeys, tryLoadDocumentKeys, type DocumentKeyFileSource, type StoredDocumentKeyInput } from './backend';
 
 export const HVY_KEY_FILE_VERSION = 1;
 export const HVY_KEY_FILE_EXTENSION = '.hvykey';
@@ -26,7 +26,7 @@ export interface ReviewedDocumentKey extends PortableDocumentKey {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const inMemoryKeyring: Record<string, string> = {};
+const inMemoryKeyring = loadedDocumentKeys();
 const pendingGeneratedKeys = new Map<string, string>();
 let persistenceQueue: Promise<void> = Promise.resolve();
 let persistenceError: unknown = null;
@@ -45,6 +45,17 @@ export async function ensureDocumentKeysLoaded(keyIds: string[]): Promise<Record
     throw new Error(`The protected local vault does not contain the required encryption ${unavailable.length === 1 ? 'key' : 'keys'}: ${ids}. Import the matching .hvykey ${unavailable.length === 1 ? 'file' : 'files'} and reopen the document.`);
   }
   return inMemoryKeyring;
+}
+
+export async function tryEnsureDocumentKeysLoaded(keyIds: string[]): Promise<boolean> {
+  const unique = [...new Set(keyIds.filter((keyId) => UUID_PATTERN.test(keyId)))];
+  const missing = unique.filter((keyId) => !inMemoryKeyring[keyId]);
+  if (missing.length > 0) {
+    const loaded = await tryLoadDocumentKeys(missing);
+    if (loaded === null) return false;
+    Object.assign(inMemoryKeyring, loaded);
+  }
+  return unique.every((keyId) => Boolean(inMemoryKeyring[keyId]));
 }
 
 export function queueGeneratedDocumentKey(keyId: string, key: string): void {

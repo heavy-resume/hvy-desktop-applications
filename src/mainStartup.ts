@@ -14,6 +14,7 @@ import { refreshInstalledPlugins } from './pluginManager';
 import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
 import { runtimeDocumentForFile } from './runtimeDocuments';
+import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
 
 let findShortcutBound = false;
 
@@ -28,6 +29,8 @@ export async function boot(): Promise<void> {
   setupErrorSurface();
   try {
     loadZoomSettings();
+    state.colorTheme = loadColorThemeSettings();
+    applyAppColorTheme(null);
     setMountRoot(render(state, handlers));
     applyZoomSettings();
     bindFindShortcut();
@@ -46,7 +49,6 @@ export async function boot(): Promise<void> {
     if (state.mcpSettings.startAutomatically && !state.mcpServerStatus.running) {
       state.mcpServerStatus = await startMcpServer();
     }
-    state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme();
     installAiChatClient(state.aiSettings, state.appSettings);
     await onAppCloseRequest(() => {
@@ -583,7 +585,7 @@ export async function loadRecentWorkspaces(): Promise<void> {
     error: null,
   }));
   rerender({ preserveMountedDocument: true });
-  await Promise.all(state.recent.workspaces.map((path) => loadWorkspaceEntry(path)));
+  await Promise.all(state.recent.workspaces.map((path) => loadWorkspaceEntry(path, { unlockEncryptedFolders: false })));
   await clearArchivedHomepageDocument();
   state.selectedWorkspacePath = state.workspaces[0]?.path ?? null;
   syncMcpWorkspaces();
@@ -627,7 +629,13 @@ export async function openHomepage(options: { force?: boolean } = {}): Promise<v
         includedDocumentId: homepage.id,
       });
     } else {
-      await openDocument(await readDocumentFile(homepage.path));
+      const file = await readDocumentFile(homepage.path);
+      if (!await documentFileCanOpenWithoutPrompt(file)) {
+        state.homepageError = null;
+        state.status = 'Encrypted homepage is locked; open it to unlock.';
+        return;
+      }
+      await openDocument(file);
     }
     state.homepageError = null;
   } catch {
@@ -656,7 +664,9 @@ export async function restoreStartupDocument(): Promise<void> {
   if (restoredFromSnapshot || state.document) return;
   for (const path of state.recent.files) {
     try {
-      await openDocument(await readDocumentFile(path));
+      const file = await readDocumentFile(path);
+      if (!await documentFileCanOpenWithoutPrompt(file)) continue;
+      await openDocument(file);
       state.status = `Restored ${fileNameFromPath(path)}`;
       await refreshRecents();
       return;
@@ -664,6 +674,11 @@ export async function restoreStartupDocument(): Promise<void> {
       // Recents are pruned by the backend when opened from the menu; boot restore just skips stale entries.
     }
   }
+}
+
+async function documentFileCanOpenWithoutPrompt(file: DocumentFile): Promise<boolean> {
+  const bytes = file.bytes instanceof Uint8Array ? file.bytes : Uint8Array.from(file.bytes);
+  return tryEnsureDocumentKeysLoaded(extractEncryptionKeyIds(bytes));
 }
 
 export async function restoreHotReloadSession(): Promise<boolean> {

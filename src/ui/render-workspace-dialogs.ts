@@ -269,7 +269,10 @@ export function renderDeleteFolderDialog(state: AppState): string {
 export function renderNewFolderDialog(state: AppState): string {
   if (!state.newFolderWorkspacePath) return '';
   const workspace = state.workspaces.find((candidate) => candidate.path === state.newFolderWorkspacePath) ?? null;
-  const parentLabel = state.newFolderParentDirectory || 'Workspace root';
+  const parentTarget = normalizeTreeRelativePath(state.newFolderParentDirectory);
+  const parentLabel = parentTarget
+    ? workspaceFolderOptions(workspace?.files ?? []).find((folder) => normalizeTreeRelativePath(folder.relativePath) === parentTarget)?.label ?? state.newFolderParentDirectory
+    : 'Workspace root';
   return `
     <div class="modal-backdrop" role="presentation">
       <form class="dialog" data-form="new-folder">
@@ -282,12 +285,29 @@ export function renderNewFolderDialog(state: AppState): string {
           <span>Name</span>
           <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" required>
         </label>
-        ${state.newFolderEncrypted ? '<p class="dialog-note">Names and documents placed in this folder will use one encryption key. The folder is stored on disk under an opaque ID.</p>' : ''}
+        ${state.newFolderEncrypted ? '<p class="dialog-note">Names and documents placed in this folder will use one encryption key. The folder is stored on disk under an app-managed encrypted-folder ID.</p>' : ''}
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-new-folder">Cancel</button>
           <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </form>
+    </div>`;
+}
+
+export function renderEncryptedAIAccessDialog(state: AppState): string {
+  const prompt = state.encryptedAIAccessPrompt;
+  if (!prompt) return '';
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog encrypted-ai-access-dialog" role="dialog" aria-modal="true" aria-labelledby="encryptedAIAccessTitle">
+        <h2 id="encryptedAIAccessTitle">Enable AI Access?</h2>
+        <p class="dialog-note">${escapeHtml(prompt.name)} is encrypted. AI features may send its decrypted content to your configured AI provider. The saved files remain encrypted, but content sent to a provider is governed by that provider’s security, retention, and privacy policies.</p>
+        ${prompt.kind === 'folder' ? '<p class="dialog-note">This permission applies to documents in this folder and its encrypted subfolders unless a document is disabled separately.</p>' : ''}
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-encrypted-ai-access">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="confirm-encrypted-ai-access" ${state.busy ? 'disabled' : ''}>Enable AI Access</button>
+        </div>
+      </section>
     </div>`;
 }
 

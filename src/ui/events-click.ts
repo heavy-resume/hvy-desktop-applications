@@ -64,6 +64,10 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.cancelDocumentEncryption();
           return;
         }
+        if (backdrop.querySelector('.encrypted-ai-access-dialog')) {
+          handlers.cancelEncryptedAIAccess();
+          return;
+        }
         if (backdrop.querySelector('.scripting-review-dialog')) {
           handlers.closeScriptingReview();
           return;
@@ -188,6 +192,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'archive-workspace' && target.dataset.workspacePath) handlers.archiveWorkspace(target.dataset.workspacePath);
     if (action === 'unarchive-workspace' && target.dataset.workspacePath) handlers.unarchiveWorkspace(target.dataset.workspacePath);
     if (action === 'retry-workspace' && target.dataset.workspacePath) handlers.retryWorkspace(target.dataset.workspacePath);
+    if (action === 'unlock-encrypted-folder' && target.dataset.workspacePath) handlers.unlockEncryptedFolders(target.dataset.workspacePath);
     if (action === 'toggle-workspace-actions' && target.dataset.workspacePath) {
       event.preventDefault();
       event.stopPropagation();
@@ -205,6 +210,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       handlers.setNewWorkspaceLocation(target.dataset.location);
     }
     if (action === 'cancel-new-workspace') handlers.cancelNewWorkspace();
+    if (action === 'cancel-encrypted-ai-access') handlers.cancelEncryptedAIAccess();
+    if (action === 'confirm-encrypted-ai-access') handlers.confirmEncryptedAIAccess();
     if (action === 'confirm-workspace-initialization') handlers.confirmWorkspaceInitialization();
     if (action === 'cancel-workspace-initialization') handlers.cancelWorkspaceInitialization();
     if (action === 'new-folder-in-workspace' && target.dataset.workspacePath) handlers.openNewFolder(target.dataset.workspacePath, target.dataset.targetDirectory ?? '');

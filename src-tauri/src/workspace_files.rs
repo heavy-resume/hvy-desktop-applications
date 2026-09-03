@@ -171,6 +171,7 @@ fn create_workspace_folder_at(
 ) -> AppResult<()> {
     let parent = workspace_target_directory(workspace_path, parent_directory)?;
     let folder_name = normalized_folder_name(name)?;
+    let encrypted_physical_name;
     let physical_name = if let Some(encrypted) = encrypted {
         if !is_encrypted_folder_id(&encrypted.folder_id) {
             return Err(AppError::Message("Encrypted folder ID is invalid.".into()));
@@ -181,7 +182,8 @@ fn create_workspace_folder_at(
         if !encrypted_folder_manifest_matches_id(&encrypted.manifest_bytes, &encrypted.folder_id) {
             return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
         }
-        encrypted.folder_id.as_str()
+        encrypted_physical_name = encrypted_folder_physical_name(&encrypted.folder_id);
+        encrypted_physical_name.as_str()
     } else {
         folder_name.as_str()
     };
@@ -221,6 +223,22 @@ fn is_encrypted_folder_id(value: &str) -> bool {
         && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
 }
 
+const ENCRYPTED_FOLDER_PHYSICAL_PREFIX: &str = "hvy-encrypted-folder-";
+
+fn encrypted_folder_physical_name(folder_id: &str) -> String {
+    format!("{ENCRYPTED_FOLDER_PHYSICAL_PREFIX}{folder_id}")
+}
+
+fn encrypted_folder_id_from_physical_name(value: &str) -> Option<&str> {
+    let folder_id = value.strip_prefix(ENCRYPTED_FOLDER_PHYSICAL_PREFIX).unwrap_or(value);
+    is_encrypted_folder_id(folder_id).then_some(folder_id)
+}
+
+fn encrypted_folder_child_path(parent: &Path, folder_id: &str) -> PathBuf {
+    let labeled = parent.join(encrypted_folder_physical_name(folder_id));
+    if labeled.exists() { labeled } else { parent.join(folder_id) }
+}
+
 fn encrypted_folder_manifest_matches_id(bytes: &[u8], folder_id: &str) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return false;
@@ -244,7 +262,7 @@ fn create_encrypted_folder_document_at(
     {
         return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
     }
-    if !is_encrypted_folder_id(&request.document_id) || !matches!(request.extension.as_str(), ".hvy" | ".phvy") {
+    if !is_encrypted_folder_id(&request.document_id) || !matches!(request.extension.as_str(), ".hvy" | ".thvy" | ".phvy") {
         return Err(AppError::Message("Encrypted document identity is invalid.".into()));
     }
     if request.document_bytes.is_empty() {
@@ -254,9 +272,11 @@ fn create_encrypted_folder_document_at(
     if !folder_path.is_dir() {
         return Err(AppError::Message("Encrypted folder was not found.".into()));
     }
-    let folder_id = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-    if !is_encrypted_folder_id(folder_id)
-        || !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
+    let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let Some(folder_id) = encrypted_folder_id_from_physical_name(folder_name) else {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    };
+    if !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
         || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
     {
         return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
@@ -305,9 +325,11 @@ fn create_encrypted_folder_child_at(
     if !folder_path.is_dir() {
         return Err(AppError::Message("Encrypted folder was not found.".into()));
     }
-    let folder_id = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-    if !is_encrypted_folder_id(folder_id)
-        || !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
+    let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let Some(folder_id) = encrypted_folder_id_from_physical_name(folder_name) else {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    };
+    if !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
         || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
         || !encrypted_folder_manifest_matches_id(&request.child_manifest_bytes, &request.child_folder_id)
     {
@@ -324,7 +346,7 @@ fn create_encrypted_folder_child_at(
     if fs::read(&manifest_path)? != request.previous_manifest_bytes {
         return Err(AppError::Message("Encrypted folder changed before the child folder could be created. Refresh and try again.".into()));
     }
-    let destination = folder_path.join(&request.child_folder_id);
+    let destination = folder_path.join(encrypted_folder_physical_name(&request.child_folder_id));
     let staging = folder_path.join(format!(".{}.creating", request.child_folder_id));
     if destination.exists() || staging.exists() {
         return Err(AppError::Message("An encrypted child folder already exists with that identity.".into()));
@@ -367,9 +389,10 @@ fn update_encrypted_folder_manifest_at(
         return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
     }
     let folder_path = workspace_path.join(relative);
-    let folder_id = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let folder_id = encrypted_folder_id_from_physical_name(folder_name).unwrap_or_default();
     if !folder_path.is_dir()
-        || !is_encrypted_folder_id(folder_id)
+        || folder_id.is_empty()
         || !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
         || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
         || encrypted_folder_manifest_key_id(&request.previous_manifest_bytes) != encrypted_folder_manifest_key_id(&request.manifest_bytes)
@@ -402,7 +425,7 @@ fn delete_encrypted_folder_document_at(
         return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
     }
     if !is_encrypted_folder_id(&request.document_id)
-        || !matches!(request.extension.as_str(), ".hvy" | ".phvy")
+        || !matches!(request.extension.as_str(), ".hvy" | ".thvy" | ".phvy")
     {
         return Err(AppError::Message("Encrypted document identity is invalid.".into()));
     }
@@ -439,11 +462,12 @@ fn delete_encrypted_folder_child_at(
         return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
     }
     let parent_path = workspace_path.join(&relative);
-    let child_path = parent_path.join(&request.child_folder_id);
+    let child_path = encrypted_folder_child_path(&parent_path, &request.child_folder_id);
     if !child_path.is_dir() {
         return Err(AppError::Message("Encrypted child folder was not found.".into()));
     }
-    let staging = parent_path.join(format!(".{}.deleting", request.child_folder_id));
+    let child_physical_name = child_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let staging = parent_path.join(format!(".{child_physical_name}.deleting"));
     if staging.exists() {
         return Err(AppError::Message("Encrypted child folder deletion is already staged.".into()));
     }
@@ -631,9 +655,10 @@ fn recover_staged_encrypted_deletions(directory: &Path) -> AppResult<()> {
             continue;
         };
         let identity = staged_name.strip_suffix(".hvy")
+            .or_else(|| staged_name.strip_suffix(".thvy"))
             .or_else(|| staged_name.strip_suffix(".phvy"))
             .unwrap_or(staged_name);
-        if !is_encrypted_folder_id(identity) {
+        if encrypted_folder_id_from_physical_name(identity).is_none() {
             continue;
         }
         let destination = directory.join(staged_name);

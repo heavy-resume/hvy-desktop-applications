@@ -3,7 +3,7 @@ import type { VisualDocument } from './hvy';
 export const encryptedDocumentPlaintextPolicy = Object.freeze({
   rawMode: 'memoryOnly',
   pdfExport: 'explicitPlaintextExport',
-  ai: 'blocked',
+  ai: 'blockedByDefaultWithExplicitEncryptedFolderConsent',
   embeddingIndexes: 'blockedAndRemoved',
   workspaceTextSearch: 'memoryOnly',
   recoveryDrafts: 'encryptedDocumentBytesWithoutPlaintextUiState',

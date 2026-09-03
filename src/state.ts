@@ -225,6 +225,14 @@ export interface AppState {
   workspaceClipboard: WorkspaceClipboardState | null;
   workspaceFileOperationPromptOpen: boolean;
   pendingWorkspaceFileOperation: PendingWorkspaceFileOperation | null;
+  encryptedAIAccessPrompt: null | {
+    kind: 'file' | 'folder';
+    workspacePath: string;
+    targetDirectory: string;
+    path: string;
+    name: string;
+    openAIWhenEnabled?: boolean;
+  };
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
   renameEncryptedFolderWorkspacePath: string | null;
@@ -521,6 +529,7 @@ export const state: AppState = {
   workspaceClipboard: null,
   workspaceFileOperationPromptOpen: false,
   pendingWorkspaceFileOperation: null,
+  encryptedAIAccessPrompt: null,
   renameFilePath: null,
   renameFileCurrentName: null,
   renameEncryptedFolderWorkspacePath: null,

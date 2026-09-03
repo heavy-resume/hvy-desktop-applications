@@ -322,6 +322,8 @@ export function renderNode(
     const encryptedFolderUnlocked = node.encryptionState === 'unlocked';
     const encryptedFolderTitle = node.encryptionState === 'missingKey'
       ? 'Encrypted folder key is not available'
+      : node.encryptionState === 'locked'
+        ? 'Open encrypted folder'
       : node.encryptionState === 'invalid'
         ? 'Encrypted folder manifest is invalid or could not be authenticated'
         : node.encryptionState === 'incomplete'
@@ -335,16 +337,17 @@ export function renderNode(
     const encryptedFolderBadge = encryptedFolder
       ? `<span class="tree-folder-encryption${encryptedFolderUnlocked ? ' is-unlocked' : ''}" title="${escapeAttr(encryptedFolderTitle)}" aria-label="${escapeAttr(encryptedFolderTitle)}">${encryptedFolderUnlocked ? '🔒' : '🔐'}</span>`
       : '';
-    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${encryptedFolderBadge}${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
+    const folderActions = `${encryptedFolderBadge}${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}${folderFilterTrigger}`;
+    const folderLabel = `<span class="tree-folder-name">${escapeHtml(name)}</span>${folderActions ? `<span class="tree-folder-actions">${folderActions}</span>` : ''}`;
     const folderTarget = encryptedFolder ? 'false' : 'true';
     const folderActionTarget = !encryptedFolder || encryptedFolderUnlocked ? 'true' : 'false';
     const encryptedFolderData = encryptedFolder ? 'true' : 'false';
     if (children.length === 0) {
       return `
         <li class="${matchedDocumentIds && !hasMatch ? 'tree-item-filter-empty' : ''}">
-          <div class="tree-folder-row${hiddenFromAI ? ' is-hidden-from-ai' : ''}${encryptedFolder ? ' is-encrypted-folder' : ''}" data-workspace-folder-target="${folderTarget}" data-workspace-folder-action-target="${folderActionTarget}" data-encrypted-folder="${encryptedFolderData}" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
+          <${node.encryptionState === 'locked' ? 'button type="button" data-action="unlock-encrypted-folder"' : 'div'} class="tree-folder-row${hiddenFromAI ? ' is-hidden-from-ai' : ''}${encryptedFolder ? ' is-encrypted-folder' : ''}" data-workspace-folder-target="${folderTarget}" data-workspace-folder-action-target="${folderActionTarget}" data-encrypted-folder="${encryptedFolderData}" data-workspace-path="${escapeAttr(workspacePath)}" data-target-directory="${escapeAttr(relativePath)}" data-folder-name="${escapeAttr(name)}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}">
             ${folderLabel}
-          </div>
+          </${node.encryptionState === 'locked' ? 'button' : 'div'}>
         </li>`;
     }
     const open = folderExpanded[normalizedRelativePath] ?? true;

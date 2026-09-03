@@ -1,16 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const backendMocks = vi.hoisted(() => ({ deleteDocumentKey: vi.fn(), loadDocumentKeys: vi.fn(), storeDocumentKeys: vi.fn() }));
+const backendMocks = vi.hoisted(() => {
+  const sessionKeys: Record<string, string> = {};
+  return { sessionKeys, deleteDocumentKey: vi.fn(), loadedDocumentKeys: vi.fn(() => sessionKeys), loadDocumentKeys: vi.fn(), storeDocumentKeys: vi.fn(), tryLoadDocumentKeys: vi.fn() };
+});
 vi.mock('./backend', async (importOriginal) => ({
   ...await importOriginal<typeof import('./backend')>(),
   loadDocumentKeys: backendMocks.loadDocumentKeys,
   deleteDocumentKey: backendMocks.deleteDocumentKey,
+  loadedDocumentKeys: backendMocks.loadedDocumentKeys,
   storeDocumentKeys: backendMocks.storeDocumentKeys,
+  tryLoadDocumentKeys: backendMocks.tryLoadDocumentKeys,
 }));
 import {
   documentKeyFingerprint,
   extractDocumentEnvelopeKeyId,
   extractEncryptionKeyIds,
   ensureDocumentKeysLoaded,
+  tryEnsureDocumentKeysLoaded,
   generateStoredDocumentKey,
   parseDocumentKeyFile,
   parseDocumentKeyFiles,
@@ -22,12 +28,14 @@ beforeEach(() => {
   backendMocks.loadDocumentKeys.mockReset().mockResolvedValue({});
   backendMocks.deleteDocumentKey.mockReset().mockResolvedValue(undefined);
   backendMocks.storeDocumentKeys.mockReset().mockResolvedValue(undefined);
+  backendMocks.tryLoadDocumentKeys.mockReset().mockResolvedValue(null);
 });
 
 const KEY_ID = '11111111-1111-4111-8111-111111111111';
 const SECOND_KEY_ID = '22222222-2222-4222-8222-222222222222';
 const KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 const SECOND_KEY = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE';
+const THIRD_KEY_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('HVY document key files', () => {
   it('generates and persists a valid key before returning it', async () => {
@@ -118,6 +126,28 @@ describe('HVY document key files', () => {
 });
 
 describe('encrypted HVY key discovery', () => {
+  it('shares keys loaded while unlocking a workspace with document mutations', async () => {
+    backendMocks.sessionKeys[THIRD_KEY_ID] = SECOND_KEY;
+
+    expect((await import('./documentKeys')).documentEncryptionKeyring()[THIRD_KEY_ID]).toBe(SECOND_KEY);
+    delete backendMocks.sessionKeys[THIRD_KEY_ID];
+  });
+
+  it('loads an already-authorized key without requesting interaction', async () => {
+    backendMocks.tryLoadDocumentKeys.mockResolvedValueOnce({ [THIRD_KEY_ID]: SECOND_KEY });
+
+    await expect(tryEnsureDocumentKeysLoaded([THIRD_KEY_ID])).resolves.toBe(true);
+    expect(backendMocks.tryLoadDocumentKeys).toHaveBeenCalledWith([THIRD_KEY_ID]);
+  });
+
+  it('leaves encrypted content locked when silent access would require interaction', async () => {
+    const unavailableKeyId = '44444444-4444-4444-8444-444444444444';
+    backendMocks.tryLoadDocumentKeys.mockResolvedValueOnce(null);
+
+    await expect(tryEnsureDocumentKeysLoaded([unavailableKeyId])).resolves.toBe(false);
+    expect(backendMocks.loadDocumentKeys).not.toHaveBeenCalled();
+  });
+
   it('finds whole-document envelope and component key IDs without duplicates', () => {
     const source = `---HVY-ENCRYPTED---\n{"algorithm":"fernet","keyId":"${KEY_ID}"}\n---HVY-ENCRYPTED-PAYLOAD---\npayload\n<!--hvy:encrypted {"keyId":"${SECOND_KEY_ID}"}-->\n<!--hvy:encrypted {"keyId":"${SECOND_KEY_ID}"}-->`;
     expect(extractEncryptionKeyIds(new TextEncoder().encode(source))).toEqual([KEY_ID, SECOND_KEY_ID]);

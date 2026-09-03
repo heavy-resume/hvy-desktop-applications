@@ -161,6 +161,7 @@
   align-content: start;
   gap: 8px;
   overflow: auto;
+  padding-right: var(--workspace-scrollbar-gutter);
   scrollbar-gutter: stable;
 }
 
@@ -448,13 +449,23 @@
 .tree-folder-row,
 .tree-folder-summary {
   width: 100%;
-  min-height: 24px;
+  min-height: 38px;
+  box-sizing: border-box;
+  margin: 0;
   border: 1px solid var(--hvy-border, #c5cec8);
   border-radius: 8px;
   background: var(--hvy-surface-tint, var(--hvy-surface, #ffffff));
   color: var(--hvy-text, #152223);
   font-weight: 700;
   text-align: left;
+}
+
+.tree-folder-row[data-action="unlock-encrypted-folder"] {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .tree-folder-summary {
@@ -474,6 +485,15 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-folder-actions {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   white-space: nowrap;
 }
 

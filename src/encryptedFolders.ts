@@ -3,13 +3,15 @@ import { decryptDocumentEnvelopeBytes, encryptDocumentBytes } from '../../heavy-
 
 export const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
 export const ENCRYPTED_FOLDER_FORMAT_VERSION = 1;
+export const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
 
-export type EncryptedFolderDocumentExtension = '.hvy' | '.phvy';
+export type EncryptedFolderDocumentExtension = '.hvy' | '.thvy' | '.phvy';
 
 export interface EncryptedFolderEntry {
   name: string;
   kind: 'document' | 'folder';
   documentExtension?: EncryptedFolderDocumentExtension;
+  aiAllowed?: boolean;
 }
 
 export interface EncryptedFolderManifest {
@@ -17,6 +19,7 @@ export interface EncryptedFolderManifest {
   folderId: string;
   name: string;
   entries: Record<string, EncryptedFolderEntry>;
+  aiAllowed?: boolean;
 }
 
 export interface EncryptedFolderEnvelope {
@@ -148,15 +151,15 @@ export function normalizeFolderManifest(value: unknown): EncryptedFolderManifest
       throw new Error(`Encrypted folder contains a duplicate logical name: ${name}.`);
     }
     if (rawEntry.kind === 'document') {
-      if (rawEntry.documentExtension !== '.hvy' && rawEntry.documentExtension !== '.phvy') {
+      if (rawEntry.documentExtension !== '.hvy' && rawEntry.documentExtension !== '.thvy' && rawEntry.documentExtension !== '.phvy') {
         throw new Error(`Encrypted folder document ${entryId} has an unsupported extension.`);
       }
-      entries[entryId] = { name, kind: 'document', documentExtension: rawEntry.documentExtension };
+      entries[entryId] = { name, kind: 'document', documentExtension: rawEntry.documentExtension, ...(typeof rawEntry.aiAllowed === 'boolean' ? { aiAllowed: rawEntry.aiAllowed } : {}) };
     } else {
-      entries[entryId] = { name, kind: 'folder' };
+      entries[entryId] = { name, kind: 'folder', ...(typeof rawEntry.aiAllowed === 'boolean' ? { aiAllowed: rawEntry.aiAllowed } : {}) };
     }
   }
-  return { version: 1, folderId: value.folderId, name, entries };
+  return { version: 1, folderId: value.folderId, name, entries, ...(typeof value.aiAllowed === 'boolean' ? { aiAllowed: value.aiAllowed } : {}) };
 }
 
 export async function resolveEncryptedWorkspace(
@@ -186,6 +189,28 @@ export async function resolveEncryptedWorkspace(
   return { ...workspace, files };
 }
 
+export function deferEncryptedWorkspace(workspace: Workspace): Workspace {
+  const deferNode = (node: WorkspaceTreeNode): WorkspaceTreeNode => {
+    if (node.kind === 'file') return node;
+    if (!node.encryptedFolderManifest) {
+      return { ...node, children: node.children.map(deferNode) };
+    }
+    try {
+      const envelope = parseFolderEnvelope(Uint8Array.from(node.encryptedFolderManifest));
+      return {
+        ...node,
+        name: `Encrypted folder · ${envelope.folderId.slice(0, 8)}`,
+        children: [],
+        encryptedFolderKeyId: envelope.keyId,
+        encryptionState: 'locked',
+      };
+    } catch {
+      return encryptedFolderState(node, null, 'invalid');
+    }
+  };
+  return { ...workspace, files: workspace.files.map(deferNode) };
+}
+
 export function findEncryptedFolder(
   workspace: Workspace | null | undefined,
   relativePath: string,
@@ -201,6 +226,40 @@ export function findEncryptedFolder(
     return null;
   };
   return workspace ? visit(workspace.files) : null;
+}
+
+export function workspaceHasLogicalName(
+  workspace: Workspace | null | undefined,
+  parentDirectory: string,
+  logicalName: string,
+  excludingRelativePath = '',
+): boolean {
+  if (!workspace) return false;
+  const parentTarget = normalizeRelativePath(parentDirectory);
+  const excludedTarget = normalizeRelativePath(excludingRelativePath);
+  const nameKey = normalizeLogicalName(logicalName).toLowerCase();
+  const findChildren = (nodes: WorkspaceTreeNode[]): WorkspaceTreeNode[] | null => {
+    if (!parentTarget) return nodes;
+    for (const node of nodes) {
+      if (node.kind !== 'folder') continue;
+      if (normalizeRelativePath(node.relativePath) === parentTarget) return node.children;
+      const nested = findChildren(node.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+  return (findChildren(workspace.files) ?? []).some((node) => (
+    normalizeRelativePath(node.relativePath) !== excludedTarget
+    && node.name.normalize('NFC').toLowerCase() === nameKey
+  ));
+}
+
+export function encryptedFolderIdFromPhysicalName(physicalName: string): string {
+  const folderId = physicalName.startsWith(ENCRYPTED_FOLDER_PHYSICAL_PREFIX)
+    ? physicalName.slice(ENCRYPTED_FOLDER_PHYSICAL_PREFIX.length)
+    : physicalName;
+  validateUuid(folderId, 'folder ID');
+  return folderId;
 }
 
 export async function prepareEncryptedFolderDocumentMutation(
@@ -348,15 +407,61 @@ export async function prepareEncryptedFolderSelfRename(
   };
 }
 
+export async function prepareEncryptedFolderSelfAIAccessMutation(
+  folder: WorkspaceFolderNode,
+  aiAllowed: boolean,
+  keyring: Record<string, string>,
+): Promise<EncryptedFolderManifestMutation> {
+  if (folder.encryptionState !== 'unlocked' || !folder.encryptedFolderManifest || !folder.encryptedFolderKeyId) {
+    throw new Error('Encrypted folder is not unlocked.');
+  }
+  const previousManifestBytes = Uint8Array.from(folder.encryptedFolderManifest);
+  const envelope = parseFolderEnvelope(previousManifestBytes);
+  const key = keyring[envelope.keyId];
+  if (!key) throw new Error(`Missing Fernet key for encrypted folder: ${envelope.keyId}`);
+  const manifest = await decryptFolderManifest(previousManifestBytes, key);
+  return {
+    previousManifestBytes,
+    manifestBytes: await encryptFolderManifest({ ...manifest, aiAllowed }, envelope.keyId, key),
+  };
+}
+
+export async function prepareEncryptedFolderEntryAIAccessMutation(
+  folder: WorkspaceFolderNode,
+  entryId: string,
+  aiAllowed: boolean,
+  keyring: Record<string, string>,
+): Promise<EncryptedFolderManifestMutation> {
+  validateUuid(entryId, 'entry ID');
+  if (folder.encryptionState !== 'unlocked' || !folder.encryptedFolderManifest || !folder.encryptedFolderKeyId) {
+    throw new Error('Encrypted folder is not unlocked.');
+  }
+  const previousManifestBytes = Uint8Array.from(folder.encryptedFolderManifest);
+  const envelope = parseFolderEnvelope(previousManifestBytes);
+  const key = keyring[envelope.keyId];
+  if (!key) throw new Error(`Missing Fernet key for encrypted folder: ${envelope.keyId}`);
+  const manifest = await decryptFolderManifest(previousManifestBytes, key);
+  const entry = manifest.entries[entryId];
+  if (!entry) throw new Error('Encrypted folder entry was not found in its manifest.');
+  return {
+    previousManifestBytes,
+    manifestBytes: await encryptFolderManifest({
+      ...manifest,
+      entries: { ...manifest.entries, [entryId]: { ...entry, aiAllowed } },
+    }, envelope.keyId, key),
+  };
+}
+
 async function resolveWorkspaceNode(
   node: WorkspaceTreeNode,
   envelopes: Map<string, EncryptedFolderEnvelope>,
   keys: Record<string, string>,
   expectedKeyId: string | null,
+  inheritedEncryptedAIAllowed = false,
 ): Promise<WorkspaceTreeNode> {
   if (node.kind === 'file') return node;
   if (!node.encryptedFolderManifest) {
-    return { ...node, children: await Promise.all(node.children.map((child) => resolveWorkspaceNode(child, envelopes, keys, expectedKeyId))) };
+    return { ...node, children: await Promise.all(node.children.map((child) => resolveWorkspaceNode(child, envelopes, keys, expectedKeyId, inheritedEncryptedAIAllowed))) };
   }
   const envelope = envelopes.get(node.path);
   if (!envelope || (expectedKeyId && envelope.keyId !== expectedKeyId)) {
@@ -370,6 +475,7 @@ async function resolveWorkspaceNode(
   } catch {
     return encryptedFolderState(node, envelope, 'invalid');
   }
+  const folderAIAllowed = manifest.aiAllowed ?? inheritedEncryptedAIAllowed;
 
   const physicalById = new Map(node.children.map((child) => [physicalEntryId(child), child]));
   const children: WorkspaceTreeNode[] = [];
@@ -390,6 +496,8 @@ async function resolveWorkspaceNode(
         name: entry.name,
         extension: entry.documentExtension!,
         encryptedFolderKeyId: envelope.keyId,
+        encryptedAIAllowed: entry.aiAllowed ?? folderAIAllowed,
+        hiddenFromAI: physical.hiddenFromAI === true || !(entry.aiAllowed ?? folderAIAllowed),
       });
       continue;
     }
@@ -405,7 +513,7 @@ async function resolveWorkspaceNode(
         });
         continue;
       }
-      const resolved = await resolveWorkspaceNode(physical, envelopes, keys, envelope.keyId) as WorkspaceFolderNode & { kind: 'folder' };
+      const resolved = await resolveWorkspaceNode(physical, envelopes, keys, envelope.keyId, entry.aiAllowed ?? folderAIAllowed) as WorkspaceFolderNode & { kind: 'folder' };
       children.push({ ...resolved, name: entry.name });
     }
   }
@@ -418,6 +526,8 @@ async function resolveWorkspaceNode(
     name: manifest.name,
     children,
     encryptedFolderKeyId: envelope.keyId,
+    encryptedAIAllowed: folderAIAllowed,
+    hiddenFromAI: node.hiddenFromAI === true || !folderAIAllowed,
     encryptionState: issues.length > 0 ? 'incomplete' : 'unlocked',
     ...(issues.length > 0 ? { encryptedFolderIssues: issues } : {}),
   };
@@ -438,7 +548,9 @@ function encryptedFolderState(
 }
 
 function physicalEntryId(node: WorkspaceTreeNode): string {
-  if (node.kind === 'folder') return node.name;
+  if (node.kind === 'folder') {
+    return encryptedFolderIdFromPhysicalName(node.name);
+  }
   return node.name.slice(0, Math.max(0, node.name.length - node.extension.length));
 }
 

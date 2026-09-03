@@ -431,7 +431,7 @@ export function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFile
   return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
 }
 
-export function workspaceFileAiAccess(path: string): { archived: boolean; locked: boolean; hiddenFromAI: boolean; readOnly: boolean } {
+export function workspaceFileAiAccess(path: string): { archived: boolean; locked: boolean; hiddenFromAI: boolean; encryptedAIAllowed: boolean; readOnly: boolean } {
   return workspaceFileAccessInWorkspaces(state.workspaces, path);
 }
 

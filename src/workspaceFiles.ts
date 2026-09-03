@@ -56,7 +56,7 @@ export function workspacePathForFileInWorkspaces(workspaces: Workspace[], path: 
 export function workspaceFileAccessInWorkspaces(
   workspaces: Workspace[],
   path: string,
-): { archived: boolean; locked: boolean; hiddenFromAI: boolean; readOnly: boolean } {
+): { archived: boolean; locked: boolean; hiddenFromAI: boolean; encryptedAIAllowed: boolean; readOnly: boolean } {
   for (const workspace of workspaces) {
     const file = findFileInWorkspace(workspace, path);
     if (file) {
@@ -66,9 +66,10 @@ export function workspaceFileAccessInWorkspaces(
         archived,
         locked,
         hiddenFromAI: file.hiddenFromAI === true,
+        encryptedAIAllowed: file.encryptedAIAllowed === true,
         readOnly: archived || locked,
       };
     }
   }
-  return { archived: false, locked: false, hiddenFromAI: false, readOnly: false };
+  return { archived: false, locked: false, hiddenFromAI: false, encryptedAIAllowed: false, readOnly: false };
 }

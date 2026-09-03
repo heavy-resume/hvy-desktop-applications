@@ -286,7 +286,7 @@ export function activateWorkspaceChatDocument(): void {
   };
   state.selectedFilePath = null;
 }
-export async function openDocument(file: DocumentFile, options: { source?: RuntimeDocument; versionId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; includedDocumentId?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
+export async function openDocument(file: DocumentFile, options: { source?: RuntimeDocument; versionId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; includedDocumentId?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; initialMode?: HvyMode; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
   const source = options.source ?? runtimeDocumentForFile(file, { distinct: options.isNew || options.defaultDocument });
   const versionId = options.versionId ?? source.workingVersionId;
   const loadStartedAt = performance.now();
@@ -324,7 +324,7 @@ export async function openDocument(file: DocumentFile, options: { source?: Runti
     { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
     () => deserializeHvy(bytes, file.extension),
   );
-  const hiddenFromAI = configuredHiddenFromAI || isWholeDocumentEncrypted(document);
+  const hiddenFromAI = configuredHiddenFromAI || (isWholeDocumentEncrypted(document) && !workspaceAccess.encryptedAIAllowed);
   if (!hiddenFromAI && file.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
     const attached = await measureDebugAsync(
       'load',
@@ -340,6 +340,7 @@ export async function openDocument(file: DocumentFile, options: { source?: Runti
   const recoveryState = options.recovered ? file.recoveryState ?? null : viewSession?.recoveryState ?? null;
   const restoredMode = viewSession?.mode
     ?? readDocumentModePreference(file.path)
+    ?? options.initialMode
     ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI });
   state.document = {
     documentId: source.documentId,

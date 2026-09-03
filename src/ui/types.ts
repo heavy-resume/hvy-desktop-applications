@@ -14,6 +14,10 @@ export interface UiHandlers {
   unarchiveWorkspace(path: string): void;
   setWorkspaceHiddenFromAI(workspacePath: string, hiddenFromAI: boolean): void;
   setWorkspaceFolderHiddenFromAI(workspacePath: string, targetDirectory: string, hiddenFromAI: boolean): void;
+  setEncryptedFolderAIAllowed(workspacePath: string, targetDirectory: string, name: string, allowed: boolean): void;
+  setEncryptedFileAIAllowed(workspacePath: string, path: string, name: string, allowed: boolean): void;
+  confirmEncryptedAIAccess(): void;
+  cancelEncryptedAIAccess(): void;
   toggleWorkspaceActions(path: string): void;
   setIntegrationsSectionExpanded(expanded: boolean): void;
   setWorkspacesSectionExpanded(expanded: boolean): void;
@@ -245,6 +249,7 @@ export interface UiHandlers {
   openRecentFile(path: string): void;
   selectFile(path: string): void;
   refreshWorkspace(path: string): void;
+  unlockEncryptedFolders(path: string): void;
   retryWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;

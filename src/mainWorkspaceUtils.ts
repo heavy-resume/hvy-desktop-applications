@@ -161,8 +161,8 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   const sourceFile = await readDocumentFile(path);
   let file: DocumentFile;
   if (destinationFolder) {
-    if (sourceNode.extension !== '.hvy' && sourceNode.extension !== '.phvy') {
-      throw new Error('Encrypted folders support .hvy and .phvy documents.');
+    if (sourceNode.extension !== '.hvy' && sourceNode.extension !== '.thvy' && sourceNode.extension !== '.phvy') {
+      throw new Error('Encrypted folders support .hvy, .thvy, and .phvy documents.');
     }
     const mutation = await prepareEncryptedFolderImportedDocumentMutation(
       destinationFolder,
@@ -192,7 +192,7 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   }
   if (sourceEncrypted) {
     const sourceFolder = findEncryptedFolder(sourceWorkspace, sourceDirectory);
-    if (!sourceFolder || (sourceNode.extension !== '.hvy' && sourceNode.extension !== '.phvy')) {
+    if (!sourceFolder || (sourceNode.extension !== '.hvy' && sourceNode.extension !== '.thvy' && sourceNode.extension !== '.phvy')) {
       throw new Error('Encrypted source folder was not found.');
     }
     const sourceEntryId = sourcePhysicalName.slice(0, Math.max(0, sourcePhysicalName.length - sourceNode.extension.length));
@@ -293,10 +293,11 @@ export function workspacePathForFile(filePath: string): string | null {
   return workspacePathForFileInWorkspaces(state.workspaces, filePath);
 }
 
-export function loadWorkspace(path: string, options: { recordRecent?: boolean } = {}): Promise<Workspace> {
+export function loadWorkspace(path: string, options: { recordRecent?: boolean; unlockEncryptedFolders?: boolean } = {}): Promise<Workspace> {
   return loadWorkspaceBackend(path, {
     includeTemplates: state.workspaceFileViews[path] === 'templates',
     recordRecent: options.recordRecent === true,
+    unlockEncryptedFolders: options.unlockEncryptedFolders,
   });
 }
 
@@ -346,7 +347,7 @@ export function workspaceDisplayNameFromPath(path: string): string {
   return normalized.split(/[\\/]/).pop() || path;
 }
 
-export async function loadWorkspaceEntry(path: string, options: { recordRecent?: boolean } = {}): Promise<void> {
+export async function loadWorkspaceEntry(path: string, options: { recordRecent?: boolean; unlockEncryptedFolders?: boolean } = {}): Promise<void> {
   await loadWorkspaceEntryUsing(path, () => loadWorkspace(path, options), 'direct');
 }
 

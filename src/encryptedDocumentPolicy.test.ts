@@ -13,7 +13,7 @@ describe('encrypted document plaintext policy', () => {
     expect(encryptedDocumentPlaintextPolicy).toMatchObject({
       rawMode: 'memoryOnly',
       pdfExport: 'explicitPlaintextExport',
-      ai: 'blocked',
+      ai: 'blockedByDefaultWithExplicitEncryptedFolderConsent',
       embeddingIndexes: 'blockedAndRemoved',
       recoveryDrafts: 'encryptedDocumentBytesWithoutPlaintextUiState',
       savedVersions: 'disabledAndPurged',

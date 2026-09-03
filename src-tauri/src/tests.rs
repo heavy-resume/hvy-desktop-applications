@@ -4,6 +4,25 @@
     use zip::write::FileOptions;
 
     #[test]
+    fn workspace_tree_serializes_renderer_field_names() {
+        let node = WorkspaceTreeNode::Folder {
+            name: "folder-id".into(),
+            path: "/workspace/folder-id".into(),
+            relative_path: "folder-id".into(),
+            hidden_from_ai: false,
+            encrypted_folder_manifest: Some(vec![1, 2, 3]),
+            children: Vec::new(),
+        };
+
+        let value = serde_json::to_value(node).unwrap();
+
+        assert_eq!(value.get("relativePath").and_then(serde_json::Value::as_str), Some("folder-id"));
+        assert_eq!(value.get("encryptedFolderManifest"), Some(&serde_json::json!([1, 2, 3])));
+        assert!(value.get("relative_path").is_none());
+        assert!(value.get("encrypted_folder_manifest").is_none());
+    }
+
+    #[test]
     fn document_key_vault_recovers_persisted_key_after_reopen() {
         let directory = tempdir().unwrap();
         let vault_path = directory.path().join("document-key-vault-v1.json");
@@ -41,7 +60,7 @@
             id: "draft".into(),
             document_path: path_to_string(&document_path),
             name: "Notes.hvy".into(),
-            extension: ".hvy".into(),
+            extension: ".thvy".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
             bytes: Vec::new(),
             bytes_path: Some("draft.bytes".into()),
@@ -477,7 +496,7 @@
 
         create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).unwrap();
 
-        let folder = dir.path().join(folder_id);
+        let folder = dir.path().join(encrypted_folder_physical_name(folder_id));
         assert!(folder.is_dir());
         assert_eq!(fs::read(folder.join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), encrypted.manifest_bytes);
         assert!(!dir.path().join("Private Plans").exists());
@@ -522,7 +541,7 @@
         create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted_folder)).unwrap();
         let request = CreateEncryptedFolderDocumentRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             document_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into(),
             extension: ".hvy".into(),
             document_bytes: b"encrypted document".to_vec(),
@@ -533,8 +552,8 @@
         let document_path = create_encrypted_folder_document_at(dir.path(), &request).unwrap();
 
         assert_eq!(fs::read(document_path).unwrap(), b"encrypted document");
-        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
-        assert!(!dir.path().join(folder_id).join(format!(".{}.hvy.creating", request.document_id)).exists());
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{}.thvy.creating", request.document_id)).exists());
     }
 
     #[test]
@@ -549,7 +568,7 @@
         let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
         let request = CreateEncryptedFolderDocumentRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             document_id: document_id.into(),
             extension: ".hvy".into(),
             document_bytes: b"encrypted document".to_vec(),
@@ -558,7 +577,7 @@
         };
 
         assert!(create_encrypted_folder_document_at(dir.path(), &request).is_err());
-        assert!(!dir.path().join(folder_id).join(format!("{document_id}.hvy")).exists());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!("{document_id}.hvy")).exists());
     }
 
     #[test]
@@ -578,7 +597,7 @@
         })).unwrap();
         let request = CreateEncryptedFolderChildRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             child_folder_id: child_id.into(),
             child_manifest_bytes: child.clone(),
             previous_manifest_bytes: previous,
@@ -587,10 +606,10 @@
 
         create_encrypted_folder_child_at(dir.path(), &request).unwrap();
 
-        let child_path = dir.path().join(folder_id).join(child_id);
+        let child_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(encrypted_folder_physical_name(child_id));
         assert_eq!(fs::read(child_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), child);
-        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
-        assert!(!dir.path().join(folder_id).join(format!(".{child_id}.creating")).exists());
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{child_id}.creating")).exists());
     }
 
     #[test]
@@ -609,7 +628,7 @@
         })).unwrap();
         let request = CreateEncryptedFolderChildRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             child_folder_id: child_id.into(),
             child_manifest_bytes: envelope(child_id, "child"),
             previous_manifest_bytes: stale.clone(),
@@ -617,7 +636,7 @@
         };
 
         assert!(create_encrypted_folder_child_at(dir.path(), &request).is_err());
-        assert!(!dir.path().join(folder_id).join(child_id).exists());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(encrypted_folder_physical_name(child_id)).exists());
     }
 
     #[test]
@@ -636,15 +655,15 @@
 
         update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             previous_manifest_bytes: previous.clone(),
             manifest_bytes: next.clone(),
         }).unwrap();
-        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
 
         assert!(update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             previous_manifest_bytes: previous,
             manifest_bytes: envelope("later"),
         }).is_err());
@@ -663,12 +682,12 @@
         create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
             folder_id: folder_id.into(), manifest_bytes: previous.clone(),
         })).unwrap();
-        let document_path = dir.path().join(folder_id).join(format!("{document_id}.hvy"));
+        let document_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!("{document_id}.hvy"));
         fs::write(&document_path, b"encrypted").unwrap();
 
         delete_encrypted_folder_document_at(dir.path(), &DeleteEncryptedFolderDocumentRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             document_id: document_id.into(),
             extension: ".hvy".into(),
             previous_manifest_bytes: previous,
@@ -676,8 +695,8 @@
         }).unwrap();
 
         assert!(!document_path.exists());
-        assert_eq!(fs::read(dir.path().join(folder_id).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
-        assert!(!dir.path().join(folder_id).join(format!(".{document_id}.hvy.deleting")).exists());
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{document_id}.hvy.deleting")).exists());
     }
 
     #[test]
@@ -691,12 +710,12 @@
         create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
             folder_id: folder_id.into(), manifest_bytes: envelope("current"),
         })).unwrap();
-        let document_path = dir.path().join(folder_id).join(format!("{document_id}.hvy"));
+        let document_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!("{document_id}.hvy"));
         fs::write(&document_path, b"encrypted").unwrap();
 
         assert!(delete_encrypted_folder_document_at(dir.path(), &DeleteEncryptedFolderDocumentRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             document_id: document_id.into(),
             extension: ".hvy".into(),
             previous_manifest_bytes: envelope("stale"),
@@ -704,7 +723,7 @@
         }).is_err());
 
         assert_eq!(fs::read(document_path).unwrap(), b"encrypted");
-        assert!(!dir.path().join(folder_id).join(format!(".{document_id}.hvy.deleting")).exists());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{document_id}.hvy.deleting")).exists());
     }
 
     #[test]
@@ -718,20 +737,20 @@
         create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
             folder_id: folder_id.into(), manifest_bytes: envelope(folder_id, "current"),
         })).unwrap();
-        let child_path = dir.path().join(folder_id).join(child_id);
+        let child_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(encrypted_folder_physical_name(child_id));
         fs::create_dir(&child_path).unwrap();
         fs::write(child_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE), envelope(child_id, "child")).unwrap();
 
         assert!(delete_encrypted_folder_child_at(dir.path(), &DeleteEncryptedFolderChildRequest {
             workspace_path: path_to_string(dir.path()),
-            folder_directory: folder_id.into(),
+            folder_directory: encrypted_folder_physical_name(folder_id),
             child_folder_id: child_id.into(),
             previous_manifest_bytes: envelope(folder_id, "stale"),
             manifest_bytes: envelope(folder_id, "next"),
         }).is_err());
 
         assert!(child_path.is_dir());
-        assert!(!dir.path().join(folder_id).join(format!(".{child_id}.deleting")).exists());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".hvy-encrypted-folder-{child_id}.deleting")).exists());
     }
 
     #[test]

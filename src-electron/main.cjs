@@ -25,6 +25,7 @@ const INTEGRATION_VAULT_KEY_FILE = 'integration-vault-key-electron.bin';
 const DOCUMENT_KEY_VAULT_FILE = 'document-key-vault-v1.json';
 const DOCUMENT_KEY_VAULT_KEY_FILE = 'document-key-vault-key-electron.bin';
 const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
+const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
 const MCP_SETTINGS = 'mcp-settings.json';
 const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
 const RECENT_LIMIT = 12;
@@ -615,6 +616,7 @@ async function handleCommand(command, args) {
     case 'reset_integration_vault': return resetIntegrationVault();
     case 'load_document_key_vault_status': return loadDocumentKeyVaultStatus();
     case 'load_document_keys': return loadDocumentKeys(args.keyIds);
+    case 'try_load_document_keys': return null;
     case 'list_document_key_metadata': return listDocumentKeyMetadata();
     case 'store_document_keys': return storeDocumentKeys(args.entries);
     case 'delete_document_key': return deleteDocumentKey(args.keyId);
@@ -1711,14 +1713,14 @@ async function selectWorkspaceDocumentFiles() {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: 'Encrypted-folder documents', extensions: ['hvy', 'phvy'] },
+      { name: 'Encrypted-folder documents', extensions: ['hvy', 'thvy', 'phvy'] },
     ],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths.map((selected) => {
     const extension = path.extname(selected).toLowerCase();
-    if (extension !== '.hvy' && extension !== '.phvy') {
-      throw new Error('Encrypted folders support .hvy and .phvy documents.');
+    if (extension !== '.hvy' && extension !== '.thvy' && extension !== '.phvy') {
+      throw new Error('Encrypted folders support .hvy, .thvy, and .phvy documents.');
     }
     return { name: path.basename(selected), bytes: Array.from(fs.readFileSync(selected)) };
   });
@@ -1894,10 +1896,11 @@ function createEncryptedFolderDocument(request) {
   const documentId = String(request?.documentId || '');
   const extension = String(request?.extension || '');
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!uuidPattern.test(documentId) || (extension !== '.hvy' && extension !== '.phvy')) throw new Error('Encrypted document identity is invalid.');
+  if (!uuidPattern.test(documentId) || !['.hvy', '.thvy', '.phvy'].includes(extension)) throw new Error('Encrypted document identity is invalid.');
   const documentBytes = Buffer.from(normalizeBytes(request?.documentBytes) || []);
   if (documentBytes.length === 0) throw new Error('Encrypted document bytes are required.');
-  const folderId = path.basename(folderPath);
+  const folderId = encryptedFolderIdFromPhysicalName(path.basename(folderPath));
+  if (!folderId) throw new Error('Encrypted folder manifest does not match the folder identity.');
   const previousManifestBytes = Buffer.from(normalizeBytes(request?.previousManifestBytes) || []);
   const manifestBytes = Buffer.from(normalizeBytes(request?.manifestBytes) || []);
   for (const bytes of [previousManifestBytes, manifestBytes]) {
@@ -1944,7 +1947,8 @@ function createEncryptedFolderChild(request) {
   const childFolderId = String(request?.childFolderId || '');
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!uuidPattern.test(childFolderId)) throw new Error('Encrypted child folder identity is invalid.');
-  const folderId = path.basename(folderPath);
+  const folderId = encryptedFolderIdFromPhysicalName(path.basename(folderPath));
+  if (!folderId) throw new Error('Encrypted folder manifest does not match the folder identity.');
   const previousManifestBytes = Buffer.from(normalizeBytes(request?.previousManifestBytes) || []);
   const manifestBytes = Buffer.from(normalizeBytes(request?.manifestBytes) || []);
   const childManifestBytes = Buffer.from(normalizeBytes(request?.childManifestBytes) || []);
@@ -1964,7 +1968,7 @@ function createEncryptedFolderChild(request) {
   if (!fs.readFileSync(manifestPath).equals(previousManifestBytes)) {
     throw new Error('Encrypted folder changed before the child folder could be created. Refresh and try again.');
   }
-  const destination = path.join(folderPath, childFolderId);
+  const destination = path.join(folderPath, encryptedFolderPhysicalName(childFolderId));
   const staging = path.join(folderPath, `.${childFolderId}.creating`);
   if (fs.existsSync(destination) || fs.existsSync(staging)) throw new Error('An encrypted child folder already exists with that identity.');
   fs.mkdirSync(staging);
@@ -1999,7 +2003,8 @@ function updateEncryptedFolderManifest(request) {
   if (!folderPath.startsWith(workspaceRoot + path.sep) || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
     throw new Error('Encrypted folder path must stay inside the workspace.');
   }
-  const folderId = path.basename(folderPath);
+  const folderId = encryptedFolderIdFromPhysicalName(path.basename(folderPath));
+  if (!folderId) throw new Error('Encrypted folder manifest does not match the folder identity.');
   const previousManifestBytes = Buffer.from(normalizeBytes(request?.previousManifestBytes) || []);
   const manifestBytes = Buffer.from(normalizeBytes(request?.manifestBytes) || []);
   const parseIdentity = (bytes) => {
@@ -2029,7 +2034,7 @@ function deleteEncryptedFolderDocument(request) {
   const documentId = String(request?.documentId || '');
   const extension = String(request?.extension || '');
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!uuidPattern.test(documentId) || (extension !== '.hvy' && extension !== '.phvy')) {
+  if (!uuidPattern.test(documentId) || !['.hvy', '.thvy', '.phvy'].includes(extension)) {
     throw new Error('Encrypted document identity is invalid.');
   }
   const folderPath = path.resolve(workspacePath, relative);
@@ -2063,8 +2068,9 @@ function deleteEncryptedFolderChild(request) {
   const parentPath = path.resolve(workspacePath, relative);
   const workspaceRoot = path.resolve(workspacePath);
   if (!relative || !parentPath.startsWith(workspaceRoot + path.sep)) throw new Error('Encrypted folder path must stay inside the workspace.');
-  const childPath = path.join(parentPath, childFolderId);
-  const staging = path.join(parentPath, `.${childFolderId}.deleting`);
+  const childPath = encryptedFolderChildPath(parentPath, childFolderId);
+  const childPhysicalName = path.basename(childPath);
+  const staging = path.join(parentPath, `.${childPhysicalName}.deleting`);
   if (!fs.existsSync(childPath) || !fs.statSync(childPath).isDirectory()) throw new Error('Encrypted child folder was not found.');
   if (fs.existsSync(staging)) throw new Error('Encrypted child folder deletion is already staged.');
   fs.renameSync(childPath, staging);
@@ -2075,7 +2081,7 @@ function deleteEncryptedFolderChild(request) {
     throw error;
   }
   fs.rmSync(staging, { recursive: true });
-  const deletedRelative = `${relative.replace(/\\/g, '/')}/${childFolderId}`;
+  const deletedRelative = `${relative.replace(/\\/g, '/')}/${childPhysicalName}`;
   const manifestPath = workspaceManifestPath(workspacePath);
   if (!manifestPath) throw new Error('Workspace manifest was not found.');
   const manifest = readJson(manifestPath, null);
@@ -2608,6 +2614,23 @@ function normalizedFolderName(name) {
   return trimmed;
 }
 
+function encryptedFolderPhysicalName(folderId) {
+  return `${ENCRYPTED_FOLDER_PHYSICAL_PREFIX}${folderId}`;
+}
+
+function encryptedFolderIdFromPhysicalName(name) {
+  const value = String(name || '');
+  const folderId = value.startsWith(ENCRYPTED_FOLDER_PHYSICAL_PREFIX)
+    ? value.slice(ENCRYPTED_FOLDER_PHYSICAL_PREFIX.length)
+    : value;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(folderId) ? folderId : null;
+}
+
+function encryptedFolderChildPath(parent, folderId) {
+  const labeled = path.join(parent, encryptedFolderPhysicalName(folderId));
+  return fs.existsSync(labeled) ? labeled : path.join(parent, folderId);
+}
+
 function createWorkspaceFolder(request) {
   const workspacePath = String(request?.workspacePath || '');
   ensureWorkspace(workspacePath);
@@ -2632,7 +2655,7 @@ function createWorkspaceFolder(request) {
       throw new Error('Encrypted folder manifest does not match the folder identity.');
     }
   }
-  const folderPath = path.join(parent, encrypted ? folderId : folderName);
+  const folderPath = path.join(parent, encrypted ? encryptedFolderPhysicalName(folderId) : folderName);
   const workspaceRoot = path.resolve(workspacePath);
   const resolved = path.resolve(folderPath);
   if (!resolved.startsWith(workspaceRoot + path.sep)) throw new Error('Folder path must stay inside the workspace.');
@@ -2709,8 +2732,8 @@ function recoverStagedEncryptedDeletions(directory) {
   for (const name of fs.readdirSync(directory)) {
     if (!name.startsWith('.') || !name.endsWith('.deleting')) continue;
     const stagedName = name.slice(1, -'.deleting'.length);
-    const identity = stagedName.replace(/\.(?:hvy|phvy)$/i, '');
-    if (!uuidPattern.test(identity)) continue;
+    const identity = stagedName.replace(/\.(?:hvy|thvy|phvy)$/i, '');
+    if (!encryptedFolderIdFromPhysicalName(identity)) continue;
     const destination = path.join(directory, stagedName);
     if (!fs.existsSync(destination)) fs.renameSync(path.join(directory, name), destination);
   }

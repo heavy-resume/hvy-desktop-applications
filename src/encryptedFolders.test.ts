@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   decryptFolderManifest,
+  deferEncryptedWorkspace,
   encryptFolderManifest,
   normalizeFolderManifest,
   parseFolderEnvelope,
   prepareEncryptedFolderChildMutation,
   prepareEncryptedFolderEntryRename,
+  prepareEncryptedFolderEntryAIAccessMutation,
   prepareEncryptedFolderEntryRemoval,
   prepareEncryptedFolderImportedDocumentMutation,
   prepareEncryptedFolderSelfRename,
+  prepareEncryptedFolderSelfAIAccessMutation,
   prepareEncryptedFolderDocumentMutation,
   resolveEncryptedWorkspace,
+  workspaceHasLogicalName,
   type EncryptedFolderManifest,
 } from './encryptedFolders';
 import type { Workspace } from './backend';
@@ -82,10 +86,43 @@ describe('encrypted folder manifests', () => {
       ...manifest,
       entries: { [DOCUMENT_ID]: { name: 'Notes', kind: 'document', documentExtension: '.md' } },
     })).toThrow('unsupported extension');
+    expect(normalizeFolderManifest({
+      ...manifest,
+      entries: { [DOCUMENT_ID]: { name: 'Reusable.thvy', kind: 'document', documentExtension: '.thvy' } },
+    }).entries[DOCUMENT_ID]).toEqual({ name: 'Reusable.thvy', kind: 'document', documentExtension: '.thvy' });
+  });
+
+  it('uses one case-insensitive logical namespace for encrypted and plaintext siblings', () => {
+    const workspace: Workspace = {
+      path: '/workspace',
+      manifest: { schemaVersion: 1, name: 'Workspace', createdAt: '', updatedAt: '' },
+      files: [
+        { kind: 'folder', name: 'Test Folder', path: '/workspace/Test Folder', relativePath: 'Test Folder', children: [] },
+        { kind: 'folder', name: 'Private', path: '/workspace/hvy-encrypted-folder-22222222-2222-4222-8222-222222222222', relativePath: 'hvy-encrypted-folder-22222222-2222-4222-8222-222222222222', children: [], encryptionState: 'unlocked' },
+      ],
+    };
+
+    expect(workspaceHasLogicalName(workspace, '', 'test folder')).toBe(true);
+    expect(workspaceHasLogicalName(workspace, '', 'PRIVATE')).toBe(true);
+    expect(workspaceHasLogicalName(workspace, '', 'Private', workspace.files[1].relativePath)).toBe(false);
+    expect(workspaceHasLogicalName(workspace, '', 'Different')).toBe(false);
   });
 });
 
 describe('encrypted workspace discovery', () => {
+  it('defers encrypted folder key access without exposing physical children', async () => {
+    const encryptedFolderManifest = Array.from(await encryptFolderManifest(manifest, KEY_ID, KEY));
+    const deferred = deferEncryptedWorkspace(physicalWorkspace(encryptedFolderManifest, [physicalDocument(DOCUMENT_ID)]));
+
+    expect(deferred.files[0]).toMatchObject({
+      kind: 'folder',
+      name: `Encrypted folder · ${FOLDER_ID.slice(0, 8)}`,
+      encryptionState: 'locked',
+      encryptedFolderKeyId: KEY_ID,
+      children: [],
+    });
+  });
+
   it('prepares an opaque encrypted document and authenticated manifest update', async () => {
     const emptyManifest = { ...manifest, entries: {} };
     const encryptedFolderManifest = Array.from(await encryptFolderManifest(emptyManifest, KEY_ID, KEY));
@@ -204,6 +241,34 @@ describe('encrypted workspace discovery', () => {
     expect(parseFolderEnvelope(mutation.manifestBytes).folderId).toBe(FOLDER_ID);
   });
 
+  it('keeps encrypted AI access disabled by default and supports folder and document overrides', async () => {
+    const aiManifest = { ...manifest, entries: { [DOCUMENT_ID]: manifest.entries[DOCUMENT_ID] } };
+    const encryptedFolderManifest = Array.from(await encryptFolderManifest(aiManifest, KEY_ID, KEY));
+    const physical = physicalWorkspace(encryptedFolderManifest, [physicalDocument(DOCUMENT_ID)]);
+    const denied = await resolveEncryptedWorkspace(physical, async () => ({ [KEY_ID]: KEY }));
+    const deniedFolder = denied.files[0];
+    expect(deniedFolder).toMatchObject({ hiddenFromAI: true, encryptedAIAllowed: false });
+    if (!deniedFolder || deniedFolder.kind !== 'folder') throw new Error('Expected encrypted folder.');
+    expect(deniedFolder.children[0]).toMatchObject({ hiddenFromAI: true, encryptedAIAllowed: false });
+
+    const folderMutation = await prepareEncryptedFolderSelfAIAccessMutation(deniedFolder, true, { [KEY_ID]: KEY });
+    const allowedPhysical = physicalWorkspace(Array.from(folderMutation.manifestBytes), [physicalDocument(DOCUMENT_ID)]);
+    const allowed = await resolveEncryptedWorkspace(allowedPhysical, async () => ({ [KEY_ID]: KEY }));
+    const allowedFolder = allowed.files[0];
+    expect(allowedFolder).toMatchObject({ hiddenFromAI: false, encryptedAIAllowed: true });
+    if (!allowedFolder || allowedFolder.kind !== 'folder') throw new Error('Expected encrypted folder.');
+    expect(allowedFolder.children[0]).toMatchObject({ hiddenFromAI: false, encryptedAIAllowed: true });
+
+    const documentMutation = await prepareEncryptedFolderEntryAIAccessMutation(allowedFolder, DOCUMENT_ID, false, { [KEY_ID]: KEY });
+    const documentDenied = await resolveEncryptedWorkspace(
+      physicalWorkspace(Array.from(documentMutation.manifestBytes), [physicalDocument(DOCUMENT_ID)]),
+      async () => ({ [KEY_ID]: KEY }),
+    );
+    expect(documentDenied.files[0]).toMatchObject({ hiddenFromAI: false, encryptedAIAllowed: true });
+    if (documentDenied.files[0]?.kind !== 'folder') throw new Error('Expected encrypted folder.');
+    expect(documentDenied.files[0].children[0]).toMatchObject({ hiddenFromAI: true, encryptedAIAllowed: false });
+  });
+
   it('maps opaque physical entries to logical names after loading the exact folder key', async () => {
     const encryptedFolderManifest = Array.from(await encryptFolderManifest(manifest, KEY_ID, KEY));
     const workspace = physicalWorkspace(encryptedFolderManifest, [
@@ -277,9 +342,9 @@ function physicalDocument(id: string): Workspace['files'][number] {
 function physicalFolder(id: string): Workspace['files'][number] {
   return {
     kind: 'folder',
-    name: id,
-    path: `/workspace/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/${id}`,
-    relativePath: `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/${id}`,
+    name: `hvy-encrypted-folder-${id}`,
+    path: `/workspace/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/hvy-encrypted-folder-${id}`,
+    relativePath: `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/hvy-encrypted-folder-${id}`,
     children: [],
   };
 }

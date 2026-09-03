@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { resolveEncryptedWorkspace } from './encryptedFolders';
+import { deferEncryptedWorkspace, resolveEncryptedWorkspace } from './encryptedFolders';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
@@ -54,6 +54,7 @@ export interface WorkspaceFileNode {
   locked?: boolean;
   hiddenFromAI?: boolean;
   encryptedFolderKeyId?: string;
+  encryptedAIAllowed?: boolean;
 }
 
 export interface WorkspaceFolderNode {
@@ -64,7 +65,8 @@ export interface WorkspaceFolderNode {
   children: WorkspaceTreeNode[];
   encryptedFolderManifest?: number[];
   encryptedFolderKeyId?: string;
-  encryptionState?: 'unlocked' | 'missingKey' | 'invalid' | 'incomplete';
+  encryptedAIAllowed?: boolean;
+  encryptionState?: 'locked' | 'unlocked' | 'missingKey' | 'invalid' | 'incomplete';
   encryptedFolderIssues?: string[];
 }
 
@@ -254,7 +256,7 @@ export interface CreateEncryptedFolderDocumentRequest {
   workspacePath: string;
   folderDirectory: string;
   documentId: string;
-  extension: '.hvy' | '.phvy';
+  extension: '.hvy' | '.thvy' | '.phvy';
   documentBytes: number[] | Uint8Array;
   previousManifestBytes: number[] | Uint8Array;
   manifestBytes: number[] | Uint8Array;
@@ -278,7 +280,7 @@ export interface UpdateEncryptedFolderManifestRequest {
 
 export interface DeleteEncryptedFolderDocumentRequest extends UpdateEncryptedFolderManifestRequest {
   documentId: string;
-  extension: '.hvy' | '.phvy';
+  extension: '.hvy' | '.thvy' | '.phvy';
 }
 
 export interface DeleteEncryptedFolderChildRequest extends UpdateEncryptedFolderManifestRequest {
@@ -693,8 +695,22 @@ export function loadDocumentKeyVaultStatus(): Promise<DocumentKeyVaultStatus> {
   return invokeDesktop('load_document_key_vault_status');
 }
 
-export function loadDocumentKeys(keyIds: string[]): Promise<Record<string, string>> {
-  return invokeDesktop('load_document_keys', { keyIds });
+const loadedDocumentKeyring: Record<string, string> = {};
+
+export function loadedDocumentKeys(): Record<string, string> {
+  return loadedDocumentKeyring;
+}
+
+export async function loadDocumentKeys(keyIds: string[]): Promise<Record<string, string>> {
+  const keys = await invokeDesktop<Record<string, string>>('load_document_keys', { keyIds });
+  Object.assign(loadedDocumentKeyring, keys);
+  return keys;
+}
+
+export async function tryLoadDocumentKeys(keyIds: string[]): Promise<Record<string, string> | null> {
+  const keys = await invokeDesktop<Record<string, string> | null>('try_load_document_keys', { keyIds });
+  if (keys) Object.assign(loadedDocumentKeyring, keys);
+  return keys;
 }
 
 export function listDocumentKeyMetadata(): Promise<DocumentKeyMetadata[]> {
@@ -931,13 +947,21 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
   return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export async function loadWorkspace(path: string, options: { includeTemplates?: boolean; recordRecent?: boolean } = {}): Promise<Workspace> {
+export async function loadWorkspace(path: string, options: { includeTemplates?: boolean; recordRecent?: boolean; unlockEncryptedFolders?: boolean } = {}): Promise<Workspace> {
   const workspace = await invokeDesktop<Workspace>('load_workspace', {
     path,
     includeTemplates: options.includeTemplates === true,
     recordRecent: options.recordRecent === true,
   });
-  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+  if (options.unlockEncryptedFolders !== false) return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+  let interactionRequired = false;
+  const resolved = await resolveEncryptedWorkspace(workspace, async (keyIds) => {
+    const keys = await tryLoadDocumentKeys(keyIds);
+    if (keys !== null) return keys;
+    interactionRequired = true;
+    return {};
+  });
+  return interactionRequired ? deferEncryptedWorkspace(workspace) : resolved;
 }
 
 export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {

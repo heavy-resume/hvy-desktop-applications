@@ -178,11 +178,12 @@ describe('workspace sidebar lifecycle', () => {
       files: [],
     });
 
-    await loadWorkspaceEntry('/Work');
+    await loadWorkspaceEntry('/Work', { unlockEncryptedFolders: false });
 
     expect(backendMocks.loadWorkspace).toHaveBeenLastCalledWith('/Work', {
       includeTemplates: false,
       recordRecent: false,
+      unlockEncryptedFolders: false,
     });
   });
 

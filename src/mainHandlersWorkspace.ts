@@ -4,13 +4,56 @@ import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
 import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
 import { documentEncryptionKeyring, generateStoredDocumentKey } from './documentKeys';
-import { encryptFolderManifest, findEncryptedFolder, prepareEncryptedFolderChildMutation, prepareEncryptedFolderDocumentMutation, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename, prepareEncryptedFolderImportedDocumentMutation, prepareEncryptedFolderSelfRename } from './encryptedFolders';
-import { state } from './state';
+import { encryptedFolderIdFromPhysicalName, encryptFolderManifest, findEncryptedFolder, prepareEncryptedFolderChildMutation, prepareEncryptedFolderDocumentMutation, prepareEncryptedFolderEntryAIAccessMutation, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename, prepareEncryptedFolderImportedDocumentMutation, prepareEncryptedFolderSelfAIAccessMutation, prepareEncryptedFolderSelfRename, workspaceHasLogicalName } from './encryptedFolders';
+import { findFileInWorkspace, state } from './state';
 import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
-import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
+import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncOpenDocumentAiAccess, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
 import type { UiHandlers } from './ui';
 
 export function createWorkspaceHandlers(): Partial<UiHandlers> {
+  const applyEncryptedAIAccess = async (prompt: NonNullable<typeof state.encryptedAIAccessPrompt>, allowed: boolean): Promise<void> => {
+    const workspace = state.workspaces.find((candidate) => candidate.path === prompt.workspacePath);
+    if (!workspace) throw new Error('Workspace was not found.');
+    let mutation;
+    let folderDirectory: string;
+    if (prompt.kind === 'folder') {
+      const folder = findEncryptedFolder(workspace, prompt.targetDirectory);
+      if (!folder) throw new Error('Encrypted folder was not found.');
+      mutation = await prepareEncryptedFolderSelfAIAccessMutation(folder, allowed, documentEncryptionKeyring());
+      folderDirectory = prompt.targetDirectory;
+    } else {
+      const file = findFileInWorkspace(workspace, prompt.path);
+      if (!file?.encryptedFolderKeyId) throw new Error('Encrypted document was not found.');
+      const parts = file.relativePath.replaceAll('\\', '/').split('/');
+      const physicalName = parts.pop() ?? '';
+      folderDirectory = parts.join('/');
+      const folder = findEncryptedFolder(workspace, folderDirectory);
+      if (!folder) throw new Error('Encrypted parent folder was not found.');
+      const entryId = physicalName.slice(0, Math.max(0, physicalName.length - file.extension.length));
+      mutation = await prepareEncryptedFolderEntryAIAccessMutation(folder, entryId, allowed, documentEncryptionKeyring());
+    }
+    const updated = await updateEncryptedFolderManifest({
+      workspacePath: prompt.workspacePath,
+      folderDirectory,
+      previousManifestBytes: mutation.previousManifestBytes,
+      manifestBytes: mutation.manifestBytes,
+    });
+    upsertWorkspace(updated);
+    clearWorkspaceFilterDocumentCache(updated.path);
+    const syncFiles = (nodes: WorkspaceTreeNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind === 'folder') syncFiles(node.children);
+        else if (node.encryptedFolderKeyId) syncOpenDocumentAiAccess(node.path, {});
+      }
+    };
+    syncFiles(updated.files);
+    if (allowed && prompt.openAIWhenEnabled && state.document?.source.path === prompt.path) {
+      state.document.mode = 'ai';
+      await mountCurrentDocument();
+    }
+    state.status = `${allowed ? 'Enabled' : 'Disabled'} AI access for ${prompt.name}`;
+  };
+
   const newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace'] = (workspacePath, targetDirectory = '') => {
     state.openWorkspaceActionsPath = null;
     state.newDocumentWorkspacePath = workspacePath;
@@ -49,6 +92,9 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       return;
     }
     const currentWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+    if (workspaceHasLogicalName(currentWorkspace, parentDirectory, trimmed)) {
+      throw new Error(`A file or folder named ${trimmed} already exists in this folder.`);
+    }
     const encryptedParent = findEncryptedFolder(currentWorkspace, parentDirectory);
     let workspace: Awaited<ReturnType<typeof createWorkspaceFolder>>;
     if (encryptedParent) {
@@ -113,9 +159,12 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const folder = findEncryptedFolder(workspace, targetDirectory);
     if (!workspace || !folder) throw new Error('Encrypted folder was not found.');
     const parts = targetDirectory.replaceAll('\\', '/').split('/');
-    const entryId = parts.pop() ?? '';
+    const entryId = encryptedFolderIdFromPhysicalName(parts.pop() ?? '');
     const parentDirectory = parts.join('/');
     const parent = findEncryptedFolder(workspace, parentDirectory);
+    if (workspaceHasLogicalName(workspace, parentDirectory, trimmed, targetDirectory)) {
+      throw new Error(`A file or folder named ${trimmed} already exists in this folder.`);
+    }
     const mutation = parent
       ? await prepareEncryptedFolderEntryRename(parent, entryId, trimmed, documentEncryptionKeyring())
       : await prepareEncryptedFolderSelfRename(folder, trimmed, documentEncryptionKeyring());
@@ -166,11 +215,12 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       const currentWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
       const encryptedFolder = findEncryptedFolder(currentWorkspace, targetDirectory);
       const parts = targetDirectory.replaceAll('\\', '/').split('/');
-      const childFolderId = parts.pop() ?? '';
+      const childPhysicalName = parts.pop() ?? '';
       const parentDirectory = parts.join('/');
       const encryptedParent = findEncryptedFolder(currentWorkspace, parentDirectory);
       const workspace = encryptedFolder && encryptedParent
         ? await (async () => {
+          const childFolderId = encryptedFolderIdFromPhysicalName(childPhysicalName);
           const mutation = await prepareEncryptedFolderEntryRemoval(encryptedParent, childFolderId, documentEncryptionKeyring());
           return deleteEncryptedFolderChild({
             workspacePath,
@@ -309,6 +359,35 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     clearWorkspaceFilterDocumentCache(workspace.path);
     state.status = `${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'Folder'} ${hiddenFromAI ? 'hidden from AI' : 'visible to AI'}`;
   }),
+  setEncryptedFolderAIAllowed: (workspacePath, targetDirectory, name, allowed) => {
+    const prompt = { kind: 'folder' as const, workspacePath, targetDirectory, path: '', name };
+    if (allowed) {
+      state.encryptedAIAccessPrompt = prompt;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    void runBusy('Disabling AI access...', () => applyEncryptedAIAccess(prompt, false), { preserveMountedDocument: true });
+  },
+  setEncryptedFileAIAllowed: (workspacePath, path, name, allowed) => {
+    const prompt = { kind: 'file' as const, workspacePath, targetDirectory: '', path, name };
+    if (allowed) {
+      state.encryptedAIAccessPrompt = prompt;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    void runBusy('Disabling AI access...', () => applyEncryptedAIAccess(prompt, false), { preserveMountedDocument: true });
+  },
+  confirmEncryptedAIAccess: () => {
+    const prompt = state.encryptedAIAccessPrompt;
+    state.encryptedAIAccessPrompt = null;
+    if (!prompt) return;
+    void runBusy('Enabling AI access...', () => applyEncryptedAIAccess(prompt, true), { preserveMountedDocument: true });
+  },
+  cancelEncryptedAIAccess: () => {
+    state.encryptedAIAccessPrompt = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   toggleWorkspaceActions: (path) => {
     state.openWorkspaceActionsPath = state.openWorkspaceActionsPath === path ? null : path;
     rerender({ preserveMountedDocument: true });
@@ -396,26 +475,13 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
     const encryptedFolder = findEncryptedFolder(workspace, targetDirectory);
     const file = encryptedFolder
-      ? await (async () => {
-        const extension = fileName.toLowerCase().endsWith('.phvy') ? '.phvy' : fileName.toLowerCase().endsWith('.hvy') ? '.hvy' : null;
-        if (!extension) throw new Error('Encrypted folders currently support HVY and PHVY documents.');
-        const mutation = await prepareEncryptedFolderDocumentMutation(
-          encryptedFolder,
-          fileName,
-          extension,
-          new TextEncoder().encode(template),
-          documentEncryptionKeyring(),
-        );
-        return createEncryptedFolderDocument({
-          workspacePath,
-          folderDirectory: targetDirectory,
-          documentId: mutation.documentId,
-          extension,
-          documentBytes: mutation.documentBytes,
-          previousManifestBytes: mutation.previousManifestBytes,
-          manifestBytes: mutation.manifestBytes,
-        });
-      })()
+      ? await createEncryptedDocumentInFolder(
+        workspacePath,
+        targetDirectory,
+        encryptedFolder,
+        fileName,
+        new TextEncoder().encode(template),
+      )
       : await createDocumentFile({
         workspacePath,
         relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
@@ -424,8 +490,8 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     showWorkspaceDocumentsView(workspacePath);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { deferMount: true });
-    state.status = 'Created blank HVY document';
+    await openDocument(file, { deferMount: true, ...(encryptedFolder ? { initialMode: 'editor' as const } : {}) });
+    state.status = `Created ${file.name}`;
     await refreshRecents();
   }),
   cancelNewDocument: () => {
@@ -922,8 +988,8 @@ async function createEncryptedDocumentInFolder(
   plaintextBytes: Uint8Array,
 ): Promise<DocumentFile> {
   const lowerName = fileName.toLowerCase();
-  const extension = lowerName.endsWith('.phvy') ? '.phvy' : lowerName.endsWith('.hvy') ? '.hvy' : null;
-  if (!extension) throw new Error('Encrypted folders support .hvy and .phvy documents.');
+  const extension = encryptedFolderDocumentExtension(lowerName);
+  if (!extension) throw new Error('Encrypted folders support .hvy, .thvy, and .phvy documents.');
   const mutation = await prepareEncryptedFolderDocumentMutation(
     folder,
     fileName,
@@ -948,11 +1014,11 @@ async function addDocumentsToEncryptedFolder(
   targetDirectory: string,
   files: DroppedWorkspaceFile[],
 ): Promise<void> {
-  const importedFiles: Array<{ path: string; name: string; extension: '.hvy' | '.phvy' }> = [];
+  const importedFiles: Array<{ path: string; name: string; extension: '.hvy' | '.thvy' | '.phvy' }> = [];
   for (const source of files) {
     const lowerName = source.name.toLowerCase();
-    const extension = lowerName.endsWith('.phvy') ? '.phvy' : lowerName.endsWith('.hvy') ? '.hvy' : null;
-    if (!extension) throw new Error('Encrypted folders support .hvy and .phvy documents.');
+    const extension = encryptedFolderDocumentExtension(lowerName);
+    if (!extension) throw new Error('Encrypted folders support .hvy, .thvy, and .phvy documents.');
     const workspace = await loadWorkspace(workspacePath);
     const folder = findEncryptedFolder(workspace, targetDirectory);
     if (!folder) throw new Error('Encrypted folder was not found.');
@@ -983,6 +1049,14 @@ async function addDocumentsToEncryptedFolder(
     const physical = await readDocumentFile(imported.path);
     await openDocument({ ...physical, name: imported.name, extension: imported.extension }, { deferMount: true });
   }
+}
+
+function encryptedFolderDocumentExtension(fileName: string): '.hvy' | '.thvy' | '.phvy' | null {
+  const lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith('.phvy')) return '.phvy';
+  if (lowerName.endsWith('.thvy')) return '.thvy';
+  if (lowerName.endsWith('.hvy')) return '.hvy';
+  return null;
 }
 
 async function refreshWorkspaceEmbeddingPreview(workspacePath: string): Promise<void> {

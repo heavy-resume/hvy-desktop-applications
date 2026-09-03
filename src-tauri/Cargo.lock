@@ -1713,6 +1713,7 @@ dependencies = [
  "pdf-extract",
  "quick-xml 0.36.2",
  "rfd",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "tauri",

@@ -13,7 +13,7 @@ import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, rend
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
 import { renderColorThemeDialog } from './render-theme';
 import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
-import { renderDeleteFileDialog, renderDeleteFolderDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
+import { renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
 import { bindWorkspaceManagerReordering, renderEmptyState, renderNewWorkspaceDialog, renderWorkspaceInitializationDialog, renderWorkspaceManagerDialog, renderWorkspaces, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
 import { UiHandlers } from './types';
@@ -250,6 +250,7 @@ export function renderModals(state: AppState): void {
     ${renderWorkspaceInitializationDialog(state)}
     ${renderWorkspaceManagerDialog(state)}
     ${renderNewFolderDialog(state)}
+    ${renderEncryptedAIAccessDialog(state)}
     ${renderNewDocumentDialog(state)}
     ${renderImportDialog(state)}
     ${renderImportProgressDialog(state)}
