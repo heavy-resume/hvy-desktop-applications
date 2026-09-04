@@ -14,7 +14,7 @@ import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './doc
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
-import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, webMcpCapabilityId } from './integrationWebMcp';
+import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 
 interface DocumentColorTheme {
@@ -699,10 +699,18 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   reviewIntegrationWebMcpTool: (integrationId, pageId, toolIndex) => {
     const { profile } = integrationPageContext(integrationId, pageId);
-    if (state.integrationWebMcpPageId !== pageId || state.integrationWebMcpProfileId !== profile.id) {
+    const scanMatchesSelection = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profile.id;
+    const tools = webMcpToolsForContext(
+      state.appSettings.integrationWebMcpApprovals,
+      integrationId,
+      pageId,
+      profile.id,
+      scanMatchesSelection ? state.integrationWebMcpTools : undefined,
+    );
+    if (!scanMatchesSelection && !tools.length) {
       throw new Error('Scan this page with the selected browser profile before reviewing its WebMCP tools.');
     }
-    const tool = state.integrationWebMcpTools[toolIndex];
+    const tool = tools[toolIndex];
     if (!tool) throw new Error('The WebMCP tool is no longer in the current scan.');
     state.integrationWebMcpReviewTool = tool;
     state.integrationWebMcpReviewIntegrationId = integrationId;

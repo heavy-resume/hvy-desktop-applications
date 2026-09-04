@@ -154,6 +154,19 @@ export function approvalMatchesDescriptor(approval: IntegrationWebMcpApproval, d
   return approval.descriptorHash === webMcpDescriptorHash(descriptor);
 }
 
+export function webMcpToolsForContext(
+  approvals: IntegrationWebMcpApprovals,
+  integrationId: string,
+  pageId: string,
+  profileId: string,
+  liveTools?: IntegrationWebMcpToolDescriptor[],
+): IntegrationWebMcpToolDescriptor[] {
+  if (liveTools !== undefined) return liveTools;
+  return Object.values(approvals)
+    .filter((approval) => approval.integrationId === integrationId && approval.pageId === pageId && approval.profileId === profileId)
+    .map((approval) => approval.descriptor);
+}
+
 export function webMcpCapabilityId(integrationId: string, pageId: string, profileId: string, descriptor: IntegrationWebMcpToolDescriptor): string {
   const value = `${integrationId}\0${pageId}\0${profileId}\0${descriptor.origin}\0${descriptor.name}`;
   return `webmcp-${bytesToHex(sha256(new TextEncoder().encode(value))).slice(0, 32)}`;

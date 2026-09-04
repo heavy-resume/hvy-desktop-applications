@@ -4,6 +4,34 @@ import { readAiSettingsForm, readAppSettingsForm, readMcpSettingsForm } from './
 import { isImportOutputMode, isNewWorkspaceLocation, isTemplateExtension, isTemplateScope } from './render-workspaces';
 import { UiHandlers } from './types';
 
+export function readWebMcpTestArguments(form: HTMLFormElement): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  for (const control of form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('[data-webmcp-argument]')) {
+    const name = control.dataset.argumentName;
+    if (!name) continue;
+    const raw = control.value.trim();
+    if (!raw && !control.required) continue;
+    const type = control.dataset.argumentType;
+    try {
+      if (control.dataset.argumentEnum === 'true') args[name] = JSON.parse(raw);
+      else if (type === 'boolean') args[name] = raw === 'true';
+      else if (type === 'number' || type === 'integer') {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) throw new Error('Enter a number.');
+        args[name] = value;
+      } else if (type === 'object' || type === 'array') {
+        const value = JSON.parse(raw) as unknown;
+        if (type === 'array' && !Array.isArray(value)) throw new Error('Enter a list value.');
+        if (type === 'object' && (!value || typeof value !== 'object' || Array.isArray(value))) throw new Error('Enter a structured value.');
+        args[name] = value;
+      } else args[name] = raw;
+    } catch (error) {
+      throw new Error(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return args;
+}
+
 export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: AppState, signal: AbortSignal): void {
   root.addEventListener('submit', (event) => {
     const form = (event.target as HTMLElement).closest<HTMLFormElement>('form[data-form]');
@@ -118,9 +146,7 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
     if (form.dataset.form === 'invoke-webmcp-tool') {
       const data = new FormData(form);
       try {
-        const args = JSON.parse(String(data.get('arguments') ?? '{}')) as unknown;
-        if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be a JSON object.');
-        handlers.invokeIntegrationWebMcpTool(String(data.get('capabilityId') ?? ''), args as Record<string, unknown>);
+        handlers.invokeIntegrationWebMcpTool(String(data.get('capabilityId') ?? ''), readWebMcpTestArguments(form));
       } catch (error) {
         let message = form.querySelector<HTMLElement>('.integration-webmcp-input-error');
         if (!message) {

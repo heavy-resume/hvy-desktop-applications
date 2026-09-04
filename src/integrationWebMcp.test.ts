@@ -6,6 +6,7 @@ import {
   normalizeWebMcpToolDescriptor,
   webMcpCapabilityId,
   webMcpDescriptorHash,
+  webMcpToolsForContext,
   type IntegrationWebMcpToolDescriptor,
 } from './integrationWebMcp';
 
@@ -77,5 +78,21 @@ describe('WebMCP approvals', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     expect(normalizeWebMcpToolDescriptor({ ...descriptor, inputSchema: circular })).toBeNull();
+  });
+
+  it('restores reviewed tools for their page and profile until a fresh scan replaces them', () => {
+    const capabilityId = webMcpCapabilityId('integration', 'page', 'profile-a', descriptor);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId,
+      integrationId: 'integration',
+      pageId: 'page',
+      profileId: 'profile-a',
+      descriptor,
+      scriptingEnabled: true,
+      mcpExposed: true,
+    });
+    expect(webMcpToolsForContext(approvals, 'integration', 'page', 'profile-a')).toEqual([descriptor]);
+    expect(webMcpToolsForContext(approvals, 'integration', 'page', 'profile-b')).toEqual([]);
+    expect(webMcpToolsForContext(approvals, 'integration', 'page', 'profile-a', [])).toEqual([]);
   });
 });

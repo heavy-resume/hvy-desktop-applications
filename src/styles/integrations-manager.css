@@ -86,6 +86,12 @@
   white-space: nowrap;
 }
 
+.integration-webmcp-list .integration-webmcp-enabled {
+  color: var(--hvy-success, #287a4b);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .integration-webmcp-toggle {
   align-items: center;
   display: inline-flex;
@@ -132,6 +138,102 @@
   color: var(--hvy-muted, #5d6b66);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.integration-webmcp-arguments {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+}
+
+.dialog.integration-webmcp-test-dialog {
+  width: min(900px, 100%);
+}
+
+.dialog.integration-webmcp-result-dialog {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(900px, 100%);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.integration-webmcp-result-payload {
+  width: 100%;
+  min-width: 0;
+  max-height: min(65vh, 640px);
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.integration-webmcp-result-actions {
+  width: 100%;
+  min-width: 0;
+}
+
+.integration-webmcp-argument-heading,
+.integration-webmcp-test-dialog .integration-webmcp-argument-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1.2fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.integration-webmcp-argument-heading {
+  background: var(--hvy-surface-alt, #edf1ed);
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 12px;
+}
+
+.integration-webmcp-test-dialog .integration-webmcp-argument-row {
+  border-top: 1px solid var(--hvy-border, #c5cec8);
+}
+
+.integration-webmcp-argument-name {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.integration-webmcp-test-dialog .integration-webmcp-argument-name > small {
+  overflow-wrap: anywhere;
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.integration-webmcp-argument-description {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--hvy-muted, #5d6b66);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.integration-webmcp-test-dialog .integration-webmcp-argument-row > .hvy-galaxy-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.integration-webmcp-test-dialog textarea.hvy-galaxy-input {
+  min-height: 120px;
+  resize: vertical;
+}
+
+@media (max-width: 620px) {
+  .integration-webmcp-argument-heading {
+    display: none;
+  }
+
+  .integration-webmcp-test-dialog .integration-webmcp-argument-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .integration-list-add {

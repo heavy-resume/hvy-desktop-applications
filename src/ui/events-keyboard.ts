@@ -14,6 +14,11 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
     }
     if (event.key !== 'Escape') return;
     const target = event.target instanceof HTMLElement ? event.target : null;
+    if (root.querySelector('.integration-webmcp-result-dialog')) {
+      event.preventDefault();
+      handlers.closeIntegrationWebMcpResult();
+      return;
+    }
     if (root.querySelector('.homepage-picker-dialog')) {
       event.preventDefault();
       handlers.cancelHomepagePicker();

@@ -2,20 +2,26 @@ import { selectedInspectionContent } from '../integrationRegistry';
 import { type AppState } from '../state';
 import { isRecord } from './render-ai-mcp';
 import { escapeAttr, escapeHtml } from './shared';
-import { approvalMatchesDescriptor, webMcpCapabilityId } from '../integrationWebMcp';
+import { approvalMatchesDescriptor, webMcpCapabilityId, webMcpToolsForContext } from '../integrationWebMcp';
 
 function renderWebMcpSection(state: AppState, integrationId: string, pageId: string): string {
   const profileId = state.selectedIntegrationProfileId;
   const scanMatchesSelection = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
-  const tools = scanMatchesSelection ? state.integrationWebMcpTools : [];
+  const tools = webMcpToolsForContext(
+    state.appSettings.integrationWebMcpApprovals,
+    integrationId,
+    pageId,
+    profileId,
+    scanMatchesSelection ? state.integrationWebMcpTools : undefined,
+  );
   const rows = tools.map((tool, index) => {
     const capabilityId = webMcpCapabilityId(integrationId, pageId, profileId, tool);
     const savedApproval = state.appSettings.integrationWebMcpApprovals[capabilityId];
     const approval = savedApproval && approvalMatchesDescriptor(savedApproval, tool) ? savedApproval : null;
     const flags = [tool.annotations.readOnlyHint ? 'Read only' : 'Action', tool.annotations.untrustedContentHint ? 'Untrusted output' : '', tool.annotations.consequentialHint ? 'Consequential' : ''].filter(Boolean).join(' · ');
-    return `<article class="integration-webmcp-tool"><div class="integration-webmcp-summary"><strong>${escapeHtml(tool.title ?? tool.name)}</strong><span>${escapeHtml(tool.description)}</span><small class="${tool.annotations.consequentialHint ? 'integration-webmcp-consequential' : ''}">${escapeHtml(flags)}</small></div><div class="integration-section-actions integration-webmcp-actions">${approval ? `<label class="integration-webmcp-toggle"><input type="checkbox" data-action="set-webmcp-exposure" data-kind="scripting" data-capability-id="${escapeAttr(capabilityId)}" ${approval.scriptingEnabled ? 'checked' : ''}> Scripts</label><label class="integration-webmcp-toggle"><input type="checkbox" data-action="set-webmcp-exposure" data-kind="mcp" data-capability-id="${escapeAttr(capabilityId)}" ${approval.mcpExposed ? 'checked' : ''}> MCP</label><button type="button" class="hvy-galaxy-button" data-action="invoke-webmcp-tool" data-capability-id="${escapeAttr(capabilityId)}">Test</button>` : `<button type="button" class="hvy-galaxy-button primary-button" data-action="review-webmcp-tool" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" data-tool-index="${index}">Review</button>`}</div></article>`;
+    return `<article class="integration-webmcp-tool"><div class="integration-webmcp-summary"><strong>${escapeHtml(tool.title ?? tool.name)}</strong><span>${escapeHtml(tool.description)}</span><small class="${tool.annotations.consequentialHint ? 'integration-webmcp-consequential' : ''}">${escapeHtml(flags)}</small></div><div class="integration-section-actions integration-webmcp-actions">${approval ? `<span class="integration-webmcp-enabled">Enabled</span>` : ''}<button type="button" class="hvy-galaxy-button ${approval ? '' : 'primary-button'}" data-action="review-webmcp-tool" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" data-tool-index="${index}">Review</button>${approval ? `<button type="button" class="hvy-galaxy-button" data-action="invoke-webmcp-tool" data-capability-id="${escapeAttr(capabilityId)}">Test</button>` : ''}</div></article>`;
   }).join('');
-  return `<section><div class="integration-section-heading"><div><h4>WebMCP Tools</h4><p>Use tools published directly by this page from Galaxy, scripts, or MCP.</p></div><button type="button" class="hvy-galaxy-button" data-action="discover-webmcp-tools" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" ${state.integrationWebMcpPending ? 'disabled' : ''}>${state.integrationWebMcpPending ? 'Scanning…' : 'Scan WebMCP tools'}</button></div>${state.integrationWebMcpError && scanMatchesSelection ? `<div class="integration-fetch-error" role="alert"><strong>WebMCP failed</strong><span>${escapeHtml(state.integrationWebMcpError)}</span></div>` : ''}${rows ? `<div class="integration-source-list integration-webmcp-list">${rows}</div>` : scanMatchesSelection && !state.integrationWebMcpPending ? '<small>No WebMCP tools are currently published by this page.</small>' : ''}</section>`;
+  return `<section><div class="integration-section-heading"><div><h4>WebMCP Tools</h4><p>Use tools published directly by this page from Galaxy, scripts, or MCP.</p></div><button type="button" class="hvy-galaxy-button" data-action="discover-webmcp-tools" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" ${state.integrationWebMcpPending ? 'disabled' : ''}>${state.integrationWebMcpPending ? 'Scanning…' : tools.length ? 'Rescan WebMCP tools' : 'Scan WebMCP tools'}</button></div>${state.integrationWebMcpError && scanMatchesSelection ? `<div class="integration-fetch-error" role="alert"><strong>WebMCP failed</strong><span>${escapeHtml(state.integrationWebMcpError)}</span></div>` : ''}${rows ? `<div class="integration-source-list integration-webmcp-list">${rows}</div>` : scanMatchesSelection && !state.integrationWebMcpPending ? '<small>No WebMCP tools are currently published by this page.</small>' : ''}</section>`;
 }
 
 export function integrationCommandGestureLabel(gesture: import('../integrationRegistry').IntegrationInteractionStepDefinition['gesture'] | undefined): string {
@@ -248,7 +254,37 @@ export function renderIntegrationWebMcpReviewDialog(state: AppState): string {
   const tool = state.integrationWebMcpReviewTool;
   if (!tool) return '';
   const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.integrationWebMcpReviewProfileId);
-  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog integration-webmcp-review-dialog" role="dialog" aria-modal="true" aria-label="Review WebMCP tool" data-form="approve-webmcp-tool"><h2>Allow ${escapeHtml(tool.title ?? tool.name)}?</h2><p>${escapeHtml(tool.description)}</p>${tool.annotations.consequentialHint ? '<p class="integration-webmcp-consequential">Consequential tool: running it may have significant effects on the website or account.</p>' : ''}${tool.annotations.untrustedContentHint ? '<p class="integration-webmcp-untrusted">This tool may return untrusted content from the website.</p>' : ''}<dl><dt>Origin</dt><dd>${escapeHtml(tool.origin)}</dd><dt>Tool name</dt><dd>${escapeHtml(tool.name)}</dd><dt>Profile</dt><dd>${escapeHtml(profile?.name ?? 'Unknown')}</dd><dt>Read Only</dt><dd>${tool.annotations.readOnlyHint ? 'True' : 'False'}</dd></dl><details><summary>Input Schema (advanced)</summary><pre>${escapeHtml(JSON.stringify(tool.inputSchema, null, 2))}</pre></details><div class="integration-webmcp-permissions"><label class="integration-webmcp-permission"><input type="checkbox" name="scriptingEnabled"><span class="integration-webmcp-permission-copy"><strong>Allow calling via HVY Scripting</strong><small>Controls sandboxed HVY Scripting. Power Scripting is unrestricted and does not use this permission.</small></span></label><label class="integration-webmcp-permission"><input type="checkbox" name="mcpExposed"><span class="integration-webmcp-permission-copy"><strong>Allow calling via HVY Galaxy MCP Server</strong><small>Allow Codex, Claude Desktop, and other MCP server users to use this WebMCP interface through HVY Galaxy.</small></span></label></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-webmcp-review">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Enable and Allow</button></div></form></div>`;
+  const capabilityId = state.integrationWebMcpReviewIntegrationId && state.integrationWebMcpReviewPageId && profile
+    ? webMcpCapabilityId(state.integrationWebMcpReviewIntegrationId, state.integrationWebMcpReviewPageId, profile.id, tool)
+    : '';
+  const savedApproval = capabilityId ? state.appSettings.integrationWebMcpApprovals[capabilityId] : undefined;
+  const approval = savedApproval && approvalMatchesDescriptor(savedApproval, tool) ? savedApproval : null;
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog integration-webmcp-review-dialog" role="dialog" aria-modal="true" aria-label="Review WebMCP tool" data-form="approve-webmcp-tool"><h2>${approval ? 'Review' : 'Allow'} ${escapeHtml(tool.title ?? tool.name)}${approval ? '' : '?'}</h2><p>${escapeHtml(tool.description)}</p>${tool.annotations.consequentialHint ? '<p class="integration-webmcp-consequential">Consequential tool: running it may have significant effects on the website or account.</p>' : ''}${tool.annotations.untrustedContentHint ? '<p class="integration-webmcp-untrusted">This tool may return untrusted content from the website.</p>' : ''}<dl><dt>Origin</dt><dd>${escapeHtml(tool.origin)}</dd><dt>Tool name</dt><dd>${escapeHtml(tool.name)}</dd><dt>Profile</dt><dd>${escapeHtml(profile?.name ?? 'Unknown')}</dd><dt>Read Only</dt><dd>${tool.annotations.readOnlyHint ? 'True' : 'False'}</dd></dl><details><summary>Input Schema (advanced)</summary><pre>${escapeHtml(JSON.stringify(tool.inputSchema, null, 2))}</pre></details><div class="integration-webmcp-permissions"><label class="integration-webmcp-permission"><input type="checkbox" name="scriptingEnabled" ${approval?.scriptingEnabled ? 'checked' : ''}><span class="integration-webmcp-permission-copy"><strong>Allow calling via HVY Scripting</strong><small>Controls sandboxed HVY Scripting. Power Scripting is unrestricted and does not use this permission.</small></span></label><label class="integration-webmcp-permission"><input type="checkbox" name="mcpExposed" ${approval?.mcpExposed ? 'checked' : ''}><span class="integration-webmcp-permission-copy"><strong>Allow calling via HVY Galaxy MCP Server</strong><small>Allow Codex, Claude Desktop, and other MCP server users to use this WebMCP interface through HVY Galaxy.</small></span></label></div><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-webmcp-review">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">${approval ? 'Update' : 'Enable and Allow'}</button></div></form></div>`;
+}
+
+function webMcpArgumentControl(name: string, schema: Record<string, unknown>, required: boolean): string {
+  const type = typeof schema.type === 'string' ? schema.type : 'string';
+  const initial = schema.default === undefined ? '' : typeof schema.default === 'string' ? schema.default : JSON.stringify(schema.default);
+  const common = `class="hvy-galaxy-input" data-webmcp-argument data-argument-name="${escapeAttr(name)}" data-argument-type="${escapeAttr(type)}" ${required ? 'required' : ''}`;
+  if (Array.isArray(schema.enum)) {
+    const options = schema.enum.map((value) => `<option value="${escapeAttr(JSON.stringify(value))}" ${schema.default === value ? 'selected' : ''}>${escapeHtml(String(value))}</option>`).join('');
+    return `<select ${common} data-argument-enum="true">${required ? '' : '<option value="">Not set</option>'}${options}</select>`;
+  }
+  if (type === 'boolean') return `<select ${common}>${required ? '' : '<option value="">Not set</option>'}<option value="true" ${schema.default === true ? 'selected' : ''}>True</option><option value="false" ${schema.default === false ? 'selected' : ''}>False</option></select>`;
+  if (type === 'number' || type === 'integer') return `<input type="number" ${common} step="${type === 'integer' ? '1' : 'any'}" value="${escapeAttr(initial)}" placeholder="${required ? 'Required' : 'Optional'}">`;
+  if (type === 'object' || type === 'array') return `<textarea ${common} rows="5" placeholder="${type === 'array' ? 'Add a list value' : 'Add a structured value'}">${escapeHtml(initial)}</textarea>`;
+  return `<textarea ${common} rows="5" placeholder="${required ? 'Required' : 'Optional'}">${escapeHtml(initial)}</textarea>`;
+}
+
+function renderWebMcpTestArguments(schema: Record<string, unknown>): string {
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = new Set(Array.isArray(schema.required) ? schema.required.filter((value): value is string => typeof value === 'string') : []);
+  const rows = Object.entries(properties).filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1])).map(([name, property]) => {
+    const type = typeof property.type === 'string' ? property.type : 'value';
+    const description = typeof property.description === 'string' ? property.description : '';
+    return `<label class="integration-webmcp-argument-row"><div class="integration-webmcp-argument-name"><strong>${escapeHtml(typeof property.title === 'string' ? property.title : name)}</strong><small>${escapeHtml(name)} · ${escapeHtml(type)}${required.has(name) ? ' · Required' : ' · Optional'}</small>${description ? `<pre class="integration-webmcp-argument-description">${escapeHtml(description)}</pre>` : ''}</div>${webMcpArgumentControl(name, property, required.has(name))}</label>`;
+  }).join('');
+  return rows ? `<div class="integration-webmcp-arguments"><div class="integration-webmcp-argument-heading"><strong>Parameter</strong><strong>Value</strong></div>${rows}</div>` : '<p class="dialog-note">This tool does not require any input.</p>';
 }
 
 export function renderIntegrationWebMcpInvokeDialog(state: AppState): string {
@@ -256,12 +292,12 @@ export function renderIntegrationWebMcpInvokeDialog(state: AppState): string {
   if (!capabilityId) return '';
   const approval = state.appSettings.integrationWebMcpApprovals[capabilityId];
   if (!approval) return '';
-  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Run WebMCP tool" data-form="invoke-webmcp-tool"><input type="hidden" name="capabilityId" value="${escapeAttr(capabilityId)}"><h2>${escapeHtml(approval.descriptor.title ?? approval.descriptor.name)}</h2><p class="dialog-note">Enter a JSON object matching the page's published input schema.</p><textarea class="hvy-galaxy-input" name="arguments" rows="8">{}</textarea><details><summary>Input schema</summary><pre>${escapeHtml(JSON.stringify(approval.descriptor.inputSchema, null, 2))}</pre></details><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-invoke-webmcp-tool">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Run</button></div></form></div>`;
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog integration-webmcp-test-dialog" role="dialog" aria-modal="true" aria-label="Test WebMCP tool" data-form="invoke-webmcp-tool"><input type="hidden" name="capabilityId" value="${escapeAttr(capabilityId)}"><h2>Test ${escapeHtml(approval.descriptor.title ?? approval.descriptor.name)}</h2><p class="dialog-note">Enter test values, then run the real tool against the selected integration page and profile.</p>${renderWebMcpTestArguments(approval.descriptor.inputSchema)}<div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-invoke-webmcp-tool">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Run Test</button></div></form></div>`;
 }
 
 export function renderIntegrationWebMcpResultDialog(state: AppState): string {
   if (!state.integrationWebMcpResultOpen) return '';
-  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog" role="dialog" aria-modal="true" aria-label="WebMCP result"><h2>WebMCP result</h2><pre>${escapeHtml(JSON.stringify(state.integrationWebMcpResult, null, 2))}</pre><div class="dialog-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="close-webmcp-result">Done</button></div></section></div>`;
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog integration-webmcp-result-dialog" role="dialog" aria-modal="true" aria-label="WebMCP result"><h2>WebMCP result</h2><pre class="integration-webmcp-result-payload">${escapeHtml(JSON.stringify(state.integrationWebMcpResult, null, 2))}</pre><div class="dialog-actions integration-webmcp-result-actions"><button type="button" class="hvy-galaxy-button primary-button" data-action="close-webmcp-result">Done</button></div></section></div>`;
 }
 
 export function renderIntegrationActionDiscardDialog(state: AppState): string {
