@@ -150,9 +150,14 @@ export interface UiHandlers {
   confirmResetIntegrationVault(): void;
   cancelResetIntegrationVault(): void;
   chooseDocumentKeyFiles(): void;
+  toggleDocumentKeyImportSelection(keyId: string, selected: boolean): void;
+  updateDocumentKeyImportConflictName(keyId: string, name: string): void;
+  selectDocumentKeyImportConflictMigration(keyId: string, migration: 'new' | 'renamed'): void;
   confirmImportDocumentKeys(): void;
   cancelImportDocumentKeys(): void;
   exportDocumentKey(keyId: string): void;
+  toggleDocumentKeyExportSelection(keyId: string, selected: boolean): void;
+  exportSelectedDocumentKeys(): void;
   requestDeleteDocumentKey(keyId: string): void;
   confirmDeleteDocumentKey(): void;
   cancelDeleteDocumentKey(): void;

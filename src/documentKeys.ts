@@ -25,6 +25,12 @@ export interface ReviewedDocumentKey extends PortableDocumentKey {
   fingerprint: string;
 }
 
+export interface DocumentKeyImportReview {
+  matchingIds: string[];
+  conflictIds: string[];
+  selectedIds: string[];
+}
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const inMemoryKeyring = loadedDocumentKeys();
 const pendingGeneratedKeys = new Map<string, string>();
@@ -45,6 +51,13 @@ export async function ensureDocumentKeysLoaded(keyIds: string[]): Promise<Record
     throw new Error(`The protected local vault does not contain the required encryption ${unavailable.length === 1 ? 'key' : 'keys'}: ${ids}. Import the matching .hvykey ${unavailable.length === 1 ? 'file' : 'files'} and reopen the document.`);
   }
   return inMemoryKeyring;
+}
+
+export async function reloadDocumentKeys(keyIds: string[]): Promise<void> {
+  const unique = [...new Set(keyIds.filter((keyId) => UUID_PATTERN.test(keyId)))];
+  const loaded = unique.length > 0 ? await loadDocumentKeys(unique) : {};
+  for (const keyId of unique) delete inMemoryKeyring[keyId];
+  Object.assign(inMemoryKeyring, loaded);
 }
 
 export async function tryEnsureDocumentKeysLoaded(keyIds: string[]): Promise<boolean> {
@@ -97,6 +110,46 @@ export async function importReviewedDocumentKeys(keys: ReviewedDocumentKey[]): P
   }));
   await storeDocumentKeys(entries);
   for (const entry of entries) inMemoryKeyring[entry.keyId] = entry.key;
+}
+
+export async function preserveStoredDocumentKey(
+  keyId: string,
+  metadata: { label?: string; createdAt?: string } = {},
+  preservedLabel?: string,
+  preservedKeyId = crypto.randomUUID(),
+): Promise<string> {
+  await ensureDocumentKeysLoaded([keyId]);
+  const key = inMemoryKeyring[keyId];
+  const baseLabel = metadata.label?.trim() || keyId;
+  const label = (preservedLabel?.trim() || `${baseLabel} (previous key)`).slice(0, 200);
+  await storeDocumentKeys([{
+    keyId: preservedKeyId,
+    key,
+    createdAt: metadata.createdAt,
+    source: 'imported',
+    label,
+  }]);
+  inMemoryKeyring[preservedKeyId] = key;
+  return preservedKeyId;
+}
+
+export function reviewDocumentKeyImports(
+  keys: ReviewedDocumentKey[],
+  existingKeys: Record<string, string>,
+): DocumentKeyImportReview {
+  const matchingIds = keys
+    .filter((key) => existingKeys[key.keyId] && documentKeyFingerprint(existingKeys[key.keyId]) === key.fingerprint)
+    .map((key) => key.keyId);
+  const matching = new Set(matchingIds);
+  const conflictIds = keys
+    .filter((key) => existingKeys[key.keyId] && !matching.has(key.keyId))
+    .map((key) => key.keyId);
+  const conflicts = new Set(conflictIds);
+  return {
+    matchingIds,
+    conflictIds,
+    selectedIds: keys.filter((key) => !matching.has(key.keyId) && !conflicts.has(key.keyId)).map((key) => key.keyId),
+  };
 }
 
 export async function generateStoredDocumentKey(label?: string): Promise<PortableDocumentKey> {

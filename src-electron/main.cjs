@@ -24,6 +24,7 @@ const INTEGRATION_VAULT_FILE = 'integration-cookie-vault-electron.json';
 const INTEGRATION_VAULT_KEY_FILE = 'integration-vault-key-electron.bin';
 const DOCUMENT_KEY_VAULT_FILE = 'document-key-vault-v1.json';
 const DOCUMENT_KEY_VAULT_KEY_FILE = 'document-key-vault-key-electron.bin';
+const DOCUMENT_KEY_MIGRATION_PREFIX = 'document-key-migration-';
 const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
 const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
 const DOCUMENT_ENCRYPTION_PREFIX = Buffer.from('---HVY-ENCRYPTED---\n');
@@ -103,6 +104,7 @@ app.on('open-file', (event, filePath) => {
 });
 
 app.whenReady().then(async () => {
+  recoverPendingDocumentKeyMigrations();
   mainWindow = createWindow();
   bindWindowShortcuts(mainWindow);
   buildMenu();
@@ -325,7 +327,6 @@ function buildMenu() {
         menuItem('Remove Document Encryption...', 'decrypt-document'),
         { label: '(unsaved changes)', id: 'document-encryption-unsaved-changes', enabled: false, visible: false },
         { type: 'separator' },
-        menuItem('Import Encryption Key...', 'import-encryption-key'),
         menuItem('Manage Encryption Keys...', 'manage-encryption-keys'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
@@ -628,6 +629,11 @@ async function handleCommand(command, args) {
     case 'list_document_key_metadata': return listDocumentKeyMetadata();
     case 'store_document_keys': return storeDocumentKeys(args.entries);
     case 'delete_document_key': return deleteDocumentKey(args.keyId);
+    case 'begin_document_key_migration': return beginDocumentKeyMigration(args.request);
+    case 'stage_document_key_migration_file': return stageDocumentKeyMigrationFile(args.request);
+    case 'commit_document_key_migration': return commitDocumentKeyMigration(args.migrationId);
+    case 'finalize_document_key_migration': return finalizeDocumentKeyMigration(args.migrationId);
+    case 'rollback_document_key_migration': return rollbackDocumentKeyMigration(args.migrationId);
     case 'open_document_key_file_dialog': return openDocumentKeyFileDialog();
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
@@ -1032,6 +1038,176 @@ function deleteDocumentKey(keyId) {
   const key = readDocumentKeyVaultKey();
   deleteDocumentKeyFromVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key, keyId);
   return loadDocumentKeyVaultStatus();
+}
+
+function documentKeyMigrationJournalPath(migrationId) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(migrationId || ''))) throw new Error('Invalid document key migration ID.');
+  return dataPath(`${DOCUMENT_KEY_MIGRATION_PREFIX}${migrationId}.json`);
+}
+
+function readDocumentKeyMigration(migrationId) {
+  const journalPath = documentKeyMigrationJournalPath(migrationId);
+  if (!fs.existsSync(journalPath)) throw new Error('Document key migration journal was not found.');
+  return { journalPath, journal: JSON.parse(fs.readFileSync(journalPath, 'utf8')) };
+}
+
+function writeDocumentKeyMigration(journalPath, journal) {
+  writeFileAtomically(journalPath, Buffer.from(JSON.stringify(journal, null, 2)));
+}
+
+function beginDocumentKeyMigration(request) {
+  const migrationId = String(request?.migrationId || '');
+  const journalPath = documentKeyMigrationJournalPath(migrationId);
+  if (fs.existsSync(journalPath)) throw new Error('Document key migration is already in progress.');
+  const keyChanges = Array.isArray(request?.keyChanges) ? request.keyChanges.map((change) => ({
+    keyId: String(change?.keyId || ''),
+    preservedKeyId: String(change?.preservedKeyId || ''),
+    ...(typeof change?.originalCreatedAt === 'string' ? { originalCreatedAt: change.originalCreatedAt } : {}),
+    ...(change?.originalSource === 'generated' || change?.originalSource === 'imported' ? { originalSource: change.originalSource } : {}),
+    ...(typeof change?.originalLabel === 'string' ? { originalLabel: change.originalLabel } : {}),
+    ...(Array.isArray(change?.originalBundleLabels) ? { originalBundleLabels: change.originalBundleLabels.filter((label) => typeof label === 'string') } : {}),
+  })) : [];
+  if (keyChanges.some((change) => !change.keyId || !change.preservedKeyId)) throw new Error('Document key migration key changes are invalid.');
+  writeDocumentKeyMigration(journalPath, {
+    version: 1,
+    migrationId,
+    phase: 'staging',
+    createdAt: new Date().toISOString(),
+    keyChanges,
+    entries: [],
+  });
+}
+
+function stageDocumentKeyMigrationFile(request) {
+  const migrationId = String(request?.migrationId || '');
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase !== 'staging') throw new Error('Document key migration is no longer accepting files.');
+  const target = path.resolve(String(request?.path || ''));
+  if (!path.isAbsolute(target) || !fs.existsSync(target) || !fs.statSync(target).isFile()) throw new Error('Document key migration target was not found.');
+  if (journal.entries.some((entry) => entry.path === target)) throw new Error('Document key migration target was staged more than once.');
+  const previousBytes = Buffer.from(normalizeBytes(request?.previousBytes) || []);
+  const nextBytes = Buffer.from(normalizeBytes(request?.bytes) || []);
+  if (!fs.readFileSync(target).equals(previousBytes)) throw new Error('A file changed while the document key migration was being prepared.');
+  const stagedPath = path.join(path.dirname(target), `.${path.basename(target)}.${migrationId}.hvy-key-next`);
+  const backupPath = path.join(path.dirname(target), `.${path.basename(target)}.${migrationId}.hvy-key-old`);
+  if (fs.existsSync(stagedPath) || fs.existsSync(backupPath)) throw new Error('Document key migration staging files already exist.');
+  fs.writeFileSync(stagedPath, nextBytes, { flag: 'wx', mode: 0o600 });
+  journal.entries.push({
+    path: target,
+    stagedPath,
+    backupPath,
+    previousHash: crypto.createHash('sha256').update(previousBytes).digest('hex'),
+  });
+  try {
+    writeDocumentKeyMigration(journalPath, journal);
+  } catch (error) {
+    fs.unlinkSync(stagedPath);
+    throw error;
+  }
+}
+
+function commitDocumentKeyMigration(migrationId) {
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase !== 'staging') throw new Error('Document key migration cannot be committed from its current state.');
+  for (const entry of journal.entries) {
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(entry.path)).digest('hex');
+    if (hash !== entry.previousHash || !fs.existsSync(entry.stagedPath)) throw new Error('A file changed before the document key migration could be committed.');
+  }
+  journal.phase = 'committing';
+  journal.committed = 0;
+  writeDocumentKeyMigration(journalPath, journal);
+  try {
+    for (const entry of journal.entries) {
+      fs.renameSync(entry.path, entry.backupPath);
+      try {
+        fs.renameSync(entry.stagedPath, entry.path);
+      } catch (error) {
+        fs.renameSync(entry.backupPath, entry.path);
+        throw error;
+      }
+      journal.committed += 1;
+      writeDocumentKeyMigration(journalPath, journal);
+    }
+    journal.phase = 'swapped';
+    writeDocumentKeyMigration(journalPath, journal);
+  } catch (error) { throw error; }
+}
+
+function restoreDocumentKeyMigrationVault(journal) {
+  if (!journal.keyChanges?.length) return;
+  const status = loadDocumentKeyVaultStatus();
+  if (status.state !== 'ready') throw new Error(status.message || 'The protected local vault is unavailable during migration recovery.');
+  const wrappingKey = readDocumentKeyVaultKey();
+  const vault = readDocumentKeyVault(wrappingKey);
+  for (const change of journal.keyChanges) {
+    const preserved = vault.keys[change.preservedKeyId];
+    if (!preserved) continue;
+    vault.keys[change.keyId] = {
+      key: preserved.key,
+      createdAt: change.originalCreatedAt || preserved.createdAt,
+      source: change.originalSource || 'imported',
+      ...(change.originalLabel ? { label: change.originalLabel } : {}),
+      ...(change.originalBundleLabels?.length ? { bundleLabels: change.originalBundleLabels } : {}),
+    };
+    delete vault.keys[change.preservedKeyId];
+  }
+  writeDocumentKeyVault(wrappingKey, vault);
+}
+
+function rollbackDocumentKeyMigration(migrationId) {
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase === 'complete') {
+    for (const entry of journal.entries) {
+      if (fs.existsSync(entry.backupPath)) fs.unlinkSync(entry.backupPath);
+      if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+    }
+    fs.unlinkSync(journalPath);
+    return;
+  }
+  for (const entry of [...journal.entries].reverse()) {
+    if (fs.existsSync(entry.backupPath)) {
+      if (fs.existsSync(entry.path)) fs.unlinkSync(entry.path);
+      fs.renameSync(entry.backupPath, entry.path);
+    }
+    if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+  }
+  restoreDocumentKeyMigrationVault(journal);
+  if (fs.existsSync(journalPath)) fs.unlinkSync(journalPath);
+}
+
+function finalizeDocumentKeyMigration(migrationId) {
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase !== 'swapped') throw new Error('Document key migration has not finished swapping files.');
+  journal.phase = 'complete';
+  writeDocumentKeyMigration(journalPath, journal);
+  for (const entry of journal.entries) {
+    if (fs.existsSync(entry.backupPath)) fs.unlinkSync(entry.backupPath);
+    if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+  }
+  fs.unlinkSync(journalPath);
+}
+
+function recoverPendingDocumentKeyMigrations() {
+  const directory = sharedAppDataDir();
+  if (!fs.existsSync(directory)) return;
+  for (const name of fs.readdirSync(directory)) {
+    if (!name.startsWith(DOCUMENT_KEY_MIGRATION_PREFIX) || !name.endsWith('.json')) continue;
+    const migrationId = name.slice(DOCUMENT_KEY_MIGRATION_PREFIX.length, -'.json'.length);
+    try {
+      const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+      if (journal.phase === 'complete') {
+        for (const entry of journal.entries) {
+          if (fs.existsSync(entry.backupPath)) fs.unlinkSync(entry.backupPath);
+          if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+        }
+        fs.unlinkSync(journalPath);
+      } else {
+        rollbackDocumentKeyMigration(migrationId);
+      }
+    } catch (error) {
+      console.error('Unable to recover document key migration', migrationId, error);
+    }
+  }
 }
 
 async function openDocumentKeyFileDialog() {
@@ -2025,7 +2201,13 @@ function updateEncryptedFolderManifest(request) {
     }
     return envelope.keyId;
   };
-  if (parseIdentity(previousManifestBytes) !== parseIdentity(manifestBytes)) {
+  const previousKeyId = parseIdentity(previousManifestBytes);
+  const nextKeyId = parseIdentity(manifestBytes);
+  const requestedKeyIdChange = request?.keyIdChange;
+  const keyIdChangeMatches = requestedKeyIdChange
+    && requestedKeyIdChange.previousKeyId === previousKeyId
+    && requestedKeyIdChange.nextKeyId === nextKeyId;
+  if (previousKeyId !== nextKeyId && !keyIdChangeMatches) {
     throw new Error('Encrypted folder manifest key identity changed unexpectedly.');
   }
   const manifestPath = path.join(folderPath, ENCRYPTED_FOLDER_MANIFEST_FILE);

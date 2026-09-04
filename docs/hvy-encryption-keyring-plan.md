@@ -378,10 +378,7 @@ The key file is a bearer secret: anyone who obtains it can decrypt every encrypt
 
 The initial workflow is bundle provisioning rather than document-time key acquisition. One or more `.hvykey` bundles are shared through an existing channel and imported into Galaxy before the corresponding documents are opened. Updated bundles can be imported later through the same workflow. Key acquisition is not part of the document-opening experience.
 
-Galaxy provides two explicit entry points using the same import implementation:
-
-1. **File → Import Encryption Key…** lets the user select one or more `.hvykey` files and shows a Galaxy review modal listing their labels, key IDs, and fingerprints before import.
-2. **File → Manage Encryption Keys… → Import Key File…** provides the same operation from the key-management modal.
+Galaxy provides key import through **File → Manage Encryption Keys… → Import Key File…**. It lets the user select one or more `.hvykey` files and shows a Galaxy review modal listing their labels, key IDs, and fingerprints before import.
 
 Missing keys use the existing non-prompting open flow in this phase:
 

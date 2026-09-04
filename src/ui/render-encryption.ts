@@ -13,30 +13,79 @@ function formatKeyTimestamp(value: string): string {
 
 export function renderDocumentKeyImportDialog(state: AppState): string {
   if (!state.documentKeyImportDialogOpen) return '';
-  const rows = state.documentKeyImportKeys.map((key) => `
+  if (state.documentKeyImportBusy) {
+    return `
+      <div class="modal-backdrop" role="presentation">
+        <section class="dialog wide-dialog document-key-dialog document-key-import-busy" role="dialog" aria-modal="true" aria-labelledby="documentKeyImportBusyTitle">
+          <h2 id="documentKeyImportBusyTitle">Importing keys</h2>
+          <p class="dialog-note">${escapeHtml(state.documentKeyImportProgress || 'Preparing migration…')}</p>
+        </section>
+      </div>`;
+  }
+  const selection = new Set(state.documentKeyImportSelection);
+  const matchingIds = new Set(state.documentKeyImportMatchingIds);
+  const conflictIds = new Set(state.documentKeyImportConflictIds);
+  const rows = state.documentKeyImportKeys.map((key) => {
+    const matchesExisting = matchingIds.has(key.keyId);
+    const conflictsWithExisting = conflictIds.has(key.keyId);
+    const checked = selection.has(key.keyId);
+    const conflictName = state.documentKeyImportConflictNames?.[key.keyId] ?? '';
+    const currentUsage = state.documentEncryptionKeyUsage?.[key.keyId] ?? { documents: [], folders: [] };
+    const hasCurrentUsage = currentUsage.documents.length > 0 || currentUsage.folders.length > 0;
+    const conflictMigration = state.documentKeyImportConflictMigrations?.[key.keyId];
+    const status = matchesExisting
+      ? 'Already on this device · skipped'
+      : conflictsWithExisting
+        ? 'Different key with the same ID · select to replace it and preserve the current key under a new ID'
+        : '';
+    return `
     <article class="encryption-key-import-row">
-      <div>
-        <strong>${escapeHtml(key.label || 'HVY encryption key')}</strong>
-        <small>${key.bundleLabel ? `${escapeHtml(key.bundleLabel)} · ` : ''}${escapeHtml(key.sourceName)}</small>
-      </div>
+      <label class="encryption-key-import-heading">
+        <input class="encryption-key-import-checkbox" type="checkbox" data-action="toggle-document-key-import-selection" data-key-id="${escapeAttr(key.keyId)}"${checked ? ' checked' : ''}${matchesExisting ? ' disabled' : ''}>
+        <span class="encryption-key-import-name"><strong>${escapeHtml(key.label || 'Unnamed Key')}</strong><small>${key.bundleLabel ? `${escapeHtml(key.bundleLabel)} · ` : ''}${escapeHtml(key.sourceName)}</small></span>
+      </label>
       <dl>
         <div><dt>Key ID</dt><dd><code>${escapeHtml(key.keyId)}</code></dd></div>
         <div><dt>Fingerprint</dt><dd><code>${escapeHtml(key.fingerprint)}</code></dd></div>
       </dl>
-    </article>`).join('');
+      ${status ? `<small class="encryption-key-import-status${conflictsWithExisting ? ' is-conflict' : ''}">${escapeHtml(status)}</small>` : ''}
+      ${conflictsWithExisting && checked ? `
+        <div class="encryption-key-import-current-usage">
+          <strong>Current usage</strong>
+          ${state.documentKeyUsageLoaded
+            ? `${currentUsage.documents.length > 0 ? `<small>Documents: ${currentUsage.documents.map(escapeHtml).join(', ')}</small>` : ''}
+               ${currentUsage.folders.length > 0 ? `<small>Folders: ${currentUsage.folders.map(escapeHtml).join(', ')}</small>` : ''}
+               ${!hasCurrentUsage ? '<small>No local usages</small>' : ''}`
+            : '<small>Checking local usages…</small>'}
+        </div>
+        ${hasCurrentUsage ? `
+          <fieldset class="encryption-key-import-migration-options">
+            <legend class="encryption-key-import-migration-legend">Update current usage</legend>
+            <label class="encryption-key-import-migration-choice"><input type="radio" name="document-key-conflict-migration-${escapeAttr(key.keyId)}" value="new" data-action="select-document-key-import-conflict-migration" data-key-id="${escapeAttr(key.keyId)}"${conflictMigration === 'new' ? ' checked' : ''}> <span>Migrate to use new key</span></label>
+            <label class="encryption-key-import-migration-choice"><input type="radio" name="document-key-conflict-migration-${escapeAttr(key.keyId)}" value="renamed" data-action="select-document-key-import-conflict-migration" data-key-id="${escapeAttr(key.keyId)}"${conflictMigration === 'renamed' ? ' checked' : ''}> <span>Migrate to use renamed key</span></label>
+          </fieldset>` : ''}
+        <label class="encryption-key-import-conflict-name">
+          <span>Rename current to…</span>
+          <input type="text" value="${escapeAttr(conflictName)}" maxlength="200" required data-action="set-document-key-import-conflict-name" data-key-id="${escapeAttr(key.keyId)}">
+        </label>` : ''}
+    </article>`;
+  }).join('');
+  const selectedConflictMissingName = state.documentKeyImportConflictIds.some((keyId) => selection.has(keyId) && !state.documentKeyImportConflictNames?.[keyId]?.trim());
+  const selectedConflictMissingMigration = state.documentKeyImportConflictIds.some((keyId) => {
+    if (!selection.has(keyId)) return false;
+    const usage = state.documentEncryptionKeyUsage?.[keyId];
+    const hasUsage = Boolean(usage && (usage.documents.length > 0 || usage.folders.length > 0));
+    return hasUsage && !state.documentKeyImportConflictMigrations?.[keyId];
+  });
+  const canImport = selection.size > 0 && !selectedConflictMissingName && !selectedConflictMissingMigration;
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog wide-dialog document-key-dialog" role="dialog" aria-modal="true" aria-labelledby="documentKeyImportTitle">
-        <div class="modal-header">
-          <div><p class="eyebrow">Encryption keys</p><h2 id="documentKeyImportTitle">Import ${state.documentKeyImportKeys.length === 1 ? 'key' : 'keys'}?</h2></div>
-          <button class="hvy-galaxy-button icon-button" type="button" data-action="cancel-import-document-keys" aria-label="Close">×</button>
-        </div>
-        <p class="dialog-note">These files are bearer secrets. Importing copies their keys into Galaxy's protected local vault; it does not remove the original downloaded files.</p>
-        <p class="dialog-note">Re-importing a matching key ID is safe and adds any new bundle label. A different key value for an existing ID is rejected; imports never replace key material.</p>
+        <h2 id="documentKeyImportTitle">Import ${state.documentKeyImportKeys.length === 1 ? 'key' : 'keys'}?</h2>
         <div class="encryption-key-import-list">${rows}</div>
         <div class="dialog-actions">
+          <button class="hvy-galaxy-button primary-button" type="button" data-action="confirm-import-document-keys"${canImport ? '' : ' disabled'}>${selection.size === 0 ? 'Import' : selection.size === 1 ? 'Import 1 key' : `Import ${selection.size} keys`}</button>
           <button class="hvy-galaxy-button" type="button" data-action="cancel-import-document-keys">Cancel</button>
-          <button class="hvy-galaxy-button primary-button" type="button" data-action="confirm-import-document-keys">Import ${state.documentKeyImportKeys.length === 1 ? 'key' : `${state.documentKeyImportKeys.length} keys`}</button>
         </div>
       </section>
     </div>`;
@@ -45,6 +94,7 @@ export function renderDocumentKeyImportDialog(state: AppState): string {
 export function renderDocumentKeyManagerDialog(state: AppState): string {
   if (!state.documentKeyManagerDialogOpen) return '';
   const loadedKeyring = documentEncryptionKeyring();
+  const exportSelection = new Set(state.documentKeyExportSelection);
   const vaultStatus = state.documentKeyVaultStatus;
   const statusCopy = {
     empty: 'The protected local vault is ready for its first key.',
@@ -62,7 +112,10 @@ export function renderDocumentKeyManagerDialog(state: AppState): string {
     return `
     <li class="document-key-row">
       <div class="document-key-heading">
-        <strong class="document-key-title">${escapeHtml(keyName)}</strong>
+        <div class="document-key-heading-main">
+          <input class="document-key-bundle-checkbox" type="checkbox" data-action="toggle-document-key-export-selection" data-key-id="${escapeAttr(metadata.keyId)}" aria-label="Select ${escapeAttr(keyName)} for bundle export"${exportSelection.has(metadata.keyId) ? ' checked' : ''}>
+          <strong class="document-key-title">${escapeHtml(keyName)}</strong>
+        </div>
         ${state.documentKeyUsageLoaded && !hasLocalUsage ? `<button class="document-key-delete-button" type="button" data-action="request-delete-document-key" data-key-id="${escapeAttr(metadata.keyId)}" aria-label="Delete ${escapeAttr(keyName)}">×</button>` : ''}
       </div>
       <code class="document-key-id">${escapeHtml(metadata.keyId)}</code>
@@ -98,6 +151,7 @@ export function renderDocumentKeyManagerDialog(state: AppState): string {
         </section>
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="choose-document-key-files"${vaultUsable ? '' : ' disabled'}>Import Key File…</button>
+          <button class="hvy-galaxy-button" type="button" data-action="export-selected-document-keys"${exportSelection.size > 0 ? '' : ' disabled'}>${exportSelection.size > 0 ? `Export selected (${exportSelection.size})…` : 'Export selected…'}</button>
           <button class="hvy-galaxy-button primary-button" type="button" data-action="close-document-key-manager">Done</button>
         </div>
       </section>

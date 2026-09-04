@@ -959,6 +959,72 @@
   border-radius: 0.65rem;
 }
 
+.document-key-dialog .encryption-key-import-heading {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.encryption-key-import-name {
+  display: grid;
+  min-width: 0;
+}
+
+.encryption-key-import-checkbox {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  margin: 0;
+  accent-color: var(--hvy-primary, #ff8a00);
+  cursor: pointer;
+}
+
+.encryption-key-import-checkbox:disabled {
+  cursor: default;
+}
+
+.encryption-key-import-status {
+  color: var(--muted-text);
+}
+
+.encryption-key-import-status.is-conflict {
+  color: var(--hvy-danger, #b33a3a);
+}
+
+.document-key-dialog .encryption-key-import-conflict-name {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 650;
+}
+
+.encryption-key-import-current-usage {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.encryption-key-import-migration-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.encryption-key-import-migration-legend {
+  width: 100%;
+  margin-bottom: 0.1rem;
+  font-weight: 650;
+}
+
+.document-key-dialog .encryption-key-import-migration-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
 .encryption-key-import-row small {
   display: block;
   margin-top: 0.2rem;
@@ -995,7 +1061,7 @@
   display: grid;
   gap: 0.75rem;
   list-style: none;
-  padding: 0;
+  padding: 0 2px 2px;
   max-height: min(26rem, 55vh);
   margin: 0.6rem 0 0;
   overflow: auto;
@@ -1014,6 +1080,22 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.document-key-heading-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.65rem;
+}
+
+.document-key-bundle-checkbox {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  margin: 0;
+  accent-color: var(--hvy-primary, #ff8a00);
+  cursor: pointer;
 }
 
 .document-key-delete-button {

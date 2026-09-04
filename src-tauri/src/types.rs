@@ -138,6 +138,14 @@ struct UpdateEncryptedFolderManifestRequest {
     folder_directory: String,
     previous_manifest_bytes: Vec<u8>,
     manifest_bytes: Vec<u8>,
+    key_id_change: Option<EncryptedFolderKeyIdChange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedFolderKeyIdChange {
+    previous_key_id: String,
+    next_key_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

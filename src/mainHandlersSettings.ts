@@ -1,15 +1,16 @@
 import { installAiChatClient } from './aiClient';
-import { installMcpClient, installPluginPackage, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget } from './backend';
+import { beginDocumentKeyMigration, commitDocumentKeyMigration, finalizeDocumentKeyMigration, installMcpClient, installPluginPackage, loadWorkspace as loadWorkspaceBackend, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, rollbackDocumentKeyMigration, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget, type Workspace } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { findFileInWorkspaces, state } from './state';
-import { applyAppColorTheme, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, writeDocumentColorPreference } from './main';
+import { applyAppColorTheme, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 import { openDocumentKeyFileDialog } from './backend';
-import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, renameStoredDocumentKey, serializeDocumentKeyFile } from './documentKeys';
+import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, preserveStoredDocumentKey, reloadDocumentKeys, renameStoredDocumentKey, reviewDocumentKeyImports, serializeDocumentKeyFile } from './documentKeys';
+import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './documentKeyMigration';
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
@@ -98,6 +99,53 @@ function editingDocumentColorTheme(): boolean {
 }
 
 export function createSettingsHandlers(): Partial<UiHandlers> {
+  const exportDocumentKeys = async (keyIds: string[], suggestedName: string): Promise<boolean> => {
+    await ensureDocumentKeysLoaded(keyIds);
+    const keyring = documentEncryptionKeyring();
+    const keys = keyIds.map((keyId) => {
+      const key = keyring[keyId];
+      if (!key) throw new Error(`Encryption key ${keyId} is not loaded.`);
+      const metadata = state.documentKeyMetadata.find((entry) => entry.keyId === keyId);
+      return {
+        keyId,
+        algorithm: 'fernet' as const,
+        key,
+        ...(metadata?.label ? { label: metadata.label } : {}),
+        ...(metadata?.createdAt ? { createdAt: metadata.createdAt } : {}),
+      };
+    });
+    return Boolean(await saveBinaryAsDialog({
+      suggestedName,
+      bytes: Array.from(serializeDocumentKeyFile(keys)),
+    }));
+  };
+  const loadKeyMigrationWorkspaces = async (): Promise<Workspace[]> => {
+    const paths = [...new Set(state.workspaces.map((workspace) => workspace.path))];
+    const variants = await Promise.all(paths.flatMap((path) => [
+      loadWorkspaceBackend(path, { unlockEncryptedFolders: true }),
+      loadWorkspaceBackend(path, { includeTemplates: true, unlockEncryptedFolders: true }),
+    ]));
+    return variants;
+  };
+  const migrateOpenDocumentsToPreservedKey = (previousKeyId: string, nextKeyId: string): void => {
+    preserveCurrentDocumentSession();
+    const documents = new Set<VisualDocument>([
+      ...[...documentSessions.values()].map((session) => session.document),
+      ...workspaceFilterDocumentCache.values(),
+      ...(state.document?.mounted?.document ? [state.document.mounted.document] : []),
+    ]);
+    for (const document of documents) migrateVisualDocumentKeyId(document, previousKeyId, nextKeyId);
+  };
+  const clearDocumentKeyImportReview = (): void => {
+    state.documentKeyImportKeys = [];
+    state.documentKeyImportSelection = [];
+    state.documentKeyImportMatchingIds = [];
+    state.documentKeyImportConflictIds = [];
+    state.documentKeyImportConflictNames = {};
+    state.documentKeyImportConflictMigrations = {};
+    state.documentKeyImportBusy = false;
+    state.documentKeyImportProgress = '';
+  };
   const integrationActionDraftJson = () => JSON.stringify({
     integrationId: state.integrationActionDraftIntegrationId,
     pageId: state.integrationActionDraftPageId,
@@ -327,34 +375,162 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     chooseDocumentKeyFiles: () => void runBusy('Reading encryption key files...', async () => {
       const sources = await openDocumentKeyFileDialog();
       if (sources.length === 0) return;
-      state.documentKeyImportKeys = parseDocumentKeyFiles(sources);
+      const keys = parseDocumentKeyFiles(sources);
+      const [metadata, usage] = await Promise.all([
+        listDocumentKeyMetadata(),
+        state.documentKeyUsageLoaded
+          ? Promise.resolve(state.documentEncryptionKeyUsage)
+          : workspaceDocumentKeyUsage(state.workspaces),
+      ]);
+      const existingIds = keys.map((key) => key.keyId).filter((keyId) => metadata.some((entry) => entry.keyId === keyId));
+      if (existingIds.length > 0) await ensureDocumentKeysLoaded(existingIds);
+      const review = reviewDocumentKeyImports(keys, documentEncryptionKeyring());
+      state.documentKeyMetadata = metadata;
+      state.documentEncryptionKeyUsage = usage;
+      state.documentKeyUsageLoaded = true;
+      state.documentKeyImportKeys = keys;
+      state.documentKeyImportMatchingIds = review.matchingIds;
+      state.documentKeyImportConflictIds = review.conflictIds;
+      state.documentKeyImportSelection = review.selectedIds;
+      state.documentKeyImportConflictNames = {};
+      state.documentKeyImportConflictMigrations = {};
       state.documentKeyManagerDialogOpen = false;
       state.documentKeyImportDialogOpen = true;
       state.status = `Review ${state.documentKeyImportKeys.length} encryption ${state.documentKeyImportKeys.length === 1 ? 'key' : 'keys'}`;
     }, { preserveMountedDocument: true }),
+    toggleDocumentKeyImportSelection: (keyId, selected) => {
+      const selection = new Set(state.documentKeyImportSelection);
+      if (selected) selection.add(keyId);
+      else selection.delete(keyId);
+      state.documentKeyImportSelection = [...selection];
+      rerender({ preserveMountedDocument: true });
+    },
+    updateDocumentKeyImportConflictName: (keyId, name) => {
+      state.documentKeyImportConflictNames[keyId] = name;
+    },
+    selectDocumentKeyImportConflictMigration: (keyId, migration) => {
+      state.documentKeyImportConflictMigrations[keyId] = migration;
+    },
     confirmImportDocumentKeys: () => void runBusy('Importing encryption keys...', async () => {
-      const keys = [...state.documentKeyImportKeys];
-      await importReviewedDocumentKeys(keys);
-      state.documentKeyImportDialogOpen = false;
-      state.documentKeyImportKeys = [];
-      state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
-      state.status = `Imported ${keys.length} encryption ${keys.length === 1 ? 'key' : 'keys'}`;
+      state.documentKeyImportBusy = true;
+      state.documentKeyImportProgress = 'Preparing migration…';
+      rerender({ preserveMountedDocument: true });
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      try {
+        const selection = new Set(state.documentKeyImportSelection);
+        const keys = state.documentKeyImportKeys.filter((key) => selection.has(key.keyId));
+        const conflictIds = new Set(state.documentKeyImportConflictIds);
+        const conflictingKeys = keys.filter((key) => conflictIds.has(key.keyId));
+        const migrationWorkspaces = conflictingKeys.length > 0 ? await loadKeyMigrationWorkspaces() : [];
+        const migrationId = crypto.randomUUID();
+        const preservedKeys = conflictingKeys.map((key) => {
+          const metadata = state.documentKeyMetadata.find((entry) => entry.keyId === key.keyId);
+          return {
+            keyId: key.keyId,
+            preservedKeyId: crypto.randomUUID(),
+            originalCreatedAt: metadata?.createdAt,
+            originalSource: metadata?.source,
+            originalLabel: metadata?.label,
+            originalBundleLabels: metadata?.bundleLabels,
+          };
+        });
+        let migrationStarted = false;
+        const showMigrationProgress = (progress: { kind: 'document' | 'folder'; label: string }): void => {
+          state.documentKeyImportProgress = progress.kind === 'folder'
+            ? `Updating folder ${progress.label}`
+            : `Migrating ${progress.label}`;
+          rerender({ preserveMountedDocument: true });
+        };
+        try {
+          if (preservedKeys.length > 0) {
+            await beginDocumentKeyMigration({ migrationId, keyChanges: preservedKeys });
+            migrationStarted = true;
+          }
+          for (const key of conflictingKeys) {
+            const metadata = state.documentKeyMetadata.find((entry) => entry.keyId === key.keyId);
+            const preservedKeyId = preservedKeys.find((entry) => entry.keyId === key.keyId)!.preservedKeyId;
+            await preserveStoredDocumentKey(key.keyId, metadata, state.documentKeyImportConflictNames[key.keyId], preservedKeyId);
+          }
+          if (conflictingKeys.length > 0) {
+            await migrateWorkspaceDocumentKeyId(migrationWorkspaces, migrationId, conflictingKeys.map((key) => {
+              const useNewKey = state.documentKeyImportConflictMigrations[key.keyId] === 'new';
+              return {
+                previousKeyId: key.keyId,
+                nextKeyId: useNewKey
+                  ? key.keyId
+                  : preservedKeys.find((entry) => entry.keyId === key.keyId)!.preservedKeyId,
+                ...(useNewKey ? { nextKeyOverride: key.key } : {}),
+              };
+            }), showMigrationProgress);
+          }
+          if (migrationStarted) {
+            state.documentKeyImportProgress = 'Committing migrated files…';
+            rerender({ preserveMountedDocument: true });
+            await commitDocumentKeyMigration(migrationId);
+          }
+          for (const key of conflictingKeys) await permanentlyDeleteDocumentKey(key.keyId);
+          if (conflictingKeys.length > 0) await importReviewedDocumentKeys(conflictingKeys);
+          if (migrationStarted) await finalizeDocumentKeyMigration(migrationId);
+          migrationStarted = false;
+          for (const key of conflictingKeys) {
+            if (state.documentKeyImportConflictMigrations[key.keyId] !== 'new') {
+              const preservedKeyId = preservedKeys.find((entry) => entry.keyId === key.keyId)!.preservedKeyId;
+              migrateOpenDocumentsToPreservedKey(key.keyId, preservedKeyId);
+            }
+          }
+          const nonConflictingKeys = keys.filter((key) => !conflictIds.has(key.keyId));
+          if (nonConflictingKeys.length > 0) {
+            state.documentKeyImportProgress = 'Saving imported keys…';
+            rerender({ preserveMountedDocument: true });
+            await importReviewedDocumentKeys(nonConflictingKeys);
+          }
+        } catch (error) {
+          if (migrationStarted) {
+            await rollbackDocumentKeyMigration(migrationId);
+            await reloadDocumentKeys(preservedKeys.flatMap((entry) => [entry.keyId, entry.preservedKeyId]));
+          }
+          throw error;
+        }
+        state.documentKeyImportDialogOpen = false;
+        clearDocumentKeyImportReview();
+        state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
+        state.documentKeyMetadata = await listDocumentKeyMetadata();
+        if (conflictingKeys.length > 0) {
+          const refreshed = await Promise.all([...new Set(state.workspaces.map((workspace) => workspace.path))]
+            .map((path) => loadWorkspaceBackend(path, {
+              includeTemplates: state.workspaceFileViews[path] === 'templates',
+              unlockEncryptedFolders: true,
+            })));
+          refreshed.forEach(upsertWorkspace);
+        }
+        state.status = `Imported ${keys.length} encryption ${keys.length === 1 ? 'key' : 'keys'}`;
+      } finally {
+        state.documentKeyImportBusy = false;
+        state.documentKeyImportProgress = '';
+      }
     }, { preserveMountedDocument: true }),
     cancelImportDocumentKeys: () => {
       state.documentKeyImportDialogOpen = false;
-      state.documentKeyImportKeys = [];
+      clearDocumentKeyImportReview();
       state.status = 'Ready';
       rerender({ preserveMountedDocument: true });
     },
     exportDocumentKey: (keyId) => void runBusy('Exporting encryption key...', async () => {
-      await ensureDocumentKeysLoaded([keyId]);
-      const key = documentEncryptionKeyring()[keyId];
-      if (!key) throw new Error(`Encryption key ${keyId} is not loaded.`);
-      const savedPath = await saveBinaryAsDialog({
-        suggestedName: `hvy-key-${keyId}.hvykey`,
-        bytes: Array.from(serializeDocumentKeyFile([{ keyId, algorithm: 'fernet', key }])),
-      });
-      if (savedPath) state.status = 'Exported encryption key file';
+      if (await exportDocumentKeys([keyId], `hvy-key-${keyId}.hvykey`)) state.status = 'Exported encryption key file';
+    }, { preserveMountedDocument: true }),
+    toggleDocumentKeyExportSelection: (keyId, selected) => {
+      const selection = new Set(state.documentKeyExportSelection);
+      if (selected) selection.add(keyId);
+      else selection.delete(keyId);
+      state.documentKeyExportSelection = [...selection];
+    },
+    exportSelectedDocumentKeys: () => void runBusy('Exporting encryption key bundle...', async () => {
+      const available = new Set(state.documentKeyMetadata.map((entry) => entry.keyId));
+      const keyIds = state.documentKeyExportSelection.filter((keyId) => available.has(keyId));
+      if (keyIds.length === 0) return;
+      if (await exportDocumentKeys(keyIds, 'hvy-key-bundle.hvykey')) {
+        state.status = `Exported ${keyIds.length} encryption ${keyIds.length === 1 ? 'key' : 'keys'}`;
+      }
     }, { preserveMountedDocument: true }),
     requestDeleteDocumentKey: (keyId) => void runBusy('Checking encryption key use...', async () => {
       const usage = state.documentEncryptionKeyUsage[keyId];
@@ -373,6 +549,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const keyId = state.documentKeyDeleteId;
       if (!keyId) return;
       await permanentlyDeleteDocumentKey(keyId);
+      state.documentKeyExportSelection = state.documentKeyExportSelection.filter((selectedId) => selectedId !== keyId);
       state.documentKeyDeleteId = null;
       state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
       state.documentKeyMetadata = await listDocumentKeyMetadata();
@@ -392,6 +569,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }, { preserveMountedDocument: true }),
     openDocumentKeyManager: () => {
       state.documentKeyMetadata = [];
+      state.documentKeyExportSelection = [];
       state.documentEncryptionKeyUsage = {};
       state.documentKeyUsageLoaded = false;
       state.documentKeyDataLoading = true;

@@ -20,7 +20,9 @@ import {
   generateStoredDocumentKey,
   parseDocumentKeyFile,
   parseDocumentKeyFiles,
+  preserveStoredDocumentKey,
   renameStoredDocumentKey,
+  reviewDocumentKeyImports,
   serializeDocumentKeyFile,
   permanentlyDeleteDocumentKey,
 } from './documentKeys';
@@ -86,6 +88,34 @@ describe('HVY document key files', () => {
     delete backendMocks.sessionKeys[SECOND_KEY_ID];
   });
 
+  it('preserves an existing key under a new ID and backup name', async () => {
+    backendMocks.loadDocumentKeys.mockResolvedValueOnce({ [KEY_ID]: KEY });
+
+    const preservedKeyId = await preserveStoredDocumentKey(KEY_ID, { label: 'Planning', createdAt: '2026-09-02T12:00:00.000Z' });
+
+    expect(preservedKeyId).not.toBe(KEY_ID);
+    expect(backendMocks.storeDocumentKeys).toHaveBeenCalledWith([{
+      keyId: preservedKeyId,
+      key: KEY,
+      createdAt: '2026-09-02T12:00:00.000Z',
+      source: 'imported',
+      label: 'Planning (previous key)',
+    }]);
+    expect(backendMocks.sessionKeys[preservedKeyId]).toBe(KEY);
+    delete backendMocks.sessionKeys[KEY_ID];
+    delete backendMocks.sessionKeys[preservedKeyId];
+  });
+
+  it('uses the required import conflict name for a preserved key', async () => {
+    backendMocks.loadDocumentKeys.mockResolvedValueOnce({ [KEY_ID]: KEY });
+
+    await preserveStoredDocumentKey(KEY_ID, { label: 'Planning' }, 'Legacy planning key');
+
+    expect(backendMocks.storeDocumentKeys).toHaveBeenCalledWith([expect.objectContaining({
+      label: 'Legacy planning key',
+    })]);
+  });
+
   it('round-trips the portable version 1 JSON format', () => {
     const bytes = serializeDocumentKeyFile([{
       keyId: KEY_ID,
@@ -105,6 +135,18 @@ describe('HVY document key files', () => {
         createdAt: '2026-09-02T12:00:00.000Z',
       }],
     });
+  });
+
+  it('round-trips multiple named keys in one bundle', () => {
+    const bytes = serializeDocumentKeyFile([
+      { keyId: KEY_ID, algorithm: 'fernet', key: KEY, label: 'Finance team' },
+      { keyId: SECOND_KEY_ID, algorithm: 'fernet', key: SECOND_KEY, label: 'Legal team' },
+    ]);
+
+    expect(parseDocumentKeyFile(new TextDecoder().decode(bytes)).keys).toEqual([
+      { keyId: KEY_ID, algorithm: 'fernet', key: KEY, label: 'Finance team' },
+      { keyId: SECOND_KEY_ID, algorithm: 'fernet', key: SECOND_KEY, label: 'Legal team' },
+    ]);
   });
 
   it('round-trips an optional bundle label and carries it into import metadata', () => {
@@ -150,6 +192,20 @@ describe('HVY document key files', () => {
     expect(documentKeyFingerprint(KEY)).toMatch(/^[0-9A-F]{4}(?:-[0-9A-F]{4}){5}$/);
     expect(documentKeyFingerprint(KEY)).not.toContain(KEY.slice(0, 8));
     expect(documentKeyFingerprint(KEY)).not.toBe(documentKeyFingerprint(SECOND_KEY));
+  });
+
+  it('preselects new imports, autoskips fingerprint matches, and requires conflicts to be selected', () => {
+    const keys = [
+      { keyId: KEY_ID, key: KEY, algorithm: 'fernet' as const, fingerprint: documentKeyFingerprint(KEY), sourceName: 'bundle.hvykey' },
+      { keyId: SECOND_KEY_ID, key: SECOND_KEY, algorithm: 'fernet' as const, fingerprint: documentKeyFingerprint(SECOND_KEY), sourceName: 'bundle.hvykey' },
+      { keyId: THIRD_KEY_ID, key: SECOND_KEY, algorithm: 'fernet' as const, fingerprint: documentKeyFingerprint(SECOND_KEY), sourceName: 'bundle.hvykey' },
+    ];
+
+    expect(reviewDocumentKeyImports(keys, { [KEY_ID]: KEY, [SECOND_KEY_ID]: KEY })).toEqual({
+      matchingIds: [KEY_ID],
+      conflictIds: [SECOND_KEY_ID],
+      selectedIds: [THIRD_KEY_ID],
+    });
   });
 });
 

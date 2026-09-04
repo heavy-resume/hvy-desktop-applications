@@ -658,14 +658,32 @@
             folder_directory: encrypted_folder_physical_name(folder_id),
             previous_manifest_bytes: previous.clone(),
             manifest_bytes: next.clone(),
+            key_id_change: None,
         }).unwrap();
         assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+
+        let migrated_key_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        let migrated = format!(
+            r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{migrated_key_id}","folderId":"{folder_id}","nonce":"migrated","ciphertext":"ciphertext"}}"#
+        ).into_bytes();
+        update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            previous_manifest_bytes: next.clone(),
+            manifest_bytes: migrated.clone(),
+            key_id_change: Some(EncryptedFolderKeyIdChange {
+                previous_key_id: key_id.into(),
+                next_key_id: migrated_key_id.into(),
+            }),
+        }).unwrap();
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), migrated);
 
         assert!(update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
             workspace_path: path_to_string(dir.path()),
             folder_directory: encrypted_folder_physical_name(folder_id),
             previous_manifest_bytes: previous,
             manifest_bytes: envelope("later"),
+            key_id_change: None,
         }).is_err());
     }
 

@@ -11,6 +11,7 @@ pub fn run() {
         })
         .setup(|app| {
             set_native_process_name();
+            recover_pending_document_key_migrations(app.handle())?;
             install_camera_permission_handler(app.handle());
             #[cfg(target_os = "macos")]
             macos_three_finger_swipe::install(app.handle().clone());
@@ -57,6 +58,11 @@ pub fn run() {
             list_document_key_metadata,
             store_document_keys,
             delete_document_key,
+            begin_document_key_migration,
+            stage_document_key_migration_file,
+            commit_document_key_migration,
+            finalize_document_key_migration,
+            rollback_document_key_migration,
             open_document_key_file_dialog,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
@@ -286,7 +292,6 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     };
     let file_builder = file_builder
         .separator()
-        .item(&MenuItemBuilder::new("Import Encryption Key...").id("import-encryption-key").build(app)?)
         .item(&MenuItemBuilder::new("Manage Encryption Keys...").id("manage-encryption-keys").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)

@@ -354,7 +354,6 @@ export async function boot(): Promise<void> {
       if (event === 'save-as') handlers.saveAs();
       if (event === 'save-to-workspace') handlers.saveCurrentToWorkspace();
       if (event === 'import-current') handlers.openImportIntoCurrent();
-      if (event === 'import-encryption-key') handlers.chooseDocumentKeyFiles();
       if (event === 'manage-encryption-keys') handlers.openDocumentKeyManager();
       if (event === 'encrypt-document') handlers.requestDocumentEncryption('encrypt');
       if (event === 'decrypt-document') handlers.requestDocumentEncryption('decrypt');

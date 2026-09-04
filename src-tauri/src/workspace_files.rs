@@ -391,11 +391,17 @@ fn update_encrypted_folder_manifest_at(
     let folder_path = workspace_path.join(relative);
     let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     let folder_id = encrypted_folder_id_from_physical_name(folder_name).unwrap_or_default();
+    let previous_key_id = encrypted_folder_manifest_key_id(&request.previous_manifest_bytes);
+    let next_key_id = encrypted_folder_manifest_key_id(&request.manifest_bytes);
+    let key_id_change_matches = request.key_id_change.as_ref().is_some_and(|change| {
+        previous_key_id.as_deref() == Some(change.previous_key_id.as_str())
+            && next_key_id.as_deref() == Some(change.next_key_id.as_str())
+    });
     if !folder_path.is_dir()
         || folder_id.is_empty()
         || !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
         || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
-        || encrypted_folder_manifest_key_id(&request.previous_manifest_bytes) != encrypted_folder_manifest_key_id(&request.manifest_bytes)
+        || (previous_key_id != next_key_id && !key_id_change_matches)
     {
         return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
     }
@@ -416,6 +422,7 @@ fn delete_encrypted_folder_document_at(
         folder_directory: request.folder_directory.clone(),
         previous_manifest_bytes: request.previous_manifest_bytes.clone(),
         manifest_bytes: request.manifest_bytes.clone(),
+        key_id_change: None,
     };
     let relative = PathBuf::from(request.folder_directory.trim());
     if relative.as_os_str().is_empty()
@@ -476,6 +483,7 @@ fn delete_encrypted_folder_child_at(
         folder_directory: request.folder_directory.clone(),
         previous_manifest_bytes: request.previous_manifest_bytes.clone(),
         manifest_bytes: request.manifest_bytes.clone(),
+        key_id_change: None,
     };
     fs::rename(&child_path, &staging)?;
     if let Err(error) = update_encrypted_folder_manifest_at(workspace_path, &update) {

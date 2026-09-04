@@ -378,6 +378,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'confirm-import-document-keys') handlers.confirmImportDocumentKeys();
     if (action === 'cancel-import-document-keys') handlers.cancelImportDocumentKeys();
     if (action === 'export-document-key') handlers.exportDocumentKey(target.dataset.keyId ?? '');
+    if (action === 'export-selected-document-keys') handlers.exportSelectedDocumentKeys();
     if (action === 'rename-document-key') {
       const row = target.closest('li');
       const input = row?.querySelector<HTMLInputElement>('[data-document-key-name]');

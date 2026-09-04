@@ -279,6 +279,31 @@ export interface UpdateEncryptedFolderManifestRequest {
   folderDirectory: string;
   previousManifestBytes: number[] | Uint8Array;
   manifestBytes: number[] | Uint8Array;
+  keyIdChange?: {
+    previousKeyId: string;
+    nextKeyId: string;
+  };
+}
+
+export interface DocumentKeyMigrationKeyChange {
+  keyId: string;
+  preservedKeyId: string;
+  originalCreatedAt?: string;
+  originalSource?: 'generated' | 'imported';
+  originalLabel?: string;
+  originalBundleLabels?: string[];
+}
+
+export interface BeginDocumentKeyMigrationRequest {
+  migrationId: string;
+  keyChanges: DocumentKeyMigrationKeyChange[];
+}
+
+export interface StageDocumentKeyMigrationFileRequest {
+  migrationId: string;
+  path: string;
+  previousBytes: number[] | Uint8Array;
+  bytes: number[] | Uint8Array;
 }
 
 export interface DeleteEncryptedFolderDocumentRequest extends UpdateEncryptedFolderManifestRequest {
@@ -1147,6 +1172,26 @@ export async function createEncryptedFolderChild(request: CreateEncryptedFolderC
 export async function updateEncryptedFolderManifest(request: UpdateEncryptedFolderManifestRequest): Promise<Workspace> {
   const workspace = await invokeDesktop<Workspace>('update_encrypted_folder_manifest', { request });
   return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export function beginDocumentKeyMigration(request: BeginDocumentKeyMigrationRequest): Promise<void> {
+  return invokeDesktop('begin_document_key_migration', { request });
+}
+
+export function stageDocumentKeyMigrationFile(request: StageDocumentKeyMigrationFileRequest): Promise<void> {
+  return invokeDesktop('stage_document_key_migration_file', { request });
+}
+
+export function commitDocumentKeyMigration(migrationId: string): Promise<void> {
+  return invokeDesktop('commit_document_key_migration', { migrationId });
+}
+
+export function finalizeDocumentKeyMigration(migrationId: string): Promise<void> {
+  return invokeDesktop('finalize_document_key_migration', { migrationId });
+}
+
+export function rollbackDocumentKeyMigration(migrationId: string): Promise<void> {
+  return invokeDesktop('rollback_document_key_migration', { migrationId });
 }
 
 export function revealDocumentFile(path: string): Promise<void> {

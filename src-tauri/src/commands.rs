@@ -449,6 +449,7 @@ const DOCUMENT_KEY_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.document-ke
 const DOCUMENT_KEY_VAULT_ACCOUNT: &str = "vault-wrapping-key-v1";
 const DOCUMENT_KEY_VAULT_FILE: &str = "document-key-vault-v1.json";
 const DOCUMENT_KEY_VAULT_AAD: &[u8] = b"hvy-galaxy-document-key-vault-v1";
+const DOCUMENT_KEY_MIGRATION_PREFIX: &str = "document-key-migration-";
 static DOCUMENT_KEY_VAULT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static DOCUMENT_KEY_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
@@ -615,6 +616,56 @@ struct DocumentKeyMetadata {
     label: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     bundle_labels: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMigrationKeyChange {
+    key_id: String,
+    preserved_key_id: String,
+    original_created_at: Option<String>,
+    original_source: Option<String>,
+    original_label: Option<String>,
+    #[serde(default)]
+    original_bundle_labels: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeginDocumentKeyMigrationRequest {
+    migration_id: String,
+    key_changes: Vec<DocumentKeyMigrationKeyChange>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StageDocumentKeyMigrationFileRequest {
+    migration_id: String,
+    path: String,
+    previous_bytes: Vec<u8>,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMigrationEntry {
+    path: String,
+    staged_path: String,
+    backup_path: String,
+    previous_hash: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMigrationJournal {
+    version: u8,
+    migration_id: String,
+    phase: String,
+    created_at: String,
+    key_changes: Vec<DocumentKeyMigrationKeyChange>,
+    entries: Vec<DocumentKeyMigrationEntry>,
+    #[serde(default)]
+    committed: usize,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1079,6 +1130,210 @@ fn delete_document_key(app: AppHandle, key_id: String) -> AppResult<DocumentKeyV
     let key = document_key_vault_key(true)?;
     delete_document_key_from_vault_at(&document_key_vault_path(&app)?, &key, &key_id)?;
     document_key_vault_status(&app)
+}
+
+fn document_key_migration_journal_path(app: &AppHandle, migration_id: &str) -> AppResult<PathBuf> {
+    if migration_id.len() != 36 || !migration_id.chars().all(|character| character.is_ascii_hexdigit() || character == '-') {
+        return Err(AppError::Message("Invalid document key migration ID.".into()));
+    }
+    let directory = app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(format!("{DOCUMENT_KEY_MIGRATION_PREFIX}{migration_id}.json")))
+}
+
+fn read_document_key_migration(app: &AppHandle, migration_id: &str) -> AppResult<(PathBuf, DocumentKeyMigrationJournal)> {
+    let journal_path = document_key_migration_journal_path(app, migration_id)?;
+    if !journal_path.exists() {
+        return Err(AppError::Message("Document key migration journal was not found.".into()));
+    }
+    let journal = serde_json::from_slice(&fs::read(&journal_path)?)?;
+    Ok((journal_path, journal))
+}
+
+fn migration_bytes_hash(bytes: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[tauri::command]
+fn begin_document_key_migration(app: AppHandle, request: BeginDocumentKeyMigrationRequest) -> AppResult<()> {
+    let journal_path = document_key_migration_journal_path(&app, &request.migration_id)?;
+    if journal_path.exists() {
+        return Err(AppError::Message("Document key migration is already in progress.".into()));
+    }
+    if request.key_changes.iter().any(|change| change.key_id.trim().is_empty() || change.preserved_key_id.trim().is_empty()) {
+        return Err(AppError::Message("Document key migration key changes are invalid.".into()));
+    }
+    write_json_atomically(&journal_path, &DocumentKeyMigrationJournal {
+        version: 1,
+        migration_id: request.migration_id,
+        phase: "staging".into(),
+        created_at: Utc::now().to_rfc3339(),
+        key_changes: request.key_changes,
+        entries: Vec::new(),
+        committed: 0,
+    })
+}
+
+#[tauri::command]
+fn stage_document_key_migration_file(app: AppHandle, request: StageDocumentKeyMigrationFileRequest) -> AppResult<()> {
+    let (journal_path, mut journal) = read_document_key_migration(&app, &request.migration_id)?;
+    if journal.phase != "staging" {
+        return Err(AppError::Message("Document key migration is no longer accepting files.".into()));
+    }
+    let target = fs::canonicalize(PathBuf::from(&request.path))?;
+    if !target.is_file() || journal.entries.iter().any(|entry| Path::new(&entry.path) == target) {
+        return Err(AppError::Message("Document key migration target is invalid or duplicated.".into()));
+    }
+    if fs::read(&target)? != request.previous_bytes {
+        return Err(AppError::Message("A file changed while the document key migration was being prepared.".into()));
+    }
+    let parent = target.parent().ok_or_else(|| AppError::Message("Document key migration target has no parent directory.".into()))?;
+    let name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| AppError::Message("Document key migration target name is invalid.".into()))?;
+    let staged_path = parent.join(format!(".{name}.{}.hvy-key-next", request.migration_id));
+    let backup_path = parent.join(format!(".{name}.{}.hvy-key-old", request.migration_id));
+    if staged_path.exists() || backup_path.exists() {
+        return Err(AppError::Message("Document key migration staging files already exist.".into()));
+    }
+    write_file_atomically(&staged_path, &request.bytes)?;
+    journal.entries.push(DocumentKeyMigrationEntry {
+        path: path_to_string(&target),
+        staged_path: path_to_string(&staged_path),
+        backup_path: path_to_string(&backup_path),
+        previous_hash: migration_bytes_hash(&request.previous_bytes),
+    });
+    if let Err(error) = write_json_atomically(&journal_path, &journal) {
+        let _ = fs::remove_file(staged_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn commit_document_key_migration(app: AppHandle, migration_id: String) -> AppResult<()> {
+    let (journal_path, mut journal) = read_document_key_migration(&app, &migration_id)?;
+    if journal.phase != "staging" {
+        return Err(AppError::Message("Document key migration cannot be committed from its current state.".into()));
+    }
+    for entry in &journal.entries {
+        if migration_bytes_hash(&fs::read(&entry.path)?) != entry.previous_hash || !Path::new(&entry.staged_path).is_file() {
+            return Err(AppError::Message("A file changed before the document key migration could be committed.".into()));
+        }
+    }
+    journal.phase = "committing".into();
+    journal.committed = 0;
+    write_json_atomically(&journal_path, &journal)?;
+    let result = (|| -> AppResult<()> {
+        for entry in &journal.entries {
+            fs::rename(&entry.path, &entry.backup_path)?;
+            if let Err(error) = fs::rename(&entry.staged_path, &entry.path) {
+                fs::rename(&entry.backup_path, &entry.path)?;
+                return Err(error.into());
+            }
+            journal.committed += 1;
+            write_json_atomically(&journal_path, &journal)?;
+        }
+        journal.phase = "swapped".into();
+        write_json_atomically(&journal_path, &journal)
+    })();
+    result
+}
+
+fn restore_document_key_migration_vault(app: &AppHandle, journal: &DocumentKeyMigrationJournal) -> AppResult<()> {
+    if journal.key_changes.is_empty() || !document_key_vault_path(app)?.exists() {
+        return Ok(());
+    }
+    let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let key = document_key_vault_key(true)?;
+    let mut vault = read_document_key_vault(app, &key)?;
+    for change in &journal.key_changes {
+        if let Some(preserved) = vault.keys.get(&change.preserved_key_id).cloned() {
+            vault.keys.insert(change.key_id.clone(), StoredDocumentKey {
+                key: preserved.key,
+                created_at: change.original_created_at.clone().unwrap_or(preserved.created_at),
+                source: change.original_source.clone().unwrap_or_else(|| "imported".into()),
+                label: change.original_label.clone(),
+                bundle_labels: change.original_bundle_labels.clone(),
+            });
+            vault.keys.remove(&change.preserved_key_id);
+        }
+    }
+    write_document_key_vault(app, &key, &vault)
+}
+
+fn rollback_document_key_migration_at(app: &AppHandle, migration_id: &str) -> AppResult<()> {
+    let (journal_path, journal) = read_document_key_migration(app, migration_id)?;
+    if journal.phase == "complete" {
+        for entry in &journal.entries {
+            let backup = Path::new(&entry.backup_path);
+            let staged = Path::new(&entry.staged_path);
+            if backup.exists() { fs::remove_file(backup)?; }
+            if staged.exists() { fs::remove_file(staged)?; }
+        }
+        fs::remove_file(journal_path)?;
+        return Ok(());
+    }
+    for entry in journal.entries.iter().rev() {
+        let target = Path::new(&entry.path);
+        let backup = Path::new(&entry.backup_path);
+        let staged = Path::new(&entry.staged_path);
+        if backup.exists() {
+            if target.exists() { fs::remove_file(target)?; }
+            fs::rename(backup, target)?;
+        }
+        if staged.exists() { fs::remove_file(staged)?; }
+    }
+    restore_document_key_migration_vault(app, &journal)?;
+    if journal_path.exists() { fs::remove_file(journal_path)?; }
+    Ok(())
+}
+
+#[tauri::command]
+fn rollback_document_key_migration(app: AppHandle, migration_id: String) -> AppResult<()> {
+    rollback_document_key_migration_at(&app, &migration_id)
+}
+
+#[tauri::command]
+fn finalize_document_key_migration(app: AppHandle, migration_id: String) -> AppResult<()> {
+    let (journal_path, mut journal) = read_document_key_migration(&app, &migration_id)?;
+    if journal.phase != "swapped" {
+        return Err(AppError::Message("Document key migration has not finished swapping files.".into()));
+    }
+    journal.phase = "complete".into();
+    write_json_atomically(&journal_path, &journal)?;
+    for entry in &journal.entries {
+        let backup = Path::new(&entry.backup_path);
+        let staged = Path::new(&entry.staged_path);
+        if backup.exists() { fs::remove_file(backup)?; }
+        if staged.exists() { fs::remove_file(staged)?; }
+    }
+    fs::remove_file(journal_path)?;
+    Ok(())
+}
+
+fn recover_pending_document_key_migrations(app: &AppHandle) -> AppResult<()> {
+    let directory = app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))?;
+    if !directory.exists() { return Ok(()); }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(DOCUMENT_KEY_MIGRATION_PREFIX) || !name.ends_with(".json") { continue; }
+        let migration_id = name.trim_start_matches(DOCUMENT_KEY_MIGRATION_PREFIX).trim_end_matches(".json");
+        let (_, journal) = read_document_key_migration(app, migration_id)?;
+        if journal.phase == "complete" {
+            for file in &journal.entries {
+                let backup = Path::new(&file.backup_path);
+                let staged = Path::new(&file.staged_path);
+                if backup.exists() { fs::remove_file(backup)?; }
+                if staged.exists() { fs::remove_file(staged)?; }
+            }
+            fs::remove_file(entry.path())?;
+        } else {
+            rollback_document_key_migration_at(app, migration_id)?;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

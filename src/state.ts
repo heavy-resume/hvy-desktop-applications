@@ -110,9 +110,17 @@ export interface AppState {
   documentKeyImportDialogOpen: boolean;
   documentKeyManagerDialogOpen: boolean;
   documentKeyImportKeys: ReviewedDocumentKey[];
+  documentKeyImportSelection: string[];
+  documentKeyImportMatchingIds: string[];
+  documentKeyImportConflictIds: string[];
+  documentKeyImportConflictNames: Record<string, string>;
+  documentKeyImportConflictMigrations: Record<string, 'new' | 'renamed'>;
+  documentKeyImportBusy: boolean;
+  documentKeyImportProgress: string;
   documentKeyMetadata: DocumentKeyMetadata[];
   documentKeyVaultStatus: DocumentKeyVaultStatus;
   documentKeyDeleteId: string | null;
+  documentKeyExportSelection: string[];
   documentEncryptionDialogOpen: boolean;
   documentEncryptionAction: 'encrypt' | 'decrypt' | null;
   documentEncryptionKeyId: string | null;
@@ -421,9 +429,17 @@ export const state: AppState = {
   documentKeyImportDialogOpen: false,
   documentKeyManagerDialogOpen: false,
   documentKeyImportKeys: [],
+  documentKeyImportSelection: [],
+  documentKeyImportMatchingIds: [],
+  documentKeyImportConflictIds: [],
+  documentKeyImportConflictNames: {},
+  documentKeyImportConflictMigrations: {},
+  documentKeyImportBusy: false,
+  documentKeyImportProgress: '',
   documentKeyMetadata: [],
   documentKeyVaultStatus: emptyDocumentKeyVaultStatus(),
   documentKeyDeleteId: null,
+  documentKeyExportSelection: [],
   documentEncryptionDialogOpen: false,
   documentEncryptionAction: null,
   documentEncryptionKeyId: null,

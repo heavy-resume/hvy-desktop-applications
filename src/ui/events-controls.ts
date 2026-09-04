@@ -77,6 +77,21 @@ export function updateImportExcludeTagAutocomplete(target: HTMLElement): void {
   menu.hidden = visibleCount === 0;
 }
 
+function updateDocumentKeyImportSubmit(dialog: HTMLElement | null): void {
+  const selected = [...(dialog?.querySelectorAll<HTMLInputElement>('[data-action="toggle-document-key-import-selection"]:checked') ?? [])];
+  const missingConflictName = selected.some((checkbox) => {
+    const row = checkbox.closest<HTMLElement>('.encryption-key-import-row');
+    const conflictName = row?.querySelector<HTMLInputElement>('[data-action="set-document-key-import-conflict-name"]');
+    const migrationOptions = row?.querySelector<HTMLElement>('.encryption-key-import-migration-options');
+    const missingMigration = Boolean(migrationOptions && !migrationOptions.querySelector<HTMLInputElement>('input:checked'));
+    return (conflictName ? !conflictName.value.trim() : false) || missingMigration;
+  });
+  const importButton = dialog?.querySelector<HTMLButtonElement>('[data-action="confirm-import-document-keys"]');
+  if (!importButton) return;
+  importButton.disabled = selected.length === 0 || missingConflictName;
+  importButton.textContent = selected.length === 0 ? 'Import' : selected.length === 1 ? 'Import 1 key' : `Import ${selected.length} keys`;
+}
+
 export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state: AppState, signal: AbortSignal): void {
   root.addEventListener('change', (event) => {
     const input = event.target instanceof HTMLInputElement && event.target.matches('input[data-plugin-file-picker]')
@@ -96,6 +111,14 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       : null;
     if (encryptionKeyLabel) {
       handlers.setDocumentEncryptionKeyLabel(encryptionKeyLabel.value);
+      return;
+    }
+    const documentKeyImportConflictName = event.target instanceof HTMLInputElement && event.target.dataset.action === 'set-document-key-import-conflict-name'
+      ? event.target
+      : null;
+    if (documentKeyImportConflictName) {
+      handlers.updateDocumentKeyImportConflictName(documentKeyImportConflictName.dataset.keyId ?? '', documentKeyImportConflictName.value);
+      updateDocumentKeyImportSubmit(documentKeyImportConflictName.closest<HTMLElement>('.document-key-dialog'));
       return;
     }
     const documentKeyName = event.target instanceof HTMLInputElement && event.target.hasAttribute('data-document-key-name')
@@ -364,6 +387,31 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
     }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-document-encryption-key') {
       handlers.selectDocumentEncryptionKey(target.value);
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.action === 'toggle-document-key-import-selection') {
+      handlers.toggleDocumentKeyImportSelection(target.dataset.keyId ?? '', target.checked);
+      const dialog = target.closest<HTMLElement>('.document-key-dialog');
+      updateDocumentKeyImportSubmit(dialog);
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.action === 'select-document-key-import-conflict-migration') {
+      const migration = target.value;
+      if (migration === 'new' || migration === 'renamed') {
+        handlers.selectDocumentKeyImportConflictMigration(target.dataset.keyId ?? '', migration);
+        updateDocumentKeyImportSubmit(target.closest<HTMLElement>('.document-key-dialog'));
+      }
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.dataset.action === 'toggle-document-key-export-selection') {
+      handlers.toggleDocumentKeyExportSelection(target.dataset.keyId ?? '', target.checked);
+      const dialog = target.closest<HTMLElement>('.document-key-dialog');
+      const selectedCount = dialog?.querySelectorAll<HTMLInputElement>('[data-action="toggle-document-key-export-selection"]:checked').length ?? 0;
+      const exportButton = dialog?.querySelector<HTMLButtonElement>('[data-action="export-selected-document-keys"]');
+      if (exportButton) {
+        exportButton.disabled = selectedCount === 0;
+        exportButton.textContent = selectedCount > 0 ? `Export selected (${selectedCount})…` : 'Export selected…';
+      }
       return;
     }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'integration-ready-url-mode') {

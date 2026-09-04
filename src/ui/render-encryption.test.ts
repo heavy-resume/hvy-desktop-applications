@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppState } from '../state';
-import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyManagerDialog } from './render-encryption';
+import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
 
 function encryptionDialogState(action: 'encrypt' | 'decrypt'): AppState {
   return {
@@ -87,6 +87,93 @@ describe('document encryption confirmation dialog', () => {
   });
 });
 
+describe('document key import review', () => {
+  it('replaces the review with the current migration progress', () => {
+    const html = renderDocumentKeyImportDialog({
+      documentKeyImportDialogOpen: true,
+      documentKeyImportBusy: true,
+      documentKeyImportProgress: 'Migrating Planning / Private / Forecast.hvy',
+    } as unknown as AppState);
+
+    expect(html).toContain('Importing keys');
+    expect(html).toContain('Migrating Planning / Private / Forecast.hvy');
+    expect(html).not.toContain('confirm-import-document-keys');
+  });
+
+  it('selects new keys, skips matches, and leaves conflicts unchecked for explicit replacement', () => {
+    const newId = '11111111-1111-4111-8111-111111111111';
+    const matchingId = '22222222-2222-4222-8222-222222222222';
+    const conflictId = '33333333-3333-4333-8333-333333333333';
+    const key = (keyId: string, label: string) => ({
+      keyId,
+      label,
+      algorithm: 'fernet' as const,
+      key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      sourceName: 'team.hvykey',
+      fingerprint: 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF',
+    });
+    const html = renderDocumentKeyImportDialog({
+      documentKeyImportDialogOpen: true,
+      documentKeyImportKeys: [key(newId, 'New key'), key(matchingId, 'Matching key'), key(conflictId, 'Conflicting key')],
+      documentKeyImportSelection: [newId],
+      documentKeyImportMatchingIds: [matchingId],
+      documentKeyImportConflictIds: [conflictId],
+      documentKeyImportConflictNames: {},
+    } as unknown as AppState);
+
+    expect(html).toContain(`data-key-id="${newId}" checked`);
+    expect(html).toContain(`data-key-id="${matchingId}" disabled`);
+    expect(html).toContain('Already on this device · skipped');
+    expect(html).toContain('Different key with the same ID · select to replace it and preserve the current key under a new ID');
+    expect(html).not.toContain('Rename current to…');
+    expect(html).not.toContain('data-action="set-document-key-import-conflict-name"');
+    expect(html).toContain('>Import 1 key</button>');
+    expect(html).not.toContain('<p class="eyebrow">Encryption keys</p>');
+    expect(html).not.toContain('aria-label="Close">×</button>');
+    expect(html).not.toContain('These files are bearer secrets');
+    expect(html).not.toContain('Re-importing a matching key ID');
+  });
+
+  it('requires a name before importing a selected conflicting key', () => {
+    const conflictId = '33333333-3333-4333-8333-333333333333';
+    const state = {
+      documentKeyImportDialogOpen: true,
+      documentKeyImportKeys: [{
+        keyId: conflictId,
+        label: 'Incoming key',
+        algorithm: 'fernet',
+        key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        sourceName: 'team.hvykey',
+        fingerprint: 'AAAA-BBBB-CCCC-DDDD-EEEE-FFFF',
+      }],
+      documentKeyImportSelection: [conflictId],
+      documentKeyImportMatchingIds: [],
+      documentKeyImportConflictIds: [conflictId],
+      documentKeyImportConflictNames: {},
+      documentKeyImportConflictMigrations: {},
+      documentEncryptionKeyUsage: {
+        [conflictId]: { documents: ['Planning / Forecast.hvy'], folders: ['Planning / Private'] },
+      },
+      documentKeyUsageLoaded: true,
+    } as unknown as AppState;
+
+    const unnamedHtml = renderDocumentKeyImportDialog(state);
+    expect(unnamedHtml).toContain('Rename current to…');
+    expect(unnamedHtml).toContain('Current usage');
+    expect(unnamedHtml).toContain('Documents: Planning / Forecast.hvy');
+    expect(unnamedHtml).toContain('Folders: Planning / Private');
+    expect(unnamedHtml).toContain('Migrate to use new key');
+    expect(unnamedHtml).toContain('Migrate to use renamed key');
+    expect(unnamedHtml).toContain('data-action="set-document-key-import-conflict-name"');
+    expect(unnamedHtml).not.toContain('placeholder=');
+    expect(unnamedHtml).toContain('data-action="confirm-import-document-keys" disabled');
+    state.documentKeyImportConflictNames[conflictId] = 'Previous finance key';
+    expect(renderDocumentKeyImportDialog(state)).toContain('data-action="confirm-import-document-keys" disabled');
+    state.documentKeyImportConflictMigrations[conflictId] = 'new';
+    expect(renderDocumentKeyImportDialog(state)).not.toContain('data-action="confirm-import-document-keys" disabled');
+  });
+});
+
 describe('document key manager', () => {
   it('lists persisted metadata without embedding secret material', () => {
     const html = renderDocumentKeyManagerDialog({
@@ -94,6 +181,7 @@ describe('document key manager', () => {
       documentEncryptionKeyUsage: { '11111111-1111-4111-8111-111111111111': { documents: ['Planning / Notes.hvy'], folders: ['Planning / Private'] } },
       documentKeyUsageLoaded: true,
       documentKeyDataLoading: false,
+      documentKeyExportSelection: ['11111111-1111-4111-8111-111111111111'],
       documentKeyMetadata: [{
         keyId: '11111111-1111-4111-8111-111111111111',
         label: 'Planning bundle',
@@ -122,6 +210,13 @@ describe('document key manager', () => {
     expect(html).toContain('data-original-key-name="Planning bundle"');
     expect(html).toContain('data-action="rename-document-key" data-key-id="11111111-1111-4111-8111-111111111111" disabled>Save name</button>');
     expect(html).toContain('data-action="export-document-key"');
+    expect(html).toContain('data-action="toggle-document-key-export-selection"');
+    expect(html).toContain('class="document-key-bundle-checkbox"');
+    expect(html).toContain('aria-label="Select Planning bundle for bundle export"');
+    expect(html).not.toContain('Include in bundle');
+    expect(html).toContain('aria-label="Select Planning bundle for bundle export" checked');
+    expect(html).toContain('data-action="export-selected-document-keys"');
+    expect(html).toContain('Export selected (1)…');
     expect(html).toContain('Bundles: Planning bundle');
     expect(html).not.toContain('data-action="request-delete-document-key"');
     expect(html).not.toContain('data-action="close-document-key-manager" aria-label="Close"');
@@ -134,6 +229,7 @@ describe('document key manager', () => {
       documentEncryptionKeyUsage: {},
       documentKeyUsageLoaded: true,
       documentKeyDataLoading: false,
+      documentKeyExportSelection: [],
       documentKeyMetadata: [{
         keyId,
         source: 'generated',
@@ -153,6 +249,7 @@ describe('document key manager', () => {
     expect(html).toContain(`aria-label="Delete Unnamed Key"`);
     expect(html).toContain('>×</button>');
     expect(html).not.toContain('>Remove…</button>');
+    expect(html).toContain('data-action="export-selected-document-keys" disabled');
   });
 
   it.each([
