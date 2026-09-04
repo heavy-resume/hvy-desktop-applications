@@ -107,6 +107,8 @@ pub fn run() {
             save_document_as_dialog_raw,
             save_pdf_as_dialog,
             save_binary_as_dialog,
+            open_attachment_file,
+            open_attachment_file_raw,
             list_saved_templates,
             save_document_template,
             update_workspace_template_visibility,

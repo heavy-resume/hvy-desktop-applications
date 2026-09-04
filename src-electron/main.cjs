@@ -683,6 +683,7 @@ async function handleCommand(command, args) {
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
     case 'save_binary_as_dialog': return saveBinaryAsDialog(args.suggestedName, args.bytes);
+    case 'open_attachment_file': return openAttachmentFile(args.filename, args.bytes);
     case 'list_saved_templates': return listSavedTemplates(args.workspacePath);
     case 'save_document_template': return saveDocumentTemplate(args.request);
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
@@ -2293,6 +2294,15 @@ async function revealDocumentFile(filePath) {
 }
 
 async function openDocumentFile(filePath) {
+  const error = await shell.openPath(filePath);
+  if (error) throw new Error(error);
+  return null;
+}
+
+async function openAttachmentFile(filename, bytes) {
+  const directory = fs.mkdtempSync(path.join(app.getPath('temp'), 'hvy-galaxy-attachment-'));
+  const filePath = path.join(directory, safeFileStem(path.basename(String(filename || 'attachment'))));
+  fs.writeFileSync(filePath, Buffer.from(bytes));
   const error = await shell.openPath(filePath);
   if (error) throw new Error(error);
   return null;

@@ -190,6 +190,11 @@ export interface SaveBinaryAsRequest {
   bytes: number[] | Uint8Array;
 }
 
+export interface OpenAttachmentFileRequest {
+  filename: string;
+  bytes: number[] | Uint8Array;
+}
+
 export interface ThemeFile {
   path: string;
   name: string;
@@ -1260,6 +1265,18 @@ export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Prom
 export function saveBinaryAsDialog(request: SaveBinaryAsRequest): Promise<string | null> {
   return invokeDesktop('save_binary_as_dialog', {
     suggestedName: request.suggestedName,
+    bytes: request.bytes,
+  });
+}
+
+export function openAttachmentFile(request: OpenAttachmentFileRequest): Promise<void> {
+  if (isTauriRuntime()) {
+    return invoke<void>('open_attachment_file_raw', toUint8Array(request.bytes), {
+      headers: { 'x-hvy-attachment-filename': encodeURIComponent(request.filename) },
+    });
+  }
+  return invokeDesktop('open_attachment_file', {
+    filename: request.filename,
     bytes: request.bytes,
   });
 }

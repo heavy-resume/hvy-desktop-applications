@@ -258,6 +258,12 @@
     }
 
     #[test]
+    fn attachment_preview_filename_keeps_extension_and_removes_path_syntax() {
+        assert_eq!(safe_attachment_filename("../Quarterly: report.pdf"), "Quarterly- report.pdf");
+        assert_eq!(safe_attachment_filename("..."), "attachment");
+    }
+
+    #[test]
     fn import_source_extension_accepts_docx() {
         assert_eq!(import_source_extension(Path::new("source.docx")), Some(".docx".into()));
     }

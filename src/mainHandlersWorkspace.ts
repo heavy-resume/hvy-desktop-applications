@@ -1,4 +1,4 @@
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openDocumentFile, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
@@ -955,9 +955,13 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     void submitWorkspaceChat(() => rerender({ preserveMountedDocument: true }));
     rerender({ preserveMountedDocument: true });
   },
-  openWorkspaceLink: (href) => void runBusy('Opening linked document...', async () => {
+  openWorkspaceLink: (href) => void runBusy('Opening linked file...', async () => {
     const path = resolveWorkspaceHref(href);
     if (!path) return;
+    if (!/\.(?:hvy|thvy|phvy|md)$/i.test(path)) {
+      await openDocumentFile(path);
+      return;
+    }
     await openDocument(await readDocumentFile(path), { deferMount: true });
   }),
   setWorkspaceFilterMode: (mode) => {

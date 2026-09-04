@@ -1,7 +1,9 @@
-import { openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
+import { openAttachmentFile, openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
 import { createDesktopEmbeddingProvider } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
+import { recallUserFileAttachmentBytes } from '../../heavy-file-format/src/document-attachment-actions';
+import { resolveUserFileAttachment } from '../../heavy-file-format/src/document-attachments';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
 import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
@@ -332,6 +334,13 @@ export async function mountHvyDocument(
     chatContextProvider: options.chatContextProvider ?? null,
     embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
     crossDocumentLinks: true,
+    attachmentAction: async (request) => {
+      if (request.action !== 'preview') return;
+      const bytes = await request.getBytes();
+      if (!bytes) throw new Error(`Attachment "${request.name}" is unavailable.`);
+      await openAttachmentFile({ filename: request.filename, bytes });
+      return { handled: true };
+    },
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
     semanticFilterConcurrency: state.aiSettings.maxConcurrentSemanticFilters,
@@ -350,7 +359,10 @@ export async function mountHvyDocument(
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, withEmbeddedSearchCollapsedSurface(root, mount)), options);
   const interactiveMount = withViewerCarouselInteractions(root, mounted);
-  const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
+  const finalMount = withAttachmentDownload(
+    root,
+    withDesktopAttachmentLinkOpening(root, document, withExternalLinkOpening(root, mode, interactiveMount)),
+  );
   return {
     mount: finalMount,
     get document() {
@@ -412,6 +424,34 @@ function withAttachmentDownload(root: HTMLElement, mount: HvyMount): HvyMount {
       console.error('[hvy:download] Failed to save attachment.', error);
     });
   }, { signal: cleanup.signal });
+  const destroy = mount.destroy;
+  return {
+    ...mount,
+    destroy() {
+      cleanup.abort();
+      destroy.call(mount);
+    },
+  };
+}
+
+function withDesktopAttachmentLinkOpening(root: HTMLElement, document: VisualDocument, mount: HvyMount): HvyMount {
+  const cleanup = new AbortController();
+  root.addEventListener('click', (event) => {
+    const link = event.target instanceof Element
+      ? event.target.closest<HTMLAnchorElement>('a[data-hvy-attachment-id]')
+      : null;
+    if (!link || !root.contains(link)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const resolution = resolveUserFileAttachment(document, link.dataset.hvyAttachmentTarget ?? '');
+    if (resolution.status !== 'resolved') return;
+    void recallUserFileAttachmentBytes(document, resolution.attachment).then(async (bytes) => {
+      if (!bytes) throw new Error(`Attachment "${resolution.attachment.name}" is unavailable.`);
+      await openAttachmentFile({ filename: resolution.attachment.filename, bytes });
+    }).catch((error) => {
+      console.error('[hvy:attachment] Failed to open attachment.', error);
+    });
+  }, { capture: true, signal: cleanup.signal });
   const destroy = mount.destroy;
   return {
     ...mount,

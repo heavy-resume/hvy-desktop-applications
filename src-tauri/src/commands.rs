@@ -2579,6 +2579,58 @@ fn save_binary_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Op
 }
 
 #[tauri::command]
+fn open_attachment_file(filename: String, bytes: Vec<u8>) -> AppResult<()> {
+    materialize_and_open_attachment(&filename, &bytes)
+}
+
+#[tauri::command]
+fn open_attachment_file_raw(request: tauri::ipc::Request<'_>) -> AppResult<()> {
+    let filename = decode_ipc_header(request.headers(), "x-hvy-attachment-filename")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw attachment bytes.".into()));
+    };
+    materialize_and_open_attachment(&filename, bytes)
+}
+
+fn materialize_and_open_attachment(filename: &str, bytes: &[u8]) -> AppResult<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "hvy-galaxy-attachment-{}-{timestamp}",
+        std::process::id(),
+    ));
+    fs::create_dir(&directory)?;
+    let path = directory.join(safe_attachment_filename(filename));
+    fs::write(&path, bytes)?;
+    open_document_file(path_to_string(&path))
+}
+
+fn safe_attachment_filename(filename: &str) -> String {
+    let leaf = Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+    let sanitized = leaf
+        .chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim();
+    if sanitized.is_empty() || sanitized.chars().all(|character| character == '.') {
+        "attachment".into()
+    } else {
+        sanitized.into()
+    }
+}
+
+#[tauri::command]
 fn list_saved_templates(app: AppHandle, workspace_path: Option<String>) -> AppResult<Vec<SavedTemplate>> {
     let mut templates = Vec::new();
     append_saved_templates(&mut templates, &app_templates_dir(&app)?, "app")?;
