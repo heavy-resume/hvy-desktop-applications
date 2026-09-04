@@ -189,6 +189,7 @@ export interface AppState {
   integrationStructuredResultOpen: boolean;
   integrationStructuredResultName: string;
   integrationStructuredResult: unknown;
+  integrationWebMcpIntegrationId: string | null;
   integrationWebMcpPageId: string | null;
   integrationWebMcpProfileId: string | null;
   integrationWebMcpScanId: string | null;
@@ -533,6 +534,7 @@ export const state: AppState = {
   integrationStructuredResultOpen: false,
   integrationStructuredResultName: '',
   integrationStructuredResult: null,
+  integrationWebMcpIntegrationId: null,
   integrationWebMcpPageId: null,
   integrationWebMcpProfileId: null,
   integrationWebMcpScanId: null,

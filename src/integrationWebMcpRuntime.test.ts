@@ -12,7 +12,7 @@ vi.mock('./integrationBrowser', () => ({
   controlIntegrationBrowser,
 }));
 
-import { handleIntegrationWebMcpResult, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
+import { discoverIntegrationWebMcpTools, handleIntegrationWebMcpResult, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 
 const descriptor: IntegrationWebMcpToolDescriptor = {
   origin: 'https://example.com',
@@ -72,7 +72,53 @@ describe('WebMCP runtime fresh-page invocation', () => {
       value: { items: [] },
       isJson: true,
       descriptor,
+      page: { origin: 'https://example.com', pathname: '/' },
     })).toBe(true);
     await expect(result).resolves.toMatchObject({ value: { items: [] }, descriptor });
   });
+
+  it('navigates an existing profile to the configured page before scanning tools', async () => {
+    isIntegrationBrowserOpen.mockResolvedValue(true);
+    const result = discoverIntegrationWebMcpTools(page, profile);
+    await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+    expect(openIntegrationPage).toHaveBeenCalledWith(
+      page.url,
+      page.allowedOrigins,
+      profile.id,
+      profile.browserStoreId,
+      false,
+      expect.objectContaining({
+        kind: 'webmcp-discovery',
+        payload: expect.objectContaining({ waitForTools: true }),
+      }),
+      false,
+      profile.name,
+    );
+    expect(controlIntegrationBrowser).not.toHaveBeenCalledWith('discover-webmcp-tools', profile.id, expect.anything());
+    const extraction = openIntegrationPage.mock.calls[0][5] as { payload: { requestId: string } };
+    expect(handleIntegrationWebMcpResult({
+      kind: 'integration-webmcp-tools',
+      requestId: extraction.payload.requestId,
+      tools: [descriptor],
+      page: { origin: 'https://example.com', pathname: '/' },
+    })).toBe(true);
+    await expect(result).resolves.toEqual([descriptor]);
+  });
+
+  it('navigates an existing profile to the approved page before invoking a tool', async () => {
+    isIntegrationBrowserOpen.mockResolvedValue(true);
+    const result = invokeIntegrationWebMcpTool(approval, page, profile, {}, false, undefined, false);
+    await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+    const extraction = openIntegrationPage.mock.calls[0][5] as { payload: { requestId: string } };
+    expect(handleIntegrationWebMcpResult({
+      kind: 'integration-webmcp-result',
+      requestId: extraction.payload.requestId,
+      value: { items: [] },
+      isJson: true,
+      descriptor,
+      page: { origin: 'https://example.com', pathname: '/' },
+    })).toBe(true);
+    await expect(result).resolves.toMatchObject({ value: { items: [] }, descriptor });
+  });
+
 });

@@ -7,7 +7,7 @@ import { analyzeWebMcpStructuredData, type WebMcpRecordSetCandidate } from '../i
 
 function renderWebMcpSection(state: AppState, integrationId: string, pageId: string): string {
   const profileId = state.selectedIntegrationProfileId;
-  const scanMatchesSelection = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
+  const scanMatchesSelection = state.integrationWebMcpIntegrationId === integrationId && state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
   const tools = webMcpToolsForContext(
     state.appSettings.integrationWebMcpApprovals,
     integrationId,
@@ -112,7 +112,7 @@ export function renderIntegrationRecordSourceDialog(state: AppState): string {
   const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
   const page = integration?.pages.find((candidate) => candidate.id === pageId);
   if (!integration || !page) return '';
-  const scanMatches = state.integrationWebMcpPageId === page.id && state.integrationWebMcpProfileId === profileId;
+  const scanMatches = state.integrationWebMcpIntegrationId === integration.id && state.integrationWebMcpPageId === page.id && state.integrationWebMcpProfileId === profileId;
   const tools = webMcpToolsForContext(
     state.appSettings.integrationWebMcpApprovals,
     integration.id,

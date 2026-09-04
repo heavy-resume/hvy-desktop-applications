@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   approvalMatchesDescriptor,
   approveIntegrationWebMcpTool,
+  beginIntegrationWebMcpScan,
   normalizeIntegrationWebMcpApprovals,
   normalizeWebMcpToolDescriptor,
   webMcpCapabilityId,
@@ -102,5 +103,34 @@ describe('WebMCP approvals', () => {
     expect(webMcpToolsForContext(approvals, 'integration', 'page', 'profile-a')).toEqual([descriptor]);
     expect(webMcpToolsForContext(approvals, 'integration', 'page', 'profile-b')).toEqual([]);
     expect(webMcpToolsForContext(approvals, 'integration', 'page', 'profile-a', [])).toEqual([]);
+  });
+
+  it('clears Integration A tools when beginning a scan for Integration B', () => {
+    const scanState = {
+      integrationWebMcpPending: false,
+      integrationWebMcpError: 'old error',
+      integrationWebMcpIntegrationId: 'integration-a',
+      integrationWebMcpPageId: 'page-a',
+      integrationWebMcpProfileId: 'profile',
+      integrationWebMcpScanId: 'scan-a',
+      integrationWebMcpTools: [descriptor],
+    };
+
+    beginIntegrationWebMcpScan(scanState, {
+      integrationId: 'integration-b',
+      pageId: 'page-b',
+      profileId: 'profile',
+      scanId: 'scan-b',
+    });
+
+    expect(scanState).toEqual({
+      integrationWebMcpPending: true,
+      integrationWebMcpError: null,
+      integrationWebMcpIntegrationId: 'integration-b',
+      integrationWebMcpPageId: 'page-b',
+      integrationWebMcpProfileId: 'profile',
+      integrationWebMcpScanId: 'scan-b',
+      integrationWebMcpTools: [],
+    });
   });
 });

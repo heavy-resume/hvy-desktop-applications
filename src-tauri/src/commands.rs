@@ -517,6 +517,13 @@ const DEFAULT_INTEGRATION_DATA_STORE_ID: [u8; 16] = [
 static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
 static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
+static INTEGRATION_ALLOWED_ORIGINS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>> = OnceLock::new();
+
+fn integration_allowed_origins(profile_id: &str) -> AppResult<Arc<Mutex<Vec<String>>>> {
+    let mut origins = INTEGRATION_ALLOWED_ORIGINS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(origins.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(Vec::new()))).clone())
+}
 
 fn integration_browser_label(profile_id: &str) -> String {
     format!("{INTEGRATION_BROWSER_LABEL}-{}", profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect::<String>())
@@ -1414,6 +1421,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             .map_err(|error| AppError::Message(error.to_string()))?;
         extractions.entry(profile_id.clone()).or_insert_with(|| Arc::new(Mutex::new(None))).clone()
     };
+    let profile_allowed_origins = integration_allowed_origins(&profile_id)?;
     if command == "open" {
         let foreground = foreground.unwrap_or(true);
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
@@ -1433,6 +1441,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         } else {
             integration_destination_url(destination.as_deref().unwrap_or(""))?
         };
+        *profile_allowed_origins.lock().map_err(|error| AppError::Message(error.to_string()))? = navigation_allowed_origins;
         let blank_url = tauri::Url::parse("about:blank")
             .map_err(|error| AppError::Message(error.to_string()))?;
         if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
@@ -1460,9 +1469,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let page_load_action_mode = action_mode_pending.clone();
         let page_load_extraction = pending_extraction.clone();
         let navigation_action_mode = action_mode_pending.clone();
-        let page_load_allowed_origins = navigation_allowed_origins.clone();
-        let toolbar_allowed_origins = navigation_allowed_origins.clone();
-        let new_window_allowed_origins = navigation_allowed_origins.clone();
+        let page_load_allowed_origins = profile_allowed_origins.clone();
+        let toolbar_allowed_origins = profile_allowed_origins.clone();
+        let new_window_allowed_origins = profile_allowed_origins.clone();
+        let navigation_allowed_origins = profile_allowed_origins.clone();
         let new_window_app = app.clone();
         let new_window_profile_id = profile_id.clone();
         let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
@@ -1495,7 +1505,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         .on_page_load(move |window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 if let Some(toolbar) = window.app_handle().get_webview(&integration_toolbar_label(&page_load_profile_id)) {
-                    let state = serde_json::json!({ "url": payload.url().as_str(), "allowed": page_load_allowed_origins });
+                    let allowed = page_load_allowed_origins.lock().map(|origins| origins.clone()).unwrap_or_default();
+                    let state = serde_json::json!({ "url": payload.url().as_str(), "allowed": allowed });
                     let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
                 }
                 let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
@@ -1542,7 +1553,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             }
         })
         .on_new_window(move |requested_url, _features| {
-            if allowed_integration_url_for_origins(&requested_url, &new_window_allowed_origins) {
+            let allowed = new_window_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&requested_url, &origins)).unwrap_or(false);
+            if allowed {
                 if let Some(content) = new_window_app.get_webview(&integration_content_label(&new_window_profile_id)) {
                     let _ = content.navigate(requested_url);
                 }
@@ -1574,7 +1586,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
                     if let Ok(value) = String::from_utf8(bytes) {
                         if let Ok(url) = value.parse::<tauri::Url>() {
-                            if allowed_integration_url_for_origins(&url, &navigation_allowed_origins) {
+                            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                            if allowed {
                                 if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
                                     let _ = window.navigate(url);
                                 }
@@ -1659,7 +1672,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 return false;
             }
-            allowed_integration_url_for_origins(requested_url, &navigation_allowed_origins)
+            navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(requested_url, &origins)).unwrap_or(false)
         });
         #[cfg(target_os = "macos")]
         let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?);
@@ -1724,7 +1737,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
                     if let Ok(value) = String::from_utf8(bytes) {
                         if let Ok(url) = value.parse::<tauri::Url>() {
-                            if allowed_integration_url_for_origins(&url, &toolbar_origins) {
+                            let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                            if allowed {
                                 let _ = toolbar_remote.navigate(url);
                             }
                         }

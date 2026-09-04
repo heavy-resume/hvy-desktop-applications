@@ -145,6 +145,7 @@ describe('record type source chooser', () => {
       integrationRecordSourceDialogOpen: true,
       integrationRecordSourceIntegrationId: 'integration',
       integrationRecordSourcePageId: 'page',
+      integrationWebMcpIntegrationId: 'integration',
       integrationWebMcpPageId: 'page',
       integrationWebMcpProfileId: integrationRegistry.profiles[0].id,
       integrationWebMcpTools: [readTool, { ...readTool, name: 'items.delete', title: 'Delete items', annotations: { ...readTool.annotations, readOnlyHint: false } }],
@@ -158,6 +159,32 @@ describe('record type source chooser', () => {
     expect(pickerHtml).toContain('data-tool-index="0" >Select</button>');
     expect(pickerHtml).toContain('data-tool-index="1" disabled>Select</button>');
     expect(pickerHtml).toContain('Not read only');
+  });
+
+  it('does not reuse a scan from another integration with the same page and profile IDs', () => {
+    const profile = integrationRegistry.profiles[0];
+    const registry = {
+      ...integrationRegistry,
+      integrations: [
+        integrationRegistry.integrations[0],
+        { ...integrationRegistry.integrations[0], id: 'integration-b', name: 'Empty page' },
+      ],
+    };
+    const html = renderIntegrationRecordSourceDialog({
+      ...state,
+      integrationRegistry: registry,
+      selectedIntegrationProfileId: profile.id,
+      integrationRecordSourceDialogOpen: true,
+      integrationRecordSourceIntegrationId: 'integration-b',
+      integrationRecordSourcePageId: 'page',
+      integrationWebMcpIntegrationId: 'integration',
+      integrationWebMcpPageId: 'page',
+      integrationWebMcpProfileId: profile.id,
+      integrationWebMcpTools: [readTool],
+    });
+    expect(html).toContain('No reviewed or scanned WebMCP tools are available');
+    expect(html).toContain('>Scan tools</button>');
+    expect(html).not.toContain('Choose from 1 available tool');
   });
 });
 

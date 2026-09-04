@@ -43,11 +43,8 @@ async function dispatch(
   openIfClosed: boolean,
   foreground: boolean,
 ): Promise<void> {
-  if (await isIntegrationBrowserOpen(profile.id)) {
-    await controlIntegrationBrowser(command, profile.id, payload);
-    return;
-  }
-  if (!openIfClosed) throw new Error(`The browser profile “${profile.name}” is closed. Open it in Galaxy before running this WebMCP tool.`);
+  const browserOpen = await isIntegrationBrowserOpen(profile.id);
+  if (!browserOpen && !openIfClosed) throw new Error(`The browser profile “${profile.name}” is closed. Open it in Galaxy before running this WebMCP tool.`);
   await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, {
     kind: command === 'discover-webmcp-tools' ? 'webmcp-discovery' : 'webmcp-invocation',
     payload: { ...payload, waitForTools: true },

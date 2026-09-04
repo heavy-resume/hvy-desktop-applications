@@ -14,6 +14,25 @@
     }
 
     #[test]
+    fn integration_navigation_uses_the_latest_origins_for_an_open_profile() {
+        let profile_id = "origin-switch-regression";
+        let shared = integration_allowed_origins(profile_id).unwrap();
+        *shared.lock().unwrap() = vec!["https://integration-a.example".into()];
+        let callback_origins = shared.clone();
+        let allows = |url: &str| {
+            let url = url.parse::<tauri::Url>().unwrap();
+            callback_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap()
+        };
+        assert!(allows("https://integration-a.example/items"));
+        assert!(!allows("https://integration-b.example/items"));
+
+        *integration_allowed_origins(profile_id).unwrap().lock().unwrap() = vec!["https://integration-b.example".into()];
+
+        assert!(!allows("https://integration-a.example/items"));
+        assert!(allows("https://integration-b.example/items"));
+    }
+
+    #[test]
     fn workspace_tree_serializes_renderer_field_names() {
         let node = WorkspaceTreeNode::Folder {
             name: "folder-id".into(),

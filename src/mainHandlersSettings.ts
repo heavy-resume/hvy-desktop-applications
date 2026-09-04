@@ -14,7 +14,7 @@ import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './doc
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
-import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
+import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, beginIntegrationWebMcpScan, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 import { analyzeWebMcpStructuredData, webMcpExtractionRecords, webMcpRecordSetAtPath } from './integrationWebMcpStructuredData';
 
@@ -712,11 +712,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   discoverIntegrationWebMcpTools: (integrationId, pageId) => {
     const { page, profile } = integrationPageContext(integrationId, pageId);
     const scanId = crypto.randomUUID();
-    state.integrationWebMcpPending = true;
-    state.integrationWebMcpError = null;
-    state.integrationWebMcpPageId = pageId;
-    state.integrationWebMcpProfileId = profile.id;
-    state.integrationWebMcpScanId = scanId;
+    beginIntegrationWebMcpScan(state, { integrationId, pageId, profileId: profile.id, scanId });
     rerender({ preserveMountedDocument: true });
     void discoverIntegrationWebMcpTools(page, profile).then((tools) => {
       if (state.integrationWebMcpScanId !== scanId) return;
@@ -747,7 +743,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   reviewIntegrationWebMcpTool: (integrationId, pageId, toolIndex) => {
     const { profile } = integrationPageContext(integrationId, pageId);
-    const scanMatchesSelection = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profile.id;
+    const scanMatchesSelection = state.integrationWebMcpIntegrationId === integrationId && state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profile.id;
     const tools = webMcpToolsForContext(
       state.appSettings.integrationWebMcpApprovals,
       integrationId,
@@ -1225,14 +1221,16 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   requestAddIntegrationRecordType: (integrationId, pageId) => {
-    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
-    const page = integration?.pages.find((candidate) => candidate.id === pageId);
-    if (!page) throw new Error('Integration page was not found.');
+    const { page, profile } = integrationPageContext(integrationId, pageId);
     state.integrationRecordSourceDialogOpen = true;
     state.integrationRecordSourceIntegrationId = integrationId;
     state.integrationRecordSourcePageId = pageId;
     state.integrationRecordSourceStep = 'source';
     rerender({ preserveMountedDocument: true });
+    void runBusy(`Opening ${page.name}...`, async () => {
+      await openIntegrationDefinitionPage(page, profile, undefined, false);
+      state.status = `${page.name} is ready for record type setup`;
+    }, { preserveMountedDocument: true });
   },
   cancelAddIntegrationRecordType: () => {
     state.integrationRecordSourceDialogOpen = false;
@@ -1255,7 +1253,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const integrationId = state.integrationRecordSourceIntegrationId;
     const pageId = state.integrationRecordSourcePageId;
     const profileId = state.selectedIntegrationProfileId;
-    const scanMatches = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
+    const scanMatches = state.integrationWebMcpIntegrationId === integrationId && state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
     const tools = integrationId && pageId ? webMcpToolsForContext(
       state.appSettings.integrationWebMcpApprovals,
       integrationId,
@@ -1275,7 +1273,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const integrationId = state.integrationRecordSourceIntegrationId;
     const pageId = state.integrationRecordSourcePageId;
     const profileId = state.selectedIntegrationProfileId;
-    const scanMatches = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
+    const scanMatches = state.integrationWebMcpIntegrationId === integrationId && state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
     const tools = integrationId && pageId ? webMcpToolsForContext(
       state.appSettings.integrationWebMcpApprovals,
       integrationId,

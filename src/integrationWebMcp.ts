@@ -171,6 +171,27 @@ export function webMcpToolsForContext(
     .map((approval) => approval.descriptor);
 }
 
+export function beginIntegrationWebMcpScan(
+  state: {
+    integrationWebMcpPending: boolean;
+    integrationWebMcpError: string | null;
+    integrationWebMcpIntegrationId: string | null;
+    integrationWebMcpPageId: string | null;
+    integrationWebMcpProfileId: string | null;
+    integrationWebMcpScanId: string | null;
+    integrationWebMcpTools: IntegrationWebMcpToolDescriptor[];
+  },
+  context: { integrationId: string; pageId: string; profileId: string; scanId: string },
+): void {
+  state.integrationWebMcpPending = true;
+  state.integrationWebMcpError = null;
+  state.integrationWebMcpIntegrationId = context.integrationId;
+  state.integrationWebMcpPageId = context.pageId;
+  state.integrationWebMcpProfileId = context.profileId;
+  state.integrationWebMcpScanId = context.scanId;
+  state.integrationWebMcpTools = [];
+}
+
 export function webMcpCapabilityId(integrationId: string, pageId: string, profileId: string, descriptor: IntegrationWebMcpToolDescriptor): string {
   const value = `${integrationId}\0${pageId}\0${profileId}\0${descriptor.origin}\0${descriptor.name}`;
   return `webmcp-${bytesToHex(sha256(new TextEncoder().encode(value))).slice(0, 32)}`;
