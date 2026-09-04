@@ -84,7 +84,16 @@ export interface IntegrationActionDefinition {
   examples?: unknown[];
   anchors?: unknown[];
   pattern?: IntegrationActionPatternDefinition;
+  source?: IntegrationWebMcpRecordSourceDefinition;
   commands?: IntegrationCommandDefinition[];
+}
+
+export interface IntegrationWebMcpRecordSourceDefinition {
+  kind: 'webmcp';
+  capabilityId: string;
+  arguments: Record<string, unknown>;
+  recordsPath: string;
+  fields: Array<{ name: string; label: string }>;
 }
 
 export interface IntegrationCommandDefinition {

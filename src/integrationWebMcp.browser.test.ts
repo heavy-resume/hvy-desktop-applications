@@ -29,7 +29,7 @@ describe('integration WebMCP page bridge', () => {
         document.querySelector('form').addEventListener('submit', event => { if (event.agentInvoked) { event.preventDefault(); event.respondWith({ submitted: event.target.elements.message.value }); } });
         window.__toolChangeCount = 0;
         document.modelContext.addEventListener('toolchange', () => { window.__toolChangeCount += 1; });
-        document.modelContext.registerTool({name:'account.read',title:'Read account',description:'Read account data',inputSchema:{type:'object',properties:{id:{type:'string'}}},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:args=>({id:args.id,ok:true})});
+        document.modelContext.registerTool({name:'account.read',title:'Read account',description:'Read account data',inputSchema:{type:'object',properties:{id:{type:'string'}}},outputSchema:{type:'object',properties:{id:{type:'string'},ok:{type:'boolean'}}},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:args=>({id:args.id,ok:true})});
         document.modelContext.registerTool({name:'slow.action',description:'Wait until cancelled',inputSchema:{type:'object'},execute:()=>new Promise(resolve=>setTimeout(()=>resolve('late'),10000))});
         document.modelContext.registerTool({name:'text.read',description:'Return plain text',inputSchema:{type:'object'},annotations:{readOnlyHint:true},execute:()=> 'plain text'});
         document.modelContext.registerTool({name:'large.read',description:'Return an oversized result',inputSchema:{type:'object'},annotations:{readOnlyHint:true},execute:()=> 'x'.repeat(1024 * 1024 + 1)});
@@ -126,7 +126,7 @@ describe('integration WebMCP page bridge', () => {
       window.__webMcpResults=[];
       window.__hvyGalaxyPublish=value=>window.__webMcpResults.push(value);
       window.__nativeContext={
-        getTools: async options => options?.fromOrigins?.length ? [{origin:'https://tools.example',name:'native.read',description:'Native cross-origin tool',inputSchema:{type:'object'},annotations:{readOnlyHint:true}}] : [],
+        getTools: async options => options?.fromOrigins?.length ? [{origin:'https://tools.example',name:'native.read',description:'Native cross-origin tool',inputSchema:{type:'object'},outputSchema:{type:'object',properties:{native:{type:'boolean'}}},annotations:{readOnlyHint:true}}] : [],
         executeTool: async (_tool, input) => { window.__nativeInput = input; return JSON.stringify({native:true}); }
       };
       Object.defineProperty(Document.prototype, 'modelContext', { configurable:true, get:() => window.__nativeContext });
@@ -141,6 +141,7 @@ describe('integration WebMCP page bridge', () => {
     const nativeResult = await nativePage.evaluate(() => (window as unknown as { __webMcpResults: Array<Record<string, unknown>> }).__webMcpResults.find((item) => item.requestId === 'native')!);
     expect((nativeResult.tools as Array<{ origin: string; name: string }>)).toContainEqual(expect.objectContaining({ origin: 'https://tools.example', name: 'native.read' }));
     const nativeTool = (nativeResult.tools as Array<Record<string, unknown>>)[0];
+    expect(nativeTool.outputSchema).toEqual({ type: 'object', properties: { native: { type: 'boolean' } } });
     await nativePage.evaluate((descriptor) => (window as unknown as { __hvyGalaxyWebMcp: { invoke(value: unknown): void } }).__hvyGalaxyWebMcp.invoke({ requestId: 'native-call', name: descriptor.name, origin: descriptor.origin, descriptor, arguments: { id: '42' }, fromOrigins: ['https://tools.example'] }), nativeTool);
     await nativePage.waitForFunction(() => (window as unknown as { __webMcpResults: Array<{ requestId?: string }> }).__webMcpResults.some((item) => item.requestId === 'native-call'));
     expect(await nativePage.evaluate(() => (window as unknown as { __nativeInput: unknown }).__nativeInput)).toEqual({ id: '42' });

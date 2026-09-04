@@ -152,6 +152,10 @@ export interface UiHandlers {
   cancelInvokeIntegrationWebMcpTool(): void;
   invokeIntegrationWebMcpTool(capabilityId: string, args: Record<string, unknown>): void;
   closeIntegrationWebMcpResult(): void;
+  requestSaveIntegrationWebMcpRecordType(): void;
+  cancelSaveIntegrationWebMcpRecordType(): void;
+  selectIntegrationWebMcpRecordPath(recordsPath: string): void;
+  saveIntegrationWebMcpRecordType(name: string, recordsPath: string, fields: Array<{ name: string; label: string }>): void;
   setInspectionPrivacyRule(path: string, action: 'label' | 'remove' | 'keep', label?: string): void;
   updateInspectionPrivacyLabel(path: string, label: string): void;
   controlIntegrationBrowser(command: 'back' | 'forward' | 'reload' | 'inspect' | 'close'): void;

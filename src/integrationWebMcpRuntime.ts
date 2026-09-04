@@ -75,6 +75,7 @@ export function invokeIntegrationWebMcpTool(
   args: Record<string, unknown>,
   foreground = false,
   signal?: AbortSignal,
+  openIfClosed = foreground,
 ): Promise<unknown> {
   return enqueueWebCapabilityForProfile(profile.id, async () => {
     signal?.throwIfAborted();
@@ -88,7 +89,7 @@ export function invokeIntegrationWebMcpTool(
         descriptor: approval.descriptor,
         arguments: args,
         fromOrigins: page.allowedOrigins,
-      }, foreground, foreground);
+      }, openIfClosed, foreground);
     } catch (error) { rejectPending(requestId, error); }
     return result;
   });

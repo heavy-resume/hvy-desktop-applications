@@ -198,6 +198,10 @@ export interface AppState {
   integrationWebMcpInvokeCapabilityId: string | null;
   integrationWebMcpResultOpen: boolean;
   integrationWebMcpResult: unknown;
+  integrationWebMcpResultCapabilityId: string | null;
+  integrationWebMcpResultArguments: Record<string, unknown>;
+  integrationWebMcpRecordBuilderOpen: boolean;
+  integrationWebMcpRecordBuilderPath: string;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
@@ -531,6 +535,10 @@ export const state: AppState = {
   integrationWebMcpInvokeCapabilityId: null,
   integrationWebMcpResultOpen: false,
   integrationWebMcpResult: null,
+  integrationWebMcpResultCapabilityId: null,
+  integrationWebMcpResultArguments: {},
+  integrationWebMcpRecordBuilderOpen: false,
+  integrationWebMcpRecordBuilderPath: '',
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
   integrationCommandDraftIntegrationId: null,

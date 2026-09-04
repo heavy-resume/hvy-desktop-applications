@@ -16,6 +16,7 @@ import { workspaceDocumentKeyUsage } from './documentKeyUsage';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
+import { analyzeWebMcpStructuredData, webMcpExtractionRecords, webMcpRecordSetAtPath } from './integrationWebMcpStructuredData';
 
 interface DocumentColorTheme {
   name: string;
@@ -776,6 +777,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (!approval || !page || !profile) throw new Error('The approved WebMCP tool is unavailable.');
     state.integrationWebMcpInvokeCapabilityId = null;
     state.integrationWebMcpPending = true;
+    state.integrationWebMcpResultCapabilityId = capabilityId;
+    state.integrationWebMcpResultArguments = args;
     rerender({ preserveMountedDocument: true });
     void invokeIntegrationWebMcpTool(approval, page, profile, args, true).then((result) => {
       state.integrationWebMcpResult = assertLiveWebMcpDescriptor(approval, result);
@@ -791,6 +794,75 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   closeIntegrationWebMcpResult: () => {
     state.integrationWebMcpResultOpen = false;
     state.integrationWebMcpResult = null;
+    state.integrationWebMcpResultCapabilityId = null;
+    state.integrationWebMcpResultArguments = {};
+    state.integrationWebMcpRecordBuilderOpen = false;
+    state.integrationWebMcpRecordBuilderPath = '';
+    rerender({ preserveMountedDocument: true });
+  },
+  requestSaveIntegrationWebMcpRecordType: () => {
+    const capabilityId = state.integrationWebMcpResultCapabilityId;
+    const approval = capabilityId ? state.appSettings.integrationWebMcpApprovals[capabilityId] : undefined;
+    const analysis = analyzeWebMcpStructuredData(state.integrationWebMcpResult);
+    if (!approval?.descriptor.annotations.readOnlyHint || analysis.kind === 'unsupported') throw new Error('This WebMCP result cannot be saved as a record type.');
+    state.integrationWebMcpRecordBuilderPath = analysis.kind === 'single-record' ? analysis.candidate.path : analysis.candidates[0]?.path ?? '';
+    state.integrationWebMcpRecordBuilderOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelSaveIntegrationWebMcpRecordType: () => {
+    state.integrationWebMcpRecordBuilderOpen = false;
+    state.integrationWebMcpRecordBuilderPath = '';
+    rerender({ preserveMountedDocument: true });
+  },
+  selectIntegrationWebMcpRecordPath: (recordsPath) => {
+    state.integrationWebMcpRecordBuilderPath = recordsPath;
+    rerender({ preserveMountedDocument: true });
+  },
+  saveIntegrationWebMcpRecordType: (name, recordsPath, requestedFields) => {
+    const capabilityId = state.integrationWebMcpResultCapabilityId;
+    const approval = capabilityId ? state.appSettings.integrationWebMcpApprovals[capabilityId] : undefined;
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === approval?.integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === approval?.pageId);
+    const analysis = analyzeWebMcpStructuredData(state.integrationWebMcpResult);
+    const selected = webMcpRecordSetAtPath(analysis, recordsPath);
+    const recordName = name.trim();
+    if (!capabilityId || !approval?.descriptor.annotations.readOnlyHint || !integration || !page || !selected) throw new Error('The WebMCP record source is no longer available.');
+    if (!recordName) throw new Error('Give the record type a name.');
+    const availableFields = new Set(selected.fields.map((field) => field.name));
+    const fields = requestedFields.map((field) => ({ name: field.name, label: field.label.trim() })).filter((field) => availableFields.has(field.name) && field.label);
+    if (!fields.length) throw new Error('Include at least one field.');
+    const action: IntegrationActionDefinition = {
+      id: `action-${crypto.randomUUID()}`,
+      integrationId: integration.id,
+      name: recordName,
+      description: approval.descriptor.description,
+      pageIds: [page.id],
+      script: 'webmcp-record-source-v1',
+      resultSchema: {
+        type: 'array',
+        items: { type: 'object', properties: Object.fromEntries(fields.map((field) => [field.label, {}])) },
+      },
+      permissions: [],
+      version: 1,
+      status: 'ready',
+      source: {
+        kind: 'webmcp',
+        capabilityId,
+        arguments: JSON.parse(JSON.stringify(state.integrationWebMcpResultArguments)) as Record<string, unknown>,
+        recordsPath,
+        fields,
+      },
+      commands: [],
+    };
+    integration.actions.push(action);
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.integrationWebMcpRecordBuilderOpen = false;
+    state.integrationWebMcpRecordBuilderPath = '';
+    state.integrationWebMcpResultOpen = false;
+    state.integrationWebMcpResult = null;
+    state.integrationWebMcpResultCapabilityId = null;
+    state.integrationWebMcpResultArguments = {};
+    state.status = `Saved ${recordName}`;
     rerender({ preserveMountedDocument: true });
   },
   openIntegrations: () => {
@@ -1416,19 +1488,48 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
     const pattern = action && actionPatternPayload(action);
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-    if (!integration || !action || !page || !pattern || !profile) throw new Error('The saved action is incomplete.');
+    if (!integration || !action || !page) throw new Error('The saved action is incomplete.');
+    const webMcpApproval = action.source?.kind === 'webmcp' ? state.appSettings.integrationWebMcpApprovals[action.source.capabilityId] : undefined;
+    const webMcpProfile = state.integrationRegistry.profiles.find((candidate) => candidate.id === webMcpApproval?.profileId);
+    if (action.source?.kind === 'webmcp' && (!webMcpApproval || !webMcpProfile)) throw new Error('The saved WebMCP source must be reviewed again.');
+    if (!action.source && (!pattern || !profile)) throw new Error('The saved action is incomplete.');
     state.integrationActionFetchPendingId = action.id;
     state.integrationActionFetchError = null;
     state.error = null;
     state.status = `Fetching ${action.name} in the background...`;
     rerender({ preserveMountedDocument: true });
+    if (action.source?.kind === 'webmcp') {
+      void invokeIntegrationWebMcpTool(webMcpApproval!, page, webMcpProfile!, action.source.arguments, false, undefined, true)
+        .then((result) => assertLiveWebMcpDescriptor(webMcpApproval!, result))
+        .then((value) => {
+          const selected = webMcpRecordSetAtPath(analyzeWebMcpStructuredData(value), action.source!.recordsPath);
+          if (!selected) throw new Error('The WebMCP result no longer contains the saved record collection.');
+          state.integrationActionFetchPendingId = null;
+          state.integrationActionFetchError = null;
+          state.integrationActionResultName = action.name;
+          state.integrationActionResultRecords = webMcpExtractionRecords(selected, action.source!.fields);
+          state.integrationActionResultActionId = action.id;
+          state.integrationActionResultOpen = true;
+          state.status = `Fetched ${action.name}`;
+          rerender({ preserveMountedDocument: true });
+        })
+        .catch((error) => {
+          state.integrationActionFetchPendingId = null;
+          state.integrationActionFetchError = error instanceof Error ? error.message : String(error);
+          state.status = 'Fetch failed';
+          rerender({ preserveMountedDocument: true });
+        });
+      return;
+    }
+    if (!pattern || !profile) throw new Error('The saved action is incomplete.');
+    const domProfile = profile;
     void (async () => {
       const extraction = { pattern, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) } };
       try {
         if (page.id === 'gmail' || page.id === 'google-calendar') {
-          await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, extraction, false, profile.name);
+          await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name);
         } else {
-          await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, extraction, false, profile.name);
+          await openIntegrationPage(page.url, page.allowedOrigins, domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name);
         }
       } catch (error) {
         state.integrationActionFetchPendingId = null;

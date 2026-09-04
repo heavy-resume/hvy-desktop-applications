@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { state } from '../state';
 import { approveIntegrationWebMcpTool, webMcpCapabilityId, type IntegrationWebMcpToolDescriptor } from '../integrationWebMcp';
-import { renderIntegrationPageErrorDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderIntegrationPageErrorDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 
 describe('integration page errors', () => {
   it('renders validation failures as an explicit modal', () => {
@@ -25,6 +25,83 @@ describe('WebMCP result dialog', () => {
     expect(html).toContain('dialog-actions integration-webmcp-result-actions');
     expect(html).toContain('data-action="close-webmcp-result"');
   });
+
+  it('offers a read-only structured result as a record type and renders collection choices', () => {
+    const profile = state.integrationRegistry.profiles[0];
+    const integrationId = 'integration';
+    const pageId = 'page';
+    const descriptor: IntegrationWebMcpToolDescriptor = {
+      origin: 'https://example.com', name: 'items.read', title: 'Items', description: 'Read items.',
+      inputSchema: { type: 'object' },
+      annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
+    };
+    const capabilityId = webMcpCapabilityId(integrationId, pageId, profile.id, descriptor);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId, integrationId, pageId, profileId: profile.id, descriptor, scriptingEnabled: false, mcpExposed: false,
+    });
+    const html = renderIntegrationWebMcpResultDialog({
+      ...state,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      integrationWebMcpResultOpen: true,
+      integrationWebMcpResultCapabilityId: capabilityId,
+      integrationWebMcpResult: { items: [{ id: 'one', title: 'First' }] },
+      integrationWebMcpRecordBuilderOpen: true,
+    });
+    expect(html).toContain('data-action="request-save-webmcp-record-type"');
+    expect(html).toContain('data-form="save-webmcp-record-type"');
+    expect(html).toContain('name="recordsPath" value="/items" data-action="select-webmcp-record-path" checked');
+    expect(html).toContain('id, title');
+    expect(html).toContain('<input type="checkbox" name="recordField" value="id" checked>');
+    expect(html).toContain('name="fieldLabel:title" value="title"');
+  });
+
+  it('does not offer plain text or consequential results as record types', () => {
+    const html = renderIntegrationWebMcpResultDialog({
+      ...state,
+      integrationWebMcpResultOpen: true,
+      integrationWebMcpResult: 'Done',
+    });
+    expect(html).not.toContain('request-save-webmcp-record-type');
+  });
+});
+
+describe('WebMCP record types', () => {
+  it('renders a saved source as fetchable records without DOM item commands', () => {
+    const profile = state.integrationRegistry.profiles[0];
+    const descriptor: IntegrationWebMcpToolDescriptor = {
+      origin: 'https://example.com', name: 'items.read', title: 'Items', description: 'Read items.',
+      inputSchema: { type: 'object' },
+      annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
+    };
+    const capabilityId = webMcpCapabilityId('integration', 'page', profile.id, descriptor);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId, integrationId: 'integration', pageId: 'page', profileId: profile.id, descriptor, scriptingEnabled: false, mcpExposed: false,
+    });
+    const html = renderIntegrationsDialog({
+      ...state,
+      integrationsDialogOpen: true,
+      selectedIntegrationId: 'integration',
+      selectedIntegrationProfileId: profile.id,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      integrationRegistry: {
+        version: 1,
+        profiles: [profile],
+        integrations: [{
+          id: 'integration', name: 'Example', profileProviderId: 'browser', editable: true,
+          pages: [{ id: 'page', name: 'Example', url: 'https://example.com/', allowedOrigins: ['https://example.com'], editable: true }],
+          actions: [{
+            id: 'records', integrationId: 'integration', name: 'Saved items', description: '', pageIds: ['page'],
+            script: 'webmcp-record-source-v1', resultSchema: {}, permissions: [], version: 1,
+            source: { kind: 'webmcp', capabilityId, arguments: {}, recordsPath: '/items', fields: [{ name: 'id', label: 'id' }] },
+          }],
+        }],
+      },
+    });
+    expect(html).toContain('WebMCP · Items');
+    expect(html).toContain('data-action="run-integration-action"');
+    expect(html).not.toContain('data-action="add-command-for-integration-action"');
+    expect(html).not.toContain('data-action="edit-integration-action"');
+  });
 });
 
 describe('WebMCP review dialog', () => {
@@ -41,6 +118,7 @@ describe('WebMCP review dialog', () => {
         exact: { type: 'boolean' },
       },
     },
+    outputSchema: { type: 'object', properties: { items: { type: 'array' } } },
     annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
   };
 
@@ -53,6 +131,7 @@ describe('WebMCP review dialog', () => {
     });
     expect(html).toContain('<dt>Read Only</dt><dd>True</dd>');
     expect(html).toContain('Input Schema (advanced)');
+    expect(html).toContain('Output Schema (advanced)');
     expect(html).toContain('Allow calling via HVY Scripting');
     expect(html).toContain('Controls sandboxed HVY Scripting. Power Scripting is unrestricted and does not use this permission.');
     expect(html).toContain('Allow calling via HVY Galaxy MCP Server');

@@ -16,6 +16,7 @@ export interface IntegrationWebMcpToolDescriptor {
   title?: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
   annotations: IntegrationWebMcpToolAnnotations;
 }
 
@@ -83,6 +84,8 @@ export function normalizeWebMcpToolDescriptor(value: unknown): IntegrationWebMcp
   if (!name || !description || !/^[A-Za-z0-9_.-]{1,128}$/.test(name) || !isTrustworthyWebMcpOrigin(origin)) return null;
   const inputSchema = jsonObject(item.inputSchema);
   if (!inputSchema) return null;
+  const outputSchema = item.outputSchema === undefined ? undefined : jsonObject(item.outputSchema);
+  if (item.outputSchema !== undefined && !outputSchema) return null;
   const annotations = item.annotations && typeof item.annotations === 'object' && !Array.isArray(item.annotations)
     ? item.annotations as Record<string, unknown>
     : {};
@@ -92,6 +95,7 @@ export function normalizeWebMcpToolDescriptor(value: unknown): IntegrationWebMcp
     ...(typeof item.title === 'string' && item.title.trim() ? { title: item.title.trim() } : {}),
     description,
     inputSchema,
+    ...(outputSchema ? { outputSchema } : {}),
     annotations: {
       readOnlyHint: annotations.readOnlyHint === true,
       untrustedContentHint: annotations.untrustedContentHint === true,

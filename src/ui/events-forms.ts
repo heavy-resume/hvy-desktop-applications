@@ -158,6 +158,14 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
         message.textContent = error instanceof Error ? error.message : String(error);
       }
     }
+    if (form.dataset.form === 'save-webmcp-record-type') {
+      const data = new FormData(form);
+      const fields = data.getAll('recordField').map((value) => {
+        const name = String(value);
+        return { name, label: String(data.get(`fieldLabel:${name}`) ?? name) };
+      });
+      handlers.saveIntegrationWebMcpRecordType(String(data.get('recordName') ?? ''), String(data.get('recordsPath') ?? ''), fields);
+    }
     if (form.dataset.form === 'integration-action-instructions') {
       const data = new FormData(form);
       handlers.reviewIntegrationActionRequest(String(data.get('actionName') ?? ''), String(data.get('actionDescription') ?? ''));

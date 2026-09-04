@@ -26,6 +26,14 @@ describe('WebMCP approvals', () => {
     expect(normalizeWebMcpToolDescriptor({ ...descriptor, name: 'invalid name' })).toBeNull();
   });
 
+  it('preserves an optional structured output schema', () => {
+    const outputSchema = { type: 'object', properties: { items: { type: 'array' } } };
+    expect(normalizeWebMcpToolDescriptor({ ...descriptor, outputSchema })?.outputSchema).toEqual(outputSchema);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(normalizeWebMcpToolDescriptor({ ...descriptor, outputSchema: circular })).toBeNull();
+  });
+
   it('hashes descriptors deterministically regardless of object key order', () => {
     const reordered = {
       annotations: { consequentialHint: false, untrustedContentHint: true, readOnlyHint: true },

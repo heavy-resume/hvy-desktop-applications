@@ -24,6 +24,7 @@
     ...(tool.title ? { title: String(tool.title) } : {}),
     description: String(tool.description || ''),
     inputSchema: tool.inputSchema && typeof tool.inputSchema === 'object' ? tool.inputSchema : { type: 'object', properties: {} },
+    ...(tool.outputSchema && typeof tool.outputSchema === 'object' ? { outputSchema: tool.outputSchema } : {}),
     annotations: {
       readOnlyHint: tool.annotations?.readOnlyHint === true,
       untrustedContentHint: tool.annotations?.untrustedContentHint === true,

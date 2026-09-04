@@ -354,6 +354,9 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'invoke-webmcp-tool' && target.dataset.capabilityId) handlers.requestInvokeIntegrationWebMcpTool(target.dataset.capabilityId);
     if (action === 'cancel-invoke-webmcp-tool') handlers.cancelInvokeIntegrationWebMcpTool();
     if (action === 'close-webmcp-result') handlers.closeIntegrationWebMcpResult();
+    if (action === 'request-save-webmcp-record-type') handlers.requestSaveIntegrationWebMcpRecordType();
+    if (action === 'cancel-save-webmcp-record-type') handlers.cancelSaveIntegrationWebMcpRecordType();
+    if (action === 'select-webmcp-record-path' && target instanceof HTMLInputElement) handlers.selectIntegrationWebMcpRecordPath(target.value);
     if (action === 'cancel-add-integration-page') handlers.cancelAddIntegrationPage();
     if (action === 'close-integration-page-error') handlers.closeIntegrationPageError();
     if (action === 'request-add-integration-profile') handlers.requestAddIntegrationProfile();
