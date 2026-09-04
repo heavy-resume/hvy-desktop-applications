@@ -2579,20 +2579,20 @@ fn save_binary_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Op
 }
 
 #[tauri::command]
-fn open_attachment_file(filename: String, bytes: Vec<u8>) -> AppResult<()> {
-    materialize_and_open_attachment(&filename, &bytes)
+fn open_attachment_file(app: AppHandle, filename: String, bytes: Vec<u8>) -> AppResult<()> {
+    materialize_and_open_attachment(&app, &filename, &bytes)
 }
 
 #[tauri::command]
-fn open_attachment_file_raw(request: tauri::ipc::Request<'_>) -> AppResult<()> {
+fn open_attachment_file_raw(app: AppHandle, request: tauri::ipc::Request<'_>) -> AppResult<()> {
     let filename = decode_ipc_header(request.headers(), "x-hvy-attachment-filename")?;
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(AppError::Message("Expected raw attachment bytes.".into()));
     };
-    materialize_and_open_attachment(&filename, bytes)
+    materialize_and_open_attachment(&app, &filename, bytes)
 }
 
-fn materialize_and_open_attachment(filename: &str, bytes: &[u8]) -> AppResult<()> {
+fn materialize_and_open_attachment(app: &AppHandle, filename: &str, bytes: &[u8]) -> AppResult<()> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| AppError::Message(error.to_string()))?
@@ -2604,7 +2604,25 @@ fn materialize_and_open_attachment(filename: &str, bytes: &[u8]) -> AppResult<()
     fs::create_dir(&directory)?;
     let path = directory.join(safe_attachment_filename(filename));
     fs::write(&path, bytes)?;
-    open_document_file(path_to_string(&path))
+    let url = tauri::Url::from_file_path(&path)
+        .map_err(|_| AppError::Message("Attachment preview path could not be converted to a file URL.".into()))?;
+    let window_label = format!("attachment-preview-{}-{timestamp}", std::process::id());
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        &window_label,
+        tauri::WebviewUrl::External(url),
+    )
+    .title(format!("{} — HVY Galaxy", safe_attachment_filename(filename)))
+    .inner_size(980.0, 820.0)
+    .min_inner_size(480.0, 360.0)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let _ = fs::remove_dir_all(&directory);
+        }
+    });
+    Ok(())
 }
 
 fn safe_attachment_filename(filename: &str) -> String {

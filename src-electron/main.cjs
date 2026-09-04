@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { promisify } = require('node:util');
 const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
 
@@ -54,6 +55,7 @@ if (handleSquirrelStartupEvent()) {
 
 let mainWindow = null;
 let pluginBuilderWindow = null;
+const attachmentPreviewWindows = new Set();
 const integrationBrowsers = new Map();
 const integrationBrowserOpenQueues = new Map();
 let appCloseAllowed = false;
@@ -2303,8 +2305,26 @@ async function openAttachmentFile(filename, bytes) {
   const directory = fs.mkdtempSync(path.join(app.getPath('temp'), 'hvy-galaxy-attachment-'));
   const filePath = path.join(directory, safeFileStem(path.basename(String(filename || 'attachment'))));
   fs.writeFileSync(filePath, Buffer.from(bytes));
-  const error = await shell.openPath(filePath);
-  if (error) throw new Error(error);
+  const previewWindow = new BrowserWindow({
+    width: 980,
+    height: 820,
+    minWidth: 480,
+    minHeight: 360,
+    title: `${path.basename(filePath)} — ${APP_NAME}`,
+    backgroundColor: '#f7f3ea',
+    icon: iconPath(appIconFileName()),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  attachmentPreviewWindows.add(previewWindow);
+  previewWindow.on('closed', () => {
+    attachmentPreviewWindows.delete(previewWindow);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await previewWindow.loadURL(pathToFileURL(filePath).href);
   return null;
 }
 

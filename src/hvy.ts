@@ -3,7 +3,7 @@ import { createDesktopEmbeddingProvider } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { recallUserFileAttachmentBytes } from '../../heavy-file-format/src/document-attachment-actions';
-import { resolveUserFileAttachment } from '../../heavy-file-format/src/document-attachments';
+import { canPreviewUserFileAttachment, resolveUserFileAttachment } from '../../heavy-file-format/src/document-attachments';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
 import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
@@ -335,10 +335,13 @@ export async function mountHvyDocument(
     embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
     crossDocumentLinks: true,
     attachmentAction: async (request) => {
-      if (request.action !== 'preview') return;
       const bytes = await request.getBytes();
       if (!bytes) throw new Error(`Attachment "${request.name}" is unavailable.`);
-      await openAttachmentFile({ filename: request.filename, bytes });
+      if (request.action === 'preview' && canPreviewUserFileAttachment(request.mediaType)) {
+        await openAttachmentFile({ filename: request.filename, bytes });
+      } else {
+        await saveBinaryAsDialog({ suggestedName: request.filename, bytes });
+      }
       return { handled: true };
     },
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
@@ -447,7 +450,11 @@ function withDesktopAttachmentLinkOpening(root: HTMLElement, document: VisualDoc
     if (resolution.status !== 'resolved') return;
     void recallUserFileAttachmentBytes(document, resolution.attachment).then(async (bytes) => {
       if (!bytes) throw new Error(`Attachment "${resolution.attachment.name}" is unavailable.`);
-      await openAttachmentFile({ filename: resolution.attachment.filename, bytes });
+      if (canPreviewUserFileAttachment(resolution.attachment.mediaType)) {
+        await openAttachmentFile({ filename: resolution.attachment.filename, bytes });
+      } else {
+        await saveBinaryAsDialog({ suggestedName: resolution.attachment.filename, bytes });
+      }
     }).catch((error) => {
       console.error('[hvy:attachment] Failed to open attachment.', error);
     });
