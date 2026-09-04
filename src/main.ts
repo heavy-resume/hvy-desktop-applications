@@ -312,7 +312,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
   });
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(versionId);
   const viewSession = storedSession;
-  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory'
+  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory' || storedSession?.recoveryState
     ? storedSession
     : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));

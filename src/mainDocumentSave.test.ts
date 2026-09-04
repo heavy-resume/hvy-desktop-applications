@@ -215,6 +215,53 @@ describe('saveCurrentDocument', () => {
     expect(mainMocks.refreshRecents).toHaveBeenCalledOnce();
   });
 
+  it('reopens a clean tab with an in-progress component from its editor session', async () => {
+    const source = {
+      documentId: 'document:example',
+      workingVersionId: 'version:example',
+      path: '/workspace/Example.hvy',
+      name: 'Example.hvy',
+      extension: '.hvy' as const,
+    };
+    const recoveryState = JSON.stringify({
+      version: 1,
+      activeEditor: {
+        activeEditorBlock: { sectionKey: 'summary', blockId: 'draft-component' },
+        activeEditorBlockPath: [{ sectionKey: 'summary', blockId: 'draft-component' }],
+        activeEditorBlockSnapshot: {
+          sectionKey: 'summary',
+          blockId: 'draft-component',
+          block: { text: 'In-progress component', schema: { id: 'draft-component', component: 'text' } },
+        },
+        activeEditorBlockSnapshots: [],
+        activeEditorNewBlockIds: ['draft-component'],
+      },
+    });
+    mainMocks.documentSessions.set(source.workingVersionId, {
+      source,
+      versionId: source.workingVersionId,
+      dirty: false,
+      isNew: false,
+      readOnly: false,
+      recoveryState,
+    });
+
+    await selectDocumentTab(source.workingVersionId);
+
+    expect(backendMocks.readDocumentFile).not.toHaveBeenCalled();
+    expect(mainMocks.openDocument).toHaveBeenCalledWith({
+      path: source.path,
+      name: source.name,
+      extension: source.extension,
+      bytes: [],
+      recoveryState,
+    }, {
+      source,
+      versionId: source.workingVersionId,
+    });
+    expect(mainMocks.refreshRecents).toHaveBeenCalledOnce();
+  });
+
   it('reopens an in-memory history tab without reading the synthetic path', async () => {
     const source = {
       documentId: 'history-document',

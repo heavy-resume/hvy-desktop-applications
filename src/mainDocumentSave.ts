@@ -294,7 +294,7 @@ export async function selectDocumentTab(path: string): Promise<void> {
     return;
   }
   const session = documentSessions.get(path);
-  if (session?.dirty || session?.isNew || session?.readOnly || session?.virtual === 'versionHistory') {
+  if (session?.dirty || session?.isNew || session?.readOnly || session?.virtual === 'versionHistory' || session?.recoveryState) {
     await openDocument({
       path: session.source.path,
       name: session.source.name,

@@ -140,6 +140,7 @@ export default defineConfig({
       '**/.electron-dev/**',
       '**/dist-electron/**',
       '**/src-tauri/target/**',
+      '**/*.browser.test.ts',
       'src/integration-inspector.test.ts',
     ],
   },
