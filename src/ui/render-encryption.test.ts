@@ -119,6 +119,8 @@ describe('document key manager', () => {
     expect(html).toContain('document-key-row');
     expect(html).toContain('document-key-name-editor');
     expect(html).toContain('data-action="rename-document-key"');
+    expect(html).toContain('data-original-key-name="Planning bundle"');
+    expect(html).toContain('data-action="rename-document-key" data-key-id="11111111-1111-4111-8111-111111111111" disabled>Save name</button>');
     expect(html).toContain('data-action="export-document-key"');
     expect(html).toContain('Bundles: Planning bundle');
     expect(html).not.toContain('data-action="request-delete-document-key"');

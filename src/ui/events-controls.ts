@@ -98,6 +98,15 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       handlers.setDocumentEncryptionKeyLabel(encryptionKeyLabel.value);
       return;
     }
+    const documentKeyName = event.target instanceof HTMLInputElement && event.target.hasAttribute('data-document-key-name')
+      ? event.target
+      : null;
+    if (documentKeyName) {
+      const saveButton = documentKeyName.closest('.document-key-row')
+        ?.querySelector<HTMLButtonElement>('[data-action="rename-document-key"]');
+      if (saveButton) saveButton.disabled = documentKeyName.value.trim() === (documentKeyName.dataset.originalKeyName ?? '');
+      return;
+    }
     const input = event.target instanceof HTMLInputElement && event.target.name === 'privacyLabel' ? event.target : null;
     const row = input?.closest<HTMLElement>('[data-privacy-path]');
     const path = row?.dataset.privacyPath;

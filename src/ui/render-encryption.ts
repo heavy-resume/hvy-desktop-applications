@@ -67,8 +67,8 @@ export function renderDocumentKeyManagerDialog(state: AppState): string {
       </div>
       <code class="document-key-id">${escapeHtml(metadata.keyId)}</code>
       <div class="document-key-name-editor">
-        <input class="hvy-galaxy-input document-key-name-input" data-document-key-name value="${escapeAttr(metadata.label || '')}" placeholder="Unnamed Key" maxlength="200" aria-label="Encryption key name">
-        <button class="hvy-galaxy-button" type="button" data-action="rename-document-key" data-key-id="${escapeAttr(metadata.keyId)}">Save Name</button>
+        <input class="hvy-galaxy-input document-key-name-input" data-document-key-name data-original-key-name="${escapeAttr(metadata.label || '')}" value="${escapeAttr(metadata.label || '')}" placeholder="Unnamed Key" maxlength="200" aria-label="Encryption key name">
+        <button class="hvy-galaxy-button" type="button" data-action="rename-document-key" data-key-id="${escapeAttr(metadata.keyId)}" disabled>Save name</button>
       </div>
       <div class="document-key-metadata">
         <small>Created ${escapeHtml(formatKeyTimestamp(metadata.createdAt))} · ${metadata.source === 'generated' ? 'Galaxy' : 'Imported key'}${loadedKeyring[metadata.keyId] ? ' · Loaded this session' : ''}</small>
