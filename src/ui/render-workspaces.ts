@@ -368,7 +368,10 @@ export function renderNode(
   const locked = node.locked === true;
   const hiddenFromAI = node.hiddenFromAI === true;
   const encryptedFolderDocument = Boolean(node.encryptedFolderKeyId);
+  const encryptedDocument = encryptedFolderDocument || node.encrypted === true;
   const hasEmbeddingFile = embeddingPreview?.enabled === true && embeddingPreview.sidecars[node.path] === true;
+  const encryptedDocumentTitle = encryptedFolderDocument ? 'Encrypted by folder' : 'Encrypted document';
+  const fileStatuses = `${archived ? '<span class="tree-file-archived">Archived</span>' : ''}${locked ? '<span class="tree-file-archived">Locked</span>' : ''}${encryptedDocument ? `<span class="tree-file-encryption" title="${encryptedDocumentTitle}" aria-label="${encryptedDocumentTitle}">🔒</span>` : ''}${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}`;
   const extensionBadge = node.extension === '.thvy' || node.extension === '.phvy'
     ? `<span class="tree-file-extension" data-extension="${escapeAttr(node.extension)}">${escapeHtml(node.extension)}</span>`
     : '';
@@ -385,9 +388,7 @@ export function renderNode(
     <li>
       <button type="button" class="hvy-galaxy-button tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" data-encrypted-folder-document="${encryptedFolderDocument ? 'true' : 'false'}" draggable="${encryptedFolderDocument ? 'false' : 'true'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
-        ${archived ? '<span class="tree-file-archived">Archived</span>' : ''}
-        ${locked ? '<span class="tree-file-archived">Locked</span>' : ''}
-        ${hiddenFromAI ? '<span class="tree-file-ai-hidden" title="Hidden from AI">AI</span>' : ''}
+        ${fileStatuses ? `<span class="tree-file-statuses">${fileStatuses}</span>` : ''}
         ${extensionBadge}
       </button>
       ${embeddingFile}

@@ -594,6 +594,7 @@ struct StoreDocumentKeyEntry {
     created_at: Option<String>,
     source: Option<String>,
     label: Option<String>,
+    clear_label: Option<bool>,
     bundle_label: Option<String>,
 }
 
@@ -1045,6 +1046,12 @@ fn store_document_keys(app: AppHandle, entries: Vec<StoreDocumentKeyEntry>) -> A
                 if !existing.bundle_labels.contains(&bundle_label) {
                     existing.bundle_labels.push(bundle_label);
                 }
+            }
+            if let Some(label) = entry.label.filter(|label| !label.trim().is_empty()) {
+                existing.label = Some(label.trim().to_string());
+            }
+            if entry.clear_label == Some(true) {
+                existing.label = None;
             }
             continue;
         }
@@ -3119,7 +3126,19 @@ fn close_app_window(app: AppHandle) -> AppResult<()> {
 
 #[tauri::command]
 fn update_file_menu_state(app: AppHandle, native_menu: State<NativeMenuState>, state: FileMenuState) -> AppResult<()> {
-    *native_menu.file_menu.lock().unwrap() = state.clone();
+    let unsaved_changes_visibility_changed = {
+        let mut current = native_menu.file_menu.lock().unwrap();
+        let changed = current.document_encryption_unsaved_changes != state.document_encryption_unsaved_changes;
+        *current = state.clone();
+        changed
+    };
+    if unsaved_changes_visibility_changed {
+        let menu = build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?;
+        set_file_menu_state(&menu, &state)?;
+        app.set_menu(menu)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        return Ok(());
+    }
     if let Some(menu) = app.menu() {
         set_file_menu_state(&menu, &state)?;
     }

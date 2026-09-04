@@ -172,5 +172,22 @@ describe('encrypted folder workspace actions', () => {
     expect(html).toContain('data-action="select-file"');
     expect(html).toContain('data-encrypted-folder-document="true"');
     expect(html).toContain('draggable="false"');
+    expect(html).toContain('class="tree-file-encryption"');
+    expect(html).toContain('aria-label="Encrypted by folder">🔒</span>');
+  });
+
+  it('shows the lock for a standalone whole-document encrypted file', () => {
+    const html = renderNode({
+      kind: 'file',
+      name: 'Roadmap.hvy',
+      path: '/workspace/Roadmap.hvy',
+      relativePath: 'Roadmap.hvy',
+      extension: '.hvy',
+      encrypted: true,
+    }, null, null, null, '/workspace', {}, null, null);
+
+    expect(html).toContain('aria-label="Encrypted document">🔒</span>');
+    expect(html).toContain('data-encrypted-folder-document="false"');
+    expect(html).toContain('draggable="true"');
   });
 });

@@ -20,6 +20,7 @@ import {
   generateStoredDocumentKey,
   parseDocumentKeyFile,
   parseDocumentKeyFiles,
+  renameStoredDocumentKey,
   serializeDocumentKeyFile,
   permanentlyDeleteDocumentKey,
 } from './documentKeys';
@@ -56,6 +57,33 @@ describe('HVY document key files', () => {
     backendMocks.storeDocumentKeys.mockRejectedValueOnce(new Error('vault unavailable'));
     await expect(generateStoredDocumentKey('Encrypted Plans')).rejects.toThrow('vault unavailable');
     expect(await import('./documentKeys').then((module) => ({ ...module.documentEncryptionKeyring() }))).toEqual(before);
+  });
+
+  it('renames an existing stored key without changing its key material', async () => {
+    backendMocks.loadDocumentKeys.mockResolvedValueOnce({ [KEY_ID]: KEY });
+
+    await renameStoredDocumentKey(KEY_ID, 'Planning documents');
+
+    expect(backendMocks.storeDocumentKeys).toHaveBeenCalledWith([{
+      keyId: KEY_ID,
+      key: KEY,
+      source: 'imported',
+      label: 'Planning documents',
+    }]);
+  });
+
+  it('clears a stored key name without changing its key material', async () => {
+    backendMocks.loadDocumentKeys.mockResolvedValueOnce({ [SECOND_KEY_ID]: SECOND_KEY });
+
+    await renameStoredDocumentKey(SECOND_KEY_ID, '   ');
+
+    expect(backendMocks.storeDocumentKeys).toHaveBeenCalledWith([{
+      keyId: SECOND_KEY_ID,
+      key: SECOND_KEY,
+      source: 'imported',
+      clearLabel: true,
+    }]);
+    delete backendMocks.sessionKeys[SECOND_KEY_ID];
   });
 
   it('round-trips the portable version 1 JSON format', () => {

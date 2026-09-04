@@ -428,7 +428,7 @@
         let dir = tempdir().unwrap();
         fs::create_dir(dir.path().join("notes")).unwrap();
         fs::create_dir(dir.path().join(".git")).unwrap();
-        fs::write(dir.path().join("a.hvy"), "a").unwrap();
+        fs::write(dir.path().join("a.hvy"), b"---HVY-ENCRYPTED---\nenvelope").unwrap();
         fs::write(dir.path().join("notes").join("b.thvy"), "b").unwrap();
         fs::write(dir.path().join(".git").join("hidden.hvy"), "hidden").unwrap();
         fs::write(dir.path().join("skip.txt"), "skip").unwrap();
@@ -450,7 +450,7 @@
         let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
-        assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));
+        assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, encrypted: true, .. } if name == "a.hvy"));
     }
 
     #[test]

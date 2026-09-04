@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DocumentKeyMetadata } from './backend';
 
 vi.hoisted(() => {
   const values = new Map<string, string>();
@@ -11,18 +12,52 @@ vi.hoisted(() => {
 
 const hvyMocks = vi.hoisted(() => ({
   applyMountedRecoveryState: vi.fn(),
+  encryptMountedDocumentAsync: vi.fn(async (mounted: { document: { encryption?: unknown } }) => {
+    mounted.document.encryption = {
+      encrypted: true,
+      algorithm: 'fernet',
+      keyId: '11111111-1111-4111-8111-111111111111',
+    };
+  }),
+  encryptMountedDocumentWithKey: vi.fn((mounted: { document: { encryption?: unknown } }, keyId: string) => {
+    mounted.document.encryption = { encrypted: true, algorithm: 'fernet', keyId };
+  }),
   getMountedRecoveryState: vi.fn(() => '{"version":1,"activeEditor":{}}'),
+  removeMountedDocumentEncryption: vi.fn((mounted: { document: { encryption?: unknown } }) => {
+    mounted.document.encryption = undefined;
+  }),
 }));
 
 const backendMocks = vi.hoisted(() => ({
-  copyDocumentToWorkspace: vi.fn(),
+  listDocumentKeyMetadata: vi.fn(async (): Promise<DocumentKeyMetadata[]> => []),
   renameDocumentFile: vi.fn(),
+}));
+
+const documentKeyMocks = vi.hoisted(() => ({
+  documentEncryptionKeyring: vi.fn(() => ({})),
+  ensureDocumentKeysLoaded: vi.fn(async () => ({})),
+  generateStoredDocumentKey: vi.fn(async () => ({
+    keyId: '11111111-1111-4111-8111-111111111111',
+    algorithm: 'fernet' as const,
+    key: 'test-key',
+  })),
+}));
+
+const documentHistoryMocks = vi.hoisted(() => ({
+  clearDocumentHistory: vi.fn(async () => undefined),
+}));
+
+const embeddingMocks = vi.hoisted(() => ({
+  deleteDocumentEmbeddingSidecar: vi.fn(async () => undefined),
+  removeDocumentEmbeddingAttachments: vi.fn(),
 }));
 
 const mainMocks = vi.hoisted(() => ({
   captureMountScrollRatio: vi.fn(() => ({ top: 0, left: 0, topPosition: 0, leftPosition: 0 })),
   applyArchivedFileRelocations: vi.fn(),
+  copyOpenWorkspaceFileToWorkspace: vi.fn(),
   backupDocumentKey: vi.fn((path: string, name: string) => `${path}:${name}`),
+  clearRecoveryDraftsForDocument: vi.fn(async () => undefined),
   documentTitle: vi.fn((name: string) => name.replace(/\.[^.]+$/, '')),
   documentSessions: new Map(),
   loadWorkspace: vi.fn(),
@@ -36,9 +71,13 @@ const mainMocks = vi.hoisted(() => ({
   relocateRecoveryDraftsForDocument: vi.fn(),
   rerender: vi.fn(),
   restoreMountScrollRatio: vi.fn(),
-  saveCurrentDocument: vi.fn(),
+  saveCurrentDocument: vi.fn(async () => {
+    if (state.document) state.document.dirty = false;
+  }),
   selectDocumentTab: vi.fn(),
-  setDocumentDirty: vi.fn(),
+  setDocumentDirty: vi.fn((dirty: boolean) => {
+    if (state.document) state.document.dirty = dirty;
+  }),
   runBusy: vi.fn(async (_label: string, task: () => Promise<void>) => task()),
   updateHomepageDocumentPath: vi.fn(),
   updateOpenDocumentFile: vi.fn((previousPath: string, file: { path: string; name: string; extension: '.hvy' }) => {
@@ -49,6 +88,13 @@ const mainMocks = vi.hoisted(() => ({
   }),
   updateCurrentDocumentSession: vi.fn(),
   upsertWorkspace: vi.fn(),
+  workspaceFileAiAccess: vi.fn(() => ({
+    archived: false,
+    locked: false,
+    hiddenFromAI: false,
+    encryptedAIAllowed: false,
+    readOnly: false,
+  })),
   workspacePathForFile: vi.fn(() => null),
   writeDocumentModePreference: vi.fn(),
   writeHotReloadSessionSnapshot: vi.fn(),
@@ -56,12 +102,21 @@ const mainMocks = vi.hoisted(() => ({
 
 vi.mock('./hvy', () => ({
   applyMountedRecoveryState: hvyMocks.applyMountedRecoveryState,
+  encryptMountedDocumentAsync: hvyMocks.encryptMountedDocumentAsync,
+  encryptMountedDocumentWithKey: hvyMocks.encryptMountedDocumentWithKey,
   getMountedRecoveryState: hvyMocks.getMountedRecoveryState,
+  removeMountedDocumentEncryption: hvyMocks.removeMountedDocumentEncryption,
 }));
+
+vi.mock('./documentHistory', () => documentHistoryMocks);
+
+vi.mock('./embeddingIndex', () => embeddingMocks);
+
+vi.mock('./documentKeys', () => documentKeyMocks);
 
 vi.mock('./backend', async (importOriginal) => ({
   ...await importOriginal<typeof import('./backend')>(),
-  copyDocumentToWorkspace: backendMocks.copyDocumentToWorkspace,
+  listDocumentKeyMetadata: backendMocks.listDocumentKeyMetadata,
   renameDocumentFile: backendMocks.renameDocumentFile,
 }));
 
@@ -102,7 +157,11 @@ describe('document handlers', () => {
     state.pendingWorkspaceFileOperation = null;
     state.workspaceFileOperationPromptOpen = false;
     state.workspaceClipboard = null;
-    backendMocks.copyDocumentToWorkspace.mockReset();
+    state.documentEncryptionAction = null;
+    state.documentEncryptionDialogOpen = false;
+    state.documentEncryptionKeyId = null;
+    state.documentEncryptionKeyUsage = {};
+    state.documentKeyDataLoading = false;
     backendMocks.renameDocumentFile.mockReset();
   });
 
@@ -231,19 +290,6 @@ describe('document handlers', () => {
       path: '/workspace/example.hvy',
       name: 'example.hvy',
     };
-    backendMocks.copyDocumentToWorkspace.mockResolvedValueOnce({
-      path: '/workspace/example-copy.hvy',
-      name: 'example-copy.hvy',
-      extension: '.hvy',
-      bytes: [],
-      relocatedArchivedFiles: [{
-        previousPath: '/workspace/example-copy.hvy',
-        path: '/workspace/example-copy 2.hvy',
-        name: 'example-copy 2.hvy',
-        extension: '.hvy',
-      }],
-    });
-    mainMocks.loadWorkspace.mockResolvedValueOnce({ path: '/workspace', name: 'Workspace', files: [] });
     const handlers = createDocumentHandlers(vi.fn());
 
     handlers.pasteWorkspaceClipboard?.('/workspace');
@@ -253,12 +299,11 @@ describe('document handlers', () => {
       expect.any(Function),
       { preserveMountedDocument: true },
     ));
-    await vi.waitFor(() => expect(mainMocks.applyArchivedFileRelocations).toHaveBeenCalledWith([
-      expect.objectContaining({
-        previousPath: '/workspace/example-copy.hvy',
-        path: '/workspace/example-copy 2.hvy',
-      }),
-    ]));
+    await vi.waitFor(() => expect(mainMocks.copyOpenWorkspaceFileToWorkspace).toHaveBeenCalledWith(
+      '/workspace/example.hvy',
+      '/workspace',
+      '',
+    ));
   });
 
   it('preserves the mounted document when archiving a workspace file', () => {
@@ -272,6 +317,131 @@ describe('document handlers', () => {
       expect.any(Function),
       { preserveMountedDocument: true },
     );
+  });
+
+  it('persists plaintext immediately after removing document encryption', async () => {
+    const document = {
+      encryption: {
+        encrypted: true,
+        algorithm: 'fernet',
+        keyId: '11111111-1111-4111-8111-111111111111',
+      },
+      sections: [],
+    };
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document, mount: {} } as never,
+    });
+    state.documentEncryptionAction = 'decrypt';
+    state.documentEncryptionDialogOpen = true;
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmDocumentEncryption?.();
+
+    await vi.waitFor(() => expect(hvyMocks.removeMountedDocumentEncryption).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mainMocks.saveCurrentDocument).toHaveBeenCalledTimes(1));
+    expect(document.encryption).toBeUndefined();
+    expect(state.document.dirty).toBe(false);
+  });
+
+  it('persists ciphertext immediately after enabling document encryption', async () => {
+    const document: { sections: unknown[]; encryption?: unknown } = { sections: [] };
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document, mount: {} } as never,
+    });
+    state.documentEncryptionAction = 'encrypt';
+    state.documentEncryptionDialogOpen = true;
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmDocumentEncryption?.();
+
+    await vi.waitFor(() => expect(mainMocks.saveCurrentDocument).toHaveBeenCalledTimes(1));
+    expect(documentKeyMocks.generateStoredDocumentKey).toHaveBeenCalledWith();
+    expect(hvyMocks.encryptMountedDocumentWithKey).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111');
+    expect(document.encryption).toEqual(expect.objectContaining({ encrypted: true }));
+    expect(state.document.dirty).toBe(false);
+  });
+
+  it('opens the encryption modal before available keys finish loading', async () => {
+    const metadata = [{
+      keyId: '22222222-2222-4222-8222-222222222222',
+      label: 'Planning key',
+      source: 'imported' as const,
+      createdAt: '2026-09-03T12:00:00.000Z',
+    }];
+    let finishLoading!: (metadata: DocumentKeyMetadata[]) => void;
+    backendMocks.listDocumentKeyMetadata.mockImplementationOnce(() => new Promise((resolve) => {
+      finishLoading = resolve;
+    }));
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document: { sections: [] }, mount: {} } as never,
+    });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.requestDocumentEncryption?.('encrypt');
+
+    expect(state.documentEncryptionDialogOpen).toBe(true);
+    expect(state.documentKeyDataLoading).toBe(true);
+    expect(state.documentKeyMetadata).toEqual([]);
+    finishLoading(metadata);
+    await vi.waitFor(() => expect(state.documentKeyDataLoading).toBe(false));
+    expect(state.documentKeyMetadata).toEqual(metadata);
+    expect(state.documentEncryptionKeyId).toBeNull();
+  });
+
+  it('encrypts with the selected existing key', async () => {
+    const keyId = '22222222-2222-4222-8222-222222222222';
+    const document: { sections: unknown[]; encryption?: unknown } = { sections: [] };
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document, mount: {} } as never,
+    });
+    state.documentEncryptionAction = 'encrypt';
+    state.documentEncryptionKeyId = keyId;
+    state.documentEncryptionDialogOpen = true;
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmDocumentEncryption?.();
+
+    await vi.waitFor(() => expect(mainMocks.saveCurrentDocument).toHaveBeenCalledTimes(1));
+    expect(documentKeyMocks.ensureDocumentKeysLoaded).toHaveBeenCalledWith([keyId]);
+    expect(hvyMocks.encryptMountedDocumentWithKey).toHaveBeenCalledWith(expect.anything(), keyId);
+    expect(documentKeyMocks.generateStoredDocumentKey).not.toHaveBeenCalled();
+    expect(document.encryption).toEqual(expect.objectContaining({ encrypted: true, keyId }));
+  });
+
+  it('closes the encryption modal before key generation finishes', async () => {
+    let finishEncryption!: () => void;
+    const encryptionPromise = new Promise<void>((resolve) => {
+      finishEncryption = resolve;
+    });
+    documentKeyMocks.generateStoredDocumentKey.mockImplementationOnce(async () => {
+      await encryptionPromise;
+      return {
+        keyId: '11111111-1111-4111-8111-111111111111',
+        algorithm: 'fernet',
+        key: 'test-key',
+      };
+    });
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document: { sections: [] }, mount: {} } as never,
+    });
+    state.documentEncryptionAction = 'encrypt';
+    state.documentEncryptionDialogOpen = true;
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmDocumentEncryption?.();
+
+    expect(state.documentEncryptionDialogOpen).toBe(false);
+    expect(state.status).toBe('Enabling document encryption...');
+    expect(mainMocks.rerender).toHaveBeenCalledWith({ preserveMountedDocument: true });
+    expect(mainMocks.saveCurrentDocument).not.toHaveBeenCalled();
+
+    finishEncryption();
+    await vi.waitFor(() => expect(mainMocks.saveCurrentDocument).toHaveBeenCalledTimes(1));
   });
 
   it('updates the shared source without changing active document or version identity when renamed', async () => {

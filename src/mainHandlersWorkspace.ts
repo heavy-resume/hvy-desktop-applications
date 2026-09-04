@@ -9,6 +9,7 @@ import { findFileInWorkspace, state } from './state';
 import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
 import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncOpenDocumentAiAccess, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
 import type { UiHandlers } from './ui';
+import { saveWorkspaceExpansionState } from './workspaceExpansionState';
 
 export function createWorkspaceHandlers(): Partial<UiHandlers> {
   const applyEncryptedAIAccess = async (prompt: NonNullable<typeof state.encryptedAIAccessPrompt>, allowed: boolean): Promise<void> => {
@@ -111,7 +112,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       let encryptedRequest: import('./backend').WorkspaceFolderRequest['encrypted'];
       if (encrypted) {
       const folderId = crypto.randomUUID();
-      const folderKey = await generateStoredDocumentKey(trimmed);
+      const folderKey = await generateStoredDocumentKey();
       const manifestBytes = await encryptFolderManifest({
         version: 1,
         folderId,
@@ -321,6 +322,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     delete state.workspaceFilters[path];
     delete state.workspaceExpanded[path];
     delete state.workspaceFolderExpanded[path];
+    saveWorkspaceExpansionState(state.workspaceExpanded);
     clearWorkspaceFilterDocumentCache(path);
     if (state.workspaceFilter.workspacePath === path) {
       state.workspaceFilter.open = false;
@@ -876,6 +878,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
   },
   setWorkspaceExpanded: (workspacePath, expanded) => {
     state.workspaceExpanded[workspacePath] = expanded;
+    saveWorkspaceExpansionState(state.workspaceExpanded);
     rerender({ preserveMountedDocument: true });
   },
   setWorkspaceFolderExpanded: (workspacePath, relativePath, expanded) => {

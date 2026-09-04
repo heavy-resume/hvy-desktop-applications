@@ -811,6 +811,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 extension,
                 archived,
                 locked,
+                encrypted,
                 hidden_from_ai,
             } => Some(WorkspaceTreeNode::File {
                 name: name.clone(),
@@ -819,6 +820,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 extension: extension.clone(),
                 archived: *archived,
                 locked: *locked,
+                encrypted: *encrypted,
                 hidden_from_ai: *hidden_from_ai,
             }),
         })

@@ -53,6 +53,7 @@ export interface WorkspaceFileNode {
   archived?: boolean;
   locked?: boolean;
   hiddenFromAI?: boolean;
+  encrypted?: boolean;
   encryptedFolderKeyId?: string;
   encryptedAIAllowed?: boolean;
 }
@@ -213,6 +214,7 @@ export interface StoredDocumentKeyInput {
   createdAt?: string;
   source: 'generated' | 'imported';
   label?: string;
+  clearLabel?: boolean;
   bundleLabel?: string;
 }
 
@@ -244,6 +246,7 @@ export interface FileMenuState {
   importCurrent: boolean;
   encryptDocument: boolean;
   decryptDocument: boolean;
+  documentEncryptionUnsavedChanges: boolean;
 }
 
 export interface CreateDocumentRequest {
@@ -1020,6 +1023,12 @@ export function readDocumentFile(path: string): Promise<DocumentFile> {
     }
     return normalizeDocumentFileBytes(await invokeDesktop('read_document_file', { path }));
   });
+}
+
+export function readDocumentFileBytes(path: string): Promise<Uint8Array> {
+  return measureDebugAsync('load', 'backend:readDocumentFileBytes', { path }, async () => (
+    normalizeDesktopBytes(await invokeDesktop<ArrayBuffer | Uint8Array | number[] | BufferJson>('read_document_file_bytes', { path }))
+  ));
 }
 
 export function saveDocumentFile(request: SaveDocumentRequest): Promise<DocumentWriteResult | void> {

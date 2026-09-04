@@ -26,6 +26,7 @@ mod macos_three_finger_swipe;
 const WORKSPACE_MANIFEST: &str = ".hvyworkspace.json";
 const LEGACY_WORKSPACE_MANIFEST: &str = ".hvygalaxy.json";
 const ENCRYPTED_FOLDER_MANIFEST_FILE: &str = ".hvy-folder";
+const DOCUMENT_ENCRYPTION_PREFIX: &[u8] = b"---HVY-ENCRYPTED---\n";
 const RECENT_STATE: &str = "recent.json";
 const ARCHIVED_WORKSPACES: &str = "archived-workspaces.json";
 const AI_SETTINGS: &str = "ai-settings.json";

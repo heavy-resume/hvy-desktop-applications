@@ -9,6 +9,7 @@ import type { SavedVersion } from './revisionModel';
 import type { IntegrationStructuredSource } from './integrationBrowser';
 import type { RuntimeDocument } from './runtimeDocuments';
 import type { ReviewedDocumentKey } from './documentKeys';
+import type { DocumentKeyUsage } from './documentKeyUsage';
 export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
 export interface OpenDocument {
@@ -114,6 +115,9 @@ export interface AppState {
   documentKeyDeleteId: string | null;
   documentEncryptionDialogOpen: boolean;
   documentEncryptionAction: 'encrypt' | 'decrypt' | null;
+  documentEncryptionKeyId: string | null;
+  documentEncryptionKeyUsage: Record<string, DocumentKeyUsage>;
+  documentKeyDataLoading: boolean;
   integrationRegistry: IntegrationRegistry;
   addIntegrationPageDialogOpen: boolean;
   integrationReadyChecksDialogOpen: boolean;
@@ -420,6 +424,9 @@ export const state: AppState = {
   documentKeyDeleteId: null,
   documentEncryptionDialogOpen: false,
   documentEncryptionAction: null,
+  documentEncryptionKeyId: null,
+  documentEncryptionKeyUsage: {},
+  documentKeyDataLoading: false,
   integrationRegistry: loadIntegrationRegistry(),
   addIntegrationPageDialogOpen: false,
   integrationReadyChecksDialogOpen: false,

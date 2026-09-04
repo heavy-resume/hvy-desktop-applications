@@ -196,6 +196,8 @@ enum WorkspaceTreeNode {
         extension: String,
         archived: bool,
         locked: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        encrypted: bool,
         #[serde(rename = "hiddenFromAI")]
         hidden_from_ai: bool,
     },
@@ -328,6 +330,7 @@ struct FileMenuState {
     import_current: bool,
     encrypt_document: bool,
     decrypt_document: bool,
+    document_encryption_unsaved_changes: bool,
 }
 
 #[derive(Default)]

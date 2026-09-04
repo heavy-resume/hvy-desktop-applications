@@ -1,4 +1,4 @@
-import type { Workspace, WorkspaceFileNode, WorkspaceTreeNode } from './backend';
+import type { DocumentFile, Workspace, WorkspaceFileNode, WorkspaceTreeNode } from './backend';
 
 export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {
   const visit = (nodes: WorkspaceTreeNode[]): WorkspaceFileNode | null => {
@@ -20,6 +20,13 @@ export function findFileInWorkspaces(workspaces: Workspace[], path: string): Wor
     if (file) return file;
   }
   return null;
+}
+
+export function documentFileWithWorkspaceName(file: DocumentFile, workspaces: Workspace[]): DocumentFile {
+  const workspaceFile = findFileInWorkspaces(workspaces, file.path);
+  return workspaceFile
+    ? { ...file, name: workspaceFile.name, extension: workspaceFile.extension }
+    : file;
 }
 
 export function workspaceRelativeFilePath(

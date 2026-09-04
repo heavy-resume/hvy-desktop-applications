@@ -1521,6 +1521,11 @@ export async function encryptMountedDocumentAsync(mounted: MountedDocument): Pro
   return generated.keyId;
 }
 
+export function encryptMountedDocumentWithKey(mounted: MountedDocument, keyId: string): string {
+  mounted.document.encryption = { algorithm: 'fernet', keyId, encrypted: true };
+  return keyId;
+}
+
 export function removeMountedDocumentEncryption(mounted: MountedDocument): string | null {
   const keyId = mounted.document.encryption?.encrypted === true ? mounted.document.encryption.keyId : null;
   mounted.document.encryption = undefined;

@@ -9,8 +9,9 @@ import { refreshInstalledPlugins } from './pluginManager';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 import { openDocumentKeyFileDialog } from './backend';
-import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, serializeDocumentKeyFile } from './documentKeys';
+import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, renameStoredDocumentKey, serializeDocumentKeyFile } from './documentKeys';
 import { serializeHvy, type VisualDocument } from './hvy';
+import { workspaceDocumentKeyUsage } from './documentKeyUsage';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 
 interface DocumentColorTheme {
@@ -380,14 +381,41 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = 'Ready';
       rerender({ preserveMountedDocument: true });
     },
-    openDocumentKeyManager: () => void runBusy('Loading encryption keys...', async () => {
-      state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
-      state.documentKeyMetadata = state.documentKeyVaultStatus.state === 'ready'
-        ? await listDocumentKeyMetadata()
-        : [];
+    renameDocumentKey: (keyId, label) => void runBusy('Naming encryption key...', async () => {
+      await renameStoredDocumentKey(keyId, label);
+      state.documentKeyMetadata = await listDocumentKeyMetadata();
+      state.status = label.trim() ? 'Encryption key name saved' : 'Encryption key name cleared';
+    }, { preserveMountedDocument: true }),
+    openDocumentKeyManager: () => {
+      state.documentKeyMetadata = [];
+      state.documentEncryptionKeyUsage = {};
+      state.documentKeyDataLoading = true;
       state.documentKeyManagerDialogOpen = true;
       state.status = 'Ready';
-    }, { preserveMountedDocument: true }),
+      rerender({ preserveMountedDocument: true });
+      void (async () => {
+        try {
+          state.documentKeyVaultStatus = await loadDocumentKeyVaultStatus();
+          if (state.documentKeyVaultStatus.state === 'ready') {
+            await Promise.all([
+              listDocumentKeyMetadata().then((metadata) => {
+                state.documentKeyMetadata = metadata;
+                rerender({ preserveMountedDocument: true });
+              }),
+              workspaceDocumentKeyUsage(state.workspaces).then((usage) => {
+                state.documentEncryptionKeyUsage = usage;
+                rerender({ preserveMountedDocument: true });
+              }),
+            ]);
+          }
+        } catch (error) {
+          state.error = error instanceof Error ? error.message : String(error);
+        } finally {
+          state.documentKeyDataLoading = false;
+          rerender({ preserveMountedDocument: true });
+        }
+      })();
+    },
     closeDocumentKeyManager: () => {
       state.documentKeyManagerDialogOpen = false;
       state.status = 'Ready';

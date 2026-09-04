@@ -378,6 +378,11 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'confirm-import-document-keys') handlers.confirmImportDocumentKeys();
     if (action === 'cancel-import-document-keys') handlers.cancelImportDocumentKeys();
     if (action === 'export-document-key') handlers.exportDocumentKey(target.dataset.keyId ?? '');
+    if (action === 'rename-document-key') {
+      const row = target.closest('li');
+      const input = row?.querySelector<HTMLInputElement>('[data-document-key-name]');
+      handlers.renameDocumentKey(target.dataset.keyId ?? '', input?.value ?? '');
+    }
     if (action === 'request-delete-document-key') handlers.requestDeleteDocumentKey(target.dataset.keyId ?? '');
     if (action === 'confirm-delete-document-key') handlers.confirmDeleteDocumentKey();
     if (action === 'cancel-delete-document-key') handlers.cancelDeleteDocumentKey();

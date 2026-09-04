@@ -346,6 +346,10 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       handlers.selectIntegrationProfile(target.value);
       return;
     }
+    if (target instanceof HTMLSelectElement && target.dataset.action === 'select-document-encryption-key') {
+      handlers.selectDocumentEncryptionKey(target.value);
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'integration-ready-url-mode') {
       const form = target.closest<HTMLFormElement>('form[data-form="integration-ready-checks"]');
       const input = form?.querySelector<HTMLInputElement>('input[name="urlValue"]');

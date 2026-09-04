@@ -56,7 +56,6 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
   state.status = 'Saving...';
   updateDirtyChrome();
   const saveStartedAt = performance.now();
-  let promotedRecoveryDraft = false;
   try {
     if (openDocument.readOnly) {
       state.status = 'The HVY Galaxy guide is read-only';
@@ -102,7 +101,6 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       openDocument.versionId = openDocument.source.workingVersionId;
       openDocument.virtual = undefined;
       markDocumentTabOpened(openDocument.versionId);
-      promotedRecoveryDraft = true;
     }
     openDocument.dirty = false;
     openDocument.recoveryBackupId = null;
@@ -124,9 +122,7 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
   } finally {
     state.busy = false;
     updateDirtyChrome();
-    if (promotedRecoveryDraft) {
-      renderAllAroundDocument();
-    }
+    renderAllAroundDocument();
   }
 }
 

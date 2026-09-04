@@ -15,6 +15,7 @@ import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
 import { runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
+import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 
 let findShortcutBound = false;
 
@@ -29,6 +30,7 @@ export async function boot(): Promise<void> {
   setupErrorSurface();
   try {
     loadZoomSettings();
+    state.workspaceExpanded = loadWorkspaceExpansionState();
     state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme(null);
     setMountRoot(render(state, handlers));

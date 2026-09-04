@@ -26,6 +26,7 @@ const DOCUMENT_KEY_VAULT_FILE = 'document-key-vault-v1.json';
 const DOCUMENT_KEY_VAULT_KEY_FILE = 'document-key-vault-key-electron.bin';
 const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
 const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
+const DOCUMENT_ENCRYPTION_PREFIX = Buffer.from('---HVY-ENCRYPTED---\n');
 const MCP_SETTINGS = 'mcp-settings.json';
 const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
 const RECENT_LIMIT = 12;
@@ -322,6 +323,7 @@ function buildMenu() {
         { type: 'separator' },
         menuItem('Encrypt Document...', 'encrypt-document'),
         menuItem('Remove Document Encryption...', 'decrypt-document'),
+        { label: '(unsaved changes)', id: 'document-encryption-unsaved-changes', enabled: false, visible: false },
         { type: 'separator' },
         menuItem('Import Encryption Key...', 'import-encryption-key'),
         menuItem('Manage Encryption Keys...', 'manage-encryption-keys'),
@@ -539,6 +541,10 @@ function refreshFileMenuState(menu) {
     const item = menu.getMenuItemById(id);
     if (item) item.enabled = enabled;
   }
+  const documentEncryptionUnsavedChanges = menu.getMenuItemById('document-encryption-unsaved-changes');
+  if (documentEncryptionUnsavedChanges) {
+    documentEncryptionUnsavedChanges.visible = fileMenuState.documentEncryptionUnsavedChanges;
+  }
 }
 
 function defaultFileMenuState() {
@@ -551,6 +557,7 @@ function defaultFileMenuState() {
     importCurrent: false,
     encryptDocument: false,
     decryptDocument: false,
+    documentEncryptionUnsavedChanges: false,
   };
 }
 
@@ -565,6 +572,7 @@ function normalizeFileMenuState(state) {
     importCurrent: Boolean(state?.importCurrent ?? fallback.importCurrent),
     encryptDocument: Boolean(state?.encryptDocument ?? fallback.encryptDocument),
     decryptDocument: Boolean(state?.decryptDocument ?? fallback.decryptDocument),
+    documentEncryptionUnsavedChanges: Boolean(state?.documentEncryptionUnsavedChanges ?? fallback.documentEncryptionUnsavedChanges),
   };
 }
 
@@ -1008,8 +1016,10 @@ function storeDocumentKeys(entries) {
         source: entry.source === 'generated' ? 'generated' : 'imported',
         ...(typeof entry.label === 'string' && entry.label.trim() ? { label: entry.label.trim() } : {}),
       }),
+      ...(typeof entry.label === 'string' && entry.label.trim() ? { label: entry.label.trim() } : {}),
       ...(bundleLabels.length > 0 ? { bundleLabels } : {}),
     };
+    if (entry.clearLabel === true) delete vault.keys[entry.keyId].label;
   }
   writeDocumentKeyVault(key, vault);
   return loadDocumentKeyVaultStatus();
@@ -2717,6 +2727,7 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
         archived: archivedFiles.has(relativePath),
         locked: lockedFiles.has(relativePath),
         hiddenFromAI: hiddenFromAIInherited || hiddenFromAIFiles.has(relativePath),
+        encrypted: documentFileIsEncrypted(entryPath),
       };
     })
     .filter(Boolean)
@@ -2724,6 +2735,17 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
       if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
       return left.name.localeCompare(right.name);
     });
+}
+
+function documentFileIsEncrypted(filePath) {
+  const descriptor = fs.openSync(filePath, 'r');
+  try {
+    const prefix = Buffer.alloc(DOCUMENT_ENCRYPTION_PREFIX.length);
+    const bytesRead = fs.readSync(descriptor, prefix, 0, prefix.length, 0);
+    return bytesRead === prefix.length && prefix.equals(DOCUMENT_ENCRYPTION_PREFIX);
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function recoverStagedEncryptedDeletions(directory) {

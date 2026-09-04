@@ -630,6 +630,7 @@ fn scan_directory(
                 path: path_to_string(&path),
                 archived: manifest.archived_files.iter().any(|archived| archived == &relative_path),
                 locked: manifest.locked_files.iter().any(|locked| locked == &relative_path),
+                encrypted: document_file_is_encrypted(&path)?,
                 hidden_from_ai: hidden_from_ai_inherited
                     || manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative_path),
                 relative_path,
@@ -642,6 +643,13 @@ fn scan_directory(
     files.sort_by_key(node_name);
     folders.extend(files);
     Ok(folders)
+}
+
+fn document_file_is_encrypted(path: &Path) -> AppResult<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut prefix = vec![0; DOCUMENT_ENCRYPTION_PREFIX.len()];
+    let bytes_read = file.read(&mut prefix)?;
+    Ok(bytes_read == prefix.len() && prefix == DOCUMENT_ENCRYPTION_PREFIX)
 }
 
 fn recover_staged_encrypted_deletions(directory: &Path) -> AppResult<()> {

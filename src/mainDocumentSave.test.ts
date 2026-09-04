@@ -125,6 +125,35 @@ describe('saveCurrentDocument', () => {
     expect(backendMocks.saveDocumentFile).not.toHaveBeenCalled();
   });
 
+  it('rerenders the sidebar after saving refreshed workspace file state', async () => {
+    state.document = {
+      documentId: 'document:example',
+      versionId: 'version:example',
+      source: {
+        documentId: 'document:example',
+        workingVersionId: 'version:example',
+        path: '/workspace/Example.hvy',
+        name: 'Example.hvy',
+        extension: '.hvy',
+      },
+      mode: 'editor',
+      dirty: true,
+      readOnly: false,
+      hiddenFromAI: false,
+      isNew: false,
+      metaOpen: false,
+      mounted: { document: { sections: [] }, mount: {} } as never,
+      recoveryBackupId: null,
+      recoveryModified: false,
+    };
+
+    await saveCurrentDocument();
+
+    expect(state.document.dirty).toBe(false);
+    expect(mainMocks.updateDirtyChrome).toHaveBeenCalledTimes(2);
+    expect(mainMocks.renderAllAroundDocument).toHaveBeenCalledOnce();
+  });
+
   it('rebuilds the tab strip after promoting a recovery draft to the working version', async () => {
     const source = {
       documentId: 'document:example',

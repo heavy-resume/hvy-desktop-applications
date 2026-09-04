@@ -240,6 +240,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .id("save-to-workspace")
         .enabled(false)
         .build(app)?;
+    let document_encryption_unsaved_changes = MenuItemBuilder::new("(unsaved changes)")
+        .id("document-encryption-unsaved-changes")
+        .enabled(false)
+        .build(app)?;
+    let show_document_encryption_unsaved_changes = app
+        .state::<NativeMenuState>()
+        .file_menu
+        .lock()
+        .unwrap()
+        .document_encryption_unsaved_changes;
     #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
@@ -268,7 +278,13 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Encrypt Document...").id("encrypt-document").enabled(false).build(app)?)
-        .item(&MenuItemBuilder::new("Remove Document Encryption...").id("decrypt-document").enabled(false).build(app)?)
+        .item(&MenuItemBuilder::new("Remove Document Encryption...").id("decrypt-document").enabled(false).build(app)?);
+    let file_builder = if show_document_encryption_unsaved_changes {
+        file_builder.item(&document_encryption_unsaved_changes)
+    } else {
+        file_builder
+    };
+    let file_builder = file_builder
         .separator()
         .item(&MenuItemBuilder::new("Import Encryption Key...").id("import-encryption-key").build(app)?)
         .item(&MenuItemBuilder::new("Manage Encryption Keys...").id("manage-encryption-keys").build(app)?)

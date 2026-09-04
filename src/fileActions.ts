@@ -1,4 +1,4 @@
-import { workspacePathForFileInWorkspaces, type AppState } from './state';
+import { findFileInWorkspaces, workspacePathForFileInWorkspaces, type AppState } from './state';
 
 export interface FileActionAvailability {
   closeDocument: boolean;
@@ -9,6 +9,7 @@ export interface FileActionAvailability {
   importCurrent: boolean;
   encryptDocument: boolean;
   decryptDocument: boolean;
+  documentEncryptionUnsavedChanges: boolean;
 }
 
 export function getFileActionAvailability(state: AppState): FileActionAvailability {
@@ -21,6 +22,9 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const editableHvyDocument = Boolean(document && editableDocument && document.source.extension !== '.md');
   const documentEncryptionAvailable = Boolean(mountedEditableDocument && editableHvyDocument && document?.mode !== 'hvy');
   const documentEncrypted = document?.mounted?.document.encryption?.encrypted === true;
+  const encryptedFolderDocument = Boolean(document?.source.path && findFileInWorkspaces(state.workspaces, document.source.path)?.encryptedFolderKeyId);
+  const documentEncryptionActionAvailable = documentEncryptionAvailable && (!documentEncrypted || !encryptedFolderDocument);
+  const documentEncryptionHasUnsavedChanges = documentEncryptionActionAvailable && Boolean(document?.dirty);
   const documentWorkspacePath = currentDocumentWorkspacePath(state);
   const hasWorkspaceDestination = state.workspaces.some((workspace) => workspace.path !== documentWorkspacePath);
 
@@ -31,8 +35,9 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
     saveToWorkspace: Boolean(mountedEditableDocument && hasWorkspaceDestination),
     exportPdf: Boolean(document?.source.extension === '.phvy' && mountedEditableDocument && !editableTemplateDocument),
     importCurrent: editableHvyDocument,
-    encryptDocument: documentEncryptionAvailable && !documentEncrypted,
-    decryptDocument: documentEncryptionAvailable && documentEncrypted,
+    encryptDocument: documentEncryptionAvailable && !documentEncrypted && !documentEncryptionHasUnsavedChanges,
+    decryptDocument: documentEncryptionAvailable && documentEncrypted && !encryptedFolderDocument && !documentEncryptionHasUnsavedChanges,
+    documentEncryptionUnsavedChanges: documentEncryptionHasUnsavedChanges,
   };
 }
 

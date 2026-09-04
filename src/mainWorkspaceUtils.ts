@@ -1,8 +1,8 @@
-import { convertWorkspaceDocumentKind, createEncryptedFolderDocument, deleteDocumentFile, deleteEncryptedFolderDocument, listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DocumentFile, type DroppedWorkspaceFile, type Workspace, type WorkspaceFileRelocation } from './backend';
+import { convertWorkspaceDocumentKind, copyDocumentToWorkspace, createEncryptedFolderDocument, deleteDocumentFile, deleteEncryptedFolderDocument, listSavedTemplates, loadWorkspace as loadWorkspaceBackend, moveDocumentToWorkspace, readDocumentFile, reauthorizeWorkspace, saveDocumentToWorkspace, updateFileMenuState, updateMcpWorkspaces, type AddFilesResult, type DocumentCreationType, type DocumentExtension, type DocumentFile, type DroppedWorkspaceFile, type Workspace, type WorkspaceFileRelocation } from './backend';
 import { relocateDocumentHistory } from './documentHistory';
 import { findFileInWorkspace, state, workspacePathForFileInWorkspaces, type AppState } from './state';
 import { documentEncryptionKeyring } from './documentKeys';
-import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderImportedDocumentMutation } from './encryptedFolders';
+import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderImportedDocumentMutation, workspaceHasLogicalName } from './encryptedFolders';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
@@ -215,7 +215,111 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   state.status = `Moved to ${file.name}`;
 }
 
+export async function copyOpenWorkspaceFileToWorkspace(path: string, workspacePath: string, targetDirectory = ''): Promise<void> {
+  const sourceWorkspacePath = workspacePathForFile(path);
+  const sourceWorkspace = state.workspaces.find((candidate) => candidate.path === sourceWorkspacePath);
+  const destinationWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+  const sourceNode = sourceWorkspace ? findFileInWorkspace(sourceWorkspace, path) : null;
+  const destinationFolder = findEncryptedFolder(destinationWorkspace, targetDirectory);
+  const sourceEncrypted = Boolean(sourceNode?.encryptedFolderKeyId);
+  if (!sourceEncrypted && !destinationFolder) {
+    const file = await copyDocumentToWorkspace({ path, workspacePath, targetDirectory });
+    await applyArchivedFileRelocations(file.relocatedArchivedFiles);
+    upsertWorkspace(await loadWorkspace(workspacePath));
+    state.selectedWorkspacePath = workspacePath;
+    state.status = `Copied to ${file.name}`;
+    await refreshRecents();
+    return;
+  }
+  if (!sourceNode) throw new Error('Source document must be inside an open workspace.');
+  const sourceFile = await readDocumentFile(path);
+  let file: DocumentFile;
+  if (destinationFolder) {
+    if (sourceNode.extension !== '.hvy' && sourceNode.extension !== '.thvy' && sourceNode.extension !== '.phvy') {
+      throw new Error('Encrypted folders support .hvy, .thvy, and .phvy documents.');
+    }
+    const logicalName = uniqueWorkspaceDocumentName(destinationWorkspace, targetDirectory, sourceNode.name);
+    const mutation = await prepareEncryptedFolderImportedDocumentMutation(
+      destinationFolder,
+      logicalName,
+      sourceNode.extension,
+      Uint8Array.from(sourceFile.bytes),
+      documentEncryptionKeyring(),
+    );
+    const created = await createEncryptedFolderDocument({
+      workspacePath,
+      folderDirectory: targetDirectory,
+      documentId: mutation.documentId,
+      extension: sourceNode.extension,
+      documentBytes: mutation.documentBytes,
+      previousManifestBytes: mutation.previousManifestBytes,
+      manifestBytes: mutation.manifestBytes,
+    });
+    file = { ...created, name: logicalName, extension: sourceNode.extension };
+  } else {
+    const created = await saveDocumentToWorkspace({
+      workspacePath,
+      targetDirectory,
+      name: sourceNode.name,
+      bytes: sourceFile.bytes,
+    });
+    file = { ...created, bytes: sourceFile.bytes };
+  }
+  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
+  upsertWorkspace(await loadWorkspace(workspacePath));
+  state.selectedWorkspacePath = workspacePath;
+  state.status = `Copied to ${file.name}`;
+  await refreshRecents();
+}
+
+function uniqueWorkspaceDocumentName(workspace: Workspace | undefined, targetDirectory: string, fileName: string): string {
+  if (!workspaceHasLogicalName(workspace, targetDirectory, fileName)) return fileName;
+  const extension = fileName.match(/\.(hvy|thvy|phvy)$/i)?.[0] ?? '';
+  const stem = extension ? fileName.slice(0, -extension.length) : fileName;
+  let index = 2;
+  while (workspaceHasLogicalName(workspace, targetDirectory, `${stem} ${index}${extension}`)) index += 1;
+  return `${stem} ${index}${extension}`;
+}
+
 export async function convertOpenWorkspaceFileKind(path: string, workspacePath: string, toTemplate: boolean): Promise<void> {
+  const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+  const sourceNode = workspace ? findFileInWorkspace(workspace, path) : null;
+  if (workspace && sourceNode?.encryptedFolderKeyId) {
+    if (sourceNode.extension !== '.hvy' && sourceNode.extension !== '.thvy' && sourceNode.extension !== '.phvy') {
+      throw new Error('Only .hvy, .thvy, and .phvy files can be converted.');
+    }
+    const nextExtension = sourceNode.extension === '.phvy' ? '.phvy' : toTemplate ? '.thvy' : '.hvy';
+    const nextName = `${sourceNode.name.slice(0, -sourceNode.extension.length)}${nextExtension}`;
+    const sourceFile = await readDocumentFile(path);
+    const created = await saveDocumentToWorkspace({
+      workspacePath,
+      targetDirectory: toTemplate ? 'templates' : '',
+      name: nextName,
+      bytes: sourceFile.bytes,
+    });
+    const parts = sourceNode.relativePath.replaceAll('\\', '/').split('/');
+    const physicalName = parts.pop() ?? '';
+    const sourceDirectory = parts.join('/');
+    const sourceFolder = findEncryptedFolder(workspace, sourceDirectory);
+    if (!sourceFolder) throw new Error('Encrypted source folder was not found.');
+    const sourceEntryId = physicalName.slice(0, Math.max(0, physicalName.length - sourceNode.extension.length));
+    const removal = await prepareEncryptedFolderEntryRemoval(sourceFolder, sourceEntryId, documentEncryptionKeyring());
+    await deleteEncryptedFolderDocument({
+      workspacePath,
+      folderDirectory: sourceDirectory,
+      documentId: sourceEntryId,
+      extension: sourceNode.extension,
+      previousManifestBytes: removal.previousManifestBytes,
+      manifestBytes: removal.manifestBytes,
+    });
+    const file = { ...created, bytes: sourceFile.bytes };
+    await updateHomepageDocumentPath(path, file.path);
+    state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
+    await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
+    await refreshSavedTemplates(workspacePath);
+    state.status = `${toTemplate ? 'Converted to template' : 'Converted to document'}: ${file.name}`;
+    return;
+  }
   const file = await convertWorkspaceDocumentKind({ path, workspacePath, toTemplate });
   await updateHomepageDocumentPath(path, file.path);
   state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';

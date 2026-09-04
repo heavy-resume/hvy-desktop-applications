@@ -208,10 +208,16 @@ export function showFileContextMenu(
     <button class="hvy-galaxy-button" type="button" data-menu-action="delete">Delete</button>
   ` : encryptedFolderDocument ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'enable-encrypted-ai' : 'disable-encrypted-ai'}">${hiddenFromAI ? 'Enable AI Access' : 'Disable AI Access'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="rename">Rename</button>
+    ${conversion ? `<button class="hvy-galaxy-button" type="button" data-menu-action="convert-workspace-file">${conversion.label}</button>` : ''}
     <button class="hvy-galaxy-button" type="button" data-menu-action="archive">Archive</button>
-    ${showWorkspaceActions ? '<button class="hvy-galaxy-button" type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
+    <button class="hvy-galaxy-button" type="button" data-menu-action="copy">Copy</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="cut">Cut</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="paste">Paste</button>
+    ${showWorkspaceActions ? '<button class="hvy-galaxy-button" type="button" data-menu-action="copy-to-workspace">Copy to...</button><button class="hvy-galaxy-button" type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   ` : `
     <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
@@ -300,6 +306,9 @@ export function showWorkspaceContextMenu(
     <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'enable-encrypted-ai' : 'disable-encrypted-ai'}">${hiddenFromAI ? 'Enable AI Access' : 'Disable AI Access'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="add-files">Add Files</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="import">Import</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="paste">Paste</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="filter" ${hiddenFromAI ? 'disabled title="Enable AI Access to filter this folder"' : ''}>Filter Folder</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="chat" ${hiddenFromAI ? 'disabled title="Enable AI Access to chat with this folder"' : ''}>Chat Folder</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="rename-folder">Rename</button>
     ${targetDirectory ? `<button class="hvy-galaxy-button" type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   ` : `

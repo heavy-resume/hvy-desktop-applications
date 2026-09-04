@@ -121,6 +121,18 @@ export async function generateStoredDocumentKey(label?: string): Promise<Portabl
   };
 }
 
+export async function renameStoredDocumentKey(keyId: string, label: string): Promise<void> {
+  const normalizedLabel = label.trim();
+  if (normalizedLabel.length > 200) throw new Error('An encryption key name may not exceed 200 characters.');
+  await ensureDocumentKeysLoaded([keyId]);
+  await storeDocumentKeys([{
+    keyId,
+    key: inMemoryKeyring[keyId],
+    source: 'imported',
+    ...(normalizedLabel ? { label: normalizedLabel } : { clearLabel: true }),
+  }]);
+}
+
 export async function permanentlyDeleteDocumentKey(keyId: string): Promise<void> {
   if (!UUID_PATTERN.test(keyId)) throw new Error(`Invalid HVY encryption key ID: ${keyId || '(missing)'}.`);
   await deleteDocumentKey(keyId);

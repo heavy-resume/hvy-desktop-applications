@@ -620,8 +620,21 @@
   text-transform: uppercase;
 }
 
-.tree-file-archived {
+.tree-file-statuses {
   grid-column: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tree-file-encryption {
+  font-size: 0.72rem;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.tree-file-archived {
   flex: 0 0 auto;
   border-radius: 4px;
   background: color-mix(in srgb, var(--hvy-text-muted, #65716d) 14%, var(--hvy-surface, #ffffff));
@@ -633,7 +646,6 @@
 }
 
 .tree-file-ai-hidden {
-  grid-column: 2;
   flex: 0 0 auto;
   border-radius: 4px;
   background: color-mix(in srgb, var(--hvy-text-muted, #65716d) 14%, var(--hvy-surface, #ffffff));
