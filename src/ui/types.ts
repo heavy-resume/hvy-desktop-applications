@@ -91,6 +91,12 @@ export interface UiHandlers {
   saveIntegrationReadyChecks(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, expectedValues: Record<string, string>): void;
   setIntegrationQuickViewProfile(integrationId: string, pageId: string, profileId: string, visible: boolean): void;
   addActionForIntegrationPage(integrationId: string, pageId: string): void;
+  requestAddIntegrationRecordType(integrationId: string, pageId: string): void;
+  cancelAddIntegrationRecordType(): void;
+  chooseIntegrationWebPageRecordType(): void;
+  chooseIntegrationWebMcpRecordType(): void;
+  backIntegrationRecordTypeSource(): void;
+  selectIntegrationWebMcpRecordTool(toolIndex: number): void;
   editIntegrationAction(integrationId: string, actionId: string): void;
   closeIntegrationActionBuilder(): void;
   cancelDiscardIntegrationAction(): void;

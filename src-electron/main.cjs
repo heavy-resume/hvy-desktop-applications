@@ -1427,7 +1427,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         const isBackgroundResult = result?.kind === 'integration-ready-check-validation'
           || (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
           || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
-          || String(result?.kind || '').startsWith('integration-webmcp-');
+          || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
         if (!isBackgroundResult) raiseWindow(mainWindow);
         return;
       }

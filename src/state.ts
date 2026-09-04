@@ -178,6 +178,10 @@ export interface AppState {
   integrationActionResultActionId: string | null;
   integrationActionFetchPendingId: string | null;
   integrationActionFetchError: string | null;
+  integrationRecordSourceDialogOpen: boolean;
+  integrationRecordSourceIntegrationId: string | null;
+  integrationRecordSourcePageId: string | null;
+  integrationRecordSourceStep: 'source' | 'webmcp';
   integrationStructuredSourcePageId: string | null;
   integrationStructuredSourcePending: boolean;
   integrationStructuredSources: IntegrationStructuredSource[];
@@ -196,12 +200,15 @@ export interface AppState {
   integrationWebMcpReviewPageId: string | null;
   integrationWebMcpReviewProfileId: string | null;
   integrationWebMcpInvokeCapabilityId: string | null;
+  integrationWebMcpInvokeForRecordType: boolean;
   integrationWebMcpResultOpen: boolean;
+  integrationWebMcpResultForRecordType: boolean;
   integrationWebMcpResult: unknown;
   integrationWebMcpResultCapabilityId: string | null;
   integrationWebMcpResultArguments: Record<string, unknown>;
   integrationWebMcpRecordBuilderOpen: boolean;
   integrationWebMcpRecordBuilderPath: string;
+  integrationWebMcpConfigureAfterReview: boolean;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
@@ -515,6 +522,10 @@ export const state: AppState = {
   integrationActionResultActionId: null,
   integrationActionFetchPendingId: null,
   integrationActionFetchError: null,
+  integrationRecordSourceDialogOpen: false,
+  integrationRecordSourceIntegrationId: null,
+  integrationRecordSourcePageId: null,
+  integrationRecordSourceStep: 'source',
   integrationStructuredSourcePageId: null,
   integrationStructuredSourcePending: false,
   integrationStructuredSources: [],
@@ -533,12 +544,15 @@ export const state: AppState = {
   integrationWebMcpReviewPageId: null,
   integrationWebMcpReviewProfileId: null,
   integrationWebMcpInvokeCapabilityId: null,
+  integrationWebMcpInvokeForRecordType: false,
   integrationWebMcpResultOpen: false,
+  integrationWebMcpResultForRecordType: false,
   integrationWebMcpResult: null,
   integrationWebMcpResultCapabilityId: null,
   integrationWebMcpResultArguments: {},
   integrationWebMcpRecordBuilderOpen: false,
   integrationWebMcpRecordBuilderPath: '',
+  integrationWebMcpConfigureAfterReview: false,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
   integrationCommandDraftIntegrationId: null,

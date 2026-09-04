@@ -117,14 +117,14 @@
     async discover(request = {}) {
       try {
         const tools = await getToolsForDiscovery(request);
-        publish({ kind: 'integration-webmcp-tools', requestId: request.requestId, tools: tools.map((entry) => entry.descriptor), page: { origin: location.origin, pathname: location.pathname } });
+        publish({ kind: 'integration-webmcp-tools', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, tools: tools.map((entry) => entry.descriptor), page: { origin: location.origin, pathname: location.pathname } });
       } catch (error) {
-        publish({ kind: 'integration-webmcp-error', requestId: request.requestId, message: error instanceof Error ? error.message : String(error) });
+        publish({ kind: 'integration-webmcp-error', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, message: error instanceof Error ? error.message : String(error) });
       }
     },
     async invoke(request = {}) {
       try {
-        const tools = await getTools(request);
+        const tools = await getToolsForDiscovery(request);
         const found = tools.find((entry) => entry.descriptor.name === request.name && entry.descriptor.origin === request.origin);
         if (!found) {
           const error = new Error(`WebMCP tool ${String(request.name || '')} is no longer available on this page.`);
@@ -149,9 +149,9 @@
         if (typeof result === 'string') {
           try { value = JSON.parse(result); isJson = true; } catch (_) { value = result; }
         }
-        publish({ kind: 'integration-webmcp-result', requestId: request.requestId, value, isJson, descriptor: found.descriptor, page: { origin: location.origin, pathname: location.pathname } });
+        publish({ kind: 'integration-webmcp-result', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, value, isJson, descriptor: found.descriptor, page: { origin: location.origin, pathname: location.pathname } });
       } catch (error) {
-        publish({ kind: 'integration-webmcp-error', requestId: request.requestId, code: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) });
+        publish({ kind: 'integration-webmcp-error', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, code: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) });
       } finally {
         active.delete(request.requestId);
       }

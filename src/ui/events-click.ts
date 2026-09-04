@@ -284,8 +284,13 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       }
     }
     if (action === 'add-action-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
-      handlers.addActionForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
+      handlers.requestAddIntegrationRecordType(target.dataset.integrationId, target.dataset.pageId);
     }
+    if (action === 'cancel-add-integration-record-type') handlers.cancelAddIntegrationRecordType();
+    if (action === 'choose-web-page-record-type') handlers.chooseIntegrationWebPageRecordType();
+    if (action === 'choose-webmcp-record-type') handlers.chooseIntegrationWebMcpRecordType();
+    if (action === 'back-record-type-source') handlers.backIntegrationRecordTypeSource();
+    if (action === 'select-webmcp-record-tool' && target.dataset.toolIndex) handlers.selectIntegrationWebMcpRecordTool(Number(target.dataset.toolIndex));
     if (action === 'edit-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.editIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
     if (action === 'close-integration-action-builder') handlers.closeIntegrationActionBuilder();
     if (action === 'cancel-discard-integration-action') handlers.cancelDiscardIntegrationAction();

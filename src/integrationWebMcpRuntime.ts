@@ -50,7 +50,7 @@ async function dispatch(
   if (!openIfClosed) throw new Error(`The browser profile “${profile.name}” is closed. Open it in Galaxy before running this WebMCP tool.`);
   await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, {
     kind: command === 'discover-webmcp-tools' ? 'webmcp-discovery' : 'webmcp-invocation',
-    payload: command === 'discover-webmcp-tools' ? { ...payload, waitForTools: true } : payload,
+    payload: { ...payload, waitForTools: true },
     context: { expectedOrigin: new URL(page.url).origin },
   }, foreground, profile.name);
 }
@@ -62,7 +62,7 @@ export function discoverIntegrationWebMcpTools(
   return enqueueWebCapabilityForProfile(profile.id, async () => {
     const requestId = crypto.randomUUID();
     const result = waitFor<IntegrationWebMcpToolDescriptor[]>(requestId, 'tools');
-    try { await dispatch(page, profile, 'discover-webmcp-tools', { requestId, fromOrigins: page.allowedOrigins }, true, false); }
+    try { await dispatch(page, profile, 'discover-webmcp-tools', { requestId, fromOrigins: page.allowedOrigins, focusMainOnResult: true }, true, false); }
     catch (error) { rejectPending(requestId, error); }
     return result;
   });
@@ -84,6 +84,7 @@ export function invokeIntegrationWebMcpTool(
     try {
       await dispatch(page, profile, 'invoke-webmcp-tool', {
         requestId,
+        focusMainOnResult: foreground,
         name: approval.descriptor.name,
         origin: approval.descriptor.origin,
         descriptor: approval.descriptor,

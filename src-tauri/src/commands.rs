@@ -460,7 +460,8 @@ fn integration_result_is_background(result: &serde_json::Value) -> bool {
         && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
             && result.pointer("/context/automatic").and_then(serde_json::Value::as_bool) == Some(true))
-        || result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind.starts_with("integration-webmcp-"))
+        || (result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind.starts_with("integration-webmcp-"))
+            && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true))
 }
 
 fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, mut result: serde_json::Value) {
@@ -1621,8 +1622,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                                     .and_then(serde_json::Value::as_bool)
                                     == Some(true));
                         let is_background_result = is_background_result
-                            || result.get("kind").and_then(serde_json::Value::as_str)
-                                .is_some_and(|kind| kind.starts_with("integration-webmcp-"));
+                            || (result.get("kind").and_then(serde_json::Value::as_str)
+                                .is_some_and(|kind| kind.starts_with("integration-webmcp-"))
+                                && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true));
                         navigation_action_mode.store(false, Ordering::SeqCst);
                         if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
                             let _ = toolbar.eval("window.hvySetInspectionState?.({})");

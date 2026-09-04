@@ -58,8 +58,9 @@ describe('integration WebMCP page bridge', () => {
   }
 
   it('discovers imperative, declarative, and same-origin descendant tools', async () => {
-    await page.evaluate(() => (window as unknown as { __hvyGalaxyWebMcp: { discover(value: unknown): void } }).__hvyGalaxyWebMcp.discover({ requestId: 'discover' }));
+    await page.evaluate(() => (window as unknown as { __hvyGalaxyWebMcp: { discover(value: unknown): void } }).__hvyGalaxyWebMcp.discover({ requestId: 'discover', focusMainOnResult: true }));
     const discovered = await result('discover');
+    expect(discovered.focusMainOnResult).toBe(true);
     const names = (discovered.tools as Array<{ name: string }>).map((tool) => tool.name);
     expect(names).toEqual(expect.arrayContaining(['account.read', 'form.submit', 'child.read']));
   });
@@ -109,6 +110,32 @@ describe('integration WebMCP page bridge', () => {
     expect(discovered).toMatchObject({
       kind: 'integration-webmcp-tools',
       tools: [expect.objectContaining({ name: 'late.read' })],
+    });
+    await delayedPage.close();
+  });
+
+  it('waits for an asynchronously registered tool before invoking on a fresh page', async () => {
+    const delayedPage = await browser.newPage();
+    await delayedPage.addInitScript(`window.__webMcpResults=[]; window.__hvyGalaxyPublish=value=>window.__webMcpResults.push(value); window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n${polyfill}\n${bridge}`);
+    await delayedPage.goto(`${origin}/delayed`);
+    await delayedPage.evaluate((toolOrigin) => (window as unknown as { __hvyGalaxyWebMcp: { invoke(value: unknown): void } }).__hvyGalaxyWebMcp.invoke({
+      requestId: 'wait-for-invocation-tool',
+      waitForTools: true,
+      name: 'late.read',
+      origin: toolOrigin,
+      descriptor: {
+        origin: toolOrigin,
+        name: 'late.read',
+        description: 'Registered after page load',
+        inputSchema: { type: 'object' },
+        annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
+      },
+      arguments: {},
+    }), origin);
+    await delayedPage.waitForFunction(() => (window as unknown as { __webMcpResults: Array<{ requestId?: string }> }).__webMcpResults.some((item) => item.requestId === 'wait-for-invocation-tool'));
+    expect(await delayedPage.evaluate(() => (window as unknown as { __webMcpResults: Array<Record<string, unknown>> }).__webMcpResults.find((item) => item.requestId === 'wait-for-invocation-tool'))).toMatchObject({
+      kind: 'integration-webmcp-result',
+      value: { late: true },
     });
     await delayedPage.close();
   });

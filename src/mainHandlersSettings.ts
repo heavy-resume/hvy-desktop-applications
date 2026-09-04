@@ -327,6 +327,53 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   });
+  const startWebPageRecordType = (integrationId: string, pageId: string) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!page) throw new Error('Integration page was not found.');
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!profile) throw new Error('Choose an integration profile.');
+    state.integrationActionDraftIntegrationId = integrationId;
+    state.integrationActionDraftPageId = pageId;
+    state.integrationActionDraftActionId = null;
+    state.integrationActionExamples = [];
+    state.integrationActionExampleRules = [];
+    state.integrationActionTargetLabels = [];
+    state.integrationActionTargetIds = [];
+    state.integrationActionTargetCardinalities = [];
+    state.integrationActionTargetOptional = [];
+    state.integrationActionTargetParentIndexes = [];
+    state.integrationActionTargetSelectionParentIndex = 0;
+    state.integrationActionTargetSelectionFieldIndex = null;
+    state.integrationActionTargetVariants = [];
+    state.integrationActionTargetNegativeVariants = [];
+    state.integrationActionTargetAbsentExamples = [];
+    state.integrationActionSelectedParentIndex = 0;
+    state.integrationActionMinimumConfidence = 0.8;
+    state.integrationActionAnchors = [];
+    state.integrationActionAnchorRules = [];
+    state.integrationActionSelectionKind = 'parent';
+    state.integrationActionSelectionPending = true;
+    state.integrationActionBuilderStep = 'define';
+    state.integrationActionDraftName = '';
+    state.integrationActionDraftDescription = '';
+    state.integrationActionPreviewRecords = [];
+    state.integrationActionLiveExampleRecords = [];
+    state.integrationActionPreviewDiagnostics = null;
+    state.integrationActionPreviewPending = false;
+    state.integrationActionEditPageLoading = false;
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderInitialJson = integrationActionDraftJson();
+    state.integrationInspectionResult = null;
+    void runBusy(`Opening ${page.name} for action selection...`, async () => {
+      if (page.id === 'gmail' || page.id === 'google-calendar') {
+        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, true, undefined, true, profile.name);
+      } else {
+        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, true, undefined, true, profile.name);
+      }
+      state.status = `Select the ${page.name} content this action should use`;
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', profile.id));
+  };
   const persistIntegrationAction = () => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationActionDraftIntegrationId);
     if (!integration || !state.integrationActionDraftPageId) throw new Error('Record type integration was not found.');
@@ -717,6 +764,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationWebMcpReviewIntegrationId = integrationId;
     state.integrationWebMcpReviewPageId = pageId;
     state.integrationWebMcpReviewProfileId = state.integrationWebMcpProfileId;
+    state.integrationWebMcpConfigureAfterReview = false;
     rerender({ preserveMountedDocument: true });
   },
   cancelIntegrationWebMcpReview: () => {
@@ -724,6 +772,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationWebMcpReviewIntegrationId = null;
     state.integrationWebMcpReviewPageId = null;
     state.integrationWebMcpReviewProfileId = null;
+    state.integrationWebMcpConfigureAfterReview = false;
     rerender({ preserveMountedDocument: true });
   },
   approveIntegrationWebMcpTool: (scriptingEnabled, mcpExposed) => {
@@ -738,6 +787,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       throw new Error('The WebMCP page or browser profile is no longer available.');
     }
     const capabilityId = webMcpCapabilityId(integrationId, pageId, profileId, descriptor);
+    const configureRecordType = state.integrationWebMcpConfigureAfterReview;
     const settings = {
       ...state.appSettings,
       integrationWebMcpApprovals: approveIntegrationWebMcpTool(state.appSettings.integrationWebMcpApprovals, {
@@ -749,6 +799,15 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationWebMcpReviewIntegrationId = null;
     state.integrationWebMcpReviewPageId = null;
     state.integrationWebMcpReviewProfileId = null;
+    state.integrationWebMcpConfigureAfterReview = false;
+    if (configureRecordType) {
+      state.integrationRecordSourceDialogOpen = false;
+      state.integrationRecordSourceIntegrationId = null;
+      state.integrationRecordSourcePageId = null;
+      state.integrationRecordSourceStep = 'source';
+      state.integrationWebMcpInvokeCapabilityId = capabilityId;
+      state.integrationWebMcpInvokeForRecordType = true;
+    }
     rerender({ preserveMountedDocument: true });
     void saveAppSettings(settings).then((saved) => { state.appSettings = saved; });
   },
@@ -763,10 +822,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   requestInvokeIntegrationWebMcpTool: (capabilityId) => {
     state.integrationWebMcpInvokeCapabilityId = capabilityId;
+    state.integrationWebMcpInvokeForRecordType = false;
     rerender({ preserveMountedDocument: true });
   },
   cancelInvokeIntegrationWebMcpTool: () => {
     state.integrationWebMcpInvokeCapabilityId = null;
+    state.integrationWebMcpInvokeForRecordType = false;
+    state.integrationWebMcpError = null;
     rerender({ preserveMountedDocument: true });
   },
   invokeIntegrationWebMcpTool: (capabilityId, args) => {
@@ -775,8 +837,10 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const page = integration?.pages.find((candidate) => candidate.id === approval?.pageId);
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === approval?.profileId);
     if (!approval || !page || !profile) throw new Error('The approved WebMCP tool is unavailable.');
-    state.integrationWebMcpInvokeCapabilityId = null;
+    const forRecordType = state.integrationWebMcpInvokeForRecordType;
     state.integrationWebMcpPending = true;
+    state.integrationWebMcpError = null;
+    state.integrationWebMcpResultForRecordType = forRecordType;
     state.integrationWebMcpResultCapabilityId = capabilityId;
     state.integrationWebMcpResultArguments = args;
     rerender({ preserveMountedDocument: true });
@@ -784,6 +848,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.integrationWebMcpResult = assertLiveWebMcpDescriptor(approval, result);
       state.integrationWebMcpResultOpen = true;
       state.integrationWebMcpPending = false;
+      state.integrationWebMcpInvokeCapabilityId = null;
+      state.integrationWebMcpInvokeForRecordType = false;
       rerender({ preserveMountedDocument: true });
     }).catch((error) => {
       state.integrationWebMcpPending = false;
@@ -793,6 +859,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   closeIntegrationWebMcpResult: () => {
     state.integrationWebMcpResultOpen = false;
+    state.integrationWebMcpResultForRecordType = false;
     state.integrationWebMcpResult = null;
     state.integrationWebMcpResultCapabilityId = null;
     state.integrationWebMcpResultArguments = {};
@@ -859,6 +926,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationWebMcpRecordBuilderOpen = false;
     state.integrationWebMcpRecordBuilderPath = '';
     state.integrationWebMcpResultOpen = false;
+    state.integrationWebMcpResultForRecordType = false;
     state.integrationWebMcpResult = null;
     state.integrationWebMcpResultCapabilityId = null;
     state.integrationWebMcpResultArguments = {};
@@ -1129,52 +1197,87 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     saveIntegrationRegistry(state.integrationRegistry);
     rerender({ preserveMountedDocument: true });
   },
-  addActionForIntegrationPage: (integrationId, pageId) => {
+  requestAddIntegrationRecordType: (integrationId, pageId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     if (!page) throw new Error('Integration page was not found.');
-    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-    if (!profile) throw new Error('Choose an integration profile.');
-    state.integrationActionDraftIntegrationId = integrationId;
-    state.integrationActionDraftPageId = pageId;
-    state.integrationActionDraftActionId = null;
-    state.integrationActionExamples = [];
-    state.integrationActionExampleRules = [];
-    state.integrationActionTargetLabels = [];
-    state.integrationActionTargetIds = [];
-    state.integrationActionTargetCardinalities = [];
-    state.integrationActionTargetOptional = [];
-    state.integrationActionTargetParentIndexes = [];
-    state.integrationActionTargetSelectionParentIndex = 0;
-    state.integrationActionTargetSelectionFieldIndex = null;
-    state.integrationActionTargetVariants = [];
-    state.integrationActionTargetNegativeVariants = [];
-    state.integrationActionTargetAbsentExamples = [];
-    state.integrationActionSelectedParentIndex = 0;
-    state.integrationActionMinimumConfidence = 0.8;
-    state.integrationActionAnchors = [];
-    state.integrationActionAnchorRules = [];
-    state.integrationActionSelectionKind = 'parent';
-    state.integrationActionSelectionPending = true;
-    state.integrationActionBuilderStep = 'define';
-    state.integrationActionDraftName = '';
-    state.integrationActionDraftDescription = '';
-    state.integrationActionPreviewRecords = [];
-    state.integrationActionLiveExampleRecords = [];
-    state.integrationActionPreviewDiagnostics = null;
-    state.integrationActionPreviewPending = false;
-    state.integrationActionEditPageLoading = false;
-    state.integrationActionBuilderOpen = true;
-    state.integrationActionBuilderInitialJson = integrationActionDraftJson();
-    state.integrationInspectionResult = null;
-    void runBusy(`Opening ${page.name} for action selection...`, async () => {
-      if (page.id === 'gmail' || page.id === 'google-calendar') {
-        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, true, undefined, true, profile.name);
-      } else {
-        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, true, undefined, true, profile.name);
-      }
-      state.status = `Select the ${page.name} content this action should use`;
-    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', profile.id));
+    state.integrationRecordSourceDialogOpen = true;
+    state.integrationRecordSourceIntegrationId = integrationId;
+    state.integrationRecordSourcePageId = pageId;
+    state.integrationRecordSourceStep = 'source';
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelAddIntegrationRecordType: () => {
+    state.integrationRecordSourceDialogOpen = false;
+    state.integrationRecordSourceIntegrationId = null;
+    state.integrationRecordSourcePageId = null;
+    state.integrationRecordSourceStep = 'source';
+    rerender({ preserveMountedDocument: true });
+  },
+  chooseIntegrationWebPageRecordType: () => {
+    const integrationId = state.integrationRecordSourceIntegrationId;
+    const pageId = state.integrationRecordSourcePageId;
+    if (!integrationId || !pageId) throw new Error('The record type source is unavailable.');
+    state.integrationRecordSourceDialogOpen = false;
+    state.integrationRecordSourceIntegrationId = null;
+    state.integrationRecordSourcePageId = null;
+    state.integrationRecordSourceStep = 'source';
+    startWebPageRecordType(integrationId, pageId);
+  },
+  chooseIntegrationWebMcpRecordType: () => {
+    const integrationId = state.integrationRecordSourceIntegrationId;
+    const pageId = state.integrationRecordSourcePageId;
+    const profileId = state.selectedIntegrationProfileId;
+    const scanMatches = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
+    const tools = integrationId && pageId ? webMcpToolsForContext(
+      state.appSettings.integrationWebMcpApprovals,
+      integrationId,
+      pageId,
+      profileId,
+      scanMatches ? state.integrationWebMcpTools : undefined,
+    ) : [];
+    if (!tools.length) throw new Error('Scan or review a WebMCP tool for this page and profile first.');
+    state.integrationRecordSourceStep = 'webmcp';
+    rerender({ preserveMountedDocument: true });
+  },
+  backIntegrationRecordTypeSource: () => {
+    state.integrationRecordSourceStep = 'source';
+    rerender({ preserveMountedDocument: true });
+  },
+  selectIntegrationWebMcpRecordTool: (toolIndex) => {
+    const integrationId = state.integrationRecordSourceIntegrationId;
+    const pageId = state.integrationRecordSourcePageId;
+    const profileId = state.selectedIntegrationProfileId;
+    const scanMatches = state.integrationWebMcpPageId === pageId && state.integrationWebMcpProfileId === profileId;
+    const tools = integrationId && pageId ? webMcpToolsForContext(
+      state.appSettings.integrationWebMcpApprovals,
+      integrationId,
+      pageId,
+      profileId,
+      scanMatches ? state.integrationWebMcpTools : undefined,
+    ) : [];
+    const tool = tools[toolIndex];
+    if (!integrationId || !pageId || !tool?.annotations.readOnlyHint) throw new Error('Choose a read-only tool from the current WebMCP scan.');
+    const capabilityId = webMcpCapabilityId(integrationId, pageId, profileId, tool);
+    const approval = state.appSettings.integrationWebMcpApprovals[capabilityId];
+    if (approval && approvalMatchesDescriptor(approval, tool)) {
+      state.integrationRecordSourceDialogOpen = false;
+      state.integrationRecordSourceIntegrationId = null;
+      state.integrationRecordSourcePageId = null;
+      state.integrationRecordSourceStep = 'source';
+      state.integrationWebMcpInvokeCapabilityId = capabilityId;
+      state.integrationWebMcpInvokeForRecordType = true;
+    } else {
+      state.integrationWebMcpReviewTool = tool;
+      state.integrationWebMcpReviewIntegrationId = integrationId;
+      state.integrationWebMcpReviewPageId = pageId;
+      state.integrationWebMcpReviewProfileId = profileId;
+      state.integrationWebMcpConfigureAfterReview = true;
+    }
+    rerender({ preserveMountedDocument: true });
+  },
+  addActionForIntegrationPage: (integrationId, pageId) => {
+    startWebPageRecordType(integrationId, pageId);
   },
   editIntegrationAction: (integrationId, actionId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);

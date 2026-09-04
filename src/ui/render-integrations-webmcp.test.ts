@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { state } from '../state';
 import { approveIntegrationWebMcpTool, webMcpCapabilityId, type IntegrationWebMcpToolDescriptor } from '../integrationWebMcp';
-import { renderIntegrationPageErrorDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderIntegrationPageErrorDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+
+const integrationRegistry = {
+  version: 1 as const,
+  profiles: state.integrationRegistry.profiles,
+  integrations: [{
+    id: 'integration', name: 'Example', profileProviderId: 'browser', editable: true,
+    pages: [{ id: 'page', name: 'Example', url: 'https://example.com/', allowedOrigins: ['https://example.com'], editable: true }],
+    actions: [],
+  }],
+};
 
 describe('integration page errors', () => {
   it('renders validation failures as an explicit modal', () => {
@@ -43,16 +53,20 @@ describe('WebMCP result dialog', () => {
       ...state,
       appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
       integrationWebMcpResultOpen: true,
+      integrationWebMcpResultForRecordType: true,
       integrationWebMcpResultCapabilityId: capabilityId,
       integrationWebMcpResult: { items: [{ id: 'one', title: 'First' }] },
       integrationWebMcpRecordBuilderOpen: true,
     });
     expect(html).toContain('data-action="request-save-webmcp-record-type"');
     expect(html).toContain('data-form="save-webmcp-record-type"');
+    expect(html).toContain('integration-webmcp-record-builder-backdrop');
+    expect(html).toContain('aria-label="WebMCP result" aria-hidden="true" inert');
     expect(html).toContain('name="recordsPath" value="/items" data-action="select-webmcp-record-path" checked');
     expect(html).toContain('id, title');
     expect(html).toContain('<input type="checkbox" name="recordField" value="id" checked>');
     expect(html).toContain('name="fieldLabel:title" value="title"');
+    expect(html).toContain('data-action="close-webmcp-result">Cancel</button>');
   });
 
   it('does not offer plain text or consequential results as record types', () => {
@@ -62,6 +76,85 @@ describe('WebMCP result dialog', () => {
       integrationWebMcpResult: 'Done',
     });
     expect(html).not.toContain('request-save-webmcp-record-type');
+  });
+});
+
+describe('record type source chooser', () => {
+  const readTool: IntegrationWebMcpToolDescriptor = {
+    origin: 'https://example.com', name: 'items.read', title: 'Items', description: 'Read items.',
+    inputSchema: { type: 'object' },
+    annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
+  };
+
+  it('offers web page records and lets the user scan in place when no WebMCP tools are known', () => {
+    const html = renderIntegrationRecordSourceDialog({
+      ...state,
+      integrationRegistry,
+      selectedIntegrationProfileId: integrationRegistry.profiles[0].id,
+      integrationRecordSourceDialogOpen: true,
+      integrationRecordSourceIntegrationId: 'integration',
+      integrationRecordSourcePageId: 'page',
+    });
+    expect(html).toContain('Where do the records come from?');
+    expect(html).toContain('data-action="choose-web-page-record-type"');
+    expect(html).toContain('data-action="choose-webmcp-record-type" disabled');
+    expect(html).toContain('data-action="discover-webmcp-tools"');
+    expect(html).toContain('>Scan tools</button>');
+    expect(html).toContain('No reviewed or scanned WebMCP tools are available');
+    expect(html.match(/class="integration-record-source-option"/g)).toHaveLength(2);
+    expect(html.match(/class="integration-record-source-actions"/g)).toHaveLength(2);
+  });
+
+  it('offers an already reviewed tool without requiring another scan', () => {
+    const profile = integrationRegistry.profiles[0];
+    const capabilityId = webMcpCapabilityId('integration', 'page', profile.id, readTool);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId, integrationId: 'integration', pageId: 'page', profileId: profile.id,
+      descriptor: readTool, scriptingEnabled: true, mcpExposed: false,
+    });
+    const common = {
+      ...state,
+      integrationRegistry,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      selectedIntegrationProfileId: profile.id,
+      integrationRecordSourceDialogOpen: true,
+      integrationRecordSourceIntegrationId: 'integration',
+      integrationRecordSourcePageId: 'page',
+      integrationWebMcpPageId: null,
+      integrationWebMcpProfileId: null,
+      integrationWebMcpTools: [],
+    };
+    const sourceHtml = renderIntegrationRecordSourceDialog(common);
+    expect(sourceHtml).toContain('Choose from 1 available tool');
+    expect(sourceHtml).toContain('data-action="choose-webmcp-record-type">Choose</button>');
+    expect(sourceHtml).not.toContain('>Scan tools</button>');
+
+    const pickerHtml = renderIntegrationRecordSourceDialog({ ...common, integrationRecordSourceStep: 'webmcp' });
+    expect(pickerHtml).toContain('Ready to configure');
+    expect(pickerHtml).toContain('data-tool-index="0" >Configure</button>');
+  });
+
+  it('enables WebMCP after scanning and distinguishes read-only tools in the picker', () => {
+    const common = {
+      ...state,
+      integrationRegistry,
+      selectedIntegrationProfileId: integrationRegistry.profiles[0].id,
+      integrationRecordSourceDialogOpen: true,
+      integrationRecordSourceIntegrationId: 'integration',
+      integrationRecordSourcePageId: 'page',
+      integrationWebMcpPageId: 'page',
+      integrationWebMcpProfileId: integrationRegistry.profiles[0].id,
+      integrationWebMcpTools: [readTool, { ...readTool, name: 'items.delete', title: 'Delete items', annotations: { ...readTool.annotations, readOnlyHint: false } }],
+    };
+    const sourceHtml = renderIntegrationRecordSourceDialog(common);
+    expect(sourceHtml).toContain('Choose from 2 available tools');
+    expect(sourceHtml).toContain('data-action="choose-webmcp-record-type">Choose</button>');
+
+    const pickerHtml = renderIntegrationRecordSourceDialog({ ...common, integrationRecordSourceStep: 'webmcp' });
+    expect(pickerHtml).toContain('Choose a WebMCP tool');
+    expect(pickerHtml).toContain('data-tool-index="0" >Select</button>');
+    expect(pickerHtml).toContain('data-tool-index="1" disabled>Select</button>');
+    expect(pickerHtml).toContain('Not read only');
   });
 });
 
@@ -195,5 +288,64 @@ describe('WebMCP review dialog', () => {
     expect(html).toContain('data-argument-type="boolean"');
     expect(html).toContain('Run Test');
     expect(html).not.toContain('name="arguments"');
+  });
+
+  it('labels invocation as record configuration when entered from the record type chooser', () => {
+    const profile = state.integrationRegistry.profiles[0];
+    const integrationId = 'integration';
+    const pageId = 'page';
+    const capabilityId = webMcpCapabilityId(integrationId, pageId, profile.id, descriptor);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId, integrationId, pageId, profileId: profile.id, descriptor, scriptingEnabled: false, mcpExposed: false,
+    });
+    const html = renderIntegrationWebMcpInvokeDialog({
+      ...state,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      integrationWebMcpInvokeCapabilityId: capabilityId,
+      integrationWebMcpInvokeForRecordType: true,
+    });
+    expect(html).toContain('Configure example.read');
+    expect(html).toContain('Read records');
+    expect(html).not.toContain('Run Test');
+  });
+
+  it('keeps a visible record-reading dialog while a newly opened page initializes', () => {
+    const profile = state.integrationRegistry.profiles[0];
+    const integrationId = 'integration';
+    const pageId = 'page';
+    const capabilityId = webMcpCapabilityId(integrationId, pageId, profile.id, descriptor);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId, integrationId, pageId, profileId: profile.id, descriptor, scriptingEnabled: false, mcpExposed: false,
+    });
+    const html = renderIntegrationWebMcpInvokeDialog({
+      ...state,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      integrationWebMcpInvokeCapabilityId: capabilityId,
+      integrationWebMcpInvokeForRecordType: true,
+      integrationWebMcpPending: true,
+    });
+    expect(html).toContain('integration-webmcp-pending-dialog');
+    expect(html).toContain('Reading records…');
+    expect(html).toContain('waiting for its WebMCP tools');
+  });
+
+  it('keeps invocation errors in the configuration dialog so they are not silent', () => {
+    const profile = state.integrationRegistry.profiles[0];
+    const integrationId = 'integration';
+    const pageId = 'page';
+    const capabilityId = webMcpCapabilityId(integrationId, pageId, profile.id, descriptor);
+    const approvals = approveIntegrationWebMcpTool({}, {
+      capabilityId, integrationId, pageId, profileId: profile.id, descriptor, scriptingEnabled: false, mcpExposed: false,
+    });
+    const html = renderIntegrationWebMcpInvokeDialog({
+      ...state,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      integrationWebMcpInvokeCapabilityId: capabilityId,
+      integrationWebMcpInvokeForRecordType: true,
+      integrationWebMcpError: 'Tool registration failed.',
+    });
+    expect(html).toContain('WebMCP failed');
+    expect(html).toContain('Tool registration failed.');
+    expect(html).toContain('Read records');
   });
 });
