@@ -378,7 +378,7 @@ fn handle_mcp_http_request(app: &AppHandle, request: HttpRequest) -> String {
     }
     let parsed = serde_json::from_slice::<serde_json::Value>(&request.body);
     let response = match parsed {
-        Ok(value) => handle_mcp_json_rpc(app, value),
+        Ok(value) => handle_mcp_json_rpc(app, value, &settings.integration_access),
         Err(error) => json_rpc_error(None, -32700, &format!("Invalid JSON: {error}")),
     };
     http_json_response(200, &response)
@@ -394,15 +394,18 @@ pub(crate) fn mcp_request_is_authorized(request: &HttpRequest, bearer_token: &st
     scheme.eq_ignore_ascii_case("bearer") && token.trim() == bearer_token
 }
 
-fn handle_mcp_json_rpc(app: &AppHandle, request: serde_json::Value) -> serde_json::Value {
+fn handle_mcp_json_rpc(app: &AppHandle, request: serde_json::Value, integration_access: &str) -> serde_json::Value {
     let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|method| method.as_str()).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
     match method {
         "initialize" => json_rpc_result(id, mcp_initialize_result(&params)),
         "notifications/initialized" => serde_json::Value::Null,
-        "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list() })),
-        "tools/call" => match handle_mcp_tool_call(app, params) {
+        "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list_with_integration_access(integration_access) })),
+        "tools/call" => match webmcp_broker_connection_path(app)
+            .ok()
+            .and_then(|path| webmcp_tool_call(&path, &params, integration_access))
+            .unwrap_or_else(|| handle_mcp_tool_call(app, params)) {
             Ok(result) => json_rpc_result(id, result),
             Err(error) => json_rpc_error(Some(id), -32000, &error.to_string()),
         },
@@ -419,14 +422,26 @@ fn handle_mcp_json_rpc_for_workspaces_with_access(
     request: serde_json::Value,
     write_access: &str,
 ) -> serde_json::Value {
+    handle_mcp_json_rpc_for_workspaces_with_policy(workspaces, request, write_access, "off", None)
+}
+
+fn handle_mcp_json_rpc_for_workspaces_with_policy(
+    workspaces: &[Workspace],
+    request: serde_json::Value,
+    write_access: &str,
+    integration_access: &str,
+    broker_connection_path: Option<&Path>,
+) -> serde_json::Value {
     let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = request.get("method").and_then(|method| method.as_str()).unwrap_or("");
     let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
     match method {
         "initialize" => json_rpc_result(id, mcp_initialize_result(&params)),
         "notifications/initialized" => serde_json::Value::Null,
-        "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list() })),
-        "tools/call" => match handle_mcp_tool_call_from_with_access(workspaces, params, write_access) {
+        "tools/list" => json_rpc_result(id, serde_json::json!({ "tools": mcp_tool_list_with_integration_access(integration_access) })),
+        "tools/call" => match broker_connection_path
+            .and_then(|path| webmcp_tool_call(path, &params, integration_access))
+            .unwrap_or_else(|| handle_mcp_tool_call_from_with_access(workspaces, params, write_access)) {
             Ok(result) => json_rpc_result(id, result),
             Err(error) => json_rpc_error(Some(id), -32000, &error.to_string()),
         },

@@ -391,6 +391,7 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
                 if path.is_empty() || authorizations.is_empty() { None } else { Some((path, authorizations)) }
             })
             .collect(),
+        integration_web_mcp_approvals: settings.integration_web_mcp_approvals,
     }
 }
 

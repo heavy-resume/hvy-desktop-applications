@@ -5,6 +5,7 @@ import { generateMcpBearerToken, normalizeHomepageSetting, type AiActionConfig, 
 import type { HvyMode } from '../hvy';
 import { type AppState } from '../state';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from '../webCapabilities';
+import { normalizeIntegrationWebMcpApprovals } from '../integrationWebMcp';
 import { copyIcon, eyeIcon } from './render-shell';
 import { escapeAttr, escapeHtml } from './shared';
 
@@ -562,6 +563,7 @@ export function parseAppSettings(value: string): AppSettings {
       pluginAcceptances: parsed.pluginAcceptances && typeof parsed.pluginAcceptances === 'object' ? parsed.pluginAcceptances : {},
       webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(parsed.webCapabilityProfileBindings),
       webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(parsed.webCapabilityAuthorizations),
+      integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(parsed.integrationWebMcpApprovals),
     };
   } catch {
     return {
@@ -576,6 +578,7 @@ export function parseAppSettings(value: string): AppSettings {
       pluginAcceptances: {},
       webCapabilityProfileBindings: {},
       webCapabilityAuthorizations: {},
+      integrationWebMcpApprovals: {},
     };
   }
 }

@@ -21,6 +21,7 @@ declare module 'virtual:hvy-built-in-plugins' {
     editableText?: HvyPlugin;
     webRecords?: HvyPlugin;
     webCommand?: HvyPlugin;
+    webMcpTool?: HvyPlugin;
   }>;
   export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }

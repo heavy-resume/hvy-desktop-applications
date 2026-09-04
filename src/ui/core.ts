@@ -9,7 +9,7 @@ import { renderAiSettingsDialog, renderAiSettingsDiscardDialog, renderMcpSetting
 import { renderAppSettingsDialog, renderAppSettingsDiscardDialog, renderDebugLogDialog, renderHomepageErrorDialog, renderHomepagePickerDialog, renderScriptingReviewDialog } from './render-app-settings';
 import { renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
 import { renderAboutDialog, renderExportedPdfDialog, renderExportPdfSavePrompt, renderImportDialog, renderImportProgressDialog, renderNewDocumentDialog, updateImportSubmit } from './render-import';
-import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog } from './render-integrations';
+import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
 import { renderColorThemeDialog } from './render-theme';
 import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
@@ -282,6 +282,7 @@ export function renderModals(state: AppState): void {
     ${renderAboutDialog(state)}
     ${renderIntegrationsDialog(state)}
     ${renderAddIntegrationPageDialog(state)}
+    ${renderIntegrationPageErrorDialog(state)}
     ${renderIntegrationReadyChecksDialog(state)}
     ${renderAddIntegrationProfileDialog(state)}
     ${renderIntegrationActionBuilderDialog(state)}
@@ -292,6 +293,9 @@ export function renderModals(state: AppState): void {
     ${renderIntegrationRecordDeleteDialog(state)}
     ${renderIntegrationActionResultDialog(state)}
     ${renderIntegrationStructuredResultDialog(state)}
+    ${renderIntegrationWebMcpReviewDialog(state)}
+    ${renderIntegrationWebMcpInvokeDialog(state)}
+    ${renderIntegrationWebMcpResultDialog(state)}
     ${renderIntegrationVaultResetDialog(state)}
     ${renderDebugLogDialog(state)}
     ${renderWorkspaceChatClosePrompt(state)}

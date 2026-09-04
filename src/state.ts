@@ -7,6 +7,7 @@ import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from 
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
 import type { IntegrationStructuredSource } from './integrationBrowser';
+import type { IntegrationWebMcpToolDescriptor } from './integrationWebMcp';
 import type { RuntimeDocument } from './runtimeDocuments';
 import type { ReviewedDocumentKey } from './documentKeys';
 import type { DocumentKeyUsage } from './documentKeyUsage';
@@ -130,6 +131,7 @@ export interface AppState {
   documentKeyDataLoading: boolean;
   integrationRegistry: IntegrationRegistry;
   addIntegrationPageDialogOpen: boolean;
+  integrationPageError: string | null;
   integrationReadyChecksDialogOpen: boolean;
   integrationReadyChecksIntegrationId: string | null;
   integrationReadyChecksPageId: string | null;
@@ -183,6 +185,19 @@ export interface AppState {
   integrationStructuredResultOpen: boolean;
   integrationStructuredResultName: string;
   integrationStructuredResult: unknown;
+  integrationWebMcpPageId: string | null;
+  integrationWebMcpProfileId: string | null;
+  integrationWebMcpScanId: string | null;
+  integrationWebMcpTools: IntegrationWebMcpToolDescriptor[];
+  integrationWebMcpPending: boolean;
+  integrationWebMcpError: string | null;
+  integrationWebMcpReviewTool: IntegrationWebMcpToolDescriptor | null;
+  integrationWebMcpReviewIntegrationId: string | null;
+  integrationWebMcpReviewPageId: string | null;
+  integrationWebMcpReviewProfileId: string | null;
+  integrationWebMcpInvokeCapabilityId: string | null;
+  integrationWebMcpResultOpen: boolean;
+  integrationWebMcpResult: unknown;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
@@ -449,6 +464,7 @@ export const state: AppState = {
   documentKeyDataLoading: false,
   integrationRegistry: loadIntegrationRegistry(),
   addIntegrationPageDialogOpen: false,
+  integrationPageError: null,
   integrationReadyChecksDialogOpen: false,
   integrationReadyChecksIntegrationId: null,
   integrationReadyChecksPageId: null,
@@ -502,6 +518,19 @@ export const state: AppState = {
   integrationStructuredResultOpen: false,
   integrationStructuredResultName: '',
   integrationStructuredResult: null,
+  integrationWebMcpPageId: null,
+  integrationWebMcpProfileId: null,
+  integrationWebMcpScanId: null,
+  integrationWebMcpTools: [],
+  integrationWebMcpPending: false,
+  integrationWebMcpError: null,
+  integrationWebMcpReviewTool: null,
+  integrationWebMcpReviewIntegrationId: null,
+  integrationWebMcpReviewPageId: null,
+  integrationWebMcpReviewProfileId: null,
+  integrationWebMcpInvokeCapabilityId: null,
+  integrationWebMcpResultOpen: false,
+  integrationWebMcpResult: null,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
   integrationCommandDraftIntegrationId: null,

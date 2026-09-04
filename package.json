@@ -17,7 +17,7 @@
     "build:electron:windows:arm64": "npm run build && node scripts/electron-package.mjs --platform win32 --arch arm64 && node scripts/electron-windows-installer.mjs --arch arm64",
     "build:electron:dmg:arm64": "npm run build && node scripts/electron-package.mjs --platform darwin --arch arm64 && node scripts/electron-dmg.mjs --platform darwin --arch arm64",
     "build:electron:dmg:x64": "npm run build && node scripts/electron-package.mjs --platform darwin --arch x64 && node scripts/electron-dmg.mjs --platform darwin --arch x64",
-    "build": "tsc && vite build",
+    "build": "node scripts/build-webmcp-preload.mjs && tsc && vite build",
     "build:tauri:host": "node scripts/build-host-apps.mjs --tauri",
     "build:electron:host": "node scripts/build-host-apps.mjs --electron",
     "build:host": "node scripts/build-host-apps.mjs",
@@ -28,11 +28,13 @@
     "preview": "vite preview",
     "tauri": "node scripts/tauri-cli.mjs",
     "smoke:frontend": "node scripts/smoke-frontend.mjs",
+    "smoke:webmcp:electron": "node scripts/build-webmcp-preload.mjs && node scripts/run-electron-webmcp-smoke.mjs",
     "test": "npm run test:unit && npm run test:browser",
     "test:unit": "vitest run",
     "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
+    "@mcp-b/webmcp-polyfill": "5.0.1",
     "@automerge/automerge": "^3.3.2",
     "@tauri-apps/api": "^2.9.0",
     "fflate": "^0.8.3",

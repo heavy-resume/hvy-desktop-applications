@@ -19,6 +19,8 @@ let cargo = null;
 let electron = null;
 let shutdownSignal = null;
 
+await import('./build-webmcp-preload.mjs');
+
 if (!(await canConnect(rendererUrl))) {
   vite = spawn(process.execPath, [path.resolve('node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', '1420'], {
     stdio: 'inherit',

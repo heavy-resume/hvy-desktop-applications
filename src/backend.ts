@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
 import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
+import { normalizeIntegrationWebMcpApprovals, type IntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
 
 declare global {
@@ -14,6 +15,7 @@ declare global {
       onOpenDocumentPath(callback: (path: string) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
       onIntegrationInspectionResult(callback: (result: unknown) => void): () => void;
+      onWebMcpBrokerRequest(callback: (request: WebMcpBrokerRequest) => void): () => void;
     };
   }
 }
@@ -529,6 +531,7 @@ export interface AppSettings {
   pluginAcceptances: Record<string, string[]>;
   webCapabilityProfileBindings: WebCapabilityProfileBindings;
   webCapabilityAuthorizations: WebCapabilityAuthorizations;
+  integrationWebMcpApprovals: IntegrationWebMcpApprovals;
 }
 
 export interface InstalledPluginPackageFile {
@@ -537,7 +540,7 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
-export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'extract-pattern' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'extract-pattern' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export interface IntegrationStorageProbeResult {
   cookieName: string;
@@ -647,11 +650,18 @@ export function loadAppSettings(): Promise<AppSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultAppSettings());
   }
-  return invokeDesktop('load_app_settings');
+  return invokeDesktop<AppSettings>('load_app_settings').then((settings) => ({
+    ...settings,
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
+  }));
 }
 
 export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
-  return invokeDesktop('save_app_settings', { settings });
+  const normalized = { ...settings, integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals) };
+  return invokeDesktop<AppSettings>('save_app_settings', { settings: normalized }).then((saved) => ({
+    ...saved,
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(saved.integrationWebMcpApprovals),
+  }));
 }
 
 export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFile[]> {
@@ -846,6 +856,7 @@ export function defaultAppSettings(): AppSettings {
     pluginAcceptances: {},
     webCapabilityProfileBindings: {},
     webCapabilityAuthorizations: {},
+    integrationWebMcpApprovals: {},
   };
 }
 
@@ -1553,4 +1564,27 @@ export function onIntegrationInspectionResult(handler: (result: unknown) => void
   if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationInspectionResult(handler));
   if (!isTauriRuntime()) return Promise.resolve(() => undefined);
   return listen<unknown>('integration-inspection-result', (event) => handler(event.payload));
+}
+
+export interface WebMcpBrokerRequest {
+  requestId: string;
+  operation: 'list' | 'call';
+  integrationAccess: McpIntegrationAccess;
+  capabilityId?: string;
+  arguments?: Record<string, unknown>;
+}
+
+export async function onWebMcpBrokerRequest(handler: (request: WebMcpBrokerRequest) => void): Promise<() => void> {
+  if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onWebMcpBrokerRequest(handler));
+  if (!isTauriRuntime()) return Promise.resolve(() => undefined);
+  const unlisten = await listen<WebMcpBrokerRequest>('webmcp-broker-request', (event) => handler(event.payload));
+  await invokeDesktop('set_web_mcp_broker_renderer_ready', { ready: true });
+  return () => {
+    unlisten();
+    void invokeDesktop('set_web_mcp_broker_renderer_ready', { ready: false });
+  };
+}
+
+export function completeWebMcpBrokerRequest(requestId: string, value?: unknown, error?: string): Promise<void> {
+  return invokeDesktop('complete_web_mcp_broker_request', { requestId, value, error });
 }

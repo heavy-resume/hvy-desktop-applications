@@ -111,6 +111,27 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
       const data = new FormData(form);
       handlers.addIntegrationProfile(String(data.get('profileName') ?? ''));
     }
+    if (form.dataset.form === 'approve-webmcp-tool') {
+      const data = new FormData(form);
+      handlers.approveIntegrationWebMcpTool(data.get('scriptingEnabled') === 'on', data.get('mcpExposed') === 'on');
+    }
+    if (form.dataset.form === 'invoke-webmcp-tool') {
+      const data = new FormData(form);
+      try {
+        const args = JSON.parse(String(data.get('arguments') ?? '{}')) as unknown;
+        if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be a JSON object.');
+        handlers.invokeIntegrationWebMcpTool(String(data.get('capabilityId') ?? ''), args as Record<string, unknown>);
+      } catch (error) {
+        let message = form.querySelector<HTMLElement>('.integration-webmcp-input-error');
+        if (!message) {
+          message = document.createElement('p');
+          message.className = 'integration-fetch-error integration-webmcp-input-error';
+          message.setAttribute('role', 'alert');
+          form.querySelector('.dialog-actions')?.before(message);
+        }
+        message.textContent = error instanceof Error ? error.message : String(error);
+      }
+    }
     if (form.dataset.form === 'integration-action-instructions') {
       const data = new FormData(form);
       handlers.reviewIntegrationActionRequest(String(data.get('actionName') ?? ''), String(data.get('actionDescription') ?? ''));

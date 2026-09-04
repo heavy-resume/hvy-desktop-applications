@@ -605,6 +605,8 @@ struct AppSettings {
     web_capability_profile_bindings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     web_capability_authorizations: std::collections::BTreeMap<String, std::collections::BTreeMap<String, WebCapabilityAuthorizationRecord>>,
+    #[serde(default)]
+    integration_web_mcp_approvals: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for AppSettings {
@@ -621,6 +623,7 @@ impl Default for AppSettings {
             plugin_acceptances: std::collections::BTreeMap::new(),
             web_capability_profile_bindings: std::collections::BTreeMap::new(),
             web_capability_authorizations: std::collections::BTreeMap::new(),
+            integration_web_mcp_approvals: std::collections::BTreeMap::new(),
         }
     }
 }

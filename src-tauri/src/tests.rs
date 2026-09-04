@@ -4,6 +4,16 @@
     use zip::write::FileOptions;
 
     #[test]
+    fn integration_navigation_allows_only_real_loopback_http_origins() {
+        let local = "http://localhost:5173/".parse::<tauri::Url>().unwrap();
+        let loopback = "http://127.0.0.1:5173/".parse::<tauri::Url>().unwrap();
+        let lookalike = "http://127.example.com:5173/".parse::<tauri::Url>().unwrap();
+        assert!(allowed_integration_url_for_origins(&local, &["http://localhost:5173".into()]));
+        assert!(allowed_integration_url_for_origins(&loopback, &["http://127.0.0.1:5173".into()]));
+        assert!(!allowed_integration_url_for_origins(&lookalike, &["http://127.example.com:5173".into()]));
+    }
+
+    #[test]
     fn workspace_tree_serializes_renderer_field_names() {
         let node = WorkspaceTreeNode::Folder {
             name: "folder-id".into(),
@@ -982,6 +992,7 @@
             debug_log_max_bytes: 0,
             web_capability_profile_bindings: std::collections::BTreeMap::new(),
             web_capability_authorizations: std::collections::BTreeMap::new(),
+            integration_web_mcp_approvals: std::collections::BTreeMap::new(),
         });
 
         assert_eq!(settings.image_attachment_max_dimensions.width, DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION);
@@ -1253,6 +1264,41 @@ model = "gpt-5.4"
             tools[10]["inputSchema"]["required"],
             serde_json::json!(["path", "patch"])
         );
+    }
+
+    #[test]
+    fn webmcp_tools_follow_integration_access_policy() {
+        let off = mcp_tool_list_with_integration_access("off");
+        let read = mcp_tool_list_with_integration_access("read");
+        let actions = mcp_tool_list_with_integration_access("actions");
+        let names = |tools: &serde_json::Value| tools.as_array().unwrap().iter()
+            .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()).map(str::to_string))
+            .collect::<Vec<_>>();
+        assert!(!names(&off).contains(&"webmcp_list_tools".to_string()));
+        assert!(names(&read).contains(&"webmcp_list_tools".to_string()));
+        assert!(names(&read).contains(&"webmcp_call_tool".to_string()));
+        assert_eq!(names(&read), names(&actions));
+    }
+
+    #[test]
+    fn webmcp_broker_reports_unavailable_app_and_normalizes_json_results() {
+        let missing = call_webmcp_broker(
+            Path::new("/path/that/does/not/exist/webmcp-broker.json"),
+            "list",
+            serde_json::json!({}),
+            "read",
+        ).unwrap_err().to_string();
+        assert!(missing.contains("Galaxy is not running"));
+
+        let result = webmcp_mcp_result(serde_json::json!({
+            "value": { "answer": 42 },
+            "resultIsJson": true,
+            "origin": "https://example.com",
+            "annotations": { "readOnlyHint": true, "untrustedContentHint": true, "consequentialHint": false }
+        }));
+        assert_eq!(result["structuredContent"]["answer"], 42);
+        assert_eq!(result["_meta"]["webmcp"]["origin"], "https://example.com");
+        assert_eq!(result["_meta"]["webmcp"]["annotations"]["untrustedContentHint"], true);
     }
 
     #[test]

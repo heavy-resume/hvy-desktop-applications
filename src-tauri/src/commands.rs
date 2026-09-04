@@ -460,6 +460,7 @@ fn integration_result_is_background(result: &serde_json::Value) -> bool {
         && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
             && result.pointer("/context/automatic").and_then(serde_json::Value::as_bool) == Some(true))
+        || result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind.starts_with("integration-webmcp-"))
 }
 
 fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, mut result: serde_json::Value) {
@@ -1361,6 +1362,8 @@ fn open_document_key_file_dialog() -> AppResult<Vec<DocumentKeyFileSource>> {
     }).collect()
 }
 const INTEGRATION_INSPECTOR: &str = include_str!("../../src/integration-inspector.js");
+const WEBMCP_POLYFILL: &str = include_str!("../../node_modules/@mcp-b/webmcp-polyfill/dist/index.iife.js");
+const INTEGRATION_WEBMCP_BRIDGE: &str = include_str!("../../src/integration-webmcp-bridge.js");
 
 fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
     let value = match destination {
@@ -1376,9 +1379,15 @@ fn allowed_integration_url(url: &tauri::Url) -> bool {
     allowed_integration_url_for_origins(url, &[])
 }
 
+fn is_local_integration_http(url: &tauri::Url) -> bool {
+    url.scheme() == "http" && url.host_str().is_some_and(|host| {
+        host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|address| address.is_loopback())
+    })
+}
+
 fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> bool {
     if !origins.is_empty() {
-        return url.scheme() == "https" && origins.iter().any(|origin| origin == url.origin().ascii_serialization().as_str());
+        return (url.scheme() == "https" || is_local_integration_http(url)) && origins.iter().any(|origin| origin == url.origin().ascii_serialization().as_str());
     }
     url.scheme() == "https"
         && url.host_str().is_some_and(|host| {
@@ -1415,7 +1424,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let navigation_allowed_origins = allowed_origins.unwrap_or_default();
         let url = if let Some(value) = url {
             let parsed = value.parse::<tauri::Url>().map_err(|error| AppError::Message(error.to_string()))?;
-            if parsed.scheme() != "https" { return Err(AppError::Message("Integration pages must use HTTPS.".into())); }
+            if parsed.scheme() != "https" && !is_local_integration_http(&parsed) { return Err(AppError::Message("Integration pages must use HTTPS, except for local development pages.".into())); }
             if !navigation_allowed_origins.iter().any(|origin| origin == parsed.origin().ascii_serialization().as_str()) {
                 return Err(AppError::Message("The custom page origin is not allowed.".into()));
             }
@@ -1458,11 +1467,11 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
         #[cfg(target_os = "windows")]
         let integration_inspector = format!(
-            "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\n{}",
-            INTEGRATION_INSPECTOR,
+            "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\nwindow.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}",
+            WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR,
         );
         #[cfg(not(target_os = "windows"))]
-        let integration_inspector = INTEGRATION_INSPECTOR.to_owned();
+        let integration_inspector = format!("window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}", WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR);
         let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
             .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
             .visible(false)
@@ -1518,6 +1527,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                             format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
                         } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
                             format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
+                            format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
+                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
+                            format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
                         } else {
                             format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
                         };
@@ -1607,6 +1620,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                                     .and_then(|context| context.get("automatic"))
                                     .and_then(serde_json::Value::as_bool)
                                     == Some(true));
+                        let is_background_result = is_background_result
+                            || result.get("kind").and_then(serde_json::Value::as_str)
+                                .is_some_and(|kind| kind.starts_with("integration-webmcp-"));
                         navigation_action_mode.store(false, Ordering::SeqCst);
                         if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
                             let _ = toolbar.eval("window.hvySetInspectionState?.({})");
@@ -1828,6 +1844,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "discover-webmcp-tools" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
+        "invoke-webmcp-tool" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
+        "cancel-webmcp-tool" => window.eval(&format!("window.__hvyGalaxyWebMcp?.cancel(({}).requestId)", payload.unwrap_or_default())),
         "cancel-inspect" => {
             if let Some(toolbar) = app.get_webview(&integration_toolbar_label(&profile_id)) {
                 let _ = toolbar.eval("window.hvySetInspectionState?.({})");

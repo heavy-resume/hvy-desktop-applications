@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, defaultIntegrationRegistry, jsonPathFor, loadIntegrationRegistry, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, selectedInspectionContent } from './integrationRegistry';
+import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, createCustomPageIntegration, defaultIntegrationRegistry, jsonPathFor, loadIntegrationRegistry, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, selectedInspectionContent } from './integrationRegistry';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,6 +12,15 @@ describe('integration registry', () => {
     const registry = defaultIntegrationRegistry();
     expect(registry.integrations).toEqual([]);
     expect(registry.profiles.map((profile) => profile.id)).toEqual(['default-google']);
+  });
+
+  it('normalizes bare localhost development pages without allowing lookalike HTTP hosts', () => {
+    const integration = createCustomPageIntegration('Local WebMCP', 'localhost:5173');
+    expect(integration.pages[0]).toMatchObject({
+      url: 'http://localhost:5173/',
+      allowedOrigins: ['http://localhost:5173'],
+    });
+    expect(() => createCustomPageIntegration('Lookalike', 'http://127.example.com:5173')).toThrow('must use HTTPS');
   });
 
   it('restores manually configured web pages and their visible profiles', () => {

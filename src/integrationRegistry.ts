@@ -234,8 +234,15 @@ export function pageCommandExecutionPayload(command: IntegrationCommandDefinitio
 }
 
 export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {
-  const url = new URL(urlValue);
-  if (url.protocol !== 'https:') throw new Error('Integration pages must use HTTPS.');
+  const rawUrl = urlValue.trim();
+  const localWithoutScheme = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(rawUrl);
+  const url = new URL(localWithoutScheme ? `http://${rawUrl}` : rawUrl);
+  const hostname = url.hostname.toLowerCase();
+  const ipv4 = hostname.split('.').map(Number);
+  const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+  const localHttp = url.protocol === 'http:' && (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' || loopbackIpv4);
+  if (url.protocol !== 'https:' && !localHttp) throw new Error('Integration pages must use HTTPS, except for local development pages.');
+  if (!name.trim()) throw new Error('Enter a name for this integration page.');
   const id = `custom-${crypto.randomUUID()}`;
   return {
     id,

@@ -4,6 +4,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .manage(mcp::McpRuntime::default())
+        .manage(mcp::WebMcpBrokerRuntime::default())
         .manage(NativeMenuState::default())
         .manage(LaunchDocumentState {
             pending_paths: Mutex::new(launch_document_paths_from_args()),
@@ -13,6 +14,7 @@ pub fn run() {
             set_native_process_name();
             recover_pending_document_key_migrations(app.handle())?;
             install_camera_permission_handler(app.handle());
+            mcp::start_webmcp_broker(app.handle().clone())?;
             #[cfg(target_os = "macos")]
             macos_three_finger_swipe::install(app.handle().clone());
             let menu = build_menu(app.handle())?;
@@ -76,6 +78,8 @@ pub fn run() {
             mcp::start_mcp_server,
             mcp::stop_mcp_server,
             mcp::update_mcp_workspaces,
+            mcp::complete_web_mcp_broker_request,
+            mcp::set_web_mcp_broker_renderer_ready,
             load_included_document,
             open_workspace_dialog,
             reauthorize_workspace,
@@ -152,6 +156,9 @@ pub fn run() {
         .expect("error while building HVY Galaxy");
 
     app.run(|app, event| {
+        if matches!(&event, tauri::RunEvent::Exit) {
+            mcp::stop_webmcp_broker(app);
+        }
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
         if let tauri::RunEvent::Opened { urls } = event {
             for url in urls {

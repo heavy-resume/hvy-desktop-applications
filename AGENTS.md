@@ -7,3 +7,5 @@ You can't use alert boxes, or native confirm, or whatever here. Gotta be explici
 Don't use the storage key for heavy-file-format its intentionally not set so we can refresh against the file system.
 
 When writting CSS use classes do not use broad overrides and type selectors because they will break things in the HVY embed.
+
+When you make a checkbox always start with check to the left of the label, not top / bottom

@@ -67,7 +67,21 @@ fn handle_mcp_stdio_message<W: Write>(
         }
     };
     let is_tool_call = mcp_request_method(&request) == Some("tools/call");
-    let response = if is_tool_call {
+    let is_webmcp_call = is_tool_call && request
+        .get("params")
+        .and_then(|params| params.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| name == "webmcp_list_tools" || name == "webmcp_call_tool");
+    let response = if is_webmcp_call {
+        let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+        let broker_path = workspace_config_path.with_file_name(WEBMCP_BROKER_CONNECTION);
+        match webmcp_tool_call(&broker_path, &params, &workspace_config.integration_access) {
+            Some(Ok(result)) => json_rpc_result(id, result),
+            Some(Err(error)) => json_rpc_error(Some(id), -32000, &error.to_string()),
+            None => json_rpc_error(Some(id), -32602, "Unknown WebMCP tool."),
+        }
+    } else if is_tool_call {
         let workspaces = load_mcp_stdio_workspaces(workspace_paths)?;
         handle_mcp_tool_call_from_with_access_and_config(
             &workspaces,
@@ -84,7 +98,13 @@ fn handle_mcp_stdio_message<W: Write>(
             json_rpc_error(Some(id), -32000, &error.to_string())
         })
     } else {
-        handle_mcp_json_rpc_for_workspaces(&[], request)
+        handle_mcp_json_rpc_for_workspaces_with_policy(
+            &[],
+            request,
+            &workspace_config.write_access,
+            &workspace_config.integration_access,
+            Some(&workspace_config_path.with_file_name(WEBMCP_BROKER_CONNECTION)),
+        )
     };
     if !response.is_null() {
         write_mcp_stdio_message(output, &response, message.framing)?;

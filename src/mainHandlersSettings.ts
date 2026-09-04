@@ -14,6 +14,8 @@ import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './doc
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
 import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
+import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, webMcpCapabilityId } from './integrationWebMcp';
+import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 
 interface DocumentColorTheme {
   name: string;
@@ -659,6 +661,130 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationStructuredResult = null;
     rerender({ preserveMountedDocument: true });
   },
+  discoverIntegrationWebMcpTools: (integrationId, pageId) => {
+    const { page, profile } = integrationPageContext(integrationId, pageId);
+    const scanId = crypto.randomUUID();
+    state.integrationWebMcpPending = true;
+    state.integrationWebMcpError = null;
+    state.integrationWebMcpPageId = pageId;
+    state.integrationWebMcpProfileId = profile.id;
+    state.integrationWebMcpScanId = scanId;
+    rerender({ preserveMountedDocument: true });
+    void discoverIntegrationWebMcpTools(page, profile).then((tools) => {
+      if (state.integrationWebMcpScanId !== scanId) return;
+      let approvalsChanged = false;
+      const approvals = Object.fromEntries(Object.entries(state.appSettings.integrationWebMcpApprovals).map(([capabilityId, approval]) => {
+        const live = tools.find((tool) => tool.origin === approval.descriptor.origin && tool.name === approval.descriptor.name);
+        if (approval.integrationId === integrationId && approval.pageId === pageId && approval.profileId === profile.id && (!live || !approvalMatchesDescriptor(approval, live)) && (approval.scriptingEnabled || approval.mcpExposed)) {
+          approvalsChanged = true;
+          return [capabilityId, { ...approval, scriptingEnabled: false, mcpExposed: false }];
+        }
+        return [capabilityId, approval];
+      }));
+      if (approvalsChanged) {
+        const settings = { ...state.appSettings, integrationWebMcpApprovals: approvals };
+        state.appSettings = settings;
+        void saveAppSettings(settings).then((saved) => { state.appSettings = saved; });
+      }
+      state.integrationWebMcpTools = tools;
+      state.integrationWebMcpPending = false;
+      state.status = tools.length ? `Found ${tools.length} WebMCP tool${tools.length === 1 ? '' : 's'}` : 'No WebMCP tools found';
+      rerender({ preserveMountedDocument: true });
+    }).catch((error) => {
+      if (state.integrationWebMcpScanId !== scanId) return;
+      state.integrationWebMcpPending = false;
+      state.integrationWebMcpError = error instanceof Error ? error.message : String(error);
+      rerender({ preserveMountedDocument: true });
+    });
+  },
+  reviewIntegrationWebMcpTool: (integrationId, pageId, toolIndex) => {
+    const { profile } = integrationPageContext(integrationId, pageId);
+    if (state.integrationWebMcpPageId !== pageId || state.integrationWebMcpProfileId !== profile.id) {
+      throw new Error('Scan this page with the selected browser profile before reviewing its WebMCP tools.');
+    }
+    const tool = state.integrationWebMcpTools[toolIndex];
+    if (!tool) throw new Error('The WebMCP tool is no longer in the current scan.');
+    state.integrationWebMcpReviewTool = tool;
+    state.integrationWebMcpReviewIntegrationId = integrationId;
+    state.integrationWebMcpReviewPageId = pageId;
+    state.integrationWebMcpReviewProfileId = state.integrationWebMcpProfileId;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelIntegrationWebMcpReview: () => {
+    state.integrationWebMcpReviewTool = null;
+    state.integrationWebMcpReviewIntegrationId = null;
+    state.integrationWebMcpReviewPageId = null;
+    state.integrationWebMcpReviewProfileId = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  approveIntegrationWebMcpTool: (scriptingEnabled, mcpExposed) => {
+    const descriptor = state.integrationWebMcpReviewTool;
+    const integrationId = state.integrationWebMcpReviewIntegrationId;
+    const pageId = state.integrationWebMcpReviewPageId;
+    const profileId = state.integrationWebMcpReviewProfileId;
+    if (!descriptor || !integrationId || !pageId || !profileId) throw new Error('The WebMCP approval is incomplete.');
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    if (!integration?.pages.some((candidate) => candidate.id === pageId)
+      || !state.integrationRegistry.profiles.some((candidate) => candidate.id === profileId)) {
+      throw new Error('The WebMCP page or browser profile is no longer available.');
+    }
+    const capabilityId = webMcpCapabilityId(integrationId, pageId, profileId, descriptor);
+    const settings = {
+      ...state.appSettings,
+      integrationWebMcpApprovals: approveIntegrationWebMcpTool(state.appSettings.integrationWebMcpApprovals, {
+        capabilityId, integrationId, pageId, profileId, descriptor, scriptingEnabled, mcpExposed,
+      }),
+    };
+    state.appSettings = settings;
+    state.integrationWebMcpReviewTool = null;
+    state.integrationWebMcpReviewIntegrationId = null;
+    state.integrationWebMcpReviewPageId = null;
+    state.integrationWebMcpReviewProfileId = null;
+    rerender({ preserveMountedDocument: true });
+    void saveAppSettings(settings).then((saved) => { state.appSettings = saved; });
+  },
+  setIntegrationWebMcpExposure: (capabilityId, kind, enabled) => {
+    const approval = state.appSettings.integrationWebMcpApprovals[capabilityId];
+    if (!approval) return;
+    const updated = { ...approval, [kind === 'scripting' ? 'scriptingEnabled' : 'mcpExposed']: enabled };
+    const settings = { ...state.appSettings, integrationWebMcpApprovals: { ...state.appSettings.integrationWebMcpApprovals, [capabilityId]: updated } };
+    state.appSettings = settings;
+    rerender({ preserveMountedDocument: true });
+    void saveAppSettings(settings).then((saved) => { state.appSettings = saved; });
+  },
+  requestInvokeIntegrationWebMcpTool: (capabilityId) => {
+    state.integrationWebMcpInvokeCapabilityId = capabilityId;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelInvokeIntegrationWebMcpTool: () => {
+    state.integrationWebMcpInvokeCapabilityId = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  invokeIntegrationWebMcpTool: (capabilityId, args) => {
+    const approval = state.appSettings.integrationWebMcpApprovals[capabilityId];
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === approval?.integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === approval?.pageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === approval?.profileId);
+    if (!approval || !page || !profile) throw new Error('The approved WebMCP tool is unavailable.');
+    state.integrationWebMcpInvokeCapabilityId = null;
+    state.integrationWebMcpPending = true;
+    rerender({ preserveMountedDocument: true });
+    void invokeIntegrationWebMcpTool(approval, page, profile, args, true).then((result) => {
+      state.integrationWebMcpResult = assertLiveWebMcpDescriptor(approval, result);
+      state.integrationWebMcpResultOpen = true;
+      state.integrationWebMcpPending = false;
+      rerender({ preserveMountedDocument: true });
+    }).catch((error) => {
+      state.integrationWebMcpPending = false;
+      state.integrationWebMcpError = error instanceof Error ? error.message : String(error);
+      rerender({ preserveMountedDocument: true });
+    });
+  },
+  closeIntegrationWebMcpResult: () => {
+    state.integrationWebMcpResultOpen = false;
+    state.integrationWebMcpResult = null;
+    rerender({ preserveMountedDocument: true });
+  },
   openIntegrations: () => {
     if (!state.integrationRegistry.integrations.some((integration) => integration.id === state.selectedIntegrationId)) {
       state.selectedIntegrationId = state.integrationRegistry.integrations[0]?.id ?? '';
@@ -680,23 +806,34 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   requestAddIntegrationPage: () => {
+    state.integrationPageError = null;
     state.addIntegrationPageDialogOpen = true;
     rerender({ preserveMountedDocument: true });
   },
   cancelAddIntegrationPage: () => {
+    state.integrationPageError = null;
     state.addIntegrationPageDialogOpen = false;
     rerender({ preserveMountedDocument: true });
   },
   addIntegrationPage: (name, url) => {
-    const integration = createCustomPageIntegration(name, url);
-    state.integrationRegistry = {
-      ...state.integrationRegistry,
-      integrations: [...state.integrationRegistry.integrations, integration],
-    };
-    state.selectedIntegrationId = integration.id;
-    saveIntegrationRegistry(state.integrationRegistry);
-    state.addIntegrationPageDialogOpen = false;
-    state.status = `Added ${integration.name}`;
+    try {
+      const integration = createCustomPageIntegration(name, url);
+      state.integrationRegistry = {
+        ...state.integrationRegistry,
+        integrations: [...state.integrationRegistry.integrations, integration],
+      };
+      state.selectedIntegrationId = integration.id;
+      saveIntegrationRegistry(state.integrationRegistry);
+      state.addIntegrationPageDialogOpen = false;
+      state.integrationPageError = null;
+      state.status = `Added ${integration.name}`;
+    } catch (error) {
+      state.integrationPageError = error instanceof Error ? error.message : String(error);
+    }
+    rerender({ preserveMountedDocument: true });
+  },
+  closeIntegrationPageError: () => {
+    state.integrationPageError = null;
     rerender({ preserveMountedDocument: true });
   },
   selectIntegration: (integrationId) => {

@@ -66,6 +66,74 @@
   font-size: 12px;
 }
 
+.integration-webmcp-list .integration-webmcp-tool {
+  align-items: flex-start;
+}
+
+.integration-webmcp-summary {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 0.2rem;
+}
+
+.integration-webmcp-list .integration-webmcp-actions {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.integration-webmcp-actions .hvy-galaxy-button {
+  white-space: nowrap;
+}
+
+.integration-webmcp-toggle {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.integration-webmcp-consequential {
+  color: var(--hvy-danger, #a12f24);
+  font-weight: 700;
+}
+
+.integration-webmcp-untrusted {
+  color: var(--hvy-warning-text, #765312);
+  font-weight: 650;
+}
+
+.integration-webmcp-permissions {
+  display: grid;
+  gap: 14px;
+}
+
+.integration-webmcp-review-dialog .integration-webmcp-permission {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.integration-webmcp-permission > input {
+  flex: 0 0 auto;
+  margin: 3px 0 0;
+}
+
+.integration-webmcp-permission-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.integration-webmcp-review-dialog .integration-webmcp-permission-copy > strong {
+  color: var(--hvy-text, #1d2926);
+  font-size: 14px;
+}
+
+.integration-webmcp-review-dialog .integration-webmcp-permission-copy > small {
+  color: var(--hvy-muted, #5d6b66);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .integration-list-add {
   margin-top: auto;
 }
@@ -473,4 +541,3 @@
   align-items: center;
   gap: 8px;
 }
-

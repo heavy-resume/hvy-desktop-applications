@@ -9,6 +9,7 @@ import {
   type WebCommandCapabilityConfig,
   type WebRecordsCapabilityConfig,
 } from './webCapabilities';
+import { enqueueWebCapabilityForProfile } from './webCapabilityQueue';
 
 export interface WebCapabilityExecutionContext {
   documentPath: string;
@@ -38,7 +39,6 @@ type PendingOperation = {
 };
 
 const pendingOperations = new Map<string, PendingOperation>();
-const profileQueues = new Map<string, Promise<unknown>>();
 const BACKGROUND_OPERATION_TIMEOUT_MS = 60_000;
 const INTERACTIVE_OPERATION_TIMEOUT_MS = 10 * 60_000;
 
@@ -56,16 +56,6 @@ function assertAuthorized(config: WebCapabilityConfig, context: WebCapabilityExe
     config,
     context.profile.id,
   )) throw new WebCapabilityAuthorizationError();
-}
-
-function enqueueForProfile<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
-  const previous = profileQueues.get(profileId) ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(operation);
-  profileQueues.set(profileId, current);
-  void current.finally(() => {
-    if (profileQueues.get(profileId) === current) profileQueues.delete(profileId);
-  }).catch(() => undefined);
-  return current;
 }
 
 function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], timeoutMs: number): Promise<T> {
@@ -105,7 +95,7 @@ export async function executeWebRecordsCapability(
   context: WebCapabilityExecutionContext,
 ): Promise<WebRecordsExecutionResult> {
   assertAuthorized(config, context);
-  return enqueueForProfile(context.profile.id, async () => {
+  return enqueueWebCapabilityForProfile(context.profile.id, async () => {
     const requestId = crypto.randomUUID();
     const result = waitForResult<WebRecordsExecutionResult>(
       requestId,
@@ -140,7 +130,7 @@ async function executeCommand(
   recordParent?: string,
 ): Promise<WebCommandExecutionResult> {
   assertAuthorized(config, context);
-  return enqueueForProfile(context.profile.id, async () => {
+  return enqueueWebCapabilityForProfile(context.profile.id, async () => {
     const requestId = crypto.randomUUID();
     const result = waitForResult<WebCommandExecutionResult>(
       requestId,

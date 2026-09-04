@@ -347,7 +347,15 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     }
     if (action === 'fetch-integration-source' && target.dataset.integrationId && target.dataset.pageId && target.dataset.sourceId) handlers.fetchIntegrationSource(target.dataset.integrationId, target.dataset.pageId, target.dataset.sourceId);
     if (action === 'close-integration-structured-result') handlers.closeIntegrationStructuredResult();
+    if (action === 'discover-webmcp-tools' && target.dataset.integrationId && target.dataset.pageId) handlers.discoverIntegrationWebMcpTools(target.dataset.integrationId, target.dataset.pageId);
+    if (action === 'review-webmcp-tool' && target.dataset.integrationId && target.dataset.pageId && target.dataset.toolIndex) handlers.reviewIntegrationWebMcpTool(target.dataset.integrationId, target.dataset.pageId, Number(target.dataset.toolIndex));
+    if (action === 'cancel-webmcp-review') handlers.cancelIntegrationWebMcpReview();
+    if (action === 'set-webmcp-exposure' && target instanceof HTMLInputElement && target.dataset.capabilityId && (target.dataset.kind === 'scripting' || target.dataset.kind === 'mcp')) handlers.setIntegrationWebMcpExposure(target.dataset.capabilityId, target.dataset.kind, target.checked);
+    if (action === 'invoke-webmcp-tool' && target.dataset.capabilityId) handlers.requestInvokeIntegrationWebMcpTool(target.dataset.capabilityId);
+    if (action === 'cancel-invoke-webmcp-tool') handlers.cancelInvokeIntegrationWebMcpTool();
+    if (action === 'close-webmcp-result') handlers.closeIntegrationWebMcpResult();
     if (action === 'cancel-add-integration-page') handlers.cancelAddIntegrationPage();
+    if (action === 'close-integration-page-error') handlers.closeIntegrationPageError();
     if (action === 'request-add-integration-profile') handlers.requestAddIntegrationProfile();
     if (action === 'cancel-add-integration-profile') handlers.cancelAddIntegrationProfile();
     if (action === 'set-inspection-privacy' && target.dataset.path) {

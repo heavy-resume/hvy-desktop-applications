@@ -92,6 +92,13 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/webCapabilities.ts',
     root: 'app',
   },
+  {
+    id: 'hvy.webmcp-tool',
+    key: 'webMcpTool',
+    exportName: 'webMcpToolPlugin',
+    modulePath: 'src/plugins/webMcpTool.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {

@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
+import { completeWebMcpBrokerRequest, includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
@@ -12,10 +12,12 @@ import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigat
 import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
 import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
+import { handleIntegrationWebMcpResult } from './integrationWebMcpRuntime';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
 import { runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
 import { loadWorkspaceExpansionState } from './workspaceExpansionState';
+import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 
 let findShortcutBound = false;
 
@@ -57,6 +59,7 @@ export async function boot(): Promise<void> {
       void handleAppCloseRequest();
     });
     await onIntegrationInspectionResult(async (result) => {
+      if (handleIntegrationWebMcpResult(result)) return;
       if (handleWebCapabilityIntegrationResult(result)) return;
       if (result && typeof result === 'object'
         && (result as { kind?: unknown }).kind === 'integration-ready-check-validation') {
@@ -309,6 +312,11 @@ export async function boot(): Promise<void> {
         return;
       }
       await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+    });
+    await onWebMcpBrokerRequest((request) => {
+      void handleWebMcpBrokerRequest(request)
+        .then((value) => completeWebMcpBrokerRequest(request.requestId, value))
+        .catch((error) => completeWebMcpBrokerRequest(request.requestId, undefined, error instanceof Error ? error.message : String(error)));
     });
     await onMenuEvent((event) => {
       if (event === 'new-workspace') handlers.newWorkspace();

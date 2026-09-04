@@ -199,6 +199,31 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
     ])
 }
 
+pub(crate) fn mcp_tool_list_with_integration_access(integration_access: &str) -> serde_json::Value {
+    let mut tools = mcp_tool_list().as_array().cloned().unwrap_or_default();
+    if normalize_mcp_integration_access(integration_access) != "off" {
+        tools.push(serde_json::json!({
+            "name": "webmcp_list_tools",
+            "description": "List site-provided WebMCP tools that the user explicitly exposed through Galaxy MCP.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        }));
+        tools.push(serde_json::json!({
+            "name": "webmcp_call_tool",
+            "description": "Call one explicitly exposed WebMCP capability through its Galaxy-bound browser profile.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "capabilityId": { "type": "string", "description": "Capability ID returned by webmcp_list_tools." },
+                    "arguments": { "type": "object", "description": "Structured arguments matching the tool input schema." }
+                },
+                "required": ["capabilityId"],
+                "additionalProperties": false
+            }
+        }));
+    }
+    serde_json::Value::Array(tools)
+}
+
 fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult<serde_json::Value> {
     let archived_workspaces_path = archived_workspaces_path(app)?;
     handle_mcp_tool_call_from_with_access_config_and_archive_path(

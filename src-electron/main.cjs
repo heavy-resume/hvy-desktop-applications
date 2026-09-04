@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { pathToFileURL } = require('node:url');
 const { promisify } = require('node:util');
 const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
@@ -69,6 +70,10 @@ let mcpStatus = {
   message: 'MCP server is stopped.',
   lastError: null,
 };
+let webMcpBrokerServer = null;
+let webMcpBrokerToken = null;
+let webMcpBrokerRendererReady = false;
+const webMcpBrokerPending = new Map();
 
 function raiseWindow(window) {
   if (!window || window.isDestroyed()) return;
@@ -111,6 +116,7 @@ app.whenReady().then(async () => {
   bindWindowShortcuts(mainWindow);
   buildMenu();
   await loadRenderer(mainWindow);
+  await startWebMcpBroker();
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -133,6 +139,8 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   requestNativeAppClose({ quit: true });
 });
+
+app.on('will-quit', () => stopWebMcpBroker());
 
 function handleSquirrelStartupEvent() {
   if (process.platform !== 'win32' || process.argv.length < 2) {
@@ -183,6 +191,9 @@ function createWindow() {
   });
   installEditableContextMenu(window);
   window.webContents.setVisualZoomLevelLimits(1, 1);
+  window.webContents.on('did-start-loading', () => {
+    if (mainWindow === window) webMcpBrokerRendererReady = false;
+  });
   window.on('close', (event) => {
     if (appCloseAllowed) return;
     event.preventDefault();
@@ -600,6 +611,10 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
   }
 });
 
+ipcMain.on('hvy:webmcp-broker-renderer-ready', (event) => {
+  if (mainWindow && event.sender === mainWindow.webContents) webMcpBrokerRendererReady = true;
+});
+
 async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
@@ -621,6 +636,7 @@ async function handleCommand(command, args) {
       const browser = integrationBrowsers.get(args.profileId || 'default-google');
       return Boolean(browser?.window && !browser.window.isDestroyed() && !browser.closePromise);
     }
+    case 'complete_web_mcp_broker_request': return completeWebMcpBrokerRequest(args.requestId, args.value, args.error);
     case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
     case 'load_integration_vault_status': return loadIntegrationVaultStatus();
     case 'setup_integration_vault': return setupIntegrationVault();
@@ -785,6 +801,9 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
   if (command === 'discover-sources') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
   if (command === 'fetch-source') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'discover-webmcp-tools') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  if (command === 'invoke-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  if (command === 'cancel-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.cancel(${JSON.stringify(payload?.requestId)}) : undefined`);
   if (command === 'cancel-inspect') {
     browserContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
     setIntegrationToolbarInspectionState(browser);
@@ -1306,8 +1325,10 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     const browserView = new WebContentsView({
       webPreferences: {
         partition: `hvy-galaxy-integrations-${profileId}-${Date.now()}`,
+        preload: path.join(__dirname, 'integration-preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,
+        nodeIntegrationInSubFrames: true,
         sandbox: true,
         webSecurity: true,
         backgroundThrottling: false,
@@ -1405,7 +1426,8 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
         const isBackgroundResult = result?.kind === 'integration-ready-check-validation'
           || (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
-          || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true);
+          || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
+          || String(result?.kind || '').startsWith('integration-webmcp-');
         if (!isBackgroundResult) raiseWindow(mainWindow);
         return;
       }
@@ -1458,6 +1480,12 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
           }
           if (extraction.kind === 'source-fetch') {
             return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
+          }
+          if (extraction.kind === 'webmcp-discovery') {
+            return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+          }
+          if (extraction.kind === 'webmcp-invocation') {
+            return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
           }
           return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
         }
@@ -1517,7 +1545,10 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
 function isAllowedIntegrationUrl(value, allowedOrigins = null) {
   try {
     const url = new URL(value);
-    if (allowedOrigins) return url.protocol === 'https:' && allowedOrigins.has(url.origin);
+    const ipv4 = url.hostname.split('.').map(Number);
+    const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const localHttp = url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '::1' || url.hostname === '[::1]' || loopbackIpv4);
+    if (allowedOrigins) return (url.protocol === 'https:' || localHttp) && allowedOrigins.has(url.origin);
     return url.protocol === 'https:' && (
       url.hostname === 'msn.com'
       || url.hostname.endsWith('.msn.com')
@@ -1587,6 +1618,102 @@ function sharedAppDataDir() {
     return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), APP_IDENTIFIER);
   }
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), APP_IDENTIFIER);
+}
+
+function webMcpBrokerConnectionPath() {
+  return path.join(sharedAppDataDir(), 'mcp', 'webmcp-broker.json');
+}
+
+function completeWebMcpBrokerRequest(requestId, value, error) {
+  const pending = webMcpBrokerPending.get(requestId);
+  if (!pending) return null;
+  clearTimeout(pending.timeout);
+  webMcpBrokerPending.delete(requestId);
+  pending.resolve(error ? { ok: false, error: String(error) } : { ok: true, value });
+  return null;
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    request.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 1024 * 1024 && !settled) {
+        settled = true;
+        chunks.length = 0;
+        reject(new Error('Broker request exceeded the 1 MB limit.'));
+      } else if (!settled) chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (!settled) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    request.on('error', (error) => {
+      if (!settled) reject(error);
+    });
+  });
+}
+
+async function startWebMcpBroker() {
+  if (webMcpBrokerServer) return;
+  webMcpBrokerToken = crypto.randomBytes(32).toString('base64url');
+  webMcpBrokerServer = http.createServer(async (request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.method !== 'POST' || request.url !== '/webmcp') {
+      response.statusCode = 404;
+      response.end(JSON.stringify({ ok: false, error: 'Not found.' }));
+      return;
+    }
+    if (request.headers.authorization !== `Bearer ${webMcpBrokerToken}`) {
+      response.statusCode = 401;
+      response.end(JSON.stringify({ ok: false, error: 'Unauthorized.' }));
+      return;
+    }
+    try {
+      const input = JSON.parse(await readRequestBody(request));
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || !webMcpBrokerRendererReady) {
+        response.statusCode = 503;
+        response.end(JSON.stringify({ ok: false, error: "Galaxy's trusted renderer is unavailable." }));
+        return;
+      }
+      const requestId = crypto.randomUUID();
+      const result = new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          webMcpBrokerPending.delete(requestId);
+          resolve({ ok: false, error: 'Galaxy timed out while executing the WebMCP request.' });
+        }, 65_000);
+        webMcpBrokerPending.set(requestId, { resolve, timeout });
+      });
+      const settings = normalizeMcpSettings(readJson(dataPath(MCP_SETTINGS), defaultMcpSettings()));
+      mainWindow.webContents.send('hvy:webmcp-broker-request', { ...input, requestId, integrationAccess: settings.integrationAccess });
+      response.end(JSON.stringify(await result));
+    } catch (error) {
+      response.statusCode = 400;
+      response.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+    }
+  });
+  await new Promise((resolve, reject) => {
+    webMcpBrokerServer.once('error', reject);
+    webMcpBrokerServer.listen(0, '127.0.0.1', resolve);
+  });
+  const address = webMcpBrokerServer.address();
+  const connectionPath = webMcpBrokerConnectionPath();
+  fs.mkdirSync(path.dirname(connectionPath), { recursive: true });
+  writeJson(connectionPath, { schemaVersion: 1, url: `http://127.0.0.1:${address.port}/webmcp`, bearerToken: webMcpBrokerToken, pid: process.pid });
+  try { fs.chmodSync(connectionPath, 0o600); } catch (_) {}
+}
+
+function stopWebMcpBroker() {
+  webMcpBrokerRendererReady = false;
+  webMcpBrokerServer?.close();
+  webMcpBrokerServer = null;
+  for (const pending of webMcpBrokerPending.values()) {
+    clearTimeout(pending.timeout);
+    pending.resolve({ ok: false, error: 'Galaxy is closing.' });
+  }
+  webMcpBrokerPending.clear();
+  try { fs.unlinkSync(webMcpBrokerConnectionPath()); } catch (_) {}
 }
 
 function electronProfileDir() {
@@ -3425,6 +3552,7 @@ function defaultAppSettings() {
     pluginAcceptances: {},
     webCapabilityProfileBindings: {},
     webCapabilityAuthorizations: {},
+    integrationWebMcpApprovals: {},
   };
 }
 
@@ -3443,7 +3571,21 @@ function normalizeAppSettings(settings) {
     pluginAcceptances: normalizePowerScriptAcceptances(settings?.pluginAcceptances),
     webCapabilityProfileBindings: normalizeNestedStringMap(settings?.webCapabilityProfileBindings),
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings?.webCapabilityAuthorizations),
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings?.integrationWebMcpApprovals),
   };
+}
+
+function normalizeIntegrationWebMcpApprovals(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([capabilityId, approval]) => (
+    capabilityId && approval && typeof approval === 'object' && !Array.isArray(approval)
+      && approval.capabilityId === capabilityId
+      && typeof approval.integrationId === 'string'
+      && typeof approval.pageId === 'string'
+      && typeof approval.profileId === 'string'
+      && typeof approval.descriptorHash === 'string'
+      && approval.descriptor && typeof approval.descriptor === 'object'
+  )));
 }
 
 function normalizeHomepageSetting(value) {
@@ -3906,6 +4048,7 @@ function updateMcpWorkspaces(paths) {
   writeMcpStdioWorkspaceConfig({
     workspaces: deduped,
     writeAccess: settings.writeAccess,
+    integrationAccess: settings.integrationAccess,
   });
   return null;
 }
