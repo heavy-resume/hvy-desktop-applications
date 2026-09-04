@@ -160,10 +160,7 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
     }
     if (form.dataset.form === 'save-webmcp-record-type') {
       const data = new FormData(form);
-      const fields = data.getAll('recordField').map((value) => {
-        const name = String(value);
-        return { name, label: String(data.get(`fieldLabel:${name}`) ?? name) };
-      });
+      const fields = data.getAll('recordField').map((value) => ({ name: String(value), label: String(value) }));
       handlers.saveIntegrationWebMcpRecordType(String(data.get('recordName') ?? ''), String(data.get('recordsPath') ?? ''), fields);
     }
     if (form.dataset.form === 'integration-action-instructions') {

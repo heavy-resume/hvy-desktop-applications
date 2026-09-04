@@ -91,7 +91,6 @@ export interface IntegrationActionDefinition {
 export interface IntegrationWebMcpRecordSourceDefinition {
   kind: 'webmcp';
   capabilityId: string;
-  arguments: Record<string, unknown>;
   recordsPath: string;
   fields: Array<{ name: string; label: string }>;
 }

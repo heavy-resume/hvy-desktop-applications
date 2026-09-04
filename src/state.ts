@@ -201,11 +201,11 @@ export interface AppState {
   integrationWebMcpReviewProfileId: string | null;
   integrationWebMcpInvokeCapabilityId: string | null;
   integrationWebMcpInvokeForRecordType: boolean;
+  integrationWebMcpInvokeActionId: string | null;
   integrationWebMcpResultOpen: boolean;
   integrationWebMcpResultForRecordType: boolean;
   integrationWebMcpResult: unknown;
   integrationWebMcpResultCapabilityId: string | null;
-  integrationWebMcpResultArguments: Record<string, unknown>;
   integrationWebMcpRecordBuilderOpen: boolean;
   integrationWebMcpRecordBuilderPath: string;
   integrationWebMcpConfigureAfterReview: boolean;
@@ -545,11 +545,11 @@ export const state: AppState = {
   integrationWebMcpReviewProfileId: null,
   integrationWebMcpInvokeCapabilityId: null,
   integrationWebMcpInvokeForRecordType: false,
+  integrationWebMcpInvokeActionId: null,
   integrationWebMcpResultOpen: false,
   integrationWebMcpResultForRecordType: false,
   integrationWebMcpResult: null,
   integrationWebMcpResultCapabilityId: null,
-  integrationWebMcpResultArguments: {},
   integrationWebMcpRecordBuilderOpen: false,
   integrationWebMcpRecordBuilderPath: '',
   integrationWebMcpConfigureAfterReview: false,

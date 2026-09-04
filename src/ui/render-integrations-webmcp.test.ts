@@ -42,7 +42,7 @@ describe('WebMCP result dialog', () => {
     const pageId = 'page';
     const descriptor: IntegrationWebMcpToolDescriptor = {
       origin: 'https://example.com', name: 'items.read', title: 'Items', description: 'Read items.',
-      inputSchema: { type: 'object' },
+      inputSchema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } },
       annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
     };
     const capabilityId = webMcpCapabilityId(integrationId, pageId, profile.id, descriptor);
@@ -63,9 +63,11 @@ describe('WebMCP result dialog', () => {
     expect(html).toContain('integration-webmcp-record-builder-backdrop');
     expect(html).toContain('aria-label="WebMCP result" aria-hidden="true" inert');
     expect(html).toContain('name="recordsPath" value="/items" data-action="select-webmcp-record-path" checked');
-    expect(html).toContain('id, title');
+    expect(html).toContain('found at this JSON path');
+    expect(html).toContain('Fields in /items');
+    expect(html).toContain('integration-webmcp-record-fields');
     expect(html).toContain('<input type="checkbox" name="recordField" value="id" checked>');
-    expect(html).toContain('name="fieldLabel:title" value="title"');
+    expect(html).not.toContain('fieldLabel:');
     expect(html).toContain('data-action="close-webmcp-result">Cancel</button>');
   });
 
@@ -130,6 +132,7 @@ describe('record type source chooser', () => {
     expect(sourceHtml).not.toContain('>Scan tools</button>');
 
     const pickerHtml = renderIntegrationRecordSourceDialog({ ...common, integrationRecordSourceStep: 'webmcp' });
+    expect(pickerHtml).toContain('integration-webmcp-tool-picker-dialog');
     expect(pickerHtml).toContain('Ready to configure');
     expect(pickerHtml).toContain('data-tool-index="0" >Configure</button>');
   });
@@ -163,7 +166,7 @@ describe('WebMCP record types', () => {
     const profile = state.integrationRegistry.profiles[0];
     const descriptor: IntegrationWebMcpToolDescriptor = {
       origin: 'https://example.com', name: 'items.read', title: 'Items', description: 'Read items.',
-      inputSchema: { type: 'object' },
+      inputSchema: { type: 'object', required: ['query'], properties: { query: { type: 'string' } } },
       annotations: { readOnlyHint: true, untrustedContentHint: false, consequentialHint: false },
     };
     const capabilityId = webMcpCapabilityId('integration', 'page', profile.id, descriptor);
@@ -185,7 +188,7 @@ describe('WebMCP record types', () => {
           actions: [{
             id: 'records', integrationId: 'integration', name: 'Saved items', description: '', pageIds: ['page'],
             script: 'webmcp-record-source-v1', resultSchema: {}, permissions: [], version: 1,
-            source: { kind: 'webmcp', capabilityId, arguments: {}, recordsPath: '/items', fields: [{ name: 'id', label: 'id' }] },
+            source: { kind: 'webmcp', capabilityId, recordsPath: '/items', fields: [{ name: 'id', label: 'id' }] },
           }],
         }],
       },
@@ -194,6 +197,30 @@ describe('WebMCP record types', () => {
     expect(html).toContain('data-action="run-integration-action"');
     expect(html).not.toContain('data-action="add-command-for-integration-action"');
     expect(html).not.toContain('data-action="edit-integration-action"');
+
+    const prompt = renderIntegrationWebMcpInvokeDialog({
+      ...state,
+      appSettings: { ...state.appSettings, integrationWebMcpApprovals: approvals },
+      integrationRegistry: {
+        version: 1,
+        profiles: [profile],
+        integrations: [{
+          id: 'integration', name: 'Example', profileProviderId: 'browser', editable: true,
+          pages: [{ id: 'page', name: 'Example', url: 'https://example.com/', allowedOrigins: ['https://example.com'], editable: true }],
+          actions: [{
+            id: 'records', integrationId: 'integration', name: 'Saved items', description: '', pageIds: ['page'],
+            script: 'webmcp-record-source-v1', resultSchema: {}, permissions: [], version: 1,
+            source: { kind: 'webmcp', capabilityId, recordsPath: '/items', fields: [{ name: 'id', label: 'id' }] },
+          }],
+        }],
+      },
+      integrationWebMcpInvokeCapabilityId: capabilityId,
+      integrationWebMcpInvokeActionId: 'records',
+    });
+    expect(prompt).toContain('Fetch Saved items');
+    expect(prompt).toContain('data-argument-name="query"');
+    expect(prompt).toContain('asks each time and does not save them');
+    expect(prompt).toContain('>Fetch items</button>');
   });
 });
 
