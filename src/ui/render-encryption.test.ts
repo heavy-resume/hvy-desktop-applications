@@ -7,6 +7,7 @@ function encryptionDialogState(action: 'encrypt' | 'decrypt'): AppState {
     documentEncryptionDialogOpen: true,
     documentEncryptionAction: action,
     documentEncryptionKeyId: null,
+    documentEncryptionKeyLabel: '',
     documentEncryptionKeyUsage: {},
     documentKeyDataLoading: false,
     documentKeyMetadata: [],
@@ -23,6 +24,8 @@ describe('document encryption confirmation dialog', () => {
     expect(html).not.toContain('aria-label="Close">×</button>');
     expect(html).not.toContain('Encrypt Document</button>');
     expect(html).toContain('Create a new key');
+    expect(html).toContain('New key name');
+    expect(html).toContain('placeholder="Unnamed Key"');
     expect(html.indexOf('>Confirm</button>')).toBeLessThan(html.indexOf('>Cancel</button>'));
   });
 
@@ -50,6 +53,7 @@ describe('document encryption confirmation dialog', () => {
     const keyId = '22222222-2222-4222-8222-222222222222';
     const html = renderDocumentEncryptionDialog({
       ...encryptionDialogState('encrypt'),
+      documentEncryptionKeyId: keyId,
       documentKeyMetadata: [{
         keyId,
         source: 'imported',
@@ -88,6 +92,7 @@ describe('document key manager', () => {
     const html = renderDocumentKeyManagerDialog({
       documentKeyManagerDialogOpen: true,
       documentEncryptionKeyUsage: { '11111111-1111-4111-8111-111111111111': { documents: ['Planning / Notes.hvy'], folders: ['Planning / Private'] } },
+      documentKeyUsageLoaded: true,
       documentKeyDataLoading: false,
       documentKeyMetadata: [{
         keyId: '11111111-1111-4111-8111-111111111111',
@@ -108,6 +113,7 @@ describe('document key manager', () => {
     expect(html).toContain('Planning bundle');
     expect(html).toContain('11111111-1111-4111-8111-111111111111');
     expect(html).toContain('Imported');
+    expect(html).not.toContain('2026-09-02T12:00:00.000Z');
     expect(html).toContain('Documents: Planning / Notes.hvy');
     expect(html).toContain('Folders: Planning / Private');
     expect(html).toContain('document-key-row');
@@ -115,7 +121,36 @@ describe('document key manager', () => {
     expect(html).toContain('data-action="rename-document-key"');
     expect(html).toContain('data-action="export-document-key"');
     expect(html).toContain('Bundles: Planning bundle');
-    expect(html).toContain('data-action="request-delete-document-key"');
+    expect(html).not.toContain('data-action="request-delete-document-key"');
+    expect(html).not.toContain('data-action="close-document-key-manager" aria-label="Close"');
+  });
+
+  it('shows an unnamed, unused key with the compact delete control', () => {
+    const keyId = '22222222-2222-4222-8222-222222222222';
+    const html = renderDocumentKeyManagerDialog({
+      documentKeyManagerDialogOpen: true,
+      documentEncryptionKeyUsage: {},
+      documentKeyUsageLoaded: true,
+      documentKeyDataLoading: false,
+      documentKeyMetadata: [{
+        keyId,
+        source: 'generated',
+        createdAt: '2026-09-02T12:00:00.000Z',
+      }],
+      documentKeyVaultStatus: {
+        configured: true,
+        hasVault: true,
+        storageMode: 'safeStorageVault',
+        state: 'ready',
+      },
+    } as unknown as AppState);
+
+    expect(html).toContain('Unnamed Key');
+    expect(html).toContain('placeholder="Unnamed Key"');
+    expect(html).toContain('No local usages');
+    expect(html).toContain(`aria-label="Delete Unnamed Key"`);
+    expect(html).toContain('>×</button>');
+    expect(html).not.toContain('>Remove…</button>');
   });
 
   it.each([
@@ -141,14 +176,23 @@ describe('document key manager', () => {
     expect(html).toContain('data-action="choose-document-key-files" disabled');
   });
 
-  it('requires an explicit modal and explains that device removal is not revocation', () => {
+  it('uses the key name and ID in the simplified delete confirmation', () => {
     const html = renderDocumentKeyDeleteDialog({
       documentKeyDeleteId: '11111111-1111-4111-8111-111111111111',
-      documentKeyMetadata: [],
+      documentKeyMetadata: [{
+        keyId: '11111111-1111-4111-8111-111111111111',
+        label: 'Planning key',
+        source: 'generated',
+        createdAt: '2026-09-02T12:00:00.000Z',
+      }],
     } as unknown as AppState);
 
-    expect(html).toContain('Remove key from this device?');
-    expect(html).toContain('does not revoke exported key files');
+    expect(html).toContain('Delete Planning key?');
+    expect(html).toContain('<span class="document-key-delete-label">Key ID</span>');
+    expect(html).toContain('<code class="document-key-delete-id">11111111-1111-4111-8111-111111111111</code>');
+    expect(html).not.toContain('HVY encryption key');
+    expect(html).not.toContain('<dt>Key</dt>');
+    expect(html).not.toContain('aria-label="Close"');
     expect(html).toContain('data-action="confirm-delete-document-key"');
   });
 });

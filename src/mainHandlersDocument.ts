@@ -115,6 +115,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     const encrypted = document.mounted.document.encryption?.encrypted === true;
     if ((action === 'encrypt' && encrypted) || (action === 'decrypt' && !encrypted)) return;
     state.documentEncryptionKeyId = null;
+    state.documentEncryptionKeyLabel = '';
     if (action === 'encrypt') {
       state.documentKeyMetadata = [];
       state.documentKeyDataLoading = true;
@@ -143,9 +144,13 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.documentEncryptionKeyId = keyId || null;
     rerender({ preserveMountedDocument: true });
   },
+  setDocumentEncryptionKeyLabel: (label) => {
+    state.documentEncryptionKeyLabel = label;
+  },
   confirmDocumentEncryption: () => {
     const action = state.documentEncryptionAction;
     const encryptionKeyId = state.documentEncryptionKeyId;
+    const encryptionKeyLabel = state.documentEncryptionKeyLabel.trim();
     state.documentEncryptionDialogOpen = false;
     state.documentEncryptionAction = null;
     state.documentEncryptionKeyId = null;
@@ -164,7 +169,9 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
             await ensureDocumentKeysLoaded([encryptionKeyId]);
             encryptMountedDocumentWithKey(mounted, encryptionKeyId);
           } else {
-            const generated = await generateStoredDocumentKey();
+            const generated = encryptionKeyLabel
+              ? await generateStoredDocumentKey(encryptionKeyLabel)
+              : await generateStoredDocumentKey();
             encryptMountedDocumentWithKey(mounted, generated.keyId);
           }
           removeDocumentEmbeddingAttachments(mounted.document);

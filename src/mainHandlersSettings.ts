@@ -357,6 +357,10 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       if (savedPath) state.status = 'Exported encryption key file';
     }, { preserveMountedDocument: true }),
     requestDeleteDocumentKey: (keyId) => void runBusy('Checking encryption key use...', async () => {
+      const usage = state.documentEncryptionKeyUsage[keyId];
+      if (!state.documentKeyUsageLoaded || (usage && (usage.documents.length > 0 || usage.folders.length > 0))) {
+        throw new Error('Only encryption keys with no local usages can be deleted.');
+      }
       const openNames = await openDocumentNamesUsingKey(keyId);
       if (openNames.length > 0) {
         throw new Error(`Close ${openNames.join(', ')} before removing this encryption key from the device.`);
@@ -389,6 +393,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     openDocumentKeyManager: () => {
       state.documentKeyMetadata = [];
       state.documentEncryptionKeyUsage = {};
+      state.documentKeyUsageLoaded = false;
       state.documentKeyDataLoading = true;
       state.documentKeyManagerDialogOpen = true;
       state.status = 'Ready';
@@ -404,6 +409,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
               }),
               workspaceDocumentKeyUsage(state.workspaces).then((usage) => {
                 state.documentEncryptionKeyUsage = usage;
+                state.documentKeyUsageLoaded = true;
                 rerender({ preserveMountedDocument: true });
               }),
             ]);

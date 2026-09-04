@@ -161,6 +161,7 @@ export interface UiHandlers {
   renameDocumentKey(keyId: string, label: string): void;
   requestDocumentEncryption(action: 'encrypt' | 'decrypt'): void;
   selectDocumentEncryptionKey(keyId: string): void;
+  setDocumentEncryptionKeyLabel(label: string): void;
   confirmDocumentEncryption(): void;
   cancelDocumentEncryption(): void;
   closeAbout(): void;

@@ -44,25 +44,33 @@ describe('workspaceDocumentKeyUsage', () => {
           kind: 'folder',
           name: 'Notes',
           path: '/work/planning/Notes',
-          relativePath: 'Notes',
+          relativePath: 'hvy-encrypted-folder-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
           encryptedFolderKeyId: FOLDER_KEY_ID,
           children: [{
-            kind: 'file',
-            name: 'Private.hvy',
-            path: '/work/planning/Notes/Private.hvy',
-            relativePath: 'Notes/Private.hvy',
-            extension: '.hvy',
+            kind: 'folder',
+            name: 'inner folder',
+            path: '/work/planning/Notes/inner-folder',
+            relativePath: 'hvy-encrypted-folder-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            encryptedFolderKeyId: FOLDER_KEY_ID,
+            children: [{
+              kind: 'file',
+              name: 'Private.hvy',
+              path: '/work/planning/Notes/inner-folder/Private.hvy',
+              relativePath: 'hvy-encrypted-folder-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/cccccccc-cccc-4ccc-8ccc-cccccccccccc/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+              extension: '.hvy',
+              encryptedFolderKeyId: FOLDER_KEY_ID,
+            }],
           }],
         },
       ],
     } satisfies Workspace;
     backendMocks.readDocumentFileBytes
       .mockResolvedValueOnce(new Uint8Array(bytes(`---HVY-ENCRYPTED---\n{"keyId":"${DOCUMENT_KEY_ID}"}\n---HVY-ENCRYPTED-PAYLOAD---\npayload`)))
-      .mockResolvedValueOnce(new Uint8Array(bytes(`Notes\n<!--hvy:encrypted {"keyId":"${COMPONENT_KEY_ID}"}-->`)));
+      .mockResolvedValueOnce(new Uint8Array(bytes(`Notes\n<!--hvy:encrypted {"keyId":"${FOLDER_KEY_ID}"}-->\n<!--hvy:encrypted {"keyId":"${COMPONENT_KEY_ID}"}-->`)));
 
     await expect(workspaceDocumentKeyUsage([workspace])).resolves.toEqual({
       [DOCUMENT_KEY_ID]: { documents: ['Planning / Roadmap.hvy'], folders: [] },
-      [COMPONENT_KEY_ID]: { documents: ['Planning / Notes/Private.hvy'], folders: [] },
+      [COMPONENT_KEY_ID]: { documents: ['Planning / Notes / inner folder / Private.hvy'], folders: [] },
       [FOLDER_KEY_ID]: { documents: [], folders: ['Planning / Notes'] },
     });
     expect(backendMocks.readDocumentFileBytes).toHaveBeenCalledTimes(2);

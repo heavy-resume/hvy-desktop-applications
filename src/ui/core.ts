@@ -47,6 +47,8 @@ let integrationSidebarScrollTop = 0;
 
 let historySidebarScrollTop = 0;
 
+let documentKeyListScrollTop = 0;
+
 export const MIN_PASTED_IMPORT_CHARS = 50;
 
 export const MIN_WORKSPACE_SIDEBAR_WIDTH = 240;
@@ -243,6 +245,14 @@ export function updateWorkspaceChatScrollButton(scroller: HTMLDivElement): void 
 
 export function renderModals(state: AppState): void {
   const root = modalRoot();
+  const currentDocumentKeyList = root.querySelector<HTMLElement>('.document-key-list');
+  if (currentDocumentKeyList) {
+    documentKeyListScrollTop = !state.documentKeyManagerDialogOpen && !state.documentKeyDeleteId
+      ? 0
+      : currentDocumentKeyList.scrollTop;
+  } else if (!state.documentKeyManagerDialogOpen && !state.documentKeyDeleteId) {
+    documentKeyListScrollTop = 0;
+  }
   const integrationDetailScrollTop = root.querySelector<HTMLElement>('.integration-detail')?.scrollTop ?? 0;
   const integrationListScrollTop = root.querySelector<HTMLElement>('.integration-list')?.scrollTop ?? 0;
   const currentIntegrationActionBuilderContent = root.querySelector<HTMLElement>('.integration-action-builder-content');
@@ -317,6 +327,8 @@ export function renderModals(state: AppState): void {
   const integrationList = root.querySelector<HTMLElement>('.integration-list');
   const integrationActionBuilderContent = root.querySelector<HTMLElement>('.integration-action-builder-content');
   const integrationActionBuilderDialog = root.querySelector<HTMLElement>('.integration-action-builder-dialog');
+  const documentKeyList = root.querySelector<HTMLElement>('.document-key-list');
+  if (documentKeyList) documentKeyList.scrollTop = documentKeyListScrollTop;
   if (integrationDetail) integrationDetail.scrollTop = integrationDetailScrollTop;
   if (integrationList) integrationList.scrollTop = integrationListScrollTop;
   if (integrationActionBuilderContent) integrationActionBuilderContent.scrollTop = state.integrationActionBuilderStep === 'define' ? integrationActionBuilderScrollTop : 0;

@@ -116,7 +116,9 @@ export interface AppState {
   documentEncryptionDialogOpen: boolean;
   documentEncryptionAction: 'encrypt' | 'decrypt' | null;
   documentEncryptionKeyId: string | null;
+  documentEncryptionKeyLabel: string;
   documentEncryptionKeyUsage: Record<string, DocumentKeyUsage>;
+  documentKeyUsageLoaded: boolean;
   documentKeyDataLoading: boolean;
   integrationRegistry: IntegrationRegistry;
   addIntegrationPageDialogOpen: boolean;
@@ -425,7 +427,9 @@ export const state: AppState = {
   documentEncryptionDialogOpen: false,
   documentEncryptionAction: null,
   documentEncryptionKeyId: null,
+  documentEncryptionKeyLabel: '',
   documentEncryptionKeyUsage: {},
+  documentKeyUsageLoaded: false,
   documentKeyDataLoading: false,
   integrationRegistry: loadIntegrationRegistry(),
   addIntegrationPageDialogOpen: false,

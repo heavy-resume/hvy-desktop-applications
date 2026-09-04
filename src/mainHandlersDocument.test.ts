@@ -36,10 +36,11 @@ const backendMocks = vi.hoisted(() => ({
 const documentKeyMocks = vi.hoisted(() => ({
   documentEncryptionKeyring: vi.fn(() => ({})),
   ensureDocumentKeysLoaded: vi.fn(async () => ({})),
-  generateStoredDocumentKey: vi.fn(async () => ({
+  generateStoredDocumentKey: vi.fn(async (label?: string) => ({
     keyId: '11111111-1111-4111-8111-111111111111',
     algorithm: 'fernet' as const,
     key: 'test-key',
+    ...(label ? { label } : {}),
   })),
 }));
 
@@ -160,6 +161,7 @@ describe('document handlers', () => {
     state.documentEncryptionAction = null;
     state.documentEncryptionDialogOpen = false;
     state.documentEncryptionKeyId = null;
+    state.documentEncryptionKeyLabel = '';
     state.documentEncryptionKeyUsage = {};
     state.documentKeyDataLoading = false;
     backendMocks.renameDocumentFile.mockReset();
@@ -361,6 +363,22 @@ describe('document handlers', () => {
     expect(hvyMocks.encryptMountedDocumentWithKey).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111');
     expect(document.encryption).toEqual(expect.objectContaining({ encrypted: true }));
     expect(state.document.dirty).toBe(false);
+  });
+
+  it('stores the optional name when creating a document encryption key', async () => {
+    state.document = testOpenDocument({
+      dirty: false,
+      mounted: { document: { sections: [] }, mount: {} } as never,
+    });
+    state.documentEncryptionAction = 'encrypt';
+    state.documentEncryptionKeyLabel = 'Planning key';
+    state.documentEncryptionDialogOpen = true;
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmDocumentEncryption?.();
+
+    await vi.waitFor(() => expect(mainMocks.saveCurrentDocument).toHaveBeenCalledTimes(1));
+    expect(documentKeyMocks.generateStoredDocumentKey).toHaveBeenCalledWith('Planning key');
   });
 
   it('opens the encryption modal before available keys finish loading', async () => {

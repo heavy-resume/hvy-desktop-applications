@@ -11,19 +11,29 @@ function collectWorkspaceUsage(
   nodes: WorkspaceTreeNode[],
   documents: Array<{ file: WorkspaceFileNode; label: string }>,
   folders: Map<string, Set<string>>,
+  logicalParent: string[] = [],
+  inheritedFolderKeyId?: string,
 ): void {
   for (const node of nodes) {
-    const label = `${workspaceName} / ${node.relativePath || node.name}`;
+    const logicalPath = [...logicalParent, node.name];
+    const label = [workspaceName, ...logicalPath].join(' / ');
     if (node.kind === 'file') {
       documents.push({ file: node, label });
       continue;
     }
-    if (node.encryptedFolderKeyId) {
+    if (node.encryptedFolderKeyId && node.encryptedFolderKeyId !== inheritedFolderKeyId) {
       const labels = folders.get(node.encryptedFolderKeyId) ?? new Set<string>();
       labels.add(label);
       folders.set(node.encryptedFolderKeyId, labels);
     }
-    collectWorkspaceUsage(workspaceName, node.children, documents, folders);
+    collectWorkspaceUsage(
+      workspaceName,
+      node.children,
+      documents,
+      folders,
+      logicalPath,
+      node.encryptedFolderKeyId ?? inheritedFolderKeyId,
+    );
   }
 }
 
@@ -34,7 +44,8 @@ export async function workspaceDocumentKeyUsage(workspaces: Workspace[]): Promis
     collectWorkspaceUsage(workspace.manifest.name, workspace.files, documents, folders);
   }
   const inspected = await Promise.all(documents.map(async ({ file, label }) => ({
-    keyIds: extractEncryptionKeyIds(await readDocumentFileBytes(file.path)),
+    keyIds: extractEncryptionKeyIds(await readDocumentFileBytes(file.path))
+      .filter((keyId) => keyId !== file.encryptedFolderKeyId),
     label,
   })));
   const documentUsage = new Map<string, Set<string>>();

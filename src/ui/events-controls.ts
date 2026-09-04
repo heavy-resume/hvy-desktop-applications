@@ -91,6 +91,13 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
     input.value = '';
   }, { signal });
   root.addEventListener('input', (event) => {
+    const encryptionKeyLabel = event.target instanceof HTMLInputElement && event.target.dataset.action === 'set-document-encryption-key-label'
+      ? event.target
+      : null;
+    if (encryptionKeyLabel) {
+      handlers.setDocumentEncryptionKeyLabel(encryptionKeyLabel.value);
+      return;
+    }
     const input = event.target instanceof HTMLInputElement && event.target.name === 'privacyLabel' ? event.target : null;
     const row = input?.closest<HTMLElement>('[data-privacy-path]');
     const path = row?.dataset.privacyPath;

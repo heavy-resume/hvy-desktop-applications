@@ -296,7 +296,7 @@ export async function mountHvyDocument(
     ...activeBuiltInPlugins,
     ...downloadedPlugins.filter((plugin) => !activeBuiltInPlugins.some((builtIn) => builtIn.id === plugin.id)),
   ];
-  const mountKeyring = { ...documentEncryptionKeyring() };
+  const mountKeyring = documentEncryptionKeyring();
   const mount = mountHvy({
     root,
     document,
