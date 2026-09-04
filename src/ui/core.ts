@@ -65,7 +65,7 @@ export function render(state: AppState, handlers: UiHandlers): HTMLElement {
 export function renderLeftPanel(state: AppState): void {
   const leftPanel = leftPanelRoot();
   workspaceSidebarScrollTop = leftPanel.querySelector<HTMLElement>('.workspaces-scroll-body')?.scrollTop ?? workspaceSidebarScrollTop;
-  integrationSidebarScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section')?.scrollTop ?? integrationSidebarScrollTop;
+  integrationSidebarScrollTop = leftPanel.querySelector<HTMLElement>('.integrations-section-body')?.scrollTop ?? integrationSidebarScrollTop;
   historySidebarScrollTop = leftPanel.querySelector<HTMLElement>('.history-sidebar-list')?.scrollTop ?? historySidebarScrollTop;
   const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view-launcher[open]')).map((details) => details.dataset.quickViewId ?? ''));
   const expandedIntegrationFilters = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-profile-filter[open]')).map((details) => details.dataset.quickViewId ?? ''));
@@ -117,9 +117,9 @@ export function renderLeftPanel(state: AppState): void {
   if (nextWorkspacesScrollBody) {
     nextWorkspacesScrollBody.scrollTop = workspaceSidebarScrollTop;
   }
-  const nextIntegrationsSection = leftPanel.querySelector<HTMLElement>('.integrations-section');
-  if (nextIntegrationsSection) {
-    nextIntegrationsSection.scrollTop = integrationSidebarScrollTop;
+  const nextIntegrationsSectionBody = leftPanel.querySelector<HTMLElement>('.integrations-section-body');
+  if (nextIntegrationsSectionBody) {
+    nextIntegrationsSectionBody.scrollTop = integrationSidebarScrollTop;
   }
   const nextHistorySidebarList = leftPanel.querySelector<HTMLElement>('.history-sidebar-list');
   if (nextHistorySidebarList) {

@@ -7,13 +7,12 @@
 }
 
 .integrations-section {
+  display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
   min-height: 0;
   max-height: 42%;
-  align-content: start;
-  overflow: auto;
-  padding-right: var(--workspace-scrollbar-gutter);
-  scrollbar-gutter: stable;
+  overflow: hidden;
 }
 
 .integrations-section.is-collapsed {
@@ -24,6 +23,19 @@
 .integrations-section:has(.integration-profile-filter[open]) {
   z-index: 10;
   overflow: visible;
+}
+
+.integrations-section:has(.integration-profile-filter[open]) .integrations-section-body {
+  overflow: visible;
+}
+
+.integrations-section-body {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  overflow: auto;
+  padding-right: var(--workspace-scrollbar-gutter);
+  scrollbar-gutter: stable;
 }
 
 .integration-quick-view {
@@ -153,6 +165,11 @@
 .workspaces-section > .sidebar-section-heading {
   flex: 0 0 auto;
   background: var(--hvy-surface-alt, #e8ece7);
+}
+
+.integrations-section > .sidebar-section-heading,
+.workspaces-section > .sidebar-section-heading {
+  padding-right: var(--workspace-scrollbar-gutter);
 }
 
 .workspaces-scroll-body {
