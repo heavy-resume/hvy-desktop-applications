@@ -330,6 +330,7 @@ function portablePattern(value: unknown): WebRecordsCapabilityConfig['record']['
     minimumConfidence: typeof record.minimumConfidence === 'number' && Number.isFinite(record.minimumConfidence)
       ? record.minimumConfidence
       : 0.85,
+    ...(record.scope ? { scope: matcherSnapshot(record.scope) } : {}),
     parents: record.parents.map(matcherSnapshot),
     targets,
   };

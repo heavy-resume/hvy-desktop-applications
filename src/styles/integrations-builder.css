@@ -97,6 +97,36 @@
   color: var(--hvy-text-muted, #5f6a66);
 }
 
+.integration-scope-summary {
+  margin-right: auto;
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 0.86rem;
+}
+
+.integration-scope-configuration {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+}
+
+.integration-scope-configuration-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.integration-scope-configuration-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.integration-scope-configuration-note {
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
 .integration-selection-collection {
   display: grid;
   gap: 8px;
@@ -858,4 +888,3 @@
   padding-top: 14px;
   border-top: 1px solid var(--hvy-border, #c5cec8);
 }
-

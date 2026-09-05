@@ -156,9 +156,10 @@ export interface AppState {
   integrationActionTargetAbsentExamples: boolean[][];
   integrationActionSelectedParentIndex: number;
   integrationActionMinimumConfidence: number;
+  integrationActionScope: unknown | null;
   integrationActionAnchors: unknown[];
   integrationActionAnchorRules: InspectionPrivacyRule[][];
-  integrationActionSelectionKind: 'parent' | 'target' | 'example';
+  integrationActionSelectionKind: 'parent' | 'target' | 'example' | 'scope';
   integrationActionSelectionPending: boolean;
   integrationActionDraftIntegrationId: string | null;
   integrationActionDraftPageId: string | null;
@@ -501,6 +502,7 @@ export const state: AppState = {
   integrationActionTargetAbsentExamples: [],
   integrationActionSelectedParentIndex: 0,
   integrationActionMinimumConfidence: 0.8,
+  integrationActionScope: null,
   integrationActionAnchors: [],
   integrationActionAnchorRules: [],
   integrationActionSelectionKind: 'parent',

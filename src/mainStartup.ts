@@ -66,6 +66,10 @@ export async function boot(): Promise<void> {
         handlers.completeIntegrationReadyCheckValidation(result);
         return;
       }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-scope-selection-request') {
+        handlers.limitIntegrationActionToSection();
+        return;
+      }
       if (result && typeof result === 'object'
         && (result as { context?: { mode?: unknown } }).context?.mode === 'ready-check') {
         handlers.completeIntegrationReadyCheck(result);
@@ -229,6 +233,17 @@ export async function boot(): Promise<void> {
       state.inspectionPrivacyRules = [];
       state.integrationActionBuilderOpen = true;
       state.integrationActionSelectionPending = false;
+      if (state.integrationActionSelectionKind === 'scope') {
+        state.integrationActionScope = result;
+        state.status = 'Limited matches to the selected page section';
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+        const readyToPreview = state.integrationActionAnchors.length > 0
+          && state.integrationActionExamples.length > 0
+          && state.integrationActionTargetLabels.every((label) => label.trim());
+        if (readyToPreview) handlers.previewIntegrationAction();
+        return;
+      }
       let collectInitialFields = false;
       let collectExistingFields = false;
       if (state.integrationActionSelectionKind === 'parent' || state.integrationActionSelectionKind === 'example') {
@@ -244,7 +259,7 @@ export async function boot(): Promise<void> {
           state.integrationActionTargetNegativeVariants[fieldIndex][parentIndex] = null;
           state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
         });
-        if (state.integrationActionSelectionKind === 'parent' && state.integrationActionExamples.length === 0) {
+        if (state.integrationActionExamples.length === 0) {
           state.integrationActionSelectionKind = 'target';
           state.integrationActionTargetSelectionParentIndex = parentIndex;
           state.integrationActionTargetSelectionFieldIndex = null;

@@ -10,12 +10,14 @@
   let scopeSelector = null;
   let scopeElement = null;
   let scopeSnapshot = null;
+  let scopeAnchorElement = null;
   let inspectionPattern = null;
   let liveMinimumConfidence = null;
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
   let targetCollection = null;
   let commandRecorder = null;
+  let commandRecordElements = null;
   let toolbarControl = null;
   let inspectionContext = null;
   let captureSequence = 0;
@@ -341,6 +343,45 @@
     };
   };
 
+  const normalizedIdentityText = (value = '') => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 160) : '';
+
+  const scopeIdentity = (element, anchor = null) => {
+    const values = [];
+    const add = (kind, value) => {
+      const normalized = normalizedIdentityText(value);
+      if (normalized) values.push({ kind, value: normalized, label: String(value).replace(/\s+/g, ' ').trim().slice(0, 160) });
+    };
+    add('aria-label', element.getAttribute('aria-label'));
+    add('title', element.getAttribute('title'));
+    const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean);
+    labelledBy.forEach((id) => add('aria-labelledby', document.getElementById(id)?.textContent || ''));
+    const anchorTop = anchor?.getBoundingClientRect().top ?? Infinity;
+    const contextualText = deepElements(element, 100)
+      .filter((candidate) => candidate !== anchor && (!anchor || !composedContains(anchor, candidate)))
+      .map((candidate) => {
+        const text = meaningfulText(candidate).directText;
+        const rect = candidate.getBoundingClientRect();
+        const role = candidate.getAttribute('role');
+        const heading = /^h[1-6]$/i.test(candidate.tagName) || role === 'heading';
+        const style = getComputedStyle(candidate);
+        return { text, rect, heading, fontWeight: Number.parseInt(style.fontWeight, 10) || 400 };
+      })
+      .filter((candidate) => candidate.text && candidate.text.length <= 160 && candidate.rect.width > 0 && candidate.rect.height > 0 && candidate.rect.top <= anchorTop + 2)
+      .sort((left, right) => Number(right.heading) - Number(left.heading) || left.rect.top - right.rect.top || Number(right.fontWeight >= 500) - Number(left.fontWeight >= 500));
+    contextualText.slice(0, 1).forEach((candidate) => add(candidate.heading ? 'heading' : 'context', candidate.text));
+    const unique = [...new Map(values.map((entry) => [`${entry.kind}:${entry.value}`, entry])).values()];
+    return {
+      label: unique[0]?.label || '',
+      tokens: unique.map((entry) => tokenHash(`${entry.kind}:${entry.value}`)).sort(),
+    };
+  };
+
+  const scopeShapeSignature = (element, anchor = null) => {
+    const shape = shapeSignature(element);
+    const identity = scopeIdentity(element, anchor);
+    return { ...shape, scopeIdentity: identity.tokens };
+  };
+
   const pathWithin = (element, parent) => {
     const path = [];
     for (let node = element; node instanceof Element && node !== parent; node = composedParent(node)) {
@@ -468,6 +509,19 @@
       [ancestorMatches, 0.10],
       [tokenSimilarity(left.semanticIdentity, right.semanticIdentity), 0.15],
       [tokenSimilarity(left.semanticLineage, right.semanticLineage), 0.19],
+      [visualSimilarity(left.visual, right.visual), 0.10],
+    ]);
+  };
+  const scopeSimilarity = (left, right) => {
+    if (!left || !right) return 0;
+    return weightedSimilarity([
+      [tagSimilarity(left.tag, right.tag), 0.08],
+      [enumSimilarity(left.family, right.family), 0.06],
+      [enumSimilarity(left.role, right.role), 0.08],
+      [tokenSimilarity(left.tokens, right.tokens), 0.10],
+      [tokenSimilarity(left.semanticIdentity, right.semanticIdentity), 0.10],
+      [tokenSimilarity(left.semanticLineage, right.semanticLineage), 0.10],
+      [tokenSimilarity(left.scopeIdentity, right.scopeIdentity), 0.38],
       [visualSimilarity(left.visual, right.visual), 0.10],
     ]);
   };
@@ -661,20 +715,21 @@
         captureId,
         tag: element.tagName.toLowerCase(),
         role: element.getAttribute('role'),
-        directText: inspectionKind === 'parent' ? '' : directText.slice(0, 300),
-        accessibleName: inspectionKind === 'parent' ? '' : accessibleName.slice(0, 300),
-        descendantText: inspectionKind === 'parent' ? '' : (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 800),
+        directText: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : directText.slice(0, 300),
+        accessibleName: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : accessibleName.slice(0, 300),
+        descendantText: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 800),
+        ...(inspectionKind === 'scope' ? { scopeLabel: scopeIdentity(element, scopeAnchorElement).label } : {}),
         cssPath: cssPath(element).slice(0, 600),
         attributes: Object.fromEntries(usefulAttributes
           .filter((name) => element.hasAttribute(name))
           .map((name) => [name, (element.getAttribute(name) || '').slice(0, 240)])),
         boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        image: inspectionKind === 'parent' ? null : imageFor(element),
+        image: inspectionKind === 'parent' || inspectionKind === 'scope' ? null : imageFor(element),
         semanticAncestry: semanticAncestry(element),
-        nearbyFields: inspectionKind === 'parent' ? [] : nearbyFields(element),
-        repeatedContext: inspectionKind === 'parent' ? null : repeatedContext(element),
+        nearbyFields: inspectionKind === 'parent' || inspectionKind === 'scope' ? [] : nearbyFields(element),
+        repeatedContext: inspectionKind === 'parent' || inspectionKind === 'scope' ? null : repeatedContext(element),
         selectorCandidates: selectorCandidates(element),
-        shape: shapeSignature(element),
+        shape: inspectionKind === 'scope' ? scopeShapeSignature(element, scopeAnchorElement) : shapeSignature(element),
         relativePath: scope instanceof Element && composedContains(scope, element) ? pathWithin(element, scope) : null,
         scopeCssPath: scope instanceof Element ? cssPath(scope) : null,
       },
@@ -831,9 +886,16 @@
     for (let node = underlyingTarget; node instanceof Element; node = node.parentElement) lightDomChain.push(node);
     const shadowDomChain = [...hitStack, ...composedPath.filter((node) => node instanceof Element)];
     const chain = [...new Set([...shadowDomChain, ...lightDomChain])];
-    if (inspectionKind === 'parent') {
-      const candidates = [...new Set([...hitStack, ...chain])]
+    if (inspectionKind === 'parent' || inspectionKind === 'scope') {
+      const scopeChain = [];
+      for (let node = scopeAnchorElement || underlyingTarget; node instanceof Element; node = composedParent(node)) scopeChain.push(node);
+      const candidates = [...new Set(inspectionKind === 'scope' ? scopeChain : [...hitStack, ...chain])]
         .filter(isParentCandidate)
+        .filter((element) => commandRecordElements === null || commandRecordElements.has(element))
+        .filter((element) => inspectionKind !== 'parent' || !scopeElement || composedContains(scopeElement, element))
+        .filter((element) => inspectionKind !== 'scope' || !element.matches('html,body'))
+        .filter((element) => inspectionKind !== 'scope' || !scopeAnchorElement || (element !== scopeAnchorElement && composedContains(element, scopeAnchorElement)))
+        .filter((element) => inspectionKind !== 'scope' || deepElements(element, 3).length >= 2)
         .filter((element, index, all) => all.findIndex((candidate) => candidate === element) === index)
         .slice(0, 12);
       const describeStructure = (element) => {
@@ -914,18 +976,19 @@
     const heading = document.createElement('div');
     heading.textContent = commandRecorder
       ? inspectionKind === 'parent' ? 'Choose the record for this command' : 'Choose the interaction target'
-      : inspectionKind === 'parent' ? 'Choose the parent containing one complete item' : 'Choose data inside the selected parent';
+      : inspectionKind === 'scope' ? 'Choose the section that should contain matching items' : inspectionKind === 'parent' ? 'Choose the parent containing one complete item' : 'Choose data inside the selected parent';
     heading.style.cssText = 'padding:7px 8px;font-weight:700;border-bottom:1px solid #c5cec8';
     picker.append(heading);
     candidates.forEach((element) => {
-      const { directText, accessibleName } = inspectionKind === 'parent' ? { directText: '', accessibleName: '' } : meaningfulText(element);
-      const completeText = inspectionKind === 'parent' ? '' : visibleText(element);
-      const image = inspectionKind === 'parent' ? null : imageFor(element);
+      const parentLike = inspectionKind === 'parent' || inspectionKind === 'scope';
+      const { directText, accessibleName } = parentLike ? { directText: '', accessibleName: '' } : meaningfulText(element);
+      const completeText = parentLike ? '' : visibleText(element);
+      const image = parentLike ? null : imageFor(element);
       const choice = document.createElement('button');
       choice.type = 'button';
       const structuralLabel = element.id ? `#${element.id}` : [...element.classList].slice(0, 2).map((name) => `.${name}`).join('') || 'container';
-      choice.textContent = inspectionKind === 'parent'
-        ? `${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${structuralLabel}`
+      choice.textContent = parentLike
+        ? `${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${inspectionKind === 'scope' ? scopeIdentity(element, scopeAnchorElement).label || structuralLabel : structuralLabel}`
         : `${image ? '🖼️ ' : ''}${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${(completeText || directText || accessibleName || (image ? image.alt || 'image' : 'control')).slice(0, 100)}`;
       choice.style.cssText = 'display:block;width:100%;padding:8px;border:0;border-bottom:1px solid #dde3df;background:transparent;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer';
       choice.addEventListener('mouseenter', () => {
@@ -1023,6 +1086,18 @@
     const shapeScore = shapeSimilarity(expected.shape, shapeSignature(candidate));
     const relativePathScore = pathSimilarity(expected.relativePath, pathWithin(candidate, parent));
     return { shapeScore, relativePathScore, score: shapeScore * 0.74 + relativePathScore * 0.26 };
+  };
+
+  const patternScopes = (pattern = {}) => {
+    const expected = pattern.scope?.selected?.shape;
+    if (!expected) return [{ element: document, score: 1 }];
+    const { minimumConfidence } = patternThresholds(pattern);
+    return deepElements(document)
+      .filter(isParentCandidate)
+      .map((element) => ({ element, score: scopeSimilarity(expected, scopeShapeSignature(element)) }))
+      .filter((candidate) => candidate.score >= minimumConfidence)
+      .sort((left, right) => right.score - left.score)
+      .filter((candidate, index, candidates) => !candidates.slice(0, index).some((accepted) => composedContains(accepted.element, candidate.element) || composedContains(candidate.element, accepted.element)));
   };
 
   const evaluateParentCandidate = (element, parentScore, targets, minimumTargetConfidence = 0.74) => {
@@ -1135,7 +1210,8 @@
     const { minimumConfidence, minimumTargetConfidence } = patternThresholds(pattern);
     const parentShapes = (pattern.parents || []).map((sample) => sample?.selected?.shape).filter(Boolean);
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
-    return deepElements(document)
+    const candidates = patternScopes(pattern).flatMap((scope) => deepElements(scope.element).filter((element) => element !== scope.element));
+    return [...new Set(candidates)]
       .filter(isParentCandidate)
       .map((element) => ({ element, parentScore: Math.max(0, ...parentShapes.map((shape) => shapeSimilarity(shape, shapeSignature(element)))) }))
       .filter((candidate) => candidate.parentScore >= Math.max(0.5, minimumConfidence - 0.13))
@@ -1776,11 +1852,16 @@
       }
     },
     start(kind = 'target', options = {}) {
-      inspectionKind = kind === 'parent' ? 'parent' : 'target';
+      inspectionKind = options.scopeSelection ? 'scope' : kind === 'parent' ? 'parent' : 'target';
       inspectionContext = options.context && typeof options.context === 'object' ? options.context : null;
-      scopeElement = null;
+      scopeElement = options.selectionScope
+        ? patternScopes({ scope: options.selectionScope, minimumConfidence: options.minimumConfidence }).at(0)?.element || null
+        : null;
       scopeSelector = options.parentCssPath || null;
       scopeSnapshot = options.parentSnapshot || null;
+      scopeAnchorElement = inspectionKind === 'scope'
+        ? resolveCapturedElement(options.scopeParentSnapshot?.selected) || null
+        : null;
       inspectionPattern = options.existingPattern
         ? { ...options.existingPattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) }
         : null;
@@ -1809,6 +1890,9 @@
       const trackedBoxes = [];
       targetCollection = null;
       toolbarControl = null;
+      commandRecordElements = options.commandRecorder?.scope === 'record'
+        ? new Set(inspectionPattern ? findPatternMatches(inspectionPattern).map((match) => match.element) : [])
+        : null;
       if (inspectionPattern) {
         const existingLayer = document.createElement('div');
         existingLayer.id = 'hvy-galaxy-existing-matches';
@@ -1910,9 +1994,11 @@
       const statusText = document.createElement('span');
       statusText.dataset.inspectorStatusText = 'true';
       statusText.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      const activeStatusText = inspectionKind === 'parent'
-        ? options.existingPattern ? 'Galaxy: add example · green passes · orange/red needs attention' : 'Galaxy: select a parent'
-        : 'Galaxy: select target data';
+      const activeStatusText = inspectionKind === 'scope'
+        ? 'Galaxy: choose an optional page section'
+        : inspectionKind === 'parent'
+          ? options.existingPattern ? 'Galaxy: add example · green passes · orange/red needs attention' : 'Galaxy: select a parent'
+          : 'Galaxy: select target data';
       statusText.textContent = activeStatusText;
       const navigationButton = document.createElement('button');
       navigationButton.type = 'button';
@@ -2210,6 +2296,7 @@
       inspectionPattern = null;
       targetCollection = null;
       commandRecorder = null;
+      commandRecordElements = null;
       toolbarControl = null;
       inspectionContext = null;
       document.removeEventListener('pointermove', pointerMove, true);
@@ -2224,11 +2311,14 @@
     snapshotElement(element, parent = null, kind = 'target') {
       const previousKind = inspectionKind;
       const previousScope = scopeElement;
-      inspectionKind = kind === 'parent' ? 'parent' : 'target';
+      const previousScopeAnchor = scopeAnchorElement;
+      inspectionKind = kind === 'scope' ? 'scope' : kind === 'parent' ? 'parent' : 'target';
       scopeElement = parent;
+      scopeAnchorElement = kind === 'scope' ? parent : null;
       const result = snapshot(element);
       inspectionKind = previousKind;
       scopeElement = previousScope;
+      scopeAnchorElement = previousScopeAnchor;
       return result;
     },
     suggestTargets(element, pattern = {}) {
@@ -2373,7 +2463,7 @@
       };
       const status = document.createElement('div');
       status.id = 'hvy-galaxy-inspector-status';
-      status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;display:grid;grid-template-columns:minmax(330px,1fr) minmax(150px,240px) auto auto;align-items:center;gap:10px;width:min(820px,calc(100vw - 24px));box-sizing:border-box;padding:8px 12px;border-radius:8px;background:#e0563f;color:#fff;box-shadow:0 4px 18px #0006;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
+      status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;display:grid;grid-template-columns:minmax(280px,1fr) minmax(150px,240px) auto auto auto;align-items:center;gap:10px;width:min(940px,calc(100vw - 24px));box-sizing:border-box;padding:8px 12px;border-radius:8px;background:#e0563f;color:#fff;box-shadow:0 4px 18px #0006;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
       const statusText = document.createElement('span');
       const slider = document.createElement('input');
       slider.type = 'range';
@@ -2383,6 +2473,15 @@
       slider.value = String(Math.round(patternThresholds(pattern).minimumConfidence * 100));
       slider.setAttribute('aria-label', 'Minimum match confidence');
       const confidenceOutput = document.createElement('output');
+      const scopeButton = document.createElement('button');
+      scopeButton.type = 'button';
+      scopeButton.textContent = pattern.scope ? 'Change section' : 'Limit to section';
+      scopeButton.style.cssText = 'padding:5px 9px;border:0;border-radius:6px;background:#fff;color:#8b2d20;font:700 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+      scopeButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        publish({ kind: 'integration-scope-selection-request' });
+      });
       const compareButton = document.createElement('button');
       compareButton.type = 'button';
       compareButton.textContent = 'Compare traits';
@@ -2481,7 +2580,7 @@
         liveMinimumConfidence = currentPattern.minimumConfidence;
         renderMatches();
       });
-      status.append(statusText, slider, confidenceOutput, compareButton, comparison);
+      status.append(statusText, slider, confidenceOutput, scopeButton, compareButton, comparison);
       document.documentElement.append(status);
       renderMatches();
       const result = serializeMatches(currentAccepted);

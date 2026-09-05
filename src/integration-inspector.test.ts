@@ -38,6 +38,7 @@ interface InspectorSnapshot {
       descendantTags: Record<string, number>;
       semanticIdentity: string[];
       semanticLineage: string[];
+      scopeIdentity?: string[];
       visual: {
         fontWeight: number;
         truncated: boolean;
@@ -49,6 +50,7 @@ interface InspectorSnapshot {
       };
     };
     relativePath: Array<{ tag: string }> | null;
+    scopeLabel?: string;
   };
 }
 
@@ -59,6 +61,9 @@ interface InspectorApi {
     primary?: boolean;
     parentCssPath?: string;
     parentSnapshot?: InspectorSnapshot;
+    scopeSelection?: boolean;
+    selectionScope?: InspectorSnapshot;
+    minimumConfidence?: number;
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
     multiSelect?: boolean;
     externalToolbar?: boolean;
@@ -66,14 +71,14 @@ interface InspectorApi {
     commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0] };
   }): void;
   control(action: 'navigate' | 'undo' | 'done'): void;
-  snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target'): InspectorSnapshot;
+  snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target' | 'scope'): InspectorSnapshot;
   suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
   matchAndHighlight(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
     matches: number;
     details: Array<{ parent: string; score: number; parentScore: number; relationshipScore: number; targets: Array<{ label: string; score: number }> }>;
     diagnostics?: unknown;
   };
-  extractPattern(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
+  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
     matches: number;
     records: Array<{
       parent: string;
@@ -691,6 +696,54 @@ describe('integration structural inspector', () => {
     expect(JSON.stringify(subject.selected.shape)).not.toContain('Project update');
   });
 
+  it('limits identical record vectors to a vector-matched page section', async () => {
+    await page.setContent(`
+      <main>
+        <section class="task-list"><h2>My Tasks</h2><article class="task"><span class="title">Alpha</span></article><article class="task"><span class="title">Beta</span></article></section>
+        <section class="task-list"><h2>Todo</h2><article class="task"><span class="title">Gamma</span></article><article class="task"><span class="title">Delta</span></article></section>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(() => {
+      const scope = document.querySelector('.task-list')!;
+      const parent = scope.querySelector('.task')!;
+      const record = {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'TITLE', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.title')!, parent, 'target') }],
+      };
+      const scopeSnapshot = window.__hvyGalaxyInspector.snapshotElement(scope, parent, 'scope');
+      return {
+        scopeSnapshot,
+        pageWide: window.__hvyGalaxyInspector.extractPattern(record),
+        limited: window.__hvyGalaxyInspector.extractPattern({
+          ...record,
+          scope: scopeSnapshot,
+        }),
+      };
+    });
+
+    expect(result.scopeSnapshot.selected.scopeLabel).toBe('My Tasks');
+    expect(JSON.stringify(result.scopeSnapshot.selected.shape)).not.toContain('My Tasks');
+    expect(result.pageWide.records.map((record) => record.targets[0].value).sort()).toEqual(['Alpha', 'Beta', 'Delta', 'Gamma']);
+    expect(result.limited.records.map((record) => record.targets[0].value)).toEqual(['Alpha', 'Beta']);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('picks page sections from a stable local ancestor chain', async () => {
+    await page.setContent('<main><section class="task-list"><h2>My Tasks</h2><article><span class="title">Alpha</span></article></section><section><h2>Todo</h2></section></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { scopeSelection: true }));
+    await movePointerTo(page, '.title');
+
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('section');
+    expect((await page.locator('#hvy-galaxy-inspector-highlight').boundingBox())?.width).toBeCloseTo((await page.locator('.task-list').boundingBox())!.width, 0);
+    await clickPointerAt(page, '.title');
+    const choices = await page.locator('#hvy-galaxy-inspector-picker button').allTextContents();
+    expect(choices[0]).toContain('My Tasks');
+    expect(choices.some((choice) => choice.startsWith('html') || choice.startsWith('body'))).toBe(false);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('encodes normalized container treatment such as borders, radius, background, and padding', async () => {
     await page.setContent('<main><span class="plain">Subject</span><span class="chip" style="display:inline-block;border:1px solid;padding:4px 10px;border-radius:12px;background:rgb(230,230,230)">report.pdf</span></main>');
     await page.addScriptTag({ content: inspectorSource });
@@ -806,6 +859,7 @@ describe('integration structural inspector', () => {
     });
 
     expect(await page.locator('[data-match-kind="parent"]').count()).toBe(6);
+    expect(await page.getByRole('button', { name: 'Limit to section' }).isVisible()).toBe(true);
     expect(await page.getByRole('button', { name: 'Compare traits' }).isVisible()).toBe(true);
     expect(await page.getByRole('slider', { name: 'Minimum match confidence' }).getAttribute('min')).toBe('50');
     await page.getByRole('slider', { name: 'Minimum match confidence' }).evaluate((element) => {
@@ -1295,6 +1349,33 @@ describe('integration structural inspector', () => {
       ],
     });
     expect(JSON.stringify(recording)).not.toContain('Temporary verification value');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('only offers accepted record matches when scoping an item command', async () => {
+    await page.setContent(fauxInbox);
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      const subject = parent.querySelector('.subject')!;
+      const pattern = {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'Subject', snapshot: window.__hvyGalaxyInspector.snapshotElement(subject, parent, 'target') }],
+      };
+      window.__hvyGalaxyInspector.start('parent', {
+        existingPattern: pattern,
+        commandRecorder: { scope: 'record', pattern },
+      });
+    });
+
+    await movePointerTo(page, '[data-record="second"] .subject');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('article');
+    await clickPointerAt(page, '[data-record="second"] .subject');
+    const choices = await page.locator('#hvy-galaxy-inspector-picker button').allTextContents();
+    expect(choices).toHaveLength(1);
+    expect(choices[0]).toContain('article');
+    expect(choices[0]).toContain('.mail-row');
     expect(pageErrors).toEqual([]);
   });
 

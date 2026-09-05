@@ -104,6 +104,8 @@ export interface UiHandlers {
   cancelIntegrationActionSelection(): void;
   addAnotherIntegrationActionExample(parentIndex?: number, fieldIndex?: number | null): void;
   addIntegrationActionAnchor(): void;
+  limitIntegrationActionToSection(): void;
+  removeIntegrationActionScope(): void;
   testIntegrationActionPattern(): void;
   previewIntegrationAction(): void;
   updateIntegrationTargetLabel(index: number, label: string): void;

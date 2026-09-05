@@ -156,6 +156,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     name: state.integrationActionDraftName,
     description: state.integrationActionDraftDescription,
     minimumConfidence: state.integrationActionMinimumConfidence,
+    scope: state.integrationActionScope,
     parents: state.integrationActionAnchors,
     fields: state.integrationActionExamples,
     labels: state.integrationActionTargetLabels,
@@ -350,10 +351,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionTargetAbsentExamples = [];
     state.integrationActionSelectedParentIndex = 0;
     state.integrationActionMinimumConfidence = 0.8;
+    state.integrationActionScope = null;
     state.integrationActionAnchors = [];
     state.integrationActionAnchorRules = [];
     state.integrationActionSelectionKind = 'parent';
-    state.integrationActionSelectionPending = true;
+    state.integrationActionSelectionPending = false;
     state.integrationActionBuilderStep = 'define';
     state.integrationActionDraftName = '';
     state.integrationActionDraftDescription = '';
@@ -365,14 +367,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionBuilderOpen = true;
     state.integrationActionBuilderInitialJson = integrationActionDraftJson();
     state.integrationInspectionResult = null;
-    void runBusy(`Opening ${page.name} for action selection...`, async () => {
-      if (page.id === 'gmail' || page.id === 'google-calendar') {
-        await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, true, undefined, true, profile.name);
-      } else {
-        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, true, undefined, true, profile.name);
-      }
-      state.status = `Select the ${page.name} content this action should use`;
-    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', profile.id));
+    state.status = `Define the ${page.name} record type`;
+    rerender({ preserveMountedDocument: true });
   };
   const persistIntegrationAction = () => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationActionDraftIntegrationId);
@@ -410,6 +406,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       pattern: {
         recordLabel: name,
         minimumConfidence: state.integrationActionMinimumConfidence,
+        ...(state.integrationActionScope ? { scope: matcherSnapshot(state.integrationActionScope) } : {}),
         parents: state.integrationActionAnchors.map(matcherSnapshot),
         fields,
       },
@@ -1336,6 +1333,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionTargetAbsentExamples = absentExamples;
     state.integrationActionSelectedParentIndex = 0;
     state.integrationActionMinimumConfidence = action.pattern.minimumConfidence ?? 0.8;
+    state.integrationActionScope = action.pattern.scope ?? null;
     state.integrationActionAnchors = parents;
     state.integrationActionAnchorRules = parents.map(() => []);
     state.integrationActionSelectionKind = 'example';
@@ -1421,6 +1419,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
   addIntegrationActionAnchor: () => {
+    const selectingFirstExample = state.integrationActionAnchors.length === 0;
     state.integrationActionBuilderOpen = true;
     state.integrationActionBuilderStep = 'define';
     state.integrationActionSelectionKind = 'example';
@@ -1435,12 +1434,29 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean),
       }));
       const existingPattern = targets.length
-        ? { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets }
+        ? { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets }
         : null;
-      const options = { existingPattern };
+      const options = { existingPattern, ...(state.integrationActionScope ? { selectionScope: state.integrationActionScope, minimumConfidence: state.integrationActionMinimumConfidence } : {}) };
       await startIntegrationActionInspection('parent', options);
-      state.status = 'Select another parent containing the same kind of data';
+      state.status = selectingFirstExample ? 'Select one complete example record' : 'Select another parent containing the same kind of data';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  limitIntegrationActionToSection: () => {
+    const parentSnapshot = state.integrationActionAnchors[0];
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionSelectionKind = 'scope';
+    state.integrationActionSelectionPending = true;
+    void runBusy('Starting section selection...', async () => {
+      await startIntegrationActionInspection('parent', { scopeSelection: true, ...(parentSnapshot ? { scopeParentSnapshot: parentSnapshot } : {}) });
+      state.status = parentSnapshot ? 'Choose a section containing the selected record' : 'Click inside the page section that should contain matching records';
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  removeIntegrationActionScope: () => {
+    state.integrationActionScope = null;
+    state.integrationActionPreviewRecords = [];
+    state.integrationActionBuilderStep = 'define';
+    state.status = 'Removed the page section limit';
+    rerender({ preserveMountedDocument: true });
   },
   removeIntegrationActionSelection: (kind, index) => {
     if (kind === 'example') {
@@ -1537,7 +1553,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   testIntegrationActionPattern: () => {
     const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, cardinality: state.integrationActionTargetCardinalities[index] ?? 'single', optional: state.integrationActionTargetOptional[index] ?? true, snapshot, snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean), negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean) }));
-    const pattern = { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets };
+    const pattern = { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets };
     void (async () => {
       if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
         await reopenIntegrationActionPage({ kind: 'pattern-highlight', pattern }, true);
@@ -1573,7 +1589,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Reviewing extraction in the background...';
     rerender({ preserveMountedDocument: true });
     const extraction = {
-      pattern: { minimumConfidence: state.integrationActionMinimumConfidence, parents: state.integrationActionAnchors, targets },
+      pattern: { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets },
       context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
       foreground: false,
     };
