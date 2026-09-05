@@ -2106,13 +2106,21 @@
           controls.append(add, finish);
           showCancel();
         };
-        const recordConfirmedStep = () => {
+        const appendRecordedStep = () => {
           steps.push({
             gesture: currentGesture,
             target: currentTarget,
             ...(currentGesture === 'type' ? { inputId: `input-${++typeStepCount}` } : {}),
           });
+        };
+        const recordConfirmedStep = () => {
+          appendRecordedStep();
           setTimeout(renderAfterStep, 150);
+        };
+        const finishWithoutPerforming = () => {
+          appendRecordedStep();
+          publish({ kind: 'integration-command-recording', steps });
+          window.__hvyGalaxyInspector.stop();
         };
         const renderSampleInput = () => {
           clearRecorderInput();
@@ -2160,8 +2168,10 @@
             showCancel();
             return;
           }
-          statusText.textContent = `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence.`;
-          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : `Confirm ${currentGesture}`, true);
+          statusText.textContent = currentGesture === 'type'
+            ? `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence.`
+            : `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence. Choose whether to perform it or finish recording without changing the page.`;
+          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : `Perform ${currentGesture}`);
           confirm.addEventListener('click', () => {
             if (currentGesture === 'type') {
               renderSampleInput();
@@ -2170,6 +2180,8 @@
             dispatchInteraction(currentResolution.element, currentGesture);
             recordConfirmedStep();
           });
+          const finish = currentGesture === 'type' ? null : recorderButton(`Finish without ${currentGesture === 'click' ? 'clicking' : currentGesture === 'double-click' ? 'double-clicking' : 'right-clicking'}`, true);
+          finish?.addEventListener('click', finishWithoutPerforming);
           const retry = recorderButton('Choose again');
           retry.addEventListener('click', () => {
             setRecorderPicking(true);
@@ -2177,7 +2189,7 @@
             controls.replaceChildren();
             showCancel();
           });
-          controls.append(confirm, retry);
+          controls.append(...[finish, confirm, retry].filter(Boolean));
           showCancel();
         };
         commandRecorder = {

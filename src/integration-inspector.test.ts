@@ -1327,7 +1327,7 @@ describe('integration structural inspector', () => {
     await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Click', exact: true }).click();
     await clickPointerAt(page, '.reveal-control');
     await page.locator('#hvy-galaxy-inspector-picker button').first().click();
-    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Confirm click' }).click();
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Perform click' }).click();
     await expect.poll(() => page.locator('.editor').isVisible()).toBe(true);
 
     await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Add step' }).click();
@@ -1349,6 +1349,36 @@ describe('integration structural inspector', () => {
       ],
     });
     expect(JSON.stringify(recording)).not.toContain('Temporary verification value');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('can finish recording a click without performing the destructive interaction', async () => {
+    await page.close();
+    page = await browser.newPage();
+    pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setContent('<main><button class="destructive-control">Clear task</button></main>');
+    await page.evaluate(() => {
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      document.body.dataset.clickCount = '0';
+      document.querySelector('.destructive-control')!.addEventListener('click', () => {
+        document.body.dataset.clickCount = String(Number(document.body.dataset.clickCount) + 1);
+      });
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { commandRecorder: { scope: 'page' } }));
+
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Click', exact: true }).click();
+    await clickPointerAt(page, '.destructive-control');
+    await page.locator('#hvy-galaxy-inspector-picker button').first().click();
+    expect(await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Perform click', exact: true }).count()).toBe(1);
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Finish without clicking', exact: true }).click();
+
+    expect(await page.locator('body').getAttribute('data-click-count')).toBe('0');
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toMatchObject({
+      kind: 'integration-command-recording',
+      steps: [{ gesture: 'click' }],
+    });
     expect(pageErrors).toEqual([]);
   });
 
