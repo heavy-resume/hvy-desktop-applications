@@ -398,7 +398,7 @@ function buildMenu() {
     {
       label: 'Plugins',
       submenu: [
-        menuItem('Plugin Builder...', 'plugin-builder'),
+        { ...menuItem('Plugin Builder...', 'plugin-builder'), enabled: false },
         menuItem('Manage Plugins...', 'manage-plugins'),
         { type: 'separator' },
         menuItem('Power Scripting...', 'review-scripting'),

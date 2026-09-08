@@ -315,7 +315,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
         .build()?;
     let plugins = SubmenuBuilder::with_id(app, "plugins-menu", "Plugins")
-        .item(&MenuItemBuilder::new("Plugin Builder...").id("plugin-builder").build(app)?)
+        .item(
+            &MenuItemBuilder::new("Plugin Builder...")
+                .id("plugin-builder")
+                .enabled(false)
+                .build(app)?,
+        )
         .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
