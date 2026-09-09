@@ -59,6 +59,10 @@
   color: var(--hvy-danger, #a12622);
 }
 
+.hvy-web-empty {
+  color: var(--hvy-muted, #746f67);
+}
+
 .hvy-web-authorization-dialog dl {
   display: grid;
   grid-template-columns: max-content 1fr;

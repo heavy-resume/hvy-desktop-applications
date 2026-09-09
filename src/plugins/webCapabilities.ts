@@ -41,7 +41,7 @@ import {
   type WebCapabilityScriptCallback as ScriptCallback,
   type WebCapabilityScriptCallbacks as WebScriptCallbacks,
 } from './webCapabilityScripting';
-import { getWebRecordResults, hasWebRecordResults, setWebRecordResults } from '../webRecordResults';
+import { getWebRecordResults, hasWebRecordResults, setWebRecordResults, subscribeWebRecordResults } from '../webRecordResults';
 import './webCapabilities.css';
 
 function scriptingCallbacks(args: JsonObject): WebScriptCallbacks {
@@ -529,6 +529,12 @@ function recordCandidate(value: unknown): { parent?: unknown; targets?: unknown 
   return value && typeof value === 'object' ? value as { parent?: unknown; targets?: unknown } : {};
 }
 
+export function emptyRecordTemplateReason(block: VisualBlock): string {
+  if (block.schema.editorOnly) return 'the selected record template is marked Editor only';
+  if (block.schema.hideIfYes.trim().toLowerCase() === 'yes') return 'the selected record template is hidden by its Hide if yes condition';
+  return 'the selected record template produced no visible content';
+}
+
 function createRecordActionBlock(label: string, componentId: string): VisualBlock {
   return {
     id: crypto.randomUUID(),
@@ -538,15 +544,40 @@ function createRecordActionBlock(label: string, componentId: string): VisualBloc
   };
 }
 
+export function claimRenderedRecordActionButton(actionButton: HTMLButtonElement): void {
+  actionButton.removeAttribute('data-action');
+  const actionRoot = actionButton.closest<HTMLElement>('[data-hvy-button="true"]');
+  actionRoot?.removeAttribute('data-hvy-button');
+  if (actionRoot) actionRoot.dataset.visibleState = 'visible';
+}
+
+export function claimRenderedRecordTemplate(element: HTMLElement): void {
+  element.querySelectorAll<HTMLElement>('[data-hvy-dynamic-visibility="true"]').forEach((renderedBlock) => {
+    renderedBlock.removeAttribute('data-hvy-dynamic-visibility');
+    renderedBlock.dataset.visibleState = 'visible';
+  });
+}
+
 function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
   const root = document.createElement('div');
   root.className = 'hvy-web-capability';
+  const resultSessionKey = state.document?.versionId;
   let pending = false;
   let error = '';
   let templatePreviews: HvyPluginComponentTemplateRenderInstance[] = [];
+  let subscribedResultKey = '';
+  let unsubscribeRecords = () => {};
   const disposeTemplatePreviews = () => {
     templatePreviews.forEach((preview) => preview.unmount());
     templatePreviews = [];
+  };
+  const subscribeToResults = (resultKey: string) => {
+    if (subscribedResultKey === resultKey) return;
+    unsubscribeRecords();
+    subscribedResultKey = resultKey;
+    unsubscribeRecords = resultKey
+      ? subscribeWebRecordResults(ctx.rawDocument, resultKey, sync, resultSessionKey)
+      : () => {};
   };
   const sync = () => {
     disposeTemplatePreviews();
@@ -554,13 +585,16 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     root.replaceChildren();
     if (ctx.mode === 'editor') root.appendChild(buildDefinitionEditor(ctx, 'records'));
     if (!config) {
+      subscribeToResults('');
       const empty = document.createElement('p');
       empty.textContent = 'Choose a saved web record definition to make this block interactive.';
       root.appendChild(empty);
       return;
     }
-    const hasFetchedRecords = hasWebRecordResults(ctx.rawDocument, ctx.block.id);
-    const records = getWebRecordResults(ctx.rawDocument, ctx.block.id);
+    const resultKey = config.capabilityId;
+    subscribeToResults(resultKey);
+    const hasFetchedRecords = hasWebRecordResults(ctx.rawDocument, resultKey, resultSessionKey);
+    const records = getWebRecordResults(ctx.rawDocument, resultKey, resultSessionKey);
     const heading = document.createElement('strong');
     heading.textContent = config.name;
     if (ctx.mode === 'reader') root.appendChild(heading);
@@ -598,7 +632,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
             authorizations: state.appSettings.webCapabilityAuthorizations,
             readyChecks: localReadyChecks(config),
           }).then((result) => {
-            setWebRecordResults(ctx.rawDocument, ctx.block.id, result.records);
+            setWebRecordResults(ctx.rawDocument, resultKey, result.records, resultSessionKey);
           }).catch((caught: unknown) => {
             error = caught instanceof Error ? caught.message : String(caught);
           }).finally(() => {
@@ -618,6 +652,12 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     }
     const list = document.createElement('div');
     list.className = 'hvy-web-records';
+    if (hasFetchedRecords && records.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'hvy-web-empty';
+      empty.textContent = 'The page returned no records.';
+      list.appendChild(empty);
+    }
     records.forEach((record, index) => {
       const candidate = recordCandidate(record);
       const targets = Array.isArray(candidate.targets) ? candidate.targets : [];
@@ -642,11 +682,22 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
             }
           }
           const preview = ctx.templates.components.render({ ...selection, values, locations });
+          claimRenderedRecordTemplate(preview.element);
+          if (!preview.element.querySelector('.reader-block')) {
+            const message = document.createElement('p');
+            message.className = 'hvy-web-error';
+            message.setAttribute('role', 'status');
+            message.textContent = `Item ${index + 1} is not visible because ${emptyRecordTemplateReason(preview.getBlock())}.`;
+            preview.unmount();
+            list.appendChild(message);
+            return;
+          }
           templatePreviews.push(preview);
           for (const binding of actionBindings) {
             const actionButton = preview.element.querySelector<HTMLButtonElement>(
               `[data-component-id="${CSS.escape(binding.componentId)}"] .hvy-button-component-button`,
             );
+            if (actionButton) claimRenderedRecordActionButton(actionButton);
             actionButton?.addEventListener('click', (event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -710,7 +761,14 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     root.appendChild(list);
   };
   sync();
-  return { element: root, refresh: sync, unmount: disposeTemplatePreviews };
+  return {
+    element: root,
+    refresh: sync,
+    unmount: () => {
+      unsubscribeRecords();
+      disposeTemplatePreviews();
+    },
+  };
 }
 
 function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {
