@@ -86,6 +86,7 @@ export interface IntegrationActionDefinition {
   pattern?: IntegrationActionPatternDefinition;
   source?: IntegrationWebMcpRecordSourceDefinition;
   commands?: IntegrationCommandDefinition[];
+  scrollPage?: boolean;
 }
 
 export interface IntegrationWebMcpRecordSourceDefinition {

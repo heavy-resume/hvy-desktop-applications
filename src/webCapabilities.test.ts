@@ -88,6 +88,7 @@ describe('web capabilities', () => {
   it('defaults and normalizes the fetched record limit', () => {
     const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
     expect(config.record.limit).toBe(100);
+    expect(config.record.scrollPage).toBe(true);
     expect(readWebRecordsCapabilityConfig({
       ...config,
       record: { ...config.record, limit: 12.9 },
@@ -96,6 +97,15 @@ describe('web capabilities', () => {
       ...config,
       record: { ...config.record, limit: 500 },
     })?.record.limit).toBe(100);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, scrollPage: false },
+    })?.record.scrollPage).toBe(false);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, scrollPage: 'no' },
+    })?.record.scrollPage).toBe(true);
+    expect(createWebRecordsCapabilityConfig('mail', page, { ...action, scrollPage: false }, 'loaded-inbox').record.scrollPage).toBe(false);
   });
 
   it('round-trips template field and action mappings while dropping stale mappings', () => {

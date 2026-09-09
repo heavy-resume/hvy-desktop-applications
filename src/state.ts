@@ -156,6 +156,7 @@ export interface AppState {
   integrationActionTargetAbsentExamples: boolean[][];
   integrationActionSelectedParentIndex: number;
   integrationActionMinimumConfidence: number;
+  integrationActionScrollPage: boolean;
   integrationActionScope: unknown | null;
   integrationActionAnchors: unknown[];
   integrationActionAnchorRules: InspectionPrivacyRule[][];
@@ -502,6 +503,7 @@ export const state: AppState = {
   integrationActionTargetAbsentExamples: [],
   integrationActionSelectedParentIndex: 0,
   integrationActionMinimumConfidence: 0.8,
+  integrationActionScrollPage: true,
   integrationActionScope: null,
   integrationActionAnchors: [],
   integrationActionAnchorRules: [],

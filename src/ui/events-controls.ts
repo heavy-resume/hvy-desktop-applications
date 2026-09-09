@@ -268,6 +268,10 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       if (output) output.value = `${target.value}%`;
       return;
     }
+    if (field === 'integration-action-scroll-page' && target instanceof HTMLInputElement) {
+      handlers.updateIntegrationActionScrollPage(target.checked);
+      return;
+    }
     if (field === 'scripting-review-filter') {
       const query = target.value.trim().toLocaleLowerCase();
       target.closest('.scripting-review-dialog')

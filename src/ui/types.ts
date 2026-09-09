@@ -116,6 +116,7 @@ export interface UiHandlers {
   setIntegrationTargetAbsent(fieldIndex: number, parentIndex: number, absent: boolean): void;
   selectIntegrationActionExample(index: number): void;
   updateIntegrationActionMinimumConfidence(value: number): void;
+  updateIntegrationActionScrollPage(enabled: boolean): void;
   continueIntegrationActionBuilder(): void;
   backIntegrationActionBuilder(): void;
   reviewIntegrationActionRequest(name: string, description: string): void;

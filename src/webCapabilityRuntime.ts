@@ -118,7 +118,11 @@ export async function executeWebRecordsCapability(
     try {
       await openForOperation(config, context, {
         kind: 'pattern-extraction',
-        pattern: { ...config.record.pattern, recordLimit: config.record.limit },
+        pattern: {
+          ...config.record.pattern,
+          recordLimit: config.record.limit,
+          scrollPage: config.record.scrollPage,
+        },
         context: {
           mode: 'hvy-capability',
           webCapabilityRequestId: requestId,

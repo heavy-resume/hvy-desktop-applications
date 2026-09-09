@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { state } from '../state';
 import { approveIntegrationWebMcpTool, webMcpCapabilityId, type IntegrationWebMcpToolDescriptor } from '../integrationWebMcp';
-import { renderIntegrationPageErrorDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderIntegrationActionBuilderDialog, renderIntegrationPageErrorDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 
 const integrationRegistry = {
   version: 1 as const,
@@ -20,6 +20,20 @@ describe('integration page errors', () => {
     expect(html).toContain('Couldn’t add web page');
     expect(html).toContain('Use a valid local page.');
     expect(html).toContain('data-action="close-integration-page-error"');
+  });
+});
+
+describe('record type retrieval settings', () => {
+  it('configures page scrolling in the record type editor with the checkbox before its label', () => {
+    const html = renderIntegrationActionBuilderDialog({
+      ...state,
+      integrationActionBuilderOpen: true,
+      integrationActionBuilderStep: 'define',
+      integrationActionScrollPage: false,
+    });
+    expect(html).toContain('data-field="integration-action-scroll-page"');
+    expect(html).not.toContain('data-field="integration-action-scroll-page" checked');
+    expect(html).toContain('<span class="integration-record-scroll-heading"><input type="checkbox" data-field="integration-action-scroll-page" ><strong>Scroll to load records</strong></span>');
   });
 });
 

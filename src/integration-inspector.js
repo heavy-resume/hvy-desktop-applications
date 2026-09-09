@@ -1722,6 +1722,9 @@
   const extractAcrossPage = async (pattern = {}) => {
     window.__hvyGalaxyInspector.stop();
     const effectivePattern = { ...pattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) };
+    const recordLimit = Number.isFinite(pattern.recordLimit)
+      ? Math.max(1, Math.min(100, Math.floor(pattern.recordLimit)))
+      : 100;
     const scrollables = deepElements(document)
       .filter((element) => element.scrollHeight > element.clientHeight + 40 && element.clientHeight > 120)
       .sort((left, right) => ((right.scrollHeight - right.clientHeight) * right.clientWidth) - ((left.scrollHeight - left.clientHeight) * left.clientWidth));
@@ -1799,9 +1802,9 @@
         structuralRecords.push(entry);
       }
     };
-    if (scroller) {
+    if (scroller && pattern.scrollPage !== false) {
       const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-      const step = Math.max(240, scroller.clientHeight * 0.7);
+      const step = Math.max(240, scroller.clientHeight * 0.9);
       const positions = [];
       for (let top = 0; top < maximum && positions.length < 60; top += step) positions.push(top);
       positions.push(maximum);
@@ -1809,15 +1812,15 @@
         scroller.scrollTop = top;
         await settle();
         collect();
+        if (records.size >= recordLimit) break;
       }
-      scroller.scrollTop = originalTop;
-      await settle();
+      if (scroller.scrollTop !== originalTop) {
+        scroller.scrollTop = originalTop;
+        await settle();
+      }
     } else {
       collect();
     }
-    const recordLimit = Number.isFinite(pattern.recordLimit)
-      ? Math.max(1, Math.min(100, Math.floor(pattern.recordLimit)))
-      : 100;
     const selected = [...records.values()]
       .sort((left, right) => left.pageTop - right.pageTop || left.pageLeft - right.pageLeft || right.record.score - left.record.score)
       .slice(0, recordLimit)

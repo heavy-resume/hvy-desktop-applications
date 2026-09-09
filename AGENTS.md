@@ -8,4 +8,4 @@ Don't use the storage key for heavy-file-format its intentionally not set so we 
 
 When writting CSS use classes do not use broad overrides and type selectors because they will break things in the HVY embed.
 
-When you make a checkbox always start with check to the left of the label, not top / bottom
+When you make a checkbox always start with check to the left of the label, not top / bottom. No seriously, don't wait for me to tell you its wrong after you make it, go fix it before I review it.

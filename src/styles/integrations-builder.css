@@ -103,6 +103,25 @@
   font-size: 0.86rem;
 }
 
+.dialog .integration-record-scroll-control {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+}
+
+.integration-record-scroll-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.integration-record-scroll-control small {
+  margin-left: 26px;
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
 .integration-scope-configuration {
   display: flex;
   align-items: center;

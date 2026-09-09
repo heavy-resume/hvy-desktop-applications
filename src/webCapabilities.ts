@@ -53,6 +53,7 @@ export interface WebRecordsCapabilityConfig {
     pattern: NonNullable<ReturnType<typeof actionPatternPayload>>;
     commands: IntegrationCommandDefinition[];
     limit: number;
+    scrollPage: boolean;
   };
   source?: WebCapabilitySource;
   render?: WebRecordsTemplateRendering;
@@ -415,6 +416,7 @@ export function createWebRecordsCapabilityConfig(
         return normalized ? [normalized] : [];
       }),
       limit: DEFAULT_WEB_RECORD_LIMIT,
+      scrollPage: action.scrollPage !== false,
     },
     source: { integrationId, pageId: page.id, actionId: action.id },
     mcp: { exposeRead: false, commandIds: [] },
@@ -491,6 +493,7 @@ export function readWebRecordsCapabilityConfig(value: unknown): WebRecordsCapabi
       pattern,
       commands,
       limit: normalizeRecordLimit(definition.limit),
+      scrollPage: definition.scrollPage !== false,
     },
     ...(normalizeSource(record.source) ? { source: normalizeSource(record.source) } : {}),
     ...(render ? { render } : {}),

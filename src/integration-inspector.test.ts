@@ -78,7 +78,7 @@ interface InspectorApi {
     details: Array<{ parent: string; score: number; parentScore: number; relationshipScore: number; targets: Array<{ label: string; score: number }> }>;
     diagnostics?: unknown;
   };
-  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number; recordLimit?: number }): {
+  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number; recordLimit?: number; scrollPage?: boolean }): {
     matches: number;
     records: Array<{
       parent: string;
@@ -1620,7 +1620,7 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('limits records while scrolling the page and restores its original position', async () => {
+  it('stops scanning once a fully rendered page satisfies the record limit', async () => {
     await page.setContent(`<aside class="decoy" style="height:200px;width:2000px;overflow:auto"><div style="height:4000px">Unrelated navigation</div></aside><main class="events" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
     await page.addScriptTag({ content: inspectorSource });
     const result = await page.evaluate(async () => {
@@ -1641,9 +1641,36 @@ describe('integration structural inspector', () => {
     });
 
     expect(result.matches).toBe(7);
-    expect(result.scrollEvents).toBeGreaterThan(1);
+    expect(result.scrollEvents).toBeLessThanOrEqual(1);
     expect(result.decoyScrollEvents).toBe(0);
     expect(result.finalTop).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not move the page when scrolling is disabled for loaded records', async () => {
+    await page.setContent(`<main class="events" style="height:160px;overflow:auto">${Array.from({ length: 20 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const scroller = document.querySelector<HTMLElement>('.events')!;
+      const parent = scroller.querySelector('.event')!;
+      scroller.scrollTop = 160;
+      await new Promise(requestAnimationFrame);
+      const initialTop = scroller.scrollTop;
+      let scrollEvents = 0;
+      scroller.addEventListener('scroll', () => { scrollEvents += 1; });
+      const extraction = await window.__hvyGalaxyInspector.extractAcrossPage({
+        minimumConfidence: 0.8,
+        recordLimit: 7,
+        scrollPage: false,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
+      });
+      return { matches: extraction.matches, initialTop, finalTop: scroller.scrollTop, scrollEvents };
+    });
+
+    expect(result.matches).toBe(7);
+    expect(result.finalTop).toBe(result.initialTop);
+    expect(result.scrollEvents).toBe(0);
     expect(pageErrors).toEqual([]);
   });
 

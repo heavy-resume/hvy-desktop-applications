@@ -101,6 +101,16 @@ function localReadyChecks(config: WebCapabilityConfig) {
   return page ? integrationPageReadyChecks(page) : config.page.readyChecks;
 }
 
+function localRecordsConfig(config: WebRecordsCapabilityConfig): WebRecordsCapabilityConfig {
+  const source = config.source;
+  if (!source?.actionId) return config;
+  const action = state.integrationRegistry.integrations
+    .find((integration) => integration.id === source.integrationId)
+    ?.actions.find((candidate) => candidate.id === source.actionId);
+  if (!action) return config;
+  return { ...config, record: { ...config.record, scrollPage: action.scrollPage !== false } };
+}
+
 function button(label: string, primary = false): HTMLButtonElement {
   const element = document.createElement('button');
   element.type = 'button';
@@ -653,7 +663,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
           pending = true;
           error = '';
           sync();
-          void executeWebRecordsCapability(config, {
+          void executeWebRecordsCapability(localRecordsConfig(config), {
             documentPath: state.document?.source.path ?? '',
             profile,
             authorizations: state.appSettings.webCapabilityAuthorizations,
@@ -898,7 +908,7 @@ export const webRecordsPlugin: HvyPlugin = {
         const callbacks = scriptingCallbacks(args);
         const executionContext = scriptingExecutionContext(config);
         return queueWebCapabilityScriptOperation(
-          () => executeWebRecordsCapability(config, executionContext),
+          () => executeWebRecordsCapability(localRecordsConfig(config), executionContext),
           callbacks,
         );
       },

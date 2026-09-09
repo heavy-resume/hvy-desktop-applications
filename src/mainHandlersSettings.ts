@@ -156,6 +156,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     name: state.integrationActionDraftName,
     description: state.integrationActionDraftDescription,
     minimumConfidence: state.integrationActionMinimumConfidence,
+    scrollPage: state.integrationActionScrollPage,
     scope: state.integrationActionScope,
     parents: state.integrationActionAnchors,
     fields: state.integrationActionExamples,
@@ -351,6 +352,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionTargetAbsentExamples = [];
     state.integrationActionSelectedParentIndex = 0;
     state.integrationActionMinimumConfidence = 0.8;
+    state.integrationActionScrollPage = true;
     state.integrationActionScope = null;
     state.integrationActionAnchors = [];
     state.integrationActionAnchorRules = [];
@@ -403,6 +405,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       permissions: ['dom:read'],
       version: 1,
       status: 'ready',
+      scrollPage: state.integrationActionScrollPage,
       pattern: {
         recordLabel: name,
         minimumConfidence: state.integrationActionMinimumConfidence,
@@ -1333,6 +1336,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionTargetAbsentExamples = absentExamples;
     state.integrationActionSelectedParentIndex = 0;
     state.integrationActionMinimumConfidence = action.pattern.minimumConfidence ?? 0.8;
+    state.integrationActionScrollPage = action.scrollPage !== false;
     state.integrationActionScope = action.pattern.scope ?? null;
     state.integrationActionAnchors = parents;
     state.integrationActionAnchorRules = parents.map(() => []);
@@ -1355,7 +1359,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     void (async () => {
       try {
         const liveExampleExtraction = {
-          pattern: actionPatternPayload(action),
+          pattern: { ...actionPatternPayload(action), scrollPage: action.scrollPage !== false },
           context: { mode: 'examples', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
           foreground: false,
         };
@@ -1551,6 +1555,9 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   updateIntegrationActionMinimumConfidence: (value) => {
     state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, value));
   },
+  updateIntegrationActionScrollPage: (enabled) => {
+    state.integrationActionScrollPage = enabled;
+  },
   testIntegrationActionPattern: () => {
     const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, cardinality: state.integrationActionTargetCardinalities[index] ?? 'single', optional: state.integrationActionTargetOptional[index] ?? true, snapshot, snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean), negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean) }));
     const pattern = { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets };
@@ -1589,7 +1596,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Reviewing extraction in the background...';
     rerender({ preserveMountedDocument: true });
     const extraction = {
-      pattern: { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets },
+      pattern: { minimumConfidence: state.integrationActionMinimumConfidence, scrollPage: state.integrationActionScrollPage, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets },
       context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
       foreground: false,
     };
@@ -1654,7 +1661,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (!pattern || !profile) throw new Error('The saved action is incomplete.');
     const domProfile = profile;
     void (async () => {
-      const extraction = { pattern, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) } };
+      const extraction = { pattern: { ...pattern, scrollPage: action.scrollPage !== false }, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) } };
       try {
         if (page.id === 'gmail' || page.id === 'google-calendar') {
           await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name);
