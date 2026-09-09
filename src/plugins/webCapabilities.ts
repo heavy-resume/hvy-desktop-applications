@@ -1,5 +1,13 @@
 import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
-import type { HvyPlugin, HvyPluginContext, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
+import type {
+  HvyPlugin,
+  HvyPluginComponentTemplateRenderInstance,
+  HvyPluginContext,
+  HvyPluginInstance,
+} from '../../../heavy-file-format/src/plugins/types';
+import { defaultBlockSchema } from '../../../heavy-file-format/src/document-factory';
+import type { ReusableTemplateVariable } from '../../../heavy-file-format/src/reusable-template-values';
+import type { VisualBlock } from '../../../heavy-file-format/src/editor/types';
 import { saveAppSettings } from '../backend';
 import { state } from '../state';
 import { integrationPageReadyChecks } from '../integrationRegistry';
@@ -20,6 +28,7 @@ import {
   type WebCapabilityAuthorizationReview,
   type WebCommandCapabilityConfig,
   type WebRecordsCapabilityConfig,
+  type WebRecordsTemplateRendering,
 } from '../webCapabilities';
 import {
   executeWebPageCommandCapability,
@@ -31,6 +40,7 @@ import {
   type WebCapabilityScriptCallback as ScriptCallback,
   type WebCapabilityScriptCallbacks as WebScriptCallbacks,
 } from './webCapabilityScripting';
+import { getWebRecordResults, hasWebRecordResults, setWebRecordResults } from '../webRecordResults';
 import './webCapabilities.css';
 
 function scriptingCallbacks(args: JsonObject): WebScriptCallbacks {
@@ -333,13 +343,178 @@ function renderValue(value: unknown): HTMLElement {
   return element;
 }
 
+function comparableName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function defaultFieldMapping(variable: ReusableTemplateVariable, config: WebRecordsCapabilityConfig): string {
+  const names = new Set([comparableName(variable.name), comparableName(variable.label)]);
+  return config.record.pattern.targets.find((target) => names.has(comparableName(target.label)))?.label ?? '';
+}
+
+function defaultActionMapping(location: string, config: WebRecordsCapabilityConfig, locationCount: number): string {
+  const comparableLocation = comparableName(location);
+  const match = config.record.commands.find((command) => (
+    comparableName(command.id) === comparableLocation || comparableName(command.name) === comparableLocation
+  ));
+  if (match) return match.id;
+  return locationCount === 1 && config.record.commands.length === 1 ? config.record.commands[0]!.id : '';
+}
+
+function buildRecordTemplateEditor(ctx: HvyPluginContext, config: WebRecordsCapabilityConfig): HTMLElement {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'hvy-web-template-editor';
+  const templateLabel = document.createElement('label');
+  templateLabel.className = 'hvy-web-template-field';
+  const templateHeading = document.createElement('span');
+  templateHeading.textContent = 'Record template';
+  const templateSelect = document.createElement('select');
+  templateSelect.className = 'hvy-galaxy-select';
+  const empty = document.createElement('option');
+  empty.value = '';
+  empty.textContent = 'Default record cards';
+  templateSelect.appendChild(empty);
+  const activeValue = config.render
+    ? JSON.stringify({ template: config.render.template, flavor: config.render.flavor ?? '' })
+    : '';
+  let hasActiveValue = !activeValue;
+  for (const template of ctx.templates.components.list()) {
+    const choices = [{ template: template.name, flavor: '' }, ...template.flavors.map((flavor) => ({
+      template: template.name,
+      flavor: flavor.name,
+    }))];
+    for (const choice of choices) {
+      const option = document.createElement('option');
+      option.value = JSON.stringify(choice);
+      option.textContent = choice.flavor ? `${choice.template} — ${choice.flavor}` : choice.template;
+      option.selected = option.value === activeValue;
+      hasActiveValue ||= option.selected;
+      templateSelect.appendChild(option);
+    }
+  }
+  if (!hasActiveValue && config.render) {
+    const unavailable = document.createElement('option');
+    unavailable.value = activeValue;
+    unavailable.textContent = `${config.render.template}${config.render.flavor ? ` — ${config.render.flavor}` : ''} (unavailable)`;
+    unavailable.selected = true;
+    templateSelect.appendChild(unavailable);
+  }
+  templateSelect.addEventListener('change', () => {
+    if (!templateSelect.value) {
+      ctx.setConfig({ render: null });
+      return;
+    }
+    const selection = JSON.parse(templateSelect.value) as { template: string; flavor: string };
+    const flavor = selection.flavor || undefined;
+    const variables = ctx.templates.components.variables({ template: selection.template, flavor });
+    const locations = ctx.templates.components.locations({ template: selection.template, flavor });
+    const render: WebRecordsTemplateRendering = {
+      template: selection.template,
+      ...(flavor ? { flavor } : {}),
+      fields: Object.fromEntries(variables.flatMap((variable) => {
+        const field = defaultFieldMapping(variable, config);
+        return field ? [[variable.name, field]] : [];
+      })),
+      actions: Object.fromEntries(locations.flatMap((location) => {
+        const command = defaultActionMapping(location, config, locations.length);
+        return command ? [[location, command]] : [];
+      })),
+    };
+    ctx.setConfig({ render: render as unknown as JsonObject });
+  });
+  templateLabel.append(templateHeading, templateSelect);
+  wrapper.appendChild(templateLabel);
+
+  if (!config.render || !hasActiveValue) return wrapper;
+  const selection = { template: config.render.template, flavor: config.render.flavor };
+  for (const variable of ctx.templates.components.variables(selection)) {
+    const label = document.createElement('label');
+    label.className = 'hvy-web-template-field';
+    const heading = document.createElement('span');
+    heading.textContent = variable.label;
+    const select = document.createElement('select');
+    select.className = 'hvy-galaxy-select';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'Leave empty';
+    select.appendChild(none);
+    for (const target of config.record.pattern.targets) {
+      const option = document.createElement('option');
+      option.value = target.label;
+      option.textContent = target.label;
+      option.selected = config.render.fields[variable.name] === target.label;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => {
+      const fields = { ...config.render!.fields };
+      if (select.value) fields[variable.name] = select.value;
+      else delete fields[variable.name];
+      ctx.setConfig({ render: { ...config.render!, fields } as unknown as JsonObject });
+    });
+    label.append(heading, select);
+    wrapper.appendChild(label);
+  }
+  for (const location of ctx.templates.components.locations(selection)) {
+    const label = document.createElement('label');
+    label.className = 'hvy-web-template-field';
+    const heading = document.createElement('span');
+    heading.textContent = `Action at ${location}`;
+    const select = document.createElement('select');
+    select.className = 'hvy-galaxy-select';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'No action';
+    select.appendChild(none);
+    for (const command of config.record.commands) {
+      const option = document.createElement('option');
+      option.value = command.id;
+      option.textContent = command.name;
+      option.selected = config.render.actions[location] === command.id;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => {
+      const actions = { ...config.render!.actions };
+      if (select.value) actions[location] = select.value;
+      else delete actions[location];
+      ctx.setConfig({ render: { ...config.render!, actions } as unknown as JsonObject });
+    });
+    label.append(heading, select);
+    wrapper.appendChild(label);
+  }
+  return wrapper;
+}
+
+function templateValue(value: unknown, variable: ReusableTemplateVariable): string {
+  if (Array.isArray(value)) return value.map((item) => String(item ?? '')).join(variable.type === 'block' ? '\n' : ', ');
+  if (value && typeof value === 'object') return JSON.stringify(value);
+  return String(value ?? '');
+}
+
+function recordCandidate(value: unknown): { parent?: unknown; targets?: unknown } {
+  return value && typeof value === 'object' ? value as { parent?: unknown; targets?: unknown } : {};
+}
+
+function createRecordActionBlock(label: string, componentId: string): VisualBlock {
+  return {
+    id: crypto.randomUUID(),
+    text: '',
+    schema: { ...defaultBlockSchema('button'), id: componentId, buttonLabel: label },
+    schemaMode: false,
+  };
+}
+
 function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
   const root = document.createElement('div');
   root.className = 'hvy-web-capability';
-  let records: unknown[] = [];
   let pending = false;
   let error = '';
+  let templatePreviews: HvyPluginComponentTemplateRenderInstance[] = [];
+  const disposeTemplatePreviews = () => {
+    templatePreviews.forEach((preview) => preview.unmount());
+    templatePreviews = [];
+  };
   const sync = () => {
+    disposeTemplatePreviews();
     const config = readWebRecordsCapabilityConfig(ctx.block.schema.pluginConfig);
     root.replaceChildren();
     if (ctx.mode === 'editor') root.appendChild(buildDefinitionEditor(ctx, 'records'));
@@ -349,11 +524,15 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
       root.appendChild(empty);
       return;
     }
+    const hasFetchedRecords = hasWebRecordResults(ctx.rawDocument, ctx.block.id);
+    const records = getWebRecordResults(ctx.rawDocument, ctx.block.id);
     const heading = document.createElement('strong');
     heading.textContent = config.name;
     const description = document.createElement('p');
     description.textContent = config.description || `Reads ${config.page.name}.`;
-    root.append(heading, description, buildProfileControls(config, sync));
+    root.append(heading, description);
+    if (ctx.mode === 'editor') root.appendChild(buildRecordTemplateEditor(ctx, config));
+    root.appendChild(buildProfileControls(config, sync));
     const profile = selectedProfile(config);
     if (profile) {
       const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.source.path ?? '', config, profile.id);
@@ -362,7 +541,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
         review.addEventListener('click', () => openAuthorizationModal(config, sync));
         root.appendChild(review);
       } else {
-        const fetch = button(pending ? 'Fetching…' : 'Fetch records', true);
+        const fetch = button(pending ? 'Fetching…' : hasFetchedRecords ? 'Refresh records' : 'Fetch records', true);
         fetch.disabled = pending;
         fetch.addEventListener('click', () => {
           pending = true;
@@ -374,7 +553,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
             authorizations: state.appSettings.webCapabilityAuthorizations,
             readyChecks: localReadyChecks(config),
           }).then((result) => {
-            records = result.records;
+            setWebRecordResults(ctx.rawDocument, ctx.block.id, result.records);
           }).catch((caught: unknown) => {
             error = caught instanceof Error ? caught.message : String(caught);
           }).finally(() => {
@@ -395,12 +574,65 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     const list = document.createElement('div');
     list.className = 'hvy-web-records';
     records.forEach((record, index) => {
+      const candidate = recordCandidate(record);
+      const targets = Array.isArray(candidate.targets) ? candidate.targets : [];
+      if (config.render) {
+        const selection = { template: config.render.template, flavor: config.render.flavor };
+        try {
+          const values = Object.fromEntries(ctx.templates.components.variables(selection).map((variable) => {
+            const fieldLabel = config.render!.fields[variable.name];
+            const target = targets.find((value) => value && typeof value === 'object'
+              && String((value as { label?: unknown }).label ?? '') === fieldLabel);
+            return [variable.name, templateValue((target as { value?: unknown } | undefined)?.value, variable)];
+          }));
+          const locations: Record<string, VisualBlock> = {};
+          const actionBindings: Array<{ componentId: string; command: WebRecordsCapabilityConfig['record']['commands'][number] }> = [];
+          if (typeof candidate.parent === 'string' && profile) {
+            for (const [location, commandId] of Object.entries(config.render.actions)) {
+              const command = config.record.commands.find((item) => item.id === commandId);
+              if (!command) continue;
+              const componentId = `web-record-action-${crypto.randomUUID()}`;
+              locations[location] = createRecordActionBlock(command.name, componentId);
+              actionBindings.push({ componentId, command });
+            }
+          }
+          const preview = ctx.templates.components.render({ ...selection, values, locations });
+          templatePreviews.push(preview);
+          for (const binding of actionBindings) {
+            const actionButton = preview.element.querySelector<HTMLButtonElement>(
+              `[data-component-id="${CSS.escape(binding.componentId)}"] .hvy-button-component-button`,
+            );
+            actionButton?.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.stopImmediatePropagation();
+              openCommandInputsModal(binding.command, (inputs) => {
+                void executeWebRecordCommandCapability(config, binding.command.id, candidate.parent as string, {
+                  documentPath: state.document?.source.path ?? '',
+                  profile: profile!,
+                  authorizations: state.appSettings.webCapabilityAuthorizations,
+                  readyChecks: localReadyChecks(config),
+                }, inputs).catch((caught: unknown) => {
+                  error = caught instanceof Error ? caught.message : String(caught);
+                  sync();
+                });
+              });
+            });
+          }
+          list.appendChild(preview.element);
+        } catch (caught: unknown) {
+          const message = document.createElement('p');
+          message.className = 'hvy-web-error';
+          message.setAttribute('role', 'alert');
+          message.textContent = `Item ${index + 1}: ${caught instanceof Error ? caught.message : String(caught)}`;
+          list.appendChild(message);
+        }
+        return;
+      }
       const article = document.createElement('article');
       const title = document.createElement('strong');
       title.textContent = `Item ${index + 1}`;
       article.appendChild(title);
-      const candidate = record && typeof record === 'object' ? record as { parent?: unknown; targets?: unknown } : {};
-      const targets = Array.isArray(candidate.targets) ? candidate.targets : [];
       for (const target of targets) {
         if (!target || typeof target !== 'object') continue;
         const row = document.createElement('div');
@@ -433,7 +665,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     root.appendChild(list);
   };
   sync();
-  return { element: root, refresh: sync };
+  return { element: root, refresh: sync, unmount: disposeTemplatePreviews };
 }
 
 function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {

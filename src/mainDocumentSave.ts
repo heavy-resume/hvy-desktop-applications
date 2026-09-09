@@ -7,6 +7,7 @@ import { availableRecoveryBackups, recoveryDraftIdentity, recoverySaveConflictKi
 import { pdfFileName, savedVersionDocumentName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
 import { activateWorkspaceChatDocument, adoptSavedAsDocument, captureMountScrollRatio, documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, mountRoot, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, restoreMountScrollRatio, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { clearWebRecordResults } from './webRecordResults';
 import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
 import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
 import { updateRuntimeDocumentFile } from './runtimeDocuments';
@@ -364,6 +365,7 @@ export async function closeDocumentTab(path: string): Promise<void> {
     rerender({ preserveMountedDocument: true });
     return;
   }
+  if (session) clearWebRecordResults(session.document);
   documentSessions.delete(path);
   removeDocumentTabPath(path);
   state.status = 'Closed tab';
@@ -426,6 +428,7 @@ export async function saveAndCloseDocument(): Promise<void> {
     const bytes = Array.from(await serializeHvy(session.document));
     await saveDocumentFile({ path: session.source.path, bytes });
     recordSuccessfulDocumentSave(session.source.path, session.source.name, session.document);
+    clearWebRecordResults(session.document);
     documentSessions.delete(session.versionId);
     removeDocumentTabPath(session.versionId);
     workspaceFilterDocumentCache.delete(session.source.path);
@@ -516,6 +519,7 @@ export async function closeTargetDocumentWithoutSaving(options: { discardDraft: 
     await clearRecoveryDraftsForDocument(identity.path, identity.name);
     deleteBackupTracking(backupDocumentKey(identity.path, identity.name));
   }
+  if (session) clearWebRecordResults(session.document);
   documentSessions.delete(targetPath);
   removeDocumentTabPath(targetPath);
   state.closeDocumentDialogOpen = false;
@@ -537,6 +541,8 @@ export async function closeActiveDocumentAfterUnsavedChoice(options: { discardDr
     openDocument.mounted?.mount.destroy();
   });
   measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:cleanupThemeReapply', { path }, resetMountLifecycleState);
+  const recordResultsDocument = openDocument.mounted?.document ?? documentSessions.get(openDocument.versionId)?.document;
+  if (recordResultsDocument) clearWebRecordResults(recordResultsDocument);
   documentSessions.delete(openDocument.versionId);
   workspaceFilterDocumentCache.delete(path);
   removeDocumentTabPath(openDocument.versionId);
@@ -576,6 +582,8 @@ export async function closeCurrentDocument(options: { discard?: boolean } = {}):
     openDocument.mounted?.mount.destroy();
   });
   measureDebug('close', 'closeCurrentDocument:cleanupThemeReapply', { path }, resetMountLifecycleState);
+  const recordResultsDocument = openDocument.mounted?.document ?? documentSessions.get(openDocument.versionId)?.document;
+  if (recordResultsDocument) clearWebRecordResults(recordResultsDocument);
   if (path) {
     documentSessions.delete(openDocument.versionId);
     workspaceFilterDocumentCache.delete(path);

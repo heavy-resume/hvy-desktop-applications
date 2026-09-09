@@ -30,6 +30,13 @@ export interface WebCapabilitySource {
   commandId?: string;
 }
 
+export interface WebRecordsTemplateRendering {
+  template: string;
+  flavor?: string;
+  fields: Record<string, string>;
+  actions: Record<string, string>;
+}
+
 export interface WebRecordsCapabilityConfig {
   schemaVersion: 1;
   capabilityId: string;
@@ -46,6 +53,7 @@ export interface WebRecordsCapabilityConfig {
     commands: IntegrationCommandDefinition[];
   };
   source?: WebCapabilitySource;
+  render?: WebRecordsTemplateRendering;
   mcp: {
     exposeRead: boolean;
     commandIds: string[];
@@ -303,6 +311,37 @@ function normalizeSource(value: unknown): WebCapabilitySource | undefined {
   };
 }
 
+function normalizeStringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).flatMap(([rawKey, rawValue]) => {
+    const key = rawKey.trim();
+    const mapped = typeof rawValue === 'string' ? rawValue.trim() : '';
+    return key && mapped ? [[key, mapped]] : [];
+  }));
+}
+
+function normalizeRecordsTemplateRendering(
+  value: unknown,
+  fieldLabels: Set<string>,
+  commandIds: Set<string>,
+): WebRecordsTemplateRendering | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const template = typeof record.template === 'string' ? record.template.trim() : '';
+  if (!template) return undefined;
+  const fields = Object.fromEntries(Object.entries(normalizeStringMap(record.fields))
+    .filter(([, fieldLabel]) => fieldLabels.has(fieldLabel)));
+  const actions = Object.fromEntries(Object.entries(normalizeStringMap(record.actions))
+    .filter(([, commandId]) => commandIds.has(commandId)));
+  const flavor = typeof record.flavor === 'string' ? record.flavor.trim() : '';
+  return {
+    template,
+    ...(flavor ? { flavor } : {}),
+    fields,
+    actions,
+  };
+}
+
 function portablePattern(value: unknown): WebRecordsCapabilityConfig['record']['pattern'] | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -422,6 +461,11 @@ export function readWebRecordsCapabilityConfig(value: unknown): WebRecordsCapabi
     ? record.mcp as Record<string, unknown>
     : {};
   const exposedCommandIds = uniqueStrings(mcp.commandIds).filter((commandId) => commands.some((command) => command.id === commandId));
+  const render = normalizeRecordsTemplateRendering(
+    record.render,
+    new Set(pattern.targets.map((target) => target.label)),
+    new Set(commands.map((command) => command.id)),
+  );
   return {
     schemaVersion: WEB_CAPABILITY_SCHEMA_VERSION,
     capabilityId,
@@ -440,6 +484,7 @@ export function readWebRecordsCapabilityConfig(value: unknown): WebRecordsCapabi
       commands,
     },
     ...(normalizeSource(record.source) ? { source: normalizeSource(record.source) } : {}),
+    ...(render ? { render } : {}),
     mcp: {
       exposeRead: mcp.exposeRead === true,
       commandIds: mcp.exposeRead === true ? exposedCommandIds : [],

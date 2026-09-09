@@ -85,12 +85,36 @@ describe('web capabilities', () => {
     expect(parsed?.mcp).toEqual({ exposeRead: false, commandIds: [] });
   });
 
+  it('round-trips template field and action mappings while dropping stale mappings', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const parsed = readWebRecordsCapabilityConfig({
+      ...config,
+      render: {
+        template: 'message-card',
+        flavor: 'compact',
+        fields: { title: 'Subject', removed: 'Missing field' },
+        actions: { 'primary-actions': 'open', removed: 'missing-command' },
+      },
+    });
+
+    expect(parsed?.render).toEqual({
+      template: 'message-card',
+      flavor: 'compact',
+      fields: { title: 'Subject' },
+      actions: { 'primary-actions': 'open' },
+    });
+  });
+
   it('hashes execution behavior but not MCP exposure or source registry IDs', () => {
     const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
     const initialHash = webCapabilityHash(config);
 
     expect(webCapabilityHash({ ...config, mcp: { exposeRead: true, commandIds: ['open'] } })).toBe(initialHash);
     expect(webCapabilityHash({ ...config, source: { integrationId: 'other', pageId: 'other' } })).toBe(initialHash);
+    expect(webCapabilityHash({
+      ...config,
+      render: { template: 'message-card', fields: { title: 'Subject' }, actions: { actions: 'open' } },
+    })).toBe(initialHash);
     expect(webCapabilityHash({ ...config, page: { ...config.page, url: 'https://mail.example.com/archive' } })).not.toBe(initialHash);
   });
 

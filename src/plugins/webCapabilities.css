@@ -12,6 +12,19 @@
   gap: 0.25rem;
 }
 
+.hvy-web-template-editor {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  border: 1px solid var(--hvy-border-color, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-template-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
 .hvy-web-records {
   display: grid;
   gap: 0.6rem;
