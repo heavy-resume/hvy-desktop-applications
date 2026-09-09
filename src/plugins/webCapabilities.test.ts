@@ -2,8 +2,11 @@ import { describe, expect, test, vi } from 'vitest';
 import {
   claimRenderedRecordActionButton,
   claimRenderedRecordTemplate,
+  applyWebRecordCommandChange,
   emptyRecordTemplateReason,
+  webRecordContentIdentity,
 } from './webCapabilities';
+import { getWebRecordResults, setWebRecordResults } from '../webRecordResults';
 import { queueWebCapabilityScriptOperation } from './webCapabilityScripting';
 import type { VisualBlock } from '../../../heavy-file-format/src/editor/types';
 
@@ -44,6 +47,34 @@ test.each([
   [{ editorOnly: false, hideIfYes: '' }, 'the selected record template produced no visible content'],
 ])('explains an empty rendered record template', (schema, expected) => {
   expect(emptyRecordTemplateReason({ schema } as unknown as VisualBlock)).toBe(expected);
+});
+
+test('applies watched record changes and removals to cached results', () => {
+  const document = {};
+  setWebRecordResults(document, 'messages', [
+    { parent: '#first', targets: [{ label: 'Status', value: 'Unread' }] },
+    { parent: '#second', targets: [{ label: 'Status', value: 'Unread' }] },
+  ]);
+
+  applyWebRecordCommandChange(document, 'messages', '#second', 'changed', {
+    parent: '#second', targets: [{ label: 'Status', value: 'Read' }],
+  });
+  expect(getWebRecordResults(document, 'messages')).toEqual([
+    { parent: '#first', targets: [{ label: 'Status', value: 'Unread' }] },
+    { parent: '#second', targets: [{ label: 'Status', value: 'Read' }] },
+  ]);
+
+  applyWebRecordCommandChange(document, 'messages', '#first', 'removed', undefined);
+  expect(getWebRecordResults(document, 'messages')).toEqual([
+    { parent: '#second', targets: [{ label: 'Status', value: 'Read' }] },
+  ]);
+});
+
+test('builds record identity from extracted field labels and values', () => {
+  expect(webRecordContentIdentity({
+    parent: '#message-2',
+    targets: [{ label: 'Subject', value: 'Hello' }, { label: 'Unread', value: true }],
+  })).toBe('[["Subject","Hello"],["Unread",true]]');
 });
 
 describe('web capability scripting callbacks', () => {

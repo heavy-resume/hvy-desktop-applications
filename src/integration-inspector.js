@@ -1556,9 +1556,70 @@
     return result;
   };
 
+  const waitForPageReadiness = async (checks) => {
+    const deadline = Date.now() + 5000;
+    let readiness;
+    do {
+      readiness = pageReadiness(checks);
+      if (readiness.ready) return readiness;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    return readiness;
+  };
+
+  const watchRecordAfterInteraction = (element, pattern, baselineParent) => {
+    const baselineMatch = findPatternMatches(pattern).find((candidate) => candidate.element === element);
+    const baselineRecord = baselineMatch ? serializeMatches([baselineMatch], true).records[0] : null;
+    const baselineIdentity = baselineRecord ? recordContentIdentity(baselineRecord) : null;
+    let settleTimer = null;
+    let timeoutTimer = null;
+    let observer = null;
+    let resolveChange;
+    const finish = (change) => {
+      if (settleTimer) clearTimeout(settleTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      observer?.disconnect();
+      resolveChange(change);
+    };
+    const inspect = () => {
+      settleTimer = null;
+      if (!element.isConnected) {
+        finish({ status: 'removed', previousParent: baselineParent });
+        return;
+      }
+      const match = findPatternMatches(pattern).find((candidate) => candidate.element === element);
+      if (!match) {
+        finish({ status: 'removed', previousParent: baselineParent });
+        return;
+      }
+      const record = serializeMatches([match], true).records[0];
+      if (recordContentIdentity(record) !== baselineIdentity) {
+        finish({ status: 'changed', previousParent: baselineParent, record });
+      }
+    };
+    const change = new Promise((resolve) => { resolveChange = resolve; });
+    observer = new MutationObserver((mutations) => {
+      const relevant = mutations.some((mutation) => mutation.target === element
+        || ((mutation.target instanceof Element ? mutation.target : mutation.target.parentElement) instanceof Element
+          && composedContains(element, mutation.target instanceof Element ? mutation.target : mutation.target.parentElement))
+        || [...mutation.removedNodes].some((node) => node === element
+          || (node instanceof Element && composedContains(node, element))));
+      if (!relevant) return;
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(inspect, 150);
+    });
+    observer.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+    if (element.shadowRoot) observer.observe(element.shadowRoot, { subtree: true, childList: true, characterData: true, attributes: true });
+    deepElements(element).forEach((descendant) => {
+      if (descendant.shadowRoot) observer.observe(descendant.shadowRoot, { subtree: true, childList: true, characterData: true, attributes: true });
+    });
+    timeoutTimer = setTimeout(() => finish(null), 10_000);
+    return change;
+  };
+
   const executeCommand = async (payload = {}) => {
     window.__hvyGalaxyInspector.stop();
-    const readiness = pageReadiness(payload.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] });
+    const readiness = await waitForPageReadiness(payload.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] });
     if (!readiness.ready) return { status: 'not-ready', reason: 'page_not_ready', message: readiness.message, readiness, stepIndex: 0, stepsExecuted: 0 };
     const command = payload.command;
     const steps = command?.steps;
@@ -1571,20 +1632,38 @@
       if (command.scope !== 'record') return document;
       if (record?.element?.isConnected) return record.element;
       const records = findPatternMatches(payload.pattern);
-      record = payload.recordParent
-        ? records.find((candidate) => cssPath(candidate.element) === payload.recordParent)
-        : records[0];
+      if (payload.recordIdentity) {
+        const identityMatches = records.filter((candidate) => {
+          const serialized = serializeMatches([candidate], true).records[0];
+          return recordContentIdentity(serialized) === payload.recordIdentity;
+        });
+        record = identityMatches.length === 1 ? identityMatches[0] : null;
+      } else {
+        record = payload.recordParent
+          ? records.find((candidate) => cssPath(candidate.element) === payload.recordParent)
+          : records[0];
+      }
       return record?.element || null;
     };
     for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
       const step = steps[stepIndex];
       const textInput = step.gesture === 'type' ? payload.inputs?.[step.inputId] : undefined;
       if (step.gesture === 'type' && typeof textInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
-      const initialScope = stepIndex === 0 ? scopeForStep() : null;
-      const resolved = stepIndex === 0
-        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture) : { status: 'no_match', reason: 'record_not_found' }
+      const initialScope = stepIndex === 0 && command.scope !== 'record' ? scopeForStep() : null;
+      const resolved = stepIndex === 0 && command.scope !== 'record'
+        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture) : { status: 'no_match', reason: 'target_not_found' }
         : await waitForInteractionTarget(scopeForStep, step, minimumTargetConfidence);
       if (resolved.status !== 'matched') return { ...resolved, stepIndex, stepsExecuted: stepIndex };
+      if (payload.watchRecord && command.scope === 'record' && stepIndex === steps.length - 1 && record?.element) {
+        void watchRecordAfterInteraction(record.element, payload.pattern, payload.recordParent || cssPath(record.element)).then((recordChange) => {
+          if (recordChange) publish({
+            kind: 'integration-record-watch-result',
+            requestId: payload.requestId,
+            commandId: command.id,
+            recordChange,
+          });
+        });
+      }
       if (step.gesture === 'type') {
         if (!dispatchTextEntry(resolved.element, textInput)) return { status: 'no_match', reason: 'target_not_text_editable', score: resolved.score, stepIndex, stepsExecuted: stepIndex };
       } else {

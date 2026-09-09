@@ -529,6 +529,33 @@ function recordCandidate(value: unknown): { parent?: unknown; targets?: unknown 
   return value && typeof value === 'object' ? value as { parent?: unknown; targets?: unknown } : {};
 }
 
+export function webRecordContentIdentity(value: unknown): string | null {
+  const candidate = recordCandidate(value);
+  if (!Array.isArray(candidate.targets)) return null;
+  return JSON.stringify(candidate.targets.map((target) => {
+    if (!target || typeof target !== 'object') return ['', null];
+    const field = target as { label?: unknown; value?: unknown };
+    return [String(field.label ?? ''), field.value];
+  }));
+}
+
+export function applyWebRecordCommandChange(
+  document: object,
+  resultKey: string,
+  previousParent: string,
+  status: 'changed' | 'removed',
+  record: unknown,
+  sessionKey?: string,
+): void {
+  const records = getWebRecordResults(document, resultKey, sessionKey);
+  const index = records.findIndex((candidate) => recordCandidate(candidate).parent === previousParent);
+  if (index < 0) return;
+  const nextRecords = [...records];
+  if (status === 'removed') nextRecords.splice(index, 1);
+  else nextRecords[index] = record;
+  setWebRecordResults(document, resultKey, nextRecords, sessionKey);
+}
+
 export function emptyRecordTemplateReason(block: VisualBlock): string {
   if (block.schema.editorOnly) return 'the selected record template is marked Editor only';
   if (block.schema.hideIfYes.trim().toLowerCase() === 'yes') return 'the selected record template is hidden by its Hide if yes condition';
@@ -708,7 +735,19 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
                   profile: profile!,
                   authorizations: state.appSettings.webCapabilityAuthorizations,
                   readyChecks: localReadyChecks(config),
-                }, inputs).catch((caught: unknown) => {
+                }, inputs, webRecordContentIdentity(candidate) ?? undefined, (recordChange) => {
+                  applyWebRecordCommandChange(
+                    ctx.rawDocument,
+                    resultKey,
+                    recordChange.previousParent,
+                    recordChange.status,
+                    recordChange.record,
+                    resultSessionKey,
+                  );
+                }).then(() => {
+                  error = '';
+                  sync();
+                }).catch((caught: unknown) => {
                   error = caught instanceof Error ? caught.message : String(caught);
                   sync();
                 });
@@ -747,7 +786,19 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
                 profile,
                 authorizations: state.appSettings.webCapabilityAuthorizations,
                 readyChecks: localReadyChecks(config),
-              }, inputs).catch((caught: unknown) => {
+              }, inputs, webRecordContentIdentity(candidate) ?? undefined, (recordChange) => {
+                applyWebRecordCommandChange(
+                  ctx.rawDocument,
+                  resultKey,
+                  recordChange.previousParent,
+                  recordChange.status,
+                  recordChange.record,
+                  resultSessionKey,
+                );
+              }).then(() => {
+                error = '';
+                sync();
+              }).catch((caught: unknown) => {
                 error = caught instanceof Error ? caught.message : String(caught);
                 sync();
               });
@@ -862,8 +913,26 @@ export const webRecordsPlugin: HvyPlugin = {
         if (!commandId || !recordParent) throw new Error('run_command requires commandId and recordParent.');
         const callbacks = scriptingCallbacks(args);
         const executionContext = scriptingExecutionContext(config);
+        const resultSessionKey = state.document?.versionId;
+        const record = getWebRecordResults(ctx.rawDocument, config.capabilityId, resultSessionKey)
+          .find((candidate) => recordCandidate(candidate).parent === recordParent);
         return queueWebCapabilityScriptOperation(
-          () => executeWebRecordCommandCapability(config, commandId, recordParent, executionContext, commandInputs(args)),
+          () => executeWebRecordCommandCapability(
+            config,
+            commandId,
+            recordParent,
+            executionContext,
+            commandInputs(args),
+            webRecordContentIdentity(record) ?? undefined,
+            (recordChange) => applyWebRecordCommandChange(
+              ctx.rawDocument,
+              config.capabilityId,
+              recordChange.previousParent,
+              recordChange.status,
+              recordChange.record,
+              resultSessionKey,
+            ),
+          ),
           callbacks,
         );
       },

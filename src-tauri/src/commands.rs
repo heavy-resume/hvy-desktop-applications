@@ -456,6 +456,7 @@ const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
     result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-ready-check-validation")
+        || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-record-watch-result")
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
         && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
@@ -1406,6 +1407,29 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
         })
 }
 
+fn integration_extraction_script(extraction: &serde_json::Value) -> String {
+    if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
+        let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
+        format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("ready-check-validation") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
+        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
+        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
+    } else {
+        format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+    }
+}
+
 #[tauri::command]
 async fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>) -> AppResult<()> {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
@@ -1447,7 +1471,16 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
             window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
                 .map_err(|error| AppError::Message(error.to_string()))?;
-            content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            if content.url().map(|current| current == url).unwrap_or(false) {
+                if action_mode_pending.load(Ordering::SeqCst) {
+                    content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
+                        .map_err(|error| AppError::Message(error.to_string()))?;
+                } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
+                    content.eval(integration_extraction_script(&extraction)).map_err(|error| AppError::Message(error.to_string()))?;
+                }
+            } else {
+                content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            }
             if foreground {
                 raise_integration_window(&window)?;
             } else if !window.is_visible().unwrap_or(false) {
@@ -1526,26 +1559,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
-                        let script = if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
-                            let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
-                            format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("ready-check-validation") {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
-                            format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
-                        } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
-                            format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
-                        } else {
-                            format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
-                        };
+                        let script = integration_extraction_script(&extraction);
                         let _ = window.eval(&script);
                       }
                     }
@@ -1615,6 +1629,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                             .get("kind")
                             .and_then(serde_json::Value::as_str)
                             == Some("integration-ready-check-validation");
+                        let is_background_result = is_background_result || result
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("integration-record-watch-result");
                         let is_background_result = is_background_result || (result
                             .get("kind")
                             .and_then(serde_json::Value::as_str)

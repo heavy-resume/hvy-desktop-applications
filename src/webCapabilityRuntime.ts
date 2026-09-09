@@ -31,6 +31,12 @@ export interface WebCommandExecutionResult {
   commandId?: string;
 }
 
+export interface WebRecordChange {
+  status: 'changed' | 'removed';
+  previousParent: string;
+  record?: unknown;
+}
+
 type PendingOperation = {
   kind: 'records' | 'command';
   resolve(value: unknown): void;
@@ -39,6 +45,10 @@ type PendingOperation = {
 };
 
 const pendingOperations = new Map<string, PendingOperation>();
+const pendingRecordWatches = new Map<string, {
+  notify(change: WebRecordChange): void;
+  timeout: ReturnType<typeof setTimeout>;
+}>();
 const BACKGROUND_OPERATION_TIMEOUT_MS = 60_000;
 const INTERACTIVE_OPERATION_TIMEOUT_MS = 10 * 60_000;
 
@@ -62,6 +72,9 @@ function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], tim
   return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingOperations.delete(requestId);
+      const watch = pendingRecordWatches.get(requestId);
+      if (watch) clearTimeout(watch.timeout);
+      pendingRecordWatches.delete(requestId);
       reject(new Error('The web capability timed out while waiting for the page.'));
     }, timeoutMs);
     pendingOperations.set(requestId, {
@@ -128,6 +141,8 @@ async function executeCommand(
   context: WebCapabilityExecutionContext,
   inputs: Record<string, string>,
   recordParent?: string,
+  recordIdentity?: string,
+  onRecordChange?: (change: WebRecordChange) => void,
 ): Promise<WebCommandExecutionResult> {
   assertAuthorized(config, context);
   return enqueueWebCapabilityForProfile(context.profile.id, async () => {
@@ -137,6 +152,10 @@ async function executeCommand(
       'command',
       context.foreground === false ? BACKGROUND_OPERATION_TIMEOUT_MS : INTERACTIVE_OPERATION_TIMEOUT_MS,
     );
+    if (command.scope === 'record' && onRecordChange) {
+      const timeout = setTimeout(() => pendingRecordWatches.delete(requestId), 15_000);
+      pendingRecordWatches.set(requestId, { notify: onRecordChange, timeout });
+    }
     try {
       await openForOperation(config, context, {
         kind: 'command-execution',
@@ -152,11 +171,16 @@ async function executeCommand(
             : { minimumConfidence: 0.8, parents: [], targets: [] },
           command,
           inputs,
+          watchRecord: command.scope === 'record',
           readyChecks: context.readyChecks ?? config.page.readyChecks,
           ...(recordParent ? { recordParent } : {}),
+          ...(recordIdentity ? { recordIdentity } : {}),
         },
       });
     } catch (error) {
+      const watch = pendingRecordWatches.get(requestId);
+      if (watch) clearTimeout(watch.timeout);
+      pendingRecordWatches.delete(requestId);
       rejectPendingOperation(requestId, error);
     }
     return result;
@@ -177,10 +201,12 @@ export function executeWebRecordCommandCapability(
   recordParent: string,
   context: WebCapabilityExecutionContext,
   inputs: Record<string, string> = {},
+  recordIdentity?: string,
+  onRecordChange?: (change: WebRecordChange) => void,
 ): Promise<WebCommandExecutionResult> {
   const command = config.record.commands.find((candidate) => candidate.id === commandId);
   if (!command) return Promise.reject(new Error(`The web capability does not define command ${commandId}.`));
-  return executeCommand(config, command, context, inputs, recordParent);
+  return executeCommand(config, command, context, inputs, recordParent, recordIdentity, onRecordChange);
 }
 
 function rejectPendingOperation(requestId: string, error: unknown): void {
@@ -197,6 +223,14 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
   const context = result.context && typeof result.context === 'object' && !Array.isArray(result.context)
     ? result.context as Record<string, unknown>
     : null;
+  if (result.kind === 'integration-record-watch-result' && typeof result.requestId === 'string') {
+    const watch = pendingRecordWatches.get(result.requestId);
+    if (!watch || !result.recordChange || typeof result.recordChange !== 'object') return false;
+    clearTimeout(watch.timeout);
+    pendingRecordWatches.delete(result.requestId);
+    watch.notify(result.recordChange as WebRecordChange);
+    return true;
+  }
   const requestId = result.kind === 'integration-command-result'
     ? result.requestId
     : context?.webCapabilityRequestId;
@@ -207,6 +241,11 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
     || (pending.kind === 'command' && result.kind !== 'integration-command-result')) return false;
   clearTimeout(pending.timeout);
   pendingOperations.delete(requestId);
+  if (pending.kind === 'command' && result.status !== 'executed') {
+    const watch = pendingRecordWatches.get(requestId);
+    if (watch) clearTimeout(watch.timeout);
+    pendingRecordWatches.delete(requestId);
+  }
   if (pending.kind === 'records') {
     if (result.status === 'not-ready') {
       pending.reject(new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.'));

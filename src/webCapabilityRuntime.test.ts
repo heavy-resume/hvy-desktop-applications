@@ -13,6 +13,7 @@ vi.mock('./webCapabilities', async (importOriginal) => ({
 }));
 
 import {
+  executeWebRecordCommandCapability,
   executeWebRecordsCapability,
   handleWebCapabilityIntegrationResult,
 } from './webCapabilityRuntime';
@@ -102,4 +103,50 @@ describe('web capability operation timeouts', () => {
 
     await rejection;
   });
+});
+
+it('delivers a watched record change after the command itself completes', async () => {
+  const onRecordChange = vi.fn();
+  const commandConfig = {
+    ...config,
+    record: {
+      ...config.record,
+      commands: [{ id: 'archive', name: 'Archive', scope: 'record', steps: [{ gesture: 'click', target: {} }] }],
+    },
+  } as WebRecordsCapabilityConfig;
+  const operation = executeWebRecordCommandCapability(
+    commandConfig,
+    'archive',
+    '#message-1',
+    executionContext(true),
+    {},
+    '[["Subject","Message 1"]]',
+    onRecordChange,
+  );
+  await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+  const extraction = openIntegrationPage.mock.calls[0][5] as {
+    payload: { requestId: string; watchRecord: boolean; recordParent: string };
+  };
+  expect(extraction.payload).toMatchObject({
+    watchRecord: true,
+    recordParent: '#message-1',
+    recordIdentity: '[["Subject","Message 1"]]',
+  });
+
+  expect(handleWebCapabilityIntegrationResult({
+    kind: 'integration-command-result',
+    requestId: extraction.payload.requestId,
+    status: 'executed',
+    commandId: 'archive',
+  })).toBe(true);
+  await expect(operation).resolves.toEqual({ status: 'executed', commandId: 'archive' });
+  expect(onRecordChange).not.toHaveBeenCalled();
+
+  const recordChange = { status: 'removed', previousParent: '#message-1' };
+  expect(handleWebCapabilityIntegrationResult({
+    kind: 'integration-record-watch-result',
+    requestId: extraction.payload.requestId,
+    recordChange,
+  })).toBe(true);
+  expect(onRecordChange).toHaveBeenCalledWith(recordChange);
 });

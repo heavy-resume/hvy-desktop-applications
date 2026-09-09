@@ -1295,6 +1295,41 @@ function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pend
   });
 }
 
+function executePendingIntegrationExtraction(browser) {
+  const extraction = browser.pendingExtraction;
+  if (!extraction) return Promise.resolve(null);
+  const currentOrigin = new URL(browser.contents.getURL()).origin;
+  if (Array.isArray(extraction.context?.expectedOrigins)
+    ? !extraction.context.expectedOrigins.includes(currentOrigin)
+    : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return Promise.resolve(null);
+  browser.pendingExtraction = null;
+  if (extraction.kind === 'command-target') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
+  }
+  if (extraction.kind === 'command-execution') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
+  }
+  if (extraction.kind === 'ready-check-validation') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
+  }
+  if (extraction.kind === 'pattern-highlight') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
+  }
+  if (extraction.kind === 'source-discovery') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
+  }
+  if (extraction.kind === 'source-fetch') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
+  }
+  if (extraction.kind === 'webmcp-discovery') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  }
+  if (extraction.kind === 'webmcp-invocation') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  }
+  return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
+}
+
 async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName) {
   let browser = integrationBrowsers.get(profileId);
   if (browser?.closePromise) await browser.closePromise;
@@ -1425,6 +1460,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         setIntegrationToolbarInspectionState(browser);
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
         const isBackgroundResult = result?.kind === 'integration-ready-check-validation'
+          || result?.kind === 'integration-record-watch-result'
           || (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
           || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
           || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
@@ -1456,40 +1492,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
         void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
         if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
-        if (browser.pendingExtraction) {
-          const extraction = browser.pendingExtraction;
-          const currentOrigin = new URL(browser.contents.getURL()).origin;
-          if (Array.isArray(extraction.context?.expectedOrigins)
-            ? !extraction.context.expectedOrigins.includes(currentOrigin)
-            : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return null;
-          browser.pendingExtraction = null;
-          if (extraction.kind === 'command-target') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
-          }
-          if (extraction.kind === 'command-execution') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
-          }
-          if (extraction.kind === 'ready-check-validation') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
-          }
-          if (extraction.kind === 'pattern-highlight') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
-          }
-          if (extraction.kind === 'source-discovery') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
-          }
-          if (extraction.kind === 'source-fetch') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
-          }
-          if (extraction.kind === 'webmcp-discovery') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
-          }
-          if (extraction.kind === 'webmcp-invocation') {
-            return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
-          }
-          return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
-        }
-        return null;
+        return executePendingIntegrationExtraction(browser);
       });
     });
     browser.contents.on('page-title-updated', (_event, title) => {
@@ -1538,7 +1541,16 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.pendingExtraction = pendingExtraction || null;
   await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
   browser.window.removeMenu();
-  await browser.contents.loadURL(url);
+  if (browser.contents.getURL() === url && !browser.contents.isLoadingMainFrame()) {
+    await browser.contents.executeJavaScript(INTEGRATION_INSPECTOR);
+    if (browser.actionModePending) {
+      await browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+    } else {
+      await executePendingIntegrationExtraction(browser);
+    }
+  } else {
+    await browser.contents.loadURL(url);
+  }
   if (foreground) raiseWindow(browser.window);
 }
 

@@ -91,7 +91,7 @@ interface InspectorApi {
   pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
   validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown> };
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
-  executeCommand(payload: { pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; inputId?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
+  executeCommand(payload: { requestId?: string; watchRecord?: boolean; recordIdentity?: string; readyChecks?: Parameters<InspectorApi['pageReadiness']>[0]; pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; inputId?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
 
 declare global {
@@ -1187,6 +1187,180 @@ describe('integration structural inspector', () => {
 
     expect(result.execution.status).toBe('executed');
     expect(result.clicked).toEqual([1]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('rematches a record by content identity when list changes invalidate its parent path', async () => {
+    await page.setContent(`<main>
+      <article class="message"><span class="subject">First</span><button>Delete</button></article>
+      <article class="message"><span class="subject">Second</span><button>Delete</button></article>
+    </main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const parents = [...document.querySelectorAll('.message')];
+      const pattern = {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parents[0], null, 'parent')],
+        targets: [{ label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('.subject')!, parents[0], 'target') }],
+      };
+      const records = window.__hvyGalaxyInspector.extractPattern(pattern).records;
+      const selected = records.find((record) => record.targets[0].value === 'Second')!;
+      const recordIdentity = JSON.stringify(selected.targets.map((field) => [field.label, field.value]));
+      const target = window.__hvyGalaxyInspector.snapshotElement(parents[0].querySelector('button')!, parents[0], 'target');
+      const clicked: string[] = [];
+      parents.forEach((parent) => parent.querySelector('button')!.addEventListener('click', () => clicked.push(parent.querySelector('.subject')!.textContent!)));
+      const inserted = parents[0].cloneNode(true) as HTMLElement;
+      inserted.querySelector('.subject')!.textContent = 'Inserted';
+      inserted.querySelector('button')!.addEventListener('click', () => clicked.push('Inserted'));
+      document.querySelector('main')!.prepend(inserted);
+
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        pattern,
+        command: { id: 'delete', scope: 'record', steps: [{ gesture: 'click', target }] },
+        recordParent: selected.parent,
+        recordIdentity,
+      });
+      return { execution, clicked };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.clicked).toEqual(['Second']);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('waits for page readiness and the requested record after refreshed content is restored', async () => {
+    await page.setContent('<h1 class="ready-state">Ready</h1><main><article class="message"><span class="subject">First</span><button>Delete</button></article></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const landmark = document.querySelector('.ready-state')!;
+      const parent = document.querySelector('.message')!;
+      const subject = parent.querySelector('.subject')!;
+      const control = parent.querySelector('button')!;
+      const pattern = {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'SUBJECT', snapshot: window.__hvyGalaxyInspector.snapshotElement(subject, parent, 'target') }],
+      };
+      const recordParent = window.__hvyGalaxyInspector.extractPattern(pattern).records[0].parent;
+      const target = window.__hvyGalaxyInspector.snapshotElement(control, parent, 'target');
+      const readySnapshot = window.__hvyGalaxyInspector.snapshotElement(landmark, null, 'target');
+      const replacementLandmark = landmark.cloneNode(true);
+      const replacementParent = parent.cloneNode(true) as HTMLElement;
+      let clicks = 0;
+      replacementParent.querySelector('button')!.addEventListener('click', () => { clicks += 1; });
+      landmark.remove();
+      parent.remove();
+      window.setTimeout(() => {
+        document.body.prepend(replacementLandmark);
+        document.querySelector('main')!.append(replacementParent);
+      }, 100);
+
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        pattern,
+        command: { id: 'delete', scope: 'record', steps: [{ gesture: 'click', target }] },
+        recordParent,
+        readyChecks: {
+          urlMode: 'strict-url',
+          urlValue: location.href,
+          elements: [{ id: 'ready', name: 'Ready state', snapshot: readySnapshot, expectedValue: 'Ready' }],
+        },
+      });
+      return { execution, clicks };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.clicks).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('reports a changed record after its command mutates the page', async () => {
+    await page.close();
+    page = await browser.newPage();
+    pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setContent('<main><article class="message"><span class="status">Unread</span><button>Mark read</button></article></main>');
+    await page.evaluate(() => {
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const parent = document.querySelector('.message')!;
+      const status = parent.querySelector('.status')!;
+      const control = parent.querySelector('button')!;
+      control.addEventListener('click', () => window.setTimeout(() => { status.textContent = 'Read'; }, 25));
+      const pattern = {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'STATUS', snapshot: window.__hvyGalaxyInspector.snapshotElement(status, parent, 'target') }],
+      };
+      const recordParent = window.__hvyGalaxyInspector.extractPattern(pattern).records[0].parent;
+      const target = window.__hvyGalaxyInspector.snapshotElement(control, parent, 'target');
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        requestId: 'watch-request',
+        watchRecord: true,
+        pattern,
+        command: { id: 'mark-read', scope: 'record', steps: [{ gesture: 'click', target }] },
+        recordParent,
+      });
+      for (let attempt = 0; attempt < 20 && !window.__commandRecordingResult; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
+      }
+      return { execution, published: window.__commandRecordingResult };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.published).toMatchObject({
+      kind: 'integration-record-watch-result',
+      requestId: 'watch-request',
+      recordChange: {
+        status: 'changed',
+        record: { targets: [{ label: 'STATUS', value: 'Read' }] },
+      },
+    });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('reports a removed record after its command removes the matched element', async () => {
+    await page.close();
+    page = await browser.newPage();
+    pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setContent('<main><article class="message"><span class="status">Active</span><button>Delete</button></article></main>');
+    await page.evaluate(() => {
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const parent = document.querySelector('.message')!;
+      const status = parent.querySelector('.status')!;
+      const control = parent.querySelector('button')!;
+      control.addEventListener('click', () => parent.remove());
+      const pattern = {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'STATUS', snapshot: window.__hvyGalaxyInspector.snapshotElement(status, parent, 'target') }],
+      };
+      const recordParent = window.__hvyGalaxyInspector.extractPattern(pattern).records[0].parent;
+      const target = window.__hvyGalaxyInspector.snapshotElement(control, parent, 'target');
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        requestId: 'remove-request',
+        watchRecord: true,
+        pattern,
+        command: { id: 'delete', scope: 'record', steps: [{ gesture: 'click', target }] },
+        recordParent,
+      });
+      for (let attempt = 0; attempt < 20 && !window.__commandRecordingResult; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
+      }
+      return { execution, published: window.__commandRecordingResult, recordParent };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.published).toMatchObject({
+      kind: 'integration-record-watch-result',
+      requestId: 'remove-request',
+      recordChange: { status: 'removed', previousParent: result.recordParent },
+    });
     expect(pageErrors).toEqual([]);
   });
 
