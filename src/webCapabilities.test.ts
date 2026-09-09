@@ -187,4 +187,31 @@ describe('web capabilities', () => {
     expect(config.command.steps[1]).toMatchObject({ gesture: 'type', inputId: 'subject' });
     expect(JSON.stringify(config)).not.toContain('Private subject');
   });
+
+  it('preserves fixed and parameterized dropdown selections in portable commands', () => {
+    const command: IntegrationCommandDefinition = {
+      id: 'choose-list',
+      name: 'Choose list',
+      scope: 'page',
+      inputs: [{
+        id: 'list',
+        name: 'List',
+        required: true,
+        options: [{ value: 'inbox', label: 'Inbox' }, { value: 'follow-up', label: 'Follow up' }],
+      }],
+      steps: [
+        { gesture: 'select', target: snapshot, value: 'inbox', valueLabel: 'Inbox' },
+        { gesture: 'select', target: snapshot, inputId: 'list' },
+      ],
+    };
+
+    const config = createWebCommandCapabilityConfig('mail', page, command, 'choose-list');
+
+    expect(config.command.inputs?.[0]).toEqual(command.inputs?.[0]);
+    expect(config.command.steps).toMatchObject([
+      { gesture: 'select', value: 'inbox', valueLabel: 'Inbox' },
+      { gesture: 'select', inputId: 'list' },
+    ]);
+    expect(JSON.stringify(config)).not.toContain('Private subject');
+  });
 });

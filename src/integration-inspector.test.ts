@@ -91,7 +91,7 @@ interface InspectorApi {
   pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
   validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown> };
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
-  executeCommand(payload: { requestId?: string; watchRecord?: boolean; recordIdentity?: string; readyChecks?: Parameters<InspectorApi['pageReadiness']>[0]; pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type'; target: InspectorSnapshot; inputId?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
+  executeCommand(payload: { requestId?: string; watchRecord?: boolean; recordIdentity?: string; readyChecks?: Parameters<InspectorApi['pageReadiness']>[0]; pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean; options?: Array<{ value: string; label: string }>; allowCustom?: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type' | 'select'; target: InspectorSnapshot; inputId?: string; value?: string; valueLabel?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
 
 declare global {
@@ -1446,6 +1446,75 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('selects a fixed native dropdown value and dispatches form events', async () => {
+    await page.setContent('<main><label>List <select class="list-control"><option value="wrong">Wrong list</option><option value="correct">Correct list</option></select></label></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const target = document.querySelector<HTMLSelectElement>('.list-control')!;
+      const events: string[] = [];
+      for (const name of ['input', 'change']) target.addEventListener(name, () => events.push(name));
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'choose-list', scope: 'page', steps: [{ gesture: 'select', target: snapshot, value: 'correct', valueLabel: 'Correct list' }] },
+      });
+      return { execution, value: target.value, events };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.value).toBe('correct');
+    expect(result.events).toEqual(['input', 'change']);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('selects a native dropdown value supplied at run time', async () => {
+    await page.setContent('<main><select class="list-control"><option value="wrong">Wrong list</option><option value="correct">Correct list</option></select></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const target = document.querySelector<HTMLSelectElement>('.list-control')!;
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: {
+          id: 'choose-list',
+          scope: 'page',
+          inputs: [{ id: 'list', name: 'List', required: true, options: [{ value: 'wrong', label: 'Wrong list' }, { value: 'correct', label: 'Correct list' }] }],
+          steps: [{ gesture: 'select', target: snapshot, inputId: 'list' }],
+        },
+        inputs: { list: 'correct' },
+      });
+      return { execution, value: target.value };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.value).toBe('correct');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('opens an ARIA combobox and selects its matching DOM option', async () => {
+    await page.setContent('<main><button class="list-control" role="combobox" aria-haspopup="listbox">Wrong list</button><div class="options" role="listbox" hidden><button role="option">Wrong list</button><button role="option">Correct list</button></div></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const target = document.querySelector<HTMLButtonElement>('.list-control')!;
+      const options = document.querySelector<HTMLElement>('.options')!;
+      target.addEventListener('click', () => { options.hidden = false; });
+      options.querySelectorAll('[role="option"]').forEach((option) => option.addEventListener('click', () => {
+        target.textContent = option.textContent;
+        options.hidden = true;
+      }));
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(target, null, 'target');
+      const execution = await window.__hvyGalaxyInspector.executeCommand({
+        pattern: { minimumConfidence: 0.8, parents: [], targets: [] },
+        command: { id: 'choose-list', scope: 'page', steps: [{ gesture: 'select', target: snapshot, value: 'Correct list', valueLabel: 'Correct list' }] },
+      });
+      return { execution, value: target.textContent };
+    });
+
+    expect(result.execution.status).toBe('executed');
+    expect(result.value).toBe('Correct list');
+    expect(pageErrors).toEqual([]);
+  });
+
   it('runs ordered steps and waits for targets revealed by earlier interactions', async () => {
     await page.setContent('<main><button class="compose-control">Compose</button><section class="draft"><input class="recipient-control"><button class="send-control">Send</button></section></main>');
     await page.addScriptTag({ content: inspectorSource });
@@ -1523,6 +1592,36 @@ describe('integration structural inspector', () => {
       ],
     });
     expect(JSON.stringify(recording)).not.toContain('Temporary verification value');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('records a native dropdown as a fixed option or run-time parameter', async () => {
+    await page.close();
+    page = await browser.newPage();
+    pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setContent('<main><select class="list-control"><option value="wrong">Wrong list</option><option value="correct">Correct list</option></select></main>');
+    await page.evaluate(() => { window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; }; });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { commandRecorder: { scope: 'page' } }));
+
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Choose option', exact: true }).click();
+    await clickPointerAt(page, '.list-control');
+    await page.locator('#hvy-galaxy-inspector-picker button').first().click();
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Choose value', exact: true }).click();
+    await page.locator('#hvy-galaxy-inspector-status [data-command-recorder-input]').selectOption('correct');
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Ask each run', exact: true }).click();
+    await expect.poll(() => page.locator('.list-control').inputValue()).toBe('correct');
+    await page.locator('#hvy-galaxy-inspector-status').getByRole('button', { name: 'Finish recording', exact: true }).click();
+
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toMatchObject({
+      kind: 'integration-command-recording',
+      steps: [{
+        gesture: 'select',
+        inputId: 'input-1',
+        options: [{ value: 'wrong', label: 'Wrong list' }, { value: 'correct', label: 'Correct list' }],
+      }],
+    });
     expect(pageErrors).toEqual([]);
   });
 

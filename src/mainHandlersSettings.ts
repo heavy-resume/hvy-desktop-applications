@@ -1798,12 +1798,18 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const inputIds = new Map<string, string>();
     const inputs: Array<{ id: string; name: string; required: boolean }> = [];
     for (const step of state.integrationCommandDraftSteps) {
-      if (step.gesture !== 'type' || !step.inputId || inputIds.has(step.inputId)) continue;
+      if ((step.gesture !== 'type' && step.gesture !== 'select') || !step.inputId || inputIds.has(step.inputId)) continue;
       const inputName = String(inputNames[step.inputId] ?? '').trim();
       const inputId = integrationCommandInputId(inputName);
       if (!inputId) throw new Error('Name each text input parameter.');
       inputIds.set(step.inputId, inputId);
-      if (!inputs.some((input) => input.id === inputId)) inputs.push({ id: inputId, name: inputName, required: true });
+      if (!inputs.some((input) => input.id === inputId)) inputs.push({
+        id: inputId,
+        name: inputName,
+        required: true,
+        ...(step.gesture === 'select' && step.options?.length ? { options: step.options } : {}),
+        ...(step.gesture === 'select' && step.allowCustom ? { allowCustom: true } : {}),
+      });
     }
     const command = {
       id: `command-${crypto.randomUUID()}`,
@@ -1836,6 +1842,19 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (!command) throw new Error('The item command was not found.');
     state.integrationCommandDeleteIntegrationId = integrationId;
     state.integrationCommandDeleteActionId = actionId;
+    state.integrationCommandDeletePageId = null;
+    state.integrationCommandDeleteCommandId = commandId;
+    state.integrationCommandDeleteDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  requestDeleteIntegrationPageCommand: (integrationId, pageId, commandId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    const command = page?.commands?.find((candidate) => candidate.id === commandId);
+    if (!command) throw new Error('The page command was not found.');
+    state.integrationCommandDeleteIntegrationId = integrationId;
+    state.integrationCommandDeleteActionId = null;
+    state.integrationCommandDeletePageId = pageId;
     state.integrationCommandDeleteCommandId = commandId;
     state.integrationCommandDeleteDialogOpen = true;
     rerender({ preserveMountedDocument: true });
@@ -1844,19 +1863,24 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDeleteDialogOpen = false;
     state.integrationCommandDeleteIntegrationId = null;
     state.integrationCommandDeleteActionId = null;
+    state.integrationCommandDeletePageId = null;
     state.integrationCommandDeleteCommandId = null;
     rerender({ preserveMountedDocument: true });
   },
   confirmDeleteIntegrationCommand: () => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDeleteIntegrationId);
     const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDeleteActionId);
-    const command = action?.commands?.find((candidate) => candidate.id === state.integrationCommandDeleteCommandId);
-    if (!action || !command) throw new Error('The item command was not found.');
-    action.commands = action.commands?.filter((candidate) => candidate.id !== command.id);
+    const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDeletePageId);
+    const command = action?.commands?.find((candidate) => candidate.id === state.integrationCommandDeleteCommandId)
+      ?? page?.commands?.find((candidate) => candidate.id === state.integrationCommandDeleteCommandId);
+    if (!command || (!action && !page)) throw new Error('The command was not found.');
+    if (action) action.commands = action.commands?.filter((candidate) => candidate.id !== command.id);
+    else page!.commands = page!.commands?.filter((candidate) => candidate.id !== command.id);
     saveIntegrationRegistry(state.integrationRegistry);
     state.integrationCommandDeleteDialogOpen = false;
     state.integrationCommandDeleteIntegrationId = null;
     state.integrationCommandDeleteActionId = null;
+    state.integrationCommandDeletePageId = null;
     state.integrationCommandDeleteCommandId = null;
     state.status = `Deleted ${command.name}`;
     rerender({ preserveMountedDocument: true });

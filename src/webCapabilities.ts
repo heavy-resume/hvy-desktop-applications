@@ -93,7 +93,7 @@ export interface WebCapabilityApprovalSummary {
   pageUrl: string;
   allowedOrigins: string[];
   fieldLabels: string[];
-  commands: Array<{ id: string; name: string; gesture: string; scope: string; inputs: Array<{ id: string; name: string; required: boolean }> }>;
+  commands: Array<{ id: string; name: string; gesture: string; scope: string; inputs: IntegrationCommandDefinition['inputs'] }>;
 }
 
 export interface WebCapabilityAuthorizationRecord {
@@ -171,7 +171,18 @@ export function normalizeWebCapabilityAuthorizations(value: unknown): WebCapabil
               const definition = input as Record<string, unknown>;
               const inputId = typeof definition.id === 'string' ? definition.id.trim() : '';
               const inputName = typeof definition.name === 'string' ? definition.name.trim() : '';
-              return inputId && inputName ? [{ id: inputId, name: inputName, required: definition.required !== false }] : [];
+              const options = Array.isArray(definition.options) ? definition.options.flatMap((rawOption) => {
+                if (!rawOption || typeof rawOption !== 'object' || Array.isArray(rawOption)) return [];
+                const option = rawOption as Record<string, unknown>;
+                return typeof option.value === 'string' && typeof option.label === 'string' ? [{ value: option.value, label: option.label }] : [];
+              }) : [];
+              return inputId && inputName ? [{
+                id: inputId,
+                name: inputName,
+                required: definition.required !== false,
+                ...(options.length ? { options } : {}),
+                ...(definition.allowCustom === true ? { allowCustom: true } : {}),
+              }] : [];
             }) : [];
             return id && commandName && gesture && scope ? [{ id, name: commandName, gesture, scope, inputs }] : [];
           })
@@ -273,19 +284,36 @@ function normalizeCommand(value: unknown, scope: 'page' | 'record'): Integration
     const inputId = typeof input.id === 'string' ? input.id.trim() : '';
     const inputName = typeof input.name === 'string' ? input.name.trim() : '';
     if (!inputId || !inputName) return [];
-    return [{ id: inputId, name: inputName, required: input.required !== false }];
+    const options = Array.isArray(input.options) ? input.options.flatMap((rawOption) => {
+      if (!rawOption || typeof rawOption !== 'object' || Array.isArray(rawOption)) return [];
+      const option = rawOption as Record<string, unknown>;
+      return typeof option.value === 'string' && typeof option.label === 'string'
+        ? [{ value: option.value, label: option.label }]
+        : [];
+    }) : [];
+    return [{
+      id: inputId,
+      name: inputName,
+      required: input.required !== false,
+      ...(options.length ? { options } : {}),
+      ...(input.allowCustom === true ? { allowCustom: true } : {}),
+    }];
   }) : [];
   if (new Set(inputs.map((input) => input.id)).size !== inputs.length) return null;
   const inputIds = new Set(inputs.map((input) => input.id));
   const steps = record.steps.flatMap<IntegrationInteractionStepDefinition>((rawStep) => {
     if (!rawStep || typeof rawStep !== 'object' || Array.isArray(rawStep)) return [];
     const step = rawStep as Record<string, unknown>;
-    if (step.gesture !== 'click' && step.gesture !== 'double-click' && step.gesture !== 'right-click' && step.gesture !== 'type') return [];
-    if (step.gesture === 'type' && (typeof step.inputId !== 'string' || !inputIds.has(step.inputId))) return [];
+    if (step.gesture !== 'click' && step.gesture !== 'double-click' && step.gesture !== 'right-click' && step.gesture !== 'type' && step.gesture !== 'select') return [];
+    if ((step.gesture === 'type' || step.gesture === 'select') && typeof step.inputId === 'string' && !inputIds.has(step.inputId)) return [];
+    if (step.gesture === 'type' && typeof step.inputId !== 'string') return [];
+    if (step.gesture === 'select' && typeof step.inputId !== 'string' && typeof step.value !== 'string') return [];
     return [{
       gesture: step.gesture,
       target: matcherSnapshot(step.target),
-      ...(step.gesture === 'type' ? { inputId: step.inputId as string } : {}),
+      ...((step.gesture === 'type' || step.gesture === 'select') && typeof step.inputId === 'string' ? { inputId: step.inputId } : {}),
+      ...(step.gesture === 'select' && typeof step.value === 'string' ? { value: step.value } : {}),
+      ...(step.gesture === 'select' && typeof step.valueLabel === 'string' ? { valueLabel: step.valueLabel } : {}),
       ...(typeof step.fromState === 'string' ? { fromState: step.fromState } : {}),
       ...(typeof step.toState === 'string' ? { toState: step.toState } : {}),
     }];

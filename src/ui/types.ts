@@ -131,6 +131,7 @@ export interface UiHandlers {
   cancelIntegrationCommandBuilder(): void;
   saveIntegrationCommand(name: string, inputNames: Record<string, string>): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;
+  requestDeleteIntegrationPageCommand(integrationId: string, pageId: string, commandId: string): void;
   cancelDeleteIntegrationCommand(): void;
   confirmDeleteIntegrationCommand(): void;
   runIntegrationCommand(integrationId: string, actionId: string, commandId: string, recordParent?: string): void;

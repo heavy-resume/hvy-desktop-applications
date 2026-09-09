@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { state } from '../state';
 import { approveIntegrationWebMcpTool, webMcpCapabilityId, type IntegrationWebMcpToolDescriptor } from '../integrationWebMcp';
-import { renderIntegrationActionBuilderDialog, renderIntegrationNavigationDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderIntegrationActionBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 
 const integrationRegistry = {
   version: 1 as const,
@@ -12,6 +12,93 @@ const integrationRegistry = {
     actions: [],
   }],
 };
+
+describe('page commands', () => {
+  const registryWithCommand = {
+    ...integrationRegistry,
+    integrations: [{
+      ...integrationRegistry.integrations[0],
+      pages: [{
+        ...integrationRegistry.integrations[0].pages[0],
+        commands: [{
+          id: 'compose',
+          name: 'Compose message',
+          scope: 'page' as const,
+          inputs: [{ id: 'subject', name: 'Subject', required: true }],
+          steps: [
+            { gesture: 'click' as const, target: { selected: { accessibleName: 'Compose' } } },
+            { gesture: 'type' as const, inputId: 'subject', target: { selected: { accessibleName: 'Subject field' } } },
+          ],
+        }],
+      }],
+    }],
+  };
+
+  it('renders each command as a reviewable and deletable container', () => {
+    const html = renderIntegrationsDialog({
+      ...state,
+      integrationsDialogOpen: true,
+      selectedIntegrationId: 'integration',
+      integrationRegistry: registryWithCommand,
+    });
+    expect(html).toContain('class="integration-page-command-card"');
+    expect(html).toContain('2 steps');
+    expect(html).toContain('Click Compose');
+    expect(html).toContain('Enter Subject into Subject field');
+    expect(html).toContain('data-action="request-delete-integration-page-command"');
+    expect(html).toContain('data-action="run-integration-page-command"');
+  });
+
+  it('uses page-specific copy in the delete confirmation', () => {
+    const html = renderIntegrationCommandDeleteDialog({
+      ...state,
+      integrationRegistry: registryWithCommand,
+      integrationCommandDeleteDialogOpen: true,
+      integrationCommandDeleteIntegrationId: 'integration',
+      integrationCommandDeletePageId: 'page',
+      integrationCommandDeleteCommandId: 'compose',
+    });
+    expect(html).toContain('aria-label="Delete page command"');
+    expect(html).toContain('Delete Compose message?');
+    expect(html).toContain('Delete page command');
+  });
+
+  it('keeps the run dialog focused on the command and its inputs', () => {
+    const html = renderIntegrationCommandRunDialog({
+      ...state,
+      integrationRegistry: registryWithCommand,
+      integrationCommandRunRequest: { integrationId: 'integration', pageId: 'page', commandId: 'compose' },
+    });
+    expect(html).toContain('<h2>Compose message</h2>');
+    expect(html).toContain('>Subject</span>');
+    expect(html).not.toContain('Run action');
+    expect(html).not.toContain('Enter the values for this run.');
+    expect(html).not.toContain('aria-label="Cancel command"');
+  });
+
+  it('renders captured command options as a dropdown', () => {
+    const command = registryWithCommand.integrations[0].pages[0].commands[0];
+    const html = renderIntegrationCommandRunDialog({
+      ...state,
+      integrationRegistry: {
+        ...registryWithCommand,
+        integrations: [{
+          ...registryWithCommand.integrations[0],
+          pages: [{
+            ...registryWithCommand.integrations[0].pages[0],
+            commands: [{
+              ...command,
+              inputs: [{ id: 'list', name: 'List', required: true, options: [{ value: 'wrong', label: 'Wrong list' }, { value: 'correct', label: 'Correct list' }] }],
+            }],
+          }],
+        }],
+      },
+      integrationCommandRunRequest: { integrationId: 'integration', pageId: 'page', commandId: 'compose' },
+    });
+    expect(html).toContain('<select class="hvy-galaxy-select"');
+    expect(html).toContain('<option value="correct">Correct list</option>');
+  });
+});
 
 describe('integration page errors', () => {
   it('renders validation failures as an explicit modal', () => {

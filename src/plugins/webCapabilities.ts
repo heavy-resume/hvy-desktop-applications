@@ -140,17 +140,41 @@ function openCommandInputsModal(command: WebCommandCapabilityConfig['command'], 
   form.setAttribute('aria-label', `Run ${command.name}`);
   const title = document.createElement('h2');
   title.textContent = command.name;
-  const note = document.createElement('p');
-  note.textContent = 'Enter the values for this run.';
-  form.append(title, note);
+  form.append(title);
   for (const definition of command.inputs) {
     const label = document.createElement('label');
     const name = document.createElement('span');
     name.textContent = definition.name;
-    const input = definition.id.includes('body') ? document.createElement('textarea') : document.createElement('input');
-    input.className = 'hvy-galaxy-input';
+    const input = definition.options?.length && !definition.allowCustom
+      ? document.createElement('select')
+      : definition.id.includes('body') ? document.createElement('textarea') : document.createElement('input');
+    input.className = input instanceof HTMLSelectElement ? 'hvy-galaxy-select' : 'hvy-galaxy-input';
     input.name = definition.id;
     if (input instanceof HTMLTextAreaElement) input.rows = 6;
+    if (input instanceof HTMLSelectElement) {
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'Choose an option';
+      input.appendChild(empty);
+      for (const definitionOption of definition.options ?? []) {
+        const option = document.createElement('option');
+        option.value = definitionOption.value;
+        option.textContent = definitionOption.label;
+        input.appendChild(option);
+      }
+    } else if (definition.options?.length) {
+      const listId = `hvy-command-options-${definition.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      input.setAttribute('list', listId);
+      const list = document.createElement('datalist');
+      list.id = listId;
+      for (const definitionOption of definition.options) {
+        const option = document.createElement('option');
+        option.value = definitionOption.value;
+        option.label = definitionOption.label;
+        list.appendChild(option);
+      }
+      form.appendChild(list);
+    }
     input.required = definition.required;
     label.append(name, input);
     form.appendChild(label);
@@ -171,7 +195,7 @@ function openCommandInputsModal(command: WebCommandCapabilityConfig['command'], 
   });
   backdrop.appendChild(form);
   document.body.appendChild(backdrop);
-  form.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea')?.focus();
+  form.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')?.focus();
 }
 
 function selectedProfile(config: WebCapabilityConfig) {

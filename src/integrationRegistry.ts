@@ -130,12 +130,23 @@ export interface IntegrationCommandInputDefinition {
   id: string;
   name: string;
   required: boolean;
+  options?: IntegrationCommandInputOptionDefinition[];
+  allowCustom?: boolean;
+}
+
+export interface IntegrationCommandInputOptionDefinition {
+  value: string;
+  label: string;
 }
 
 export interface IntegrationInteractionStepDefinition {
-  gesture: 'click' | 'double-click' | 'right-click' | 'type';
+  gesture: 'click' | 'double-click' | 'right-click' | 'type' | 'select';
   target: unknown;
   inputId?: string;
+  value?: string;
+  valueLabel?: string;
+  options?: IntegrationCommandInputOptionDefinition[];
+  allowCustom?: boolean;
   fromState?: string;
   toState?: string;
 }

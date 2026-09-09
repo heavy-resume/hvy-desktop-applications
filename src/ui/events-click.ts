@@ -328,6 +328,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'add-command-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.addCommandForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'cancel-integration-command-builder') handlers.cancelIntegrationCommandBuilder();
     if (action === 'request-delete-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) handlers.requestDeleteIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId);
+    if (action === 'request-delete-integration-page-command' && target.dataset.integrationId && target.dataset.pageId && target.dataset.commandId) handlers.requestDeleteIntegrationPageCommand(target.dataset.integrationId, target.dataset.pageId, target.dataset.commandId);
     if (action === 'cancel-delete-integration-command') handlers.cancelDeleteIntegrationCommand();
     if (action === 'confirm-delete-integration-command') handlers.confirmDeleteIntegrationCommand();
     if (action === 'run-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) {

@@ -29,6 +29,7 @@ export function integrationCommandGestureLabel(gesture: import('../integrationRe
   if (gesture === 'double-click') return 'Double click';
   if (gesture === 'right-click') return 'Right click';
   if (gesture === 'type') return 'Enter text';
+  if (gesture === 'select') return 'Choose option';
   return 'Click';
 }
 
@@ -48,6 +49,20 @@ function renderRecordTypeCard(state: AppState, integrationId: string, action: im
   const sourceLabel = webMcp ? `WebMCP · ${approval?.descriptor.title ?? approval?.descriptor.name ?? 'Unavailable tool'}` : 'Web page identification';
   const details = action.description || recordTypeFieldLabels(action);
   return `<article class="integration-record-definition"><div class="integration-record-summary"><strong>${escapeHtml(action.name)}${action.status === 'draft' ? ' <small>Draft</small>' : ''}</strong><span>${escapeHtml(details)}</span><small>${escapeHtml(sourceLabel)}</small>${webMcp ? '' : renderItemCommandPills(integrationId, action)}</div><div class="integration-record-actions">${webMcp ? '' : `<button type="button" class="hvy-galaxy-button" data-action="edit-integration-action" data-integration-id="${escapeAttr(integrationId)}" data-action-id="${escapeAttr(action.id)}">Edit</button>`}<button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-action" data-integration-id="${escapeAttr(integrationId)}" data-action-id="${escapeAttr(action.id)}">Delete</button>${webMcp ? '' : `<button type="button" class="hvy-galaxy-button" data-action="add-command-for-integration-action" data-integration-id="${escapeAttr(integrationId)}" data-action-id="${escapeAttr(action.id)}">Add item command</button>`}<button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-action" data-integration-id="${escapeAttr(integrationId)}" data-action-id="${escapeAttr(action.id)}" ${(action.pattern || webMcp) && !state.integrationActionFetchPendingId ? '' : 'disabled'}>${state.integrationActionFetchPendingId === action.id ? 'Fetching…' : 'Fetch items'}</button></div></article>`;
+}
+
+function renderPageCommandCard(integrationId: string, pageId: string, command: import('../integrationRegistry').IntegrationCommandDefinition): string {
+  const steps = command.steps.map((step, index) => {
+    const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
+    const input = command.inputs?.find((candidate) => candidate.id === step.inputId);
+    const detail = step.gesture === 'type'
+      ? `Enter ${escapeHtml(input?.name ?? 'text')} into ${target}`
+      : step.gesture === 'select'
+        ? `${step.inputId ? `Choose ${escapeHtml(input?.name ?? 'an option')}` : `Choose ${escapeHtml(step.valueLabel ?? step.value ?? 'an option')}`} in ${target}`
+        : `${integrationCommandGestureLabel(step.gesture)} ${target}`;
+    return `<li class="integration-page-command-step"><span class="integration-page-command-step-number">${index + 1}</span><span>${detail}</span></li>`;
+  }).join('');
+  return `<article class="integration-page-command-card"><div class="integration-page-command-summary"><strong>${escapeHtml(command.name)}</strong><small>${command.steps.length} ${command.steps.length === 1 ? 'step' : 'steps'}</small><ol class="integration-page-command-steps" aria-label="Steps for ${escapeAttr(command.name)}">${steps}</ol></div><div class="integration-record-actions"><button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-page-command" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" data-command-id="${escapeAttr(command.id)}">Delete</button><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" data-command-id="${escapeAttr(command.id)}">Run</button></div></article>`;
 }
 
 export function renderIntegrationsDialog(state: AppState): string {
@@ -94,7 +109,7 @@ export function renderIntegrationsDialog(state: AppState): string {
           </nav>
           <main class="integration-detail">
             <div class="integration-detail-header"><div class="integration-page-identity"><button class="hvy-galaxy-button" type="button" data-action="open-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Open</button><div><h3>${escapeHtml(selectedPage.name)}</h3><p>${escapeHtml(new URL(selectedPage.url).hostname)}</p></div></div><button class="hvy-galaxy-button" type="button" data-action="open-integration-ready-checks" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}">Page settings</button></div>
-            <section><div class="integration-section-heading"><div><h4>Page Commands</h4><p>Commands that do not require a matched record.</p></div><div class="integration-section-actions"><button type="button" class="hvy-galaxy-button icon-button" data-action="add-command-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" title="Add page command" aria-label="Add page command">+</button></div></div>${selectedPage.commands?.length ? `<div class="integration-command-list integration-page-command-list">${selectedPage.commands.map((command) => `<button type="button" class="hvy-galaxy-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-command-id="${escapeAttr(command.id)}">${escapeHtml(command.name)}</button>`).join('')}</div>` : '<div class="integration-empty-state integration-section-empty"><strong>No page commands yet</strong></div>'}</section>
+            <section><div class="integration-section-heading"><div><h4>Page Commands</h4><p>Commands that do not require a matched record.</p></div><div class="integration-section-actions"><button type="button" class="hvy-galaxy-button icon-button" data-action="add-command-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" title="Add page command" aria-label="Add page command">+</button></div></div>${selectedPage.commands?.length ? `<div class="integration-action-list integration-page-command-list">${selectedPage.commands.map((command) => renderPageCommandCard(selectedIntegration.id, selectedPage.id, command)).join('')}</div>` : '<div class="integration-empty-state integration-section-empty"><strong>No page commands yet</strong></div>'}</section>
             ${structuredSources}
             ${webMcpTools}
             <section><div class="integration-section-heading"><div><h4>Record Types</h4><p>Reusable structures and commands that belong to ${escapeHtml(selectedPage.name)}.</p></div><div class="integration-section-actions">${state.integrationActionFetchPendingId ? `<span class="integration-fetch-status" role="status"><span class="integration-selection-pulse" aria-hidden="true"></span>Fetching items in the background…</span>` : ''}<button type="button" class="hvy-galaxy-button icon-button" data-action="add-action-for-integration-page" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" title="Define record type" aria-label="Define record type">+</button></div></div>${state.integrationActionFetchError ? `<div class="integration-fetch-error" role="alert"><strong>Fetch failed</strong><span>${escapeHtml(state.integrationActionFetchError)}</span></div>` : ''}${selectedIntegration.actions.length ? `<div class="integration-action-list">${selectedIntegration.actions.map((action) => renderRecordTypeCard(state, selectedIntegration.id, action)).join('')}</div>` : '<div class="integration-empty-state integration-section-empty"><strong>No record types yet</strong></div>'}</section>
@@ -256,10 +271,14 @@ export function renderIntegrationCommandBuilderDialog(state: AppState): string {
   }
   const steps = state.integrationCommandDraftSteps.map((step, index) => {
     const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
-    const detail = step.gesture === 'type' ? `Enter a parameter into ${target}` : `${integrationCommandGestureLabel(step.gesture)} ${target}`;
+    const detail = step.gesture === 'type'
+      ? `Enter a parameter into ${target}`
+      : step.gesture === 'select'
+        ? `${step.inputId ? 'Choose a parameter' : `Choose ${escapeHtml(step.valueLabel ?? step.value ?? 'an option')}`} in ${target}`
+        : `${integrationCommandGestureLabel(step.gesture)} ${target}`;
     return `<div class="integration-selection-row"><div class="integration-selection-review"><strong>${index + 1}</strong><span>${detail}</span><small>Resolved and performed successfully while recording.</small></div></div>`;
   }).join('');
-  const inputFields = state.integrationCommandDraftSteps.flatMap((step, index) => step.gesture === 'type' && step.inputId ? [`<label><span>Parameter for step ${index + 1}</span><input class="hvy-galaxy-input" name="recordedInput:${escapeAttr(step.inputId)}" placeholder="Parameter name" required autocomplete="off"></label>`] : []).join('');
+  const inputFields = state.integrationCommandDraftSteps.flatMap((step, index) => (step.gesture === 'type' || step.gesture === 'select') && step.inputId ? [`<label><span>Parameter for step ${index + 1}</span><input class="hvy-galaxy-input" name="recordedInput:${escapeAttr(step.inputId)}" placeholder="Parameter name" required autocomplete="off"></label>`] : []).join('');
   return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Name recorded command" data-form="integration-command-reconcile"><div class="modal-header"><div><p class="eyebrow">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'}</p><h2>Name the recorded action</h2><p class="dialog-note">The browser already verified every interaction. Name the action and its text parameters; temporary recording values are not retained.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Action name</span><input class="hvy-galaxy-input" name="commandName" placeholder="Action name" required autocomplete="off"></label>${inputFields}<section class="integration-selection-collection"><h3>Verified sequence</h3><div>${steps}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Save action</button></div></form></div>`;
 }
 
@@ -273,11 +292,17 @@ export function renderIntegrationCommandRunDialog(state: AppState): string {
     ?? page?.commands?.find((candidate) => candidate.id === request.commandId);
   if (!command) return '';
   const fields = (command.inputs ?? []).map((input) => {
-    const attributes = `class="hvy-galaxy-input" name="commandInput:${escapeAttr(input.id)}" ${input.required ? 'required' : ''}`;
-    const control = input.id.includes('body') ? `<textarea ${attributes} rows="6"></textarea>` : `<input ${attributes} autocomplete="off">`;
+    const attributes = `name="commandInput:${escapeAttr(input.id)}" ${input.required ? 'required' : ''}`;
+    const options = input.options?.map((option) => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`).join('') ?? '';
+    const listId = `command-input-options-${input.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const control = input.options?.length
+      ? input.allowCustom
+        ? `<input class="hvy-galaxy-input" ${attributes} list="${escapeAttr(listId)}" autocomplete="off"><datalist id="${escapeAttr(listId)}">${options}</datalist>`
+        : `<select class="hvy-galaxy-select" ${attributes}><option value="">Choose an option</option>${options}</select>`
+      : input.id.includes('body') ? `<textarea class="hvy-galaxy-input" ${attributes} rows="6"></textarea>` : `<input class="hvy-galaxy-input" ${attributes} autocomplete="off">`;
     return `<label><span>${escapeHtml(input.name)}</span>${control}</label>`;
   }).join('');
-  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog" role="dialog" aria-modal="true" aria-label="Run ${escapeAttr(command.name)}" data-form="integration-command-run"><div class="modal-header"><div><p class="eyebrow">Run action</p><h2>${escapeHtml(command.name)}</h2><p class="dialog-note">Enter the values for this run.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-run" aria-label="Cancel command">×</button></div>${fields}<div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-run">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Run</button></div></form></div>`;
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><form class="dialog integration-command-run-dialog" role="dialog" aria-modal="true" aria-label="Run ${escapeAttr(command.name)}" data-form="integration-command-run"><div class="modal-header"><div><h2>${escapeHtml(command.name)}</h2></div></div>${fields}<div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-run">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Run</button></div></form></div>`;
 }
 
 export function renderIntegrationActionResultDialog(state: AppState): string {
@@ -409,8 +434,12 @@ export function renderIntegrationCommandDeleteDialog(state: AppState): string {
   if (!state.integrationCommandDeleteDialogOpen) return '';
   const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDeleteIntegrationId);
   const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDeleteActionId);
-  const command = action?.commands?.find((candidate) => candidate.id === state.integrationCommandDeleteCommandId);
-  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog" role="dialog" aria-modal="true" aria-label="Delete item command"><h2>Delete ${escapeHtml(command?.name ?? 'this item command')}?</h2><p>This removes the command from ${escapeHtml(action?.name ?? 'the record type')}. It does not run the command or change the web page.</p><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-delete-integration-command">Cancel</button><button type="button" class="hvy-galaxy-button danger-button" data-action="confirm-delete-integration-command">Delete item command</button></div></section></div>`;
+  const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDeletePageId);
+  const command = action?.commands?.find((candidate) => candidate.id === state.integrationCommandDeleteCommandId)
+    ?? page?.commands?.find((candidate) => candidate.id === state.integrationCommandDeleteCommandId);
+  const kind = page ? 'page command' : 'item command';
+  const owner = page?.name ?? action?.name ?? (page ? 'the page' : 'the record type');
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog" role="dialog" aria-modal="true" aria-label="Delete ${kind}"><h2>Delete ${escapeHtml(command?.name ?? `this ${kind}`)}?</h2><p>This removes the command from ${escapeHtml(owner)}. It does not run the command or change the web page.</p><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-delete-integration-command">Cancel</button><button type="button" class="hvy-galaxy-button danger-button" data-action="confirm-delete-integration-command">Delete ${kind}</button></div></section></div>`;
 }
 
 export function renderAddIntegrationPageDialog(state: AppState): string {

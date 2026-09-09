@@ -1472,11 +1472,15 @@
     || element instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'tel', 'url', 'password'].includes(element.type)
     || element instanceof HTMLElement && element.isContentEditable;
 
+  const isSelectControl = (element) => element instanceof HTMLSelectElement
+    || element instanceof Element && (element.getAttribute('role') === 'combobox' || element.getAttribute('aria-haspopup') === 'listbox');
+
   const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture) => {
     const expected = snapshotValue?.selected;
     if (!expected?.shape) return { status: 'no_match', reason: 'target_pattern_missing' };
     const candidates = structuralTargetsWithin(scope, scope instanceof Element && !expected.relativePath?.length)
       .filter((element) => gesture !== 'type' || isTextEntryElement(element))
+      .filter((element) => gesture !== 'select' || isSelectControl(element))
       .map((element) => {
         if (scope instanceof Element) return { element, ...targetCandidateSimilarity(expected, element, scope) };
         const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
@@ -1537,6 +1541,56 @@
       inputType: 'insertText',
     }));
     element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    return true;
+  };
+
+  const selectionOptions = (element) => {
+    if (element instanceof HTMLSelectElement) {
+      return [...element.options]
+        .filter((option) => !option.disabled)
+        .map((option) => ({ value: option.value, label: option.label || option.textContent?.trim() || option.value }))
+        .filter((option) => option.label);
+    }
+    return deepElements(document)
+      .filter((candidate) => candidate.getAttribute('role') === 'option' && isStructuralTargetCandidate(candidate))
+      .map((option) => {
+        const label = meaningfulText(option).accessibleName || visibleText(option);
+        return { value: option.getAttribute('data-value') || label, label };
+      })
+      .filter((option) => option.label)
+      .filter((option, index, options) => options.findIndex((candidate) => candidate.value === option.value && candidate.label === option.label) === index);
+  };
+
+  const dispatchSelection = async (element, value, label = value) => {
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    element.focus();
+    if (element instanceof HTMLSelectElement) {
+      const option = [...element.options].find((candidate) => candidate.value === value)
+        || [...element.options].find((candidate) => (candidate.label || candidate.textContent?.trim()) === label);
+      if (!option) return false;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(element, option.value);
+      element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      return element.value === option.value;
+    }
+    if (isTextEntryElement(element)) return dispatchTextEntry(element, value);
+    const findOption = () => selectionOptions(element).map((option) => ({
+      ...option,
+      element: deepElements(document).find((candidate) => candidate.getAttribute('role') === 'option'
+        && isStructuralTargetCandidate(candidate)
+        && (meaningfulText(candidate).accessibleName || visibleText(candidate)) === option.label),
+    })).find((option) => option.value === value || option.label === label);
+    let option = findOption();
+    if (!option?.element) {
+      dispatchInteraction(element, 'click');
+      const deadline = Date.now() + 2000;
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        option = findOption();
+      } while (!option?.element && Date.now() < deadline);
+    }
+    if (!option?.element) return false;
+    dispatchInteraction(option.element, 'click');
     return true;
   };
 
@@ -1625,7 +1679,9 @@
     const steps = command?.steps;
     const commandInputs = Array.isArray(command?.inputs) ? command.inputs : [];
     const commandInputIds = new Set(commandInputs.map((input) => input?.id).filter((id) => typeof id === 'string' && id));
-    if (!command || !Array.isArray(steps) || !steps.length || steps.some((step) => !step || !['click', 'double-click', 'right-click', 'type'].includes(step.gesture) || (step.gesture === 'type' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId))))) return { status: 'no_match', reason: 'command_invalid', stepIndex: 0, stepsExecuted: 0 };
+    if (!command || !Array.isArray(steps) || !steps.length || steps.some((step) => !step || !['click', 'double-click', 'right-click', 'type', 'select'].includes(step.gesture)
+      || (step.gesture === 'type' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId)))
+      || (step.gesture === 'select' && typeof step.value !== 'string' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId))))) return { status: 'no_match', reason: 'command_invalid', stepIndex: 0, stepsExecuted: 0 };
     const { minimumTargetConfidence } = patternThresholds(payload.pattern);
     let record = null;
     const scopeForStep = () => {
@@ -1648,7 +1704,9 @@
     for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
       const step = steps[stepIndex];
       const textInput = step.gesture === 'type' ? payload.inputs?.[step.inputId] : undefined;
+      const selectionInput = step.gesture === 'select' ? (step.inputId ? payload.inputs?.[step.inputId] : step.value) : undefined;
       if (step.gesture === 'type' && typeof textInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
+      if (step.gesture === 'select' && typeof selectionInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
       const initialScope = stepIndex === 0 && command.scope !== 'record' ? scopeForStep() : null;
       const resolved = stepIndex === 0 && command.scope !== 'record'
         ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture) : { status: 'no_match', reason: 'target_not_found' }
@@ -1666,6 +1724,10 @@
       }
       if (step.gesture === 'type') {
         if (!dispatchTextEntry(resolved.element, textInput)) return { status: 'no_match', reason: 'target_not_text_editable', score: resolved.score, stepIndex, stepsExecuted: stepIndex };
+      } else if (step.gesture === 'select') {
+        const input = commandInputs.find((candidate) => candidate.id === step.inputId);
+        const label = input?.options?.find((option) => option.value === selectionInput)?.label || step.valueLabel || selectionInput;
+        if (!await dispatchSelection(resolved.element, selectionInput, label)) return { status: 'no_match', reason: 'option_not_found', score: resolved.score, stepIndex, stepsExecuted: stepIndex };
       } else {
         dispatchInteraction(resolved.element, step.gesture);
       }
@@ -2114,7 +2176,8 @@
         let currentGesture = null;
         let currentTarget = null;
         let currentResolution = null;
-        let typeStepCount = 0;
+        let parameterStepCount = 0;
+        let currentSelection = null;
         const recorderButton = (label, primary = false) => {
           const button = document.createElement('button');
           button.type = 'button';
@@ -2145,7 +2208,8 @@
           setRecorderPicking(false);
           controls.replaceChildren();
           statusText.textContent = `Step ${steps.length + 1}: choose an interaction.`;
-          const gestures = [['click', 'Click'], ['double-click', 'Double click'], ['right-click', 'Right click'], ['type', 'Enter text']];
+          currentSelection = null;
+          const gestures = [['click', 'Click'], ['double-click', 'Double click'], ['right-click', 'Right click'], ['type', 'Enter text'], ['select', 'Choose option']];
           gestures.forEach(([gesture, label]) => {
             const button = recorderButton(label, gesture === 'click');
             button.addEventListener('click', () => {
@@ -2153,7 +2217,7 @@
               inspectionKind = 'target';
               setRecorderPicking(true);
               controls.replaceChildren();
-              statusText.textContent = `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : `${label.toLocaleLowerCase()} target`}.`;
+              statusText.textContent = `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : gesture === 'select' ? 'dropdown or combobox' : `${label.toLocaleLowerCase()} target`}.`;
               const pause = recorderButton('Pause to navigate');
               let navigating = false;
               pause.addEventListener('click', () => {
@@ -2195,7 +2259,16 @@
           steps.push({
             gesture: currentGesture,
             target: currentTarget,
-            ...(currentGesture === 'type' ? { inputId: `input-${++typeStepCount}` } : {}),
+            ...(currentGesture === 'type' ? { inputId: `input-${++parameterStepCount}` } : {}),
+            ...(currentGesture === 'select' && currentSelection?.askEachRun ? {
+              inputId: `input-${++parameterStepCount}`,
+              options: currentSelection.options,
+              ...(currentSelection.allowCustom ? { allowCustom: true } : {}),
+            } : {}),
+            ...(currentGesture === 'select' && !currentSelection?.askEachRun ? {
+              value: currentSelection?.value,
+              valueLabel: currentSelection?.label,
+            } : {}),
           });
         };
         const recordConfirmedStep = () => {
@@ -2234,6 +2307,77 @@
           showCancel();
           input.focus();
         };
+        const renderSelectInput = async () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          const target = currentResolution.element;
+          if (!(target instanceof HTMLSelectElement) && !selectionOptions(target).length && !isTextEntryElement(target)) {
+            dispatchInteraction(target, 'click');
+            await new Promise((resolve) => setTimeout(resolve, 150));
+          }
+          const options = selectionOptions(target);
+          const allowCustom = isTextEntryElement(target);
+          if (!options.length && !allowCustom) {
+            statusText.textContent = 'No selectable options appeared. Record this control as separate click steps instead.';
+            const retry = recorderButton('Choose again', true);
+            retry.addEventListener('click', renderChooseGesture);
+            controls.append(retry);
+            showCancel();
+            return;
+          }
+          statusText.textContent = `Step ${steps.length + 1}: choose a value, then save it or ask for it each run.`;
+          let input;
+          if (allowCustom) {
+            input = document.createElement('input');
+            input.type = 'text';
+            if (options.length) {
+              const list = document.createElement('datalist');
+              list.id = `hvy-command-recorder-options-${steps.length + 1}`;
+              options.forEach((choice) => {
+                const option = document.createElement('option');
+                option.value = choice.value;
+                option.label = choice.label;
+                list.appendChild(option);
+              });
+              input.setAttribute('list', list.id);
+              status.insertBefore(list, controls);
+              list.dataset.commandRecorderInput = 'true';
+            }
+          } else {
+            input = document.createElement('select');
+            options.forEach((choice) => {
+              const option = document.createElement('option');
+              option.value = choice.value;
+              option.textContent = choice.label;
+              input.appendChild(option);
+            });
+          }
+          input.dataset.commandRecorderInput = 'true';
+          input.style.cssText = 'width:100%;padding:8px;border:1px solid #747c88;border-radius:7px;background:#111318;color:#fff;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
+          const finish = async (askEachRun) => {
+            const value = input.value;
+            if (!value) {
+              input.focus();
+              return;
+            }
+            const label = options.find((choice) => choice.value === value)?.label || value;
+            if (!await dispatchSelection(target, value, label)) {
+              statusText.textContent = 'Galaxy could not apply that option. Choose another value or select the control again.';
+              return;
+            }
+            currentSelection = { value, label, options, allowCustom, askEachRun };
+            recordConfirmedStep();
+          };
+          const fixed = recorderButton('Use this value', true);
+          fixed.addEventListener('click', () => { void finish(false); });
+          const parameter = recorderButton('Ask each run');
+          parameter.addEventListener('click', () => { void finish(true); });
+          status.insertBefore(input, controls);
+          controls.append(fixed, parameter);
+          showCancel();
+          input.focus();
+        };
         const renderTargetConfirmation = () => {
           clearRecorderInput();
           setRecorderPicking(false);
@@ -2253,19 +2397,23 @@
             showCancel();
             return;
           }
-          statusText.textContent = currentGesture === 'type'
+          statusText.textContent = currentGesture === 'type' || currentGesture === 'select'
             ? `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence.`
             : `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence. Choose whether to perform it or finish recording without changing the page.`;
-          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : `Perform ${currentGesture}`);
+          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : currentGesture === 'select' ? 'Choose value' : `Perform ${currentGesture}`);
           confirm.addEventListener('click', () => {
             if (currentGesture === 'type') {
               renderSampleInput();
               return;
             }
+            if (currentGesture === 'select') {
+              void renderSelectInput();
+              return;
+            }
             dispatchInteraction(currentResolution.element, currentGesture);
             recordConfirmedStep();
           });
-          const finish = currentGesture === 'type' ? null : recorderButton(`Finish without ${currentGesture === 'click' ? 'clicking' : currentGesture === 'double-click' ? 'double-clicking' : 'right-clicking'}`, true);
+          const finish = currentGesture === 'type' || currentGesture === 'select' ? null : recorderButton(`Finish without ${currentGesture === 'click' ? 'clicking' : currentGesture === 'double-click' ? 'double-clicking' : 'right-clicking'}`, true);
           finish?.addEventListener('click', finishWithoutPerforming);
           const retry = recorderButton('Choose again');
           retry.addEventListener('click', () => {

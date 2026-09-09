@@ -232,6 +232,7 @@ export interface AppState {
   integrationCommandDeleteDialogOpen: boolean;
   integrationCommandDeleteIntegrationId: string | null;
   integrationCommandDeleteActionId: string | null;
+  integrationCommandDeletePageId: string | null;
   integrationCommandDeleteCommandId: string | null;
   integrationRecordDeleteDialogOpen: boolean;
   integrationRecordDeleteIntegrationId: string | null;
@@ -581,6 +582,7 @@ export const state: AppState = {
   integrationCommandDeleteDialogOpen: false,
   integrationCommandDeleteIntegrationId: null,
   integrationCommandDeleteActionId: null,
+  integrationCommandDeletePageId: null,
   integrationCommandDeleteCommandId: null,
   integrationRecordDeleteDialogOpen: false,
   integrationRecordDeleteIntegrationId: null,
