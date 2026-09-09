@@ -14,15 +14,32 @@
 
 .hvy-web-template-editor {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
   padding: 0.65rem;
   border: 1px solid var(--hvy-border-color, #c9c3b8);
   border-radius: 0.45rem;
 }
 
+.hvy-web-template-selection {
+  grid-column: 1 / -1;
+}
+
 .hvy-web-template-field {
   display: grid;
   gap: 0.25rem;
+}
+
+.hvy-web-record-limit {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.hvy-web-runtime-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10rem;
+  align-items: end;
+  gap: 0.5rem;
 }
 
 .hvy-web-records {

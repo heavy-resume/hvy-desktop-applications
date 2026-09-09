@@ -85,6 +85,19 @@ describe('web capabilities', () => {
     expect(parsed?.mcp).toEqual({ exposeRead: false, commandIds: [] });
   });
 
+  it('defaults and normalizes the fetched record limit', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    expect(config.record.limit).toBe(100);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, limit: 12.9 },
+    })?.record.limit).toBe(12);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, limit: 500 },
+    })?.record.limit).toBe(100);
+  });
+
   it('round-trips template field and action mappings while dropping stale mappings', () => {
     const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
     const parsed = readWebRecordsCapabilityConfig({

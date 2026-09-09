@@ -1077,9 +1077,16 @@ function installMetaTemplateContextMenu(
   const controller = new AbortController();
   const closeMenu = () => root.querySelector('.hvy-meta-template-context-menu')?.remove();
 
-  root.addEventListener('contextmenu', (event) => {
+  documentOwner().addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
-    const hit = target ? getMetaTemplateHit(target) : null;
+    if (!target || !root.contains(target)) return;
+    if (target?.closest('.reusable-definition-modal')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeMenu();
+      return;
+    }
+    const hit = getMetaTemplateHit(target);
     if (!hit) return;
     event.preventDefault();
     event.stopImmediatePropagation();

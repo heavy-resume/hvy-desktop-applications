@@ -15,6 +15,7 @@ import { actionPatternPayload, integrationPageReadyChecks, matcherSnapshot } fro
 export const WEB_RECORDS_PLUGIN_ID = 'hvy.web-records';
 export const WEB_COMMAND_PLUGIN_ID = 'hvy.web-command';
 export const WEB_CAPABILITY_SCHEMA_VERSION = 1;
+export const DEFAULT_WEB_RECORD_LIMIT = 100;
 
 export interface WebCapabilityPageSnapshot {
   name: string;
@@ -51,6 +52,7 @@ export interface WebRecordsCapabilityConfig {
     permissions: Array<'dom:read' | 'image:read'>;
     pattern: NonNullable<ReturnType<typeof actionPatternPayload>>;
     commands: IntegrationCommandDefinition[];
+    limit: number;
   };
   source?: WebCapabilitySource;
   render?: WebRecordsTemplateRendering;
@@ -297,6 +299,11 @@ function normalizeCommand(value: unknown, scope: 'page' | 'record'): Integration
   };
 }
 
+function normalizeRecordLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_WEB_RECORD_LIMIT;
+  return Math.max(1, Math.min(DEFAULT_WEB_RECORD_LIMIT, Math.floor(value)));
+}
+
 function normalizeSource(value: unknown): WebCapabilitySource | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -407,6 +414,7 @@ export function createWebRecordsCapabilityConfig(
         const normalized = normalizeCommand(command, 'record');
         return normalized ? [normalized] : [];
       }),
+      limit: DEFAULT_WEB_RECORD_LIMIT,
     },
     source: { integrationId, pageId: page.id, actionId: action.id },
     mcp: { exposeRead: false, commandIds: [] },
@@ -482,6 +490,7 @@ export function readWebRecordsCapabilityConfig(value: unknown): WebRecordsCapabi
       permissions: uniqueStrings(definition.permissions).filter((permission): permission is 'dom:read' | 'image:read' => permission === 'dom:read' || permission === 'image:read'),
       pattern,
       commands,
+      limit: normalizeRecordLimit(definition.limit),
     },
     ...(normalizeSource(record.source) ? { source: normalizeSource(record.source) } : {}),
     ...(render ? { render } : {}),

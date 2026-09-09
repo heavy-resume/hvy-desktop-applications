@@ -1736,9 +1736,12 @@
     } else {
       collect();
     }
+    const recordLimit = Number.isFinite(pattern.recordLimit)
+      ? Math.max(1, Math.min(100, Math.floor(pattern.recordLimit)))
+      : 100;
     const selected = [...records.values()]
       .sort((left, right) => left.pageTop - right.pageTop || left.pageLeft - right.pageLeft || right.record.score - left.record.score)
-      .slice(0, 100)
+      .slice(0, recordLimit)
       .map((entry) => entry.record);
     return {
       matches: selected.length,

@@ -36,6 +36,7 @@ const config = {
     permissions: ['dom:read'],
     pattern: { minimumConfidence: 0.85, parents: [], targets: [] },
     commands: [],
+    limit: 25,
   },
   mcp: { exposeRead: true, commandIds: [] },
 } as WebRecordsCapabilityConfig;
@@ -61,6 +62,8 @@ describe('web capability operation timeouts', () => {
     const operation = executeWebRecordsCapability(config, executionContext(true));
     await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
     const extraction = openIntegrationPage.mock.calls[0][5] as { context: { webCapabilityRequestId: string } };
+
+    expect(extraction).toMatchObject({ pattern: { recordLimit: 25 } });
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(handleWebCapabilityIntegrationResult({

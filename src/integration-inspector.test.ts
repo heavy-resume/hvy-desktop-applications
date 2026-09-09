@@ -78,7 +78,7 @@ interface InspectorApi {
     details: Array<{ parent: string; score: number; parentScore: number; relationshipScore: number; targets: Array<{ label: string; score: number }> }>;
     diagnostics?: unknown;
   };
-  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
+  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number; recordLimit?: number }): {
     matches: number;
     records: Array<{
       parent: string;
@@ -1446,7 +1446,7 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('scrolls the page during across-page extraction and restores its original position', async () => {
+  it('limits records while scrolling the page and restores its original position', async () => {
     await page.setContent(`<aside class="decoy" style="height:200px;width:2000px;overflow:auto"><div style="height:4000px">Unrelated navigation</div></aside><main class="events" style="height:160px;overflow:auto">${Array.from({ length: 30 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
     await page.addScriptTag({ content: inspectorSource });
     const result = await page.evaluate(async () => {
@@ -1459,13 +1459,14 @@ describe('integration structural inspector', () => {
       decoy.addEventListener('scroll', () => { decoyScrollEvents += 1; });
       const extraction = await window.__hvyGalaxyInspector.extractAcrossPage({
         minimumConfidence: 0.8,
+        recordLimit: 7,
         parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
         targets: [{ label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
       });
       return { matches: extraction.matches, scrollEvents, decoyScrollEvents, finalTop: scroller.scrollTop };
     });
 
-    expect(result.matches).toBe(30);
+    expect(result.matches).toBe(7);
     expect(result.scrollEvents).toBeGreaterThan(1);
     expect(result.decoyScrollEvents).toBe(0);
     expect(result.finalTop).toBe(0);

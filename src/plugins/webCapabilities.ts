@@ -22,6 +22,7 @@ import {
   readWebRecordsCapabilityConfig,
   reviewWebCapabilityAuthorization,
   setWebCapabilityProfileBinding,
+  DEFAULT_WEB_RECORD_LIMIT,
   WEB_COMMAND_PLUGIN_ID,
   WEB_RECORDS_PLUGIN_ID,
   type WebCapabilityConfig,
@@ -306,6 +307,11 @@ function buildDefinitionEditor(ctx: HvyPluginContext, kind: 'records' | 'command
   const empty = document.createElement('option');
   empty.value = '';
   empty.textContent = kind === 'records' ? 'Choose a saved record type' : 'Choose a saved page command';
+  const activeConfig = kind === 'records'
+    ? readWebRecordsCapabilityConfig(ctx.block.schema.pluginConfig)
+    : readWebCommandCapabilityConfig(ctx.block.schema.pluginConfig);
+  const activeSource = activeConfig?.source;
+  empty.selected = !activeSource;
   select.appendChild(empty);
   for (const integration of state.integrationRegistry.integrations) {
     for (const page of integration.pages) {
@@ -315,7 +321,10 @@ function buildDefinitionEditor(ctx: HvyPluginContext, kind: 'records' | 'command
       for (const definition of definitions) {
         const option = document.createElement('option');
         option.value = JSON.stringify({ integrationId: integration.id, pageId: page.id, definitionId: definition.id });
-        option.textContent = `${page.name} — ${definition.name}`;
+        option.textContent = definition.name;
+        option.selected = activeSource?.integrationId === integration.id
+          && activeSource.pageId === page.id
+          && (kind === 'records' ? activeSource.actionId : activeSource.commandId) === definition.id;
         select.appendChild(option);
       }
     }
@@ -365,7 +374,7 @@ function buildRecordTemplateEditor(ctx: HvyPluginContext, config: WebRecordsCapa
   const wrapper = document.createElement('div');
   wrapper.className = 'hvy-web-template-editor';
   const templateLabel = document.createElement('label');
-  templateLabel.className = 'hvy-web-template-field';
+  templateLabel.className = 'hvy-web-template-field hvy-web-template-selection';
   const templateHeading = document.createElement('span');
   templateHeading.textContent = 'Record template';
   const templateSelect = document.createElement('select');
@@ -484,6 +493,32 @@ function buildRecordTemplateEditor(ctx: HvyPluginContext, config: WebRecordsCapa
   return wrapper;
 }
 
+function buildRecordLimitEditor(ctx: HvyPluginContext, config: WebRecordsCapabilityConfig): HTMLElement {
+  const label = document.createElement('label');
+  label.className = 'hvy-web-record-limit';
+  const heading = document.createElement('span');
+  heading.textContent = 'Limit';
+  const inputHolder = document.createElement('span');
+  const input = document.createElement('input');
+  input.style = 'height: 1.5rem;';
+  input.className = 'hvy-galaxy-input';
+  input.type = 'number';
+  input.min = '1';
+  input.max = String(DEFAULT_WEB_RECORD_LIMIT);
+  input.step = '1';
+  input.required = true;
+  input.value = String(config.record.limit);
+  input.addEventListener('change', () => {
+    const requested = Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : config.record.limit;
+    const limit = Math.max(1, Math.min(DEFAULT_WEB_RECORD_LIMIT, Math.floor(requested)));
+    input.value = String(limit);
+    ctx.setConfig({ record: { ...config.record, limit } as unknown as JsonObject });
+  });
+  inputHolder.append(input);
+  label.append(heading, inputHolder);
+  return label;
+}
+
 function templateValue(value: unknown, variable: ReusableTemplateVariable): string {
   if (Array.isArray(value)) return value.map((item) => String(item ?? '')).join(variable.type === 'block' ? '\n' : ', ');
   if (value && typeof value === 'object') return JSON.stringify(value);
@@ -528,11 +563,21 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     const records = getWebRecordResults(ctx.rawDocument, ctx.block.id);
     const heading = document.createElement('strong');
     heading.textContent = config.name;
-    const description = document.createElement('p');
-    description.textContent = config.description || `Reads ${config.page.name}.`;
-    root.append(heading, description);
-    if (ctx.mode === 'editor') root.appendChild(buildRecordTemplateEditor(ctx, config));
-    root.appendChild(buildProfileControls(config, sync));
+    if (ctx.mode === 'reader') root.appendChild(heading);
+    if (config.description) {
+      const description = document.createElement('p');
+      description.textContent = config.description;
+      root.appendChild(description);
+    }
+    const profileControls = buildProfileControls(config, sync);
+    if (ctx.mode === 'editor') {
+      const runtimeControls = document.createElement('div');
+      runtimeControls.className = 'hvy-web-runtime-controls';
+      runtimeControls.append(profileControls, buildRecordLimitEditor(ctx, config));
+      root.append(runtimeControls, buildRecordTemplateEditor(ctx, config));
+    } else {
+      root.appendChild(profileControls);
+    }
     const profile = selectedProfile(config);
     if (profile) {
       const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.source.path ?? '', config, profile.id);
