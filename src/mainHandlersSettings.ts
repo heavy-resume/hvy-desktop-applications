@@ -1011,6 +1011,50 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationPageError = null;
     rerender({ preserveMountedDocument: true });
   },
+  requestDeleteIntegrationPage: (integrationId, pageId) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!integration || !page) throw new Error('Integration page was not found.');
+    state.integrationReadyChecksIntegrationId = integrationId;
+    state.integrationReadyChecksPageId = pageId;
+    state.integrationPageDeleteDialogOpen = true;
+    rerender({ preserveMountedDocument: true });
+  },
+  cancelDeleteIntegrationPage: () => {
+    state.integrationPageDeleteDialogOpen = false;
+    rerender({ preserveMountedDocument: true });
+  },
+  confirmDeleteIntegrationPage: () => {
+    const integrationId = state.integrationReadyChecksIntegrationId;
+    const pageId = state.integrationReadyChecksPageId;
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!integration || !page) throw new Error('Integration page was not found.');
+    state.integrationRegistry = {
+      ...state.integrationRegistry,
+      integrations: state.integrationRegistry.integrations.filter((candidate) => candidate.id !== integration.id),
+    };
+    saveIntegrationRegistry(state.integrationRegistry);
+    const approvals = Object.fromEntries(Object.entries(state.appSettings.integrationWebMcpApprovals)
+      .filter(([, approval]) => approval.integrationId !== integration.id || approval.pageId !== page.id));
+    if (Object.keys(approvals).length !== Object.keys(state.appSettings.integrationWebMcpApprovals).length) {
+      const settings = { ...state.appSettings, integrationWebMcpApprovals: approvals };
+      state.appSettings = settings;
+      void saveAppSettings(settings).then((saved) => { state.appSettings = saved; });
+    }
+    state.selectedIntegrationId = state.integrationRegistry.integrations[0]?.id ?? '';
+    state.integrationPageDeleteDialogOpen = false;
+    state.integrationReadyChecksDialogOpen = false;
+    state.integrationReadyChecksIntegrationId = null;
+    state.integrationReadyChecksPageId = null;
+    state.integrationReadyChecksDraft = null;
+    state.integrationAllowedOriginsDraft = '';
+    state.integrationReadyCheckSelectionPending = false;
+    state.integrationReadyCheckValidationPending = false;
+    state.integrationReadyCheckValidationResult = null;
+    state.status = `Deleted ${page.name}`;
+    rerender({ preserveMountedDocument: true });
+  },
   selectIntegration: (integrationId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     if (!integration) throw new Error('Integration was not found.');
@@ -1077,12 +1121,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationReadyCheckSelectionPending = false;
     state.integrationReadyCheckValidationPending = false;
     state.integrationReadyCheckValidationResult = null;
+    state.integrationPageDeleteDialogOpen = false;
     state.integrationReadyChecksDialogOpen = true;
     rerender({ preserveMountedDocument: true });
   },
   cancelIntegrationReadyChecks: () => {
     if (state.integrationReadyCheckSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
     state.integrationReadyChecksDialogOpen = false;
+    state.integrationPageDeleteDialogOpen = false;
     state.integrationReadyChecksIntegrationId = null;
     state.integrationReadyChecksPageId = null;
     state.integrationReadyChecksDraft = null;

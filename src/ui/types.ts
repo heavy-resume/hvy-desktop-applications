@@ -152,6 +152,9 @@ export interface UiHandlers {
   cancelAddIntegrationPage(): void;
   addIntegrationPage(name: string, url: string): void;
   closeIntegrationPageError(): void;
+  requestDeleteIntegrationPage(integrationId: string, pageId: string): void;
+  cancelDeleteIntegrationPage(): void;
+  confirmDeleteIntegrationPage(): void;
   discoverIntegrationSources(integrationId: string, pageId: string): void;
   saveIntegrationSource(integrationId: string, pageId: string, source: import('../integrationBrowser').IntegrationStructuredSource): void;
   fetchIntegrationSource(integrationId: string, pageId: string, sourceId: string): void;

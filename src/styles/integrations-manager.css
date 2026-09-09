@@ -549,6 +549,10 @@
   gap: 20px;
 }
 
+.integration-page-delete-button {
+  margin-right: auto;
+}
+
 .integration-ready-url,
 .integration-ready-check-list,
 .integration-ready-check-row > div {

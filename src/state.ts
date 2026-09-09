@@ -133,6 +133,7 @@ export interface AppState {
   addIntegrationPageDialogOpen: boolean;
   integrationPageError: string | null;
   integrationReadyChecksDialogOpen: boolean;
+  integrationPageDeleteDialogOpen: boolean;
   integrationReadyChecksIntegrationId: string | null;
   integrationReadyChecksPageId: string | null;
   integrationReadyChecksDraft: IntegrationPageReadyChecks | null;
@@ -490,6 +491,7 @@ export const state: AppState = {
   addIntegrationPageDialogOpen: false,
   integrationPageError: null,
   integrationReadyChecksDialogOpen: false,
+  integrationPageDeleteDialogOpen: false,
   integrationReadyChecksIntegrationId: null,
   integrationReadyChecksPageId: null,
   integrationReadyChecksDraft: null,

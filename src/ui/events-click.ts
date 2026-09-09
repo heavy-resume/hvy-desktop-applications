@@ -348,6 +348,9 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'select-integration' && target.dataset.integrationId) handlers.selectIntegration(target.dataset.integrationId);
     if (action === 'select-integration-profile' && target.dataset.profileId) handlers.selectIntegrationProfile(target.dataset.profileId);
     if (action === 'request-add-integration-page') handlers.requestAddIntegrationPage();
+    if (action === 'request-delete-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.requestDeleteIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
+    if (action === 'cancel-delete-integration-page') handlers.cancelDeleteIntegrationPage();
+    if (action === 'confirm-delete-integration-page') handlers.confirmDeleteIntegrationPage();
     if (action === 'discover-integration-sources' && target.dataset.integrationId && target.dataset.pageId) handlers.discoverIntegrationSources(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'save-integration-source' && target.dataset.integrationId && target.dataset.pageId && target.dataset.sourceIndex) {
       const source = state.integrationStructuredSources[Number(target.dataset.sourceIndex)];

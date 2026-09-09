@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { state } from '../state';
 import { approveIntegrationWebMcpTool, webMcpCapabilityId, type IntegrationWebMcpToolDescriptor } from '../integrationWebMcp';
-import { renderIntegrationActionBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderIntegrationActionBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageDeleteDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 
 const integrationRegistry = {
   version: 1 as const,
@@ -125,6 +125,22 @@ describe('integration page navigation', () => {
     expect(html).toContain('name="allowedOrigins"');
     expect(html).toContain('https://example.com\nhttps://redirect.example');
     expect(html).toContain('Redirects and new windows remain inside Galaxy');
+    expect(html).toContain('data-action="request-delete-integration-page"');
+    expect(html).toContain('integration-page-delete-button');
+  });
+
+  it('confirms page deletion and explains what is removed', () => {
+    const html = renderIntegrationPageDeleteDialog({
+      ...state,
+      integrationRegistry,
+      integrationPageDeleteDialogOpen: true,
+      integrationReadyChecksIntegrationId: 'integration',
+      integrationReadyChecksPageId: 'page',
+    });
+    expect(html).toContain('role="alertdialog"');
+    expect(html).toContain('Delete Example?');
+    expect(html).toContain('its record types, page commands, and item commands');
+    expect(html).toContain('data-action="confirm-delete-integration-page"');
   });
 
   it('prompts before saving and following a new origin', () => {
