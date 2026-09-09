@@ -330,6 +330,7 @@ struct DocumentWriteResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct FileMenuState {
+    open_homepage: bool,
     close_document: bool,
     save: bool,
     save_as: bool,

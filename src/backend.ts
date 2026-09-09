@@ -245,6 +245,7 @@ export interface SaveThemeAsRequest {
 }
 
 export interface FileMenuState {
+  openHomepage: boolean;
   closeDocument: boolean;
   save: boolean;
   saveAs: boolean;

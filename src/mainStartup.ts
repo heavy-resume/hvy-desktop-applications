@@ -18,6 +18,7 @@ import { runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
 import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
+import { isHomepageOpen } from './fileActions';
 
 let findShortcutBound = false;
 
@@ -343,6 +344,7 @@ export async function boot(): Promise<void> {
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
       if (event === 'open-workspace') handlers.openWorkspace();
       if (event === 'open-file') handlers.openFile();
+      if (event === 'open-homepage') void openHomepage({ force: true });
       if (event === 'find') openMountedSearch();
       if (event === 'bold') performRichTextAction('bold');
       if (event === 'italic') performRichTextAction('italic');
@@ -649,6 +651,7 @@ export async function openHomepage(options: { force?: boolean } = {}): Promise<v
   if (!options.force && (state.document || state.documentTabs.length > 0 || state.selectedFilePath)) return;
   const homepage = state.appSettings.homepage;
   if (homepage.kind === 'none') return;
+  if (isHomepageOpen(state)) return;
   try {
     if (homepage.kind === 'included') {
       const included = includedDocuments.find((document) => document.id === homepage.id);

@@ -224,6 +224,32 @@
     return tokens.sort().map(tokenHash);
   };
 
+  const identityHash = (kind, value) => {
+    const normalized = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 160) : '';
+    return normalized ? tokenHash(`${kind}:${normalized}`) : null;
+  };
+
+  const controlIdentitySignature = (element) => {
+    const labels = [];
+    const addLabel = (kind, value) => {
+      const hash = identityHash(kind, value);
+      if (hash) labels.push(hash);
+    };
+    addLabel('aria-label', element.getAttribute('aria-label'));
+    (element.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).forEach((id) => addLabel('labelled-by', document.getElementById(id)?.textContent || ''));
+    if ('labels' in element && element.labels) [...element.labels].forEach((label) => {
+      const copy = label.cloneNode(true);
+      copy.querySelectorAll('input,select,textarea,button,[role="combobox"]').forEach((control) => control.remove());
+      addLabel('label', copy.textContent || '');
+    });
+    return {
+      labels: [...new Set(labels)].sort(),
+      formName: identityHash('name', element.getAttribute('name')),
+      testId: identityHash('test-id', element.getAttribute('data-testid')),
+      id: identityHash('id', element.id),
+    };
+  };
+
   const colorSignature = (value = '') => {
     const channels = value.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)/i);
     if (!channels) return { hue: 0, saturation: 0, lightness: 0, alpha: value === 'transparent' ? 0 : 1 };
@@ -328,6 +354,7 @@
       family: tagFamily(element.tagName.toLowerCase(), element.getAttribute('role')),
       tokens: structuralTokens(element),
       semanticIdentity: semanticIdentityTokens(element),
+      controlIdentity: controlIdentitySignature(element),
       semanticLineage: semanticLineageTokens(element),
       depth: fullDepth,
       childCount: children.length,
@@ -414,6 +441,24 @@
     const union = new Set([...leftSet, ...rightSet]);
     if (!union.size) return null;
     return [...leftSet].filter((value) => rightSet.has(value)).length / union.size;
+  };
+  const identityValueSimilarity = (left, right) => {
+    if (!left || !right) return null;
+    return left === right ? 1 : 0;
+  };
+  const identityLabelSimilarity = (left = [], right = []) => {
+    if (!left.length || !right.length) return null;
+    const rightSet = new Set(right);
+    return left.some((value) => rightSet.has(value)) ? 1 : 0;
+  };
+  const controlIdentitySimilarity = (left = {}, right = {}) => {
+    const parts = [
+      [identityLabelSimilarity(left.labels, right.labels), 0.55],
+      [identityValueSimilarity(left.formName, right.formName), 0.30],
+      [identityValueSimilarity(left.testId, right.testId), 0.10],
+      [identityValueSimilarity(left.id, right.id), 0.05],
+    ];
+    return parts.some((part) => typeof part[0] === 'number') ? weightedSimilarity(parts) : null;
   };
   const weightedSimilarity = (parts) => {
     const evidence = parts.filter((part) => typeof part[0] === 'number' && Number.isFinite(part[0]));
@@ -507,6 +552,7 @@
       [ratio(left.depth, right.depth), 0.01],
       [tokenSimilarity(left.tokens, right.tokens), 0.03],
       [ancestorMatches, 0.10],
+      [controlIdentitySimilarity(left.controlIdentity, right.controlIdentity), 0.18],
       [tokenSimilarity(left.semanticIdentity, right.semanticIdentity), 0.15],
       [tokenSimilarity(left.semanticLineage, right.semanticLineage), 0.19],
       [visualSimilarity(left.visual, right.visual), 0.10],
@@ -731,6 +777,7 @@
         selectorCandidates: selectorCandidates(element),
         shape: inspectionKind === 'scope' ? scopeShapeSignature(element, scopeAnchorElement) : shapeSignature(element),
         relativePath: scope instanceof Element && composedContains(scope, element) ? pathWithin(element, scope) : null,
+        pagePath: pathWithin(element, document.documentElement),
         scopeCssPath: scope instanceof Element ? cssPath(scope) : null,
       },
     };
@@ -1472,8 +1519,16 @@
     || element instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'tel', 'url', 'password'].includes(element.type)
     || element instanceof HTMLElement && element.isContentEditable;
 
-  const isSelectControl = (element) => element instanceof HTMLSelectElement
-    || element instanceof Element && (element.getAttribute('role') === 'combobox' || element.getAttribute('aria-haspopup') === 'listbox');
+  const isNativeSelectControl = (element) => element instanceof HTMLSelectElement;
+
+  const isDataListControl = (element) => element instanceof HTMLInputElement && element.list instanceof HTMLDataListElement;
+
+  const isPopupSelectControl = (element) => element instanceof Element
+    && (element.getAttribute('role') === 'combobox' || element.getAttribute('aria-haspopup') === 'listbox');
+
+  const isSelectControl = (element) => isNativeSelectControl(element)
+    || isDataListControl(element)
+    || isPopupSelectControl(element);
 
   const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture) => {
     const expected = snapshotValue?.selected;
@@ -1484,7 +1539,8 @@
       .map((element) => {
         if (scope instanceof Element) return { element, ...targetCandidateSimilarity(expected, element, scope) };
         const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
-        return { element, shapeScore, relativePathScore: 1, score: shapeScore };
+        const relativePathScore = expected.pagePath ? pathSimilarity(expected.pagePath, pathWithin(element, document.documentElement)) : 1;
+        return { element, shapeScore, relativePathScore, score: expected.pagePath ? shapeScore * 0.74 + relativePathScore * 0.26 : shapeScore };
       })
       .sort((left, right) => right.score - left.score);
     const best = candidates[0];
@@ -1544,54 +1600,99 @@
     return true;
   };
 
+  const popupOptionElements = (element) => {
+    const controlledIds = `${element.getAttribute('aria-controls') || ''} ${element.getAttribute('aria-owns') || ''}`
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    const controlledRoots = controlledIds
+      .map((id) => document.getElementById(id))
+      .filter((candidate) => candidate instanceof Element && isStructuralTargetCandidate(candidate));
+    const roots = controlledRoots.length
+      ? controlledRoots
+      : deepElements(document).filter((candidate) => candidate.getAttribute('role') === 'listbox' && isStructuralTargetCandidate(candidate));
+    return roots
+      .flatMap((root) => [
+        ...(root.getAttribute('role') === 'option' ? [root] : []),
+        ...deepElements(root),
+      ])
+      .filter((candidate) => candidate.getAttribute('role') === 'option' && isStructuralTargetCandidate(candidate));
+  };
+
   const selectionOptions = (element) => {
-    if (element instanceof HTMLSelectElement) {
+    if (isNativeSelectControl(element)) {
       return [...element.options]
         .filter((option) => !option.disabled)
         .map((option) => ({ value: option.value, label: option.label || option.textContent?.trim() || option.value }))
         .filter((option) => option.label);
     }
-    return deepElements(document)
-      .filter((candidate) => candidate.getAttribute('role') === 'option' && isStructuralTargetCandidate(candidate))
+    if (isDataListControl(element)) {
+      return [...element.list.options]
+        .map((option) => ({ value: option.value, label: option.label || option.value }))
+        .filter((option) => option.label);
+    }
+    return popupOptionElements(element)
       .map((option) => {
         const label = meaningfulText(option).accessibleName || visibleText(option);
-        return { value: option.getAttribute('data-value') || label, label };
+        return { value: option.getAttribute('data-value') || label, label, element: option };
       })
       .filter((option) => option.label)
       .filter((option, index, options) => options.findIndex((candidate) => candidate.value === option.value && candidate.label === option.label) === index);
   };
 
+  const optionLabelTokens = (value = '') => [...new Set(String(value).toLocaleLowerCase()
+    .match(/[\p{L}\p{N}]+/gu)
+    ?.filter((token) => !/^\p{N}+$/u.test(token)) || [])];
+
+  const optionLabelSimilarity = (left, right) => {
+    const leftTokens = new Set(optionLabelTokens(left));
+    const rightTokens = new Set(optionLabelTokens(right));
+    const union = new Set([...leftTokens, ...rightTokens]);
+    if (!union.size) return 0;
+    return [...leftTokens].filter((token) => rightTokens.has(token)).length / union.size;
+  };
+
+  const matchingSelectionOption = (options, value, label) => {
+    const exactValue = options.find((option) => option.value === value);
+    const exactLabel = options.find((option) => option.label === label);
+    if (exactLabel) return exactLabel;
+    const ranked = options.map((option) => ({ option, score: optionLabelSimilarity(label || value, option.label) }))
+      .sort((left, right) => right.score - left.score);
+    const best = ranked[0];
+    const runnerUp = ranked[1];
+    const uniqueLabelMatch = best?.score >= 0.7 && (!runnerUp || best.score - runnerUp.score >= 0.15) ? best.option : null;
+    if (!exactValue) return uniqueLabelMatch;
+    if (!optionLabelTokens(label).length || optionLabelSimilarity(label, exactValue.label) >= 0.7) return exactValue;
+    return uniqueLabelMatch || exactValue;
+  };
+
   const dispatchSelection = async (element, value, label = value) => {
     element.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     element.focus();
-    if (element instanceof HTMLSelectElement) {
-      const option = [...element.options].find((candidate) => candidate.value === value)
-        || [...element.options].find((candidate) => (candidate.label || candidate.textContent?.trim()) === label);
-      if (!option) return false;
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(element, option.value);
+    if (isNativeSelectControl(element)) {
+      const choices = [...element.options].map((option) => ({ option, value: option.value, label: option.label || option.textContent?.trim() || option.value }));
+      const choice = matchingSelectionOption(choices, value, label);
+      if (!choice) return false;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(element, choice.option.value);
       element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
       element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-      return element.value === option.value;
+      return element.value === choice.option.value;
+    }
+    if (isDataListControl(element)) return dispatchTextEntry(element, value);
+    if (isPopupSelectControl(element)) {
+      let option = matchingSelectionOption(selectionOptions(element), value, label);
+      if (!option?.element) dispatchInteraction(element, 'click');
+      const deadline = Date.now() + 2000;
+      while (!option?.element && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        option = matchingSelectionOption(selectionOptions(element), value, label);
+      }
+      if (!option?.element) return isTextEntryElement(element) && dispatchTextEntry(element, value);
+      dispatchInteraction(option.element, 'click');
+      return true;
     }
     if (isTextEntryElement(element)) return dispatchTextEntry(element, value);
-    const findOption = () => selectionOptions(element).map((option) => ({
-      ...option,
-      element: deepElements(document).find((candidate) => candidate.getAttribute('role') === 'option'
-        && isStructuralTargetCandidate(candidate)
-        && (meaningfulText(candidate).accessibleName || visibleText(candidate)) === option.label),
-    })).find((option) => option.value === value || option.label === label);
-    let option = findOption();
-    if (!option?.element) {
-      dispatchInteraction(element, 'click');
-      const deadline = Date.now() + 2000;
-      do {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        option = findOption();
-      } while (!option?.element && Date.now() < deadline);
-    }
-    if (!option?.element) return false;
-    dispatchInteraction(option.element, 'click');
-    return true;
+    return false;
   };
 
   const waitForInteractionTarget = async (scopeForStep, step, minimumConfidence) => {
@@ -1608,6 +1709,30 @@
       await new Promise((resolve) => setTimeout(resolve, 50));
     } while (Date.now() < deadline);
     return result;
+  };
+
+  const waitForInteractionSettled = async () => {
+    const startedAt = Date.now();
+    let lastMutationAt = startedAt;
+    const observer = new MutationObserver(() => { lastMutationAt = Date.now(); });
+    observer.observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+    const nextRender = () => document.visibilityState === 'visible' && typeof requestAnimationFrame === 'function'
+      ? new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      : new Promise((resolve) => setTimeout(resolve, 16));
+    await nextRender();
+    await nextRender();
+    try {
+      while (Date.now() - startedAt < 2000) {
+        const activeAnimations = typeof document.getAnimations === 'function' && document.getAnimations().some((animation) => {
+          const iterations = animation.effect?.getTiming().iterations;
+          return animation.playState === 'running' && iterations !== Infinity;
+        });
+        if (Date.now() - startedAt >= 200 && Date.now() - lastMutationAt >= 120 && !activeAnimations) return;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      }
+    } finally {
+      observer.disconnect();
+    }
   };
 
   const waitForPageReadiness = async (checks) => {
@@ -1731,6 +1856,7 @@
       } else {
         dispatchInteraction(resolved.element, step.gesture);
       }
+      if (stepIndex < steps.length - 1) await waitForInteractionSettled();
     }
     return {
       status: 'executed',
@@ -2273,7 +2399,7 @@
         };
         const recordConfirmedStep = () => {
           appendRecordedStep();
-          setTimeout(renderAfterStep, 150);
+          void waitForInteractionSettled().then(renderAfterStep);
         };
         const finishWithoutPerforming = () => {
           appendRecordedStep();
@@ -2312,12 +2438,12 @@
           setRecorderPicking(false);
           controls.replaceChildren();
           const target = currentResolution.element;
-          if (!(target instanceof HTMLSelectElement) && !selectionOptions(target).length && !isTextEntryElement(target)) {
+          if (isPopupSelectControl(target) && target.getAttribute('aria-expanded') !== 'true') {
             dispatchInteraction(target, 'click');
-            await new Promise((resolve) => setTimeout(resolve, 150));
+            await waitForInteractionSettled();
           }
           const options = selectionOptions(target);
-          const allowCustom = isTextEntryElement(target);
+          const allowCustom = isDataListControl(target) || isTextEntryElement(target);
           if (!options.length && !allowCustom) {
             statusText.textContent = 'No selectable options appeared. Record this control as separate click steps instead.';
             const retry = recorderButton('Choose again', true);
@@ -2366,7 +2492,13 @@
               statusText.textContent = 'Galaxy could not apply that option. Choose another value or select the control again.';
               return;
             }
-            currentSelection = { value, label, options, allowCustom, askEachRun };
+            currentSelection = {
+              value,
+              label,
+              options: options.map((option) => ({ value: option.value, label: option.label })),
+              allowCustom,
+              askEachRun,
+            };
             recordConfirmedStep();
           };
           const fixed = recorderButton('Use this value', true);

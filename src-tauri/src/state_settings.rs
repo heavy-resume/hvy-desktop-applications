@@ -187,6 +187,7 @@ fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuSta
         .get("file-menu")
         .and_then(|item| item.as_submenu().cloned())
         .ok_or_else(|| AppError::Message("File menu is unavailable.".into()))?;
+    set_submenu_item_enabled(&file, "open-homepage", state.open_homepage)?;
     set_submenu_item_enabled(&file, "close-document", state.close_document)?;
     set_submenu_item_enabled(&file, "save", state.save)?;
     set_submenu_item_enabled(&file, "save-as", state.save_as)?;

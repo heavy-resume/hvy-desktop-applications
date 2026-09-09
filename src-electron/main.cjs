@@ -320,6 +320,8 @@ function buildMenu() {
     {
       label: 'File',
       submenu: [
+        menuItem('Open Homepage', 'open-homepage'),
+        { type: 'separator' },
         menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),
         menuItem('Open Workspace', 'open-workspace', 'CmdOrCtrl+O'),
         menuItem('Manage Workspaces...', 'manage-workspaces'),
@@ -447,6 +449,7 @@ function menuItem(label, id, accelerator) {
 }
 
 function fileMenuItemEnabled(id) {
+  if (id === 'open-homepage') return fileMenuState.openHomepage;
   if (id === 'close-document') return fileMenuState.closeDocument;
   if (id === 'save') return fileMenuState.save;
   if (id === 'save-as') return fileMenuState.saveAs;
@@ -563,6 +566,7 @@ function refreshFileMenuState(menu) {
 
 function defaultFileMenuState() {
   return {
+    openHomepage: false,
     closeDocument: false,
     save: false,
     saveAs: false,
@@ -578,6 +582,7 @@ function defaultFileMenuState() {
 function normalizeFileMenuState(state) {
   const fallback = defaultFileMenuState();
   return {
+    openHomepage: Boolean(state?.openHomepage ?? fallback.openHomepage),
     closeDocument: Boolean(state?.closeDocument ?? fallback.closeDocument),
     save: Boolean(state?.save ?? fallback.save),
     saveAs: Boolean(state?.saveAs ?? fallback.saveAs),
@@ -592,6 +597,7 @@ function normalizeFileMenuState(state) {
 
 function fileMenuStateEntries(state) {
   return {
+    'open-homepage': state.openHomepage,
     'close-document': state.closeDocument,
     save: state.save,
     'save-as': state.saveAs,

@@ -1,6 +1,7 @@
 import { findFileInWorkspaces, workspacePathForFileInWorkspaces, type AppState } from './state';
 
 export interface FileActionAvailability {
+  openHomepage: boolean;
   closeDocument: boolean;
   save: boolean;
   saveAs: boolean;
@@ -29,6 +30,7 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
   const hasWorkspaceDestination = state.workspaces.some((workspace) => workspace.path !== documentWorkspacePath);
 
   return {
+    openHomepage: state.appSettings.homepage.kind !== 'none',
     closeDocument: hasDocument,
     save: historyPreview || Boolean((document?.dirty || editableTemplateDocument) && editableDocument),
     saveAs: historyPreview || mountedEditableDocument,
@@ -39,6 +41,15 @@ export function getFileActionAvailability(state: AppState): FileActionAvailabili
     decryptDocument: documentEncryptionAvailable && documentEncrypted && !encryptedFolderDocument && !documentEncryptionHasUnsavedChanges,
     documentEncryptionUnsavedChanges: documentEncryptionHasUnsavedChanges,
   };
+}
+
+export function isHomepageOpen(state: AppState): boolean {
+  const homepage = state.appSettings.homepage;
+  const document = state.document;
+  if (!document) return false;
+  if (homepage.kind === 'included') return document.includedDocumentId === homepage.id;
+  if (homepage.kind === 'file') return !document.virtual && document.source.path === homepage.path;
+  return false;
 }
 
 export function isWorkspaceTemplatePath(state: AppState, path: string): boolean {

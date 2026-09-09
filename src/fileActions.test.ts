@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AppState } from './state';
-import { getFileActionAvailability } from './fileActions';
+import { getFileActionAvailability, isHomepageOpen } from './fileActions';
 
 function encryptedDocumentState(encryptedFolderDocument: boolean, dirty = false): AppState {
   const path = encryptedFolderDocument
     ? '/workspace/hvy-encrypted-folder-22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333.hvy'
     : '/workspace/Notes.hvy';
   return {
+    appSettings: { homepage: { kind: 'included', id: 'hvy-galaxy-guide' } },
     document: {
       source: { path, name: 'Notes.hvy', extension: '.hvy' },
       mode: 'editor',
@@ -54,5 +55,49 @@ describe('document encryption file actions', () => {
       encryptDocument: false,
       documentEncryptionUnsavedChanges: true,
     });
+  });
+});
+
+describe('homepage file action', () => {
+  it('is available for a configured included homepage', () => {
+    expect(getFileActionAvailability(encryptedDocumentState(false)).openHomepage).toBe(true);
+  });
+
+  it('is available when a homepage is configured', () => {
+    const state = encryptedDocumentState(false);
+    state.appSettings = { homepage: { kind: 'file', path: '/workspace/Home.hvy' } } as AppState['appSettings'];
+
+    expect(getFileActionAvailability(state).openHomepage).toBe(true);
+  });
+
+  it('is unavailable when the homepage is disabled', () => {
+    const state = encryptedDocumentState(false);
+    state.appSettings = { homepage: { kind: 'none' } } as AppState['appSettings'];
+
+    expect(getFileActionAvailability(state).openHomepage).toBe(false);
+  });
+});
+
+describe('open homepage identity', () => {
+  it('recognizes the active configured file', () => {
+    const state = encryptedDocumentState(false);
+    state.appSettings = { homepage: { kind: 'file', path: state.document!.source.path } } as AppState['appSettings'];
+
+    expect(isHomepageOpen(state)).toBe(true);
+  });
+
+  it('recognizes an active included homepage by its stable id', () => {
+    const state = encryptedDocumentState(false);
+    state.document!.includedDocumentId = 'hvy-galaxy-guide';
+
+    expect(isHomepageOpen(state)).toBe(true);
+  });
+
+  it('does not treat a virtual view of the configured file as the homepage', () => {
+    const state = encryptedDocumentState(false);
+    state.appSettings = { homepage: { kind: 'file', path: state.document!.source.path } } as AppState['appSettings'];
+    state.document!.virtual = 'versionHistory';
+
+    expect(isHomepageOpen(state)).toBe(false);
   });
 });

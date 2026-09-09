@@ -247,11 +247,12 @@ export function saveIntegrationRegistry(registry: IntegrationRegistry): void {
 
 export function matcherSnapshot(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
-  const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown } }).selected;
+  const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown; pagePath?: unknown } }).selected;
   return {
     selected: {
       shape: selected?.shape,
       relativePath: selected?.relativePath ?? null,
+      ...(selected?.pagePath ? { pagePath: selected.pagePath } : {}),
     },
   };
 }
