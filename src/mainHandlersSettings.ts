@@ -13,7 +13,7 @@ import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionK
 import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './documentKeyMigration';
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
-import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationNavigationResumeUrl, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, beginIntegrationWebMcpScan, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 import { analyzeWebMcpStructuredData, webMcpExtractionRecords, webMcpRecordSetAtPath } from './integrationWebMcpStructuredData';
@@ -180,7 +180,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (page.id === 'gmail' || page.id === 'google-calendar') {
       await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, payload, foreground, profile.name);
     } else {
-      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name);
+      const integrationId = state.integrationRegistry.integrations.find((integration) => integration.pages.some((candidate) => candidate.id === page.id))?.id;
+      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name, integrationId, page.id);
     }
   };
   const integrationPageContext = (integrationId: string, pageId: string) => {
@@ -194,7 +195,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (page.id === 'gmail' || page.id === 'google-calendar') {
       await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, payload, foreground, profile.name);
     } else {
-      await openIntegrationPage(targetUrl, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name);
+      const integrationId = state.integrationRegistry.integrations.find((integration) => integration.pages.some((candidate) => candidate.id === page.id))?.id;
+      await openIntegrationPage(targetUrl, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name, integrationId, page.id);
     }
   };
   const openPageForStructuredSource = async (page: ReturnType<typeof integrationPageContext>['page'], profile: ReturnType<typeof integrationPageContext>['profile'], payload: unknown) => openIntegrationDefinitionPage(page, profile, payload, false);
@@ -205,6 +207,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   const updateReadyChecksDraft = (
     urlMode: IntegrationPageReadyChecks['urlMode'],
     urlValue: string,
+    allowedOrigins: string,
     expectedValues: Record<string, string>,
   ) => {
     const draft = state.integrationReadyChecksDraft;
@@ -217,6 +220,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         ...(expectedValues[check.id]?.trim() ? { expectedValue: expectedValues[check.id].trim() } : { expectedValue: undefined }),
       })),
     };
+    state.integrationAllowedOriginsDraft = allowedOrigins;
   };
   const validatedReadyChecksDraft = (): IntegrationPageReadyChecks => {
     const draft = state.integrationReadyChecksDraft;
@@ -283,7 +287,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     void runBusy(`Running ${command.name}...`, async () => {
       const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, payload: { ...payload, readyChecks: integrationPageReadyChecks(page) } };
       if (page.id === 'gmail' || page.id === 'google-calendar') await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name);
-      else await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name);
+      else await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name, integration.id, page.id);
       state.status = `Ran ${command.name}`;
     }, { preserveMountedDocument: true });
   };
@@ -312,7 +316,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       if (page.id === 'gmail' || page.id === 'google-calendar') {
         await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
       } else {
-        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name);
+        await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name, integration.id, page.id);
       }
       state.status = 'Record and verify each command step in the integration browser';
     }, { preserveMountedDocument: true });
@@ -332,7 +336,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   const startWebPageRecordType = (integrationId: string, pageId: string) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
-    if (!page) throw new Error('Integration page was not found.');
+    if (!integration || !page) throw new Error('Integration page was not found.');
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!profile) throw new Error('Choose an integration profile.');
     state.integrationActionDraftIntegrationId = integrationId;
@@ -1042,7 +1046,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   openIntegrationPage: (integrationId, pageId, profileId) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
-    if (!page) throw new Error('Integration page was not found.');
+    if (!integration || !page) throw new Error('Integration page was not found.');
     const selectedProfileId = profileId ?? state.selectedIntegrationProfileId;
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === selectedProfileId);
     if (!profile) throw new Error('Choose an integration profile.');
@@ -1057,7 +1061,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       return;
     }
     void runBusy(`Opening ${page.name}...`, async () => {
-      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name);
+      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
       state.integrationVaultStatus = await loadIntegrationVaultStatus();
       state.status = `Opened ${page.name}`;
     }, { preserveMountedDocument: true });
@@ -1069,6 +1073,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationReadyChecksIntegrationId = integrationId;
     state.integrationReadyChecksPageId = pageId;
     state.integrationReadyChecksDraft = structuredClone(integrationPageReadyChecks(page));
+    state.integrationAllowedOriginsDraft = page.allowedOrigins.join('\n');
     state.integrationReadyCheckSelectionPending = false;
     state.integrationReadyCheckValidationPending = false;
     state.integrationReadyCheckValidationResult = null;
@@ -1081,6 +1086,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationReadyChecksIntegrationId = null;
     state.integrationReadyChecksPageId = null;
     state.integrationReadyChecksDraft = null;
+    state.integrationAllowedOriginsDraft = '';
     state.integrationReadyCheckSelectionPending = false;
     state.integrationReadyCheckValidationPending = false;
     state.integrationReadyCheckValidationResult = null;
@@ -1093,16 +1099,17 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Canceled ready check selection';
     rerender({ preserveMountedDocument: true });
   },
-  requestIntegrationReadyCheck: (integrationId, pageId, urlMode, urlValue, expectedValues) => {
-    updateReadyChecksDraft(urlMode, urlValue, expectedValues);
+  requestIntegrationReadyCheck: (integrationId, pageId, urlMode, urlValue, allowedOriginsValue, expectedValues) => {
+    updateReadyChecksDraft(urlMode, urlValue, allowedOriginsValue, expectedValues);
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!page || !profile) throw new Error('The integration page or profile was not found.');
+    const pageWithOrigins = { ...page, allowedOrigins: normalizeIntegrationPageAllowedOrigins(page.url, state.integrationAllowedOriginsDraft) };
     const options = { context: { mode: 'ready-check', integrationId, pageId } };
     const pendingSelection = {
       kind: 'command-target',
-      context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) },
+      context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(pageWithOrigins) },
       inspectionKind: 'target',
       options,
     };
@@ -1111,7 +1118,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
     void runBusy(`Opening ${page.name} to select a ready check...`, async () => {
       try {
-        await openIntegrationDefinitionPage(page, profile, pendingSelection, true);
+        await openIntegrationDefinitionPage(pageWithOrigins, profile, pendingSelection, true);
       } catch (error) {
         state.integrationReadyCheckSelectionPending = false;
         throw error;
@@ -1139,11 +1146,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Added page ready check';
     rerender({ preserveMountedDocument: true });
   },
-  testIntegrationReadyChecks: (integrationId, pageId, urlMode, urlValue, expectedValues) => {
-    updateReadyChecksDraft(urlMode, urlValue, expectedValues);
+  testIntegrationReadyChecks: (integrationId, pageId, urlMode, urlValue, allowedOriginsValue, expectedValues) => {
+    updateReadyChecksDraft(urlMode, urlValue, allowedOriginsValue, expectedValues);
     const draft = validatedReadyChecksDraft();
     const { page, profile } = integrationPageContext(integrationId, pageId);
-    const pageWithDraft = { ...page, readyChecks: draft };
+    const pageWithDraft = { ...page, readyChecks: draft, allowedOrigins: normalizeIntegrationPageAllowedOrigins(page.url, state.integrationAllowedOriginsDraft) };
     const context = {
       mode: 'ready-check-validation',
       integrationId,
@@ -1158,7 +1165,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
     void runBusy(`Reloading ${page.name} and testing ready checks...`, async () => {
       try {
-        await openIntegrationDefinitionPage(page, profile, validation, true, targetUrl);
+        await openIntegrationDefinitionPage(pageWithDraft, profile, validation, true, targetUrl);
       } catch (error) {
         state.integrationReadyCheckValidationPending = false;
         throw error;
@@ -1185,12 +1192,15 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationReadyCheckValidationResult = null;
     rerender({ preserveMountedDocument: true });
   },
-  saveIntegrationReadyChecks: (integrationId, pageId, urlMode, urlValue, expectedValues) => {
-    updateReadyChecksDraft(urlMode, urlValue, expectedValues);
+  saveIntegrationReadyChecks: (integrationId, pageId, urlMode, urlValue, allowedOriginsValue, expectedValues) => {
+    updateReadyChecksDraft(urlMode, urlValue, allowedOriginsValue, expectedValues);
     const draft = validatedReadyChecksDraft();
+    const page = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId)?.pages.find((candidate) => candidate.id === pageId);
+    if (!page) throw new Error('Integration page was not found.');
+    const allowedOrigins = normalizeIntegrationPageAllowedOrigins(page.url, state.integrationAllowedOriginsDraft);
     const integrations = state.integrationRegistry.integrations.map((integration) => integration.id !== integrationId ? integration : {
       ...integration,
-      pages: integration.pages.map((page) => page.id === pageId ? { ...page, readyChecks: structuredClone(draft) } : page),
+      pages: integration.pages.map((page) => page.id === pageId ? { ...page, allowedOrigins, readyChecks: structuredClone(draft) } : page),
     });
     state.integrationRegistry = { ...state.integrationRegistry, integrations };
     saveIntegrationRegistry(state.integrationRegistry);
@@ -1198,11 +1208,71 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationReadyChecksIntegrationId = null;
     state.integrationReadyChecksPageId = null;
     state.integrationReadyChecksDraft = null;
+    state.integrationAllowedOriginsDraft = '';
     state.integrationReadyCheckSelectionPending = false;
     state.integrationReadyCheckValidationPending = false;
     state.integrationReadyCheckValidationResult = null;
-    state.status = 'Saved ready checks';
+    state.status = 'Saved page settings';
     rerender({ preserveMountedDocument: true });
+  },
+  requestIntegrationNavigationApproval: (value) => {
+    if (!value || typeof value !== 'object') return;
+    const request = value as { profileId?: unknown; integrationId?: unknown; pageId?: unknown; requestedUrl?: unknown; currentUrl?: unknown; navigationKind?: unknown };
+    if (typeof request.profileId !== 'string' || typeof request.requestedUrl !== 'string') return;
+    const integrationId = typeof request.integrationId === 'string' ? request.integrationId : undefined;
+    const pageId = typeof request.pageId === 'string' ? request.pageId : undefined;
+    const integration = integrationId
+      ? state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId)
+      : state.integrationRegistry.integrations.find((candidate) => candidate.pages.some((page) => page.id === pageId));
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    if (!integration || !page) return;
+    const requestedUrl = new URL(request.requestedUrl).href;
+    const currentUrl = typeof request.currentUrl === 'string' && request.currentUrl.startsWith('http')
+      ? new URL(request.currentUrl).href
+      : page.url;
+    state.integrationNavigationRequest = {
+      profileId: request.profileId,
+      integrationId: integration.id,
+      pageId: page.id,
+      requestedUrl,
+      currentUrl,
+      navigationKind: request.navigationKind === 'frame-or-main' || request.navigationKind === 'new-window' || request.navigationKind === 'address'
+        ? request.navigationKind
+        : 'main-frame',
+    };
+    rerender({ preserveMountedDocument: true });
+  },
+  approveIntegrationNavigation: () => {
+    const request = state.integrationNavigationRequest;
+    if (!request) return;
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === request.integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === request.pageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === request.profileId);
+    if (!integration || !page || !profile) throw new Error('The integration page or profile was not found.');
+    const allowedOrigins = normalizeIntegrationPageAllowedOrigins(page.url, [...page.allowedOrigins, request.requestedUrl].join('\n'));
+    state.integrationRegistry = {
+      ...state.integrationRegistry,
+      integrations: state.integrationRegistry.integrations.map((candidate) => candidate.id !== integration.id ? candidate : {
+        ...candidate,
+        pages: candidate.pages.map((candidatePage) => candidatePage.id === page.id ? { ...candidatePage, allowedOrigins } : candidatePage),
+      }),
+    };
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.integrationNavigationRequest = null;
+    state.status = `Allowed navigation to ${new URL(request.requestedUrl).origin}`;
+    rerender({ preserveMountedDocument: true });
+    const resumeUrl = integrationNavigationResumeUrl(request.navigationKind, request.currentUrl, request.requestedUrl);
+    void runBusy(`Allowing navigation to ${new URL(request.requestedUrl).origin}...`, async () => {
+      await openIntegrationPage(resumeUrl, allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
+      if (request.navigationKind === 'frame-or-main') await controlIntegrationBrowser('reload', profile.id);
+    }, { preserveMountedDocument: true });
+  },
+  rejectIntegrationNavigation: () => {
+    const profileId = state.integrationNavigationRequest?.profileId;
+    state.integrationNavigationRequest = null;
+    state.status = 'Blocked integration navigation';
+    rerender({ preserveMountedDocument: true });
+    if (profileId) void controlIntegrationBrowser('focus-browser', profileId);
   },
   setIntegrationQuickViewProfile: (integrationId, pageId, profileId, visible) => {
     const profileIds = state.integrationRegistry.profiles.map((profile) => profile.id);
@@ -1366,7 +1436,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         if (page.id === 'gmail' || page.id === 'google-calendar') {
           await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name);
         } else {
-          await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name);
+          await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name, integration.id, page.id);
         }
         state.integrationActionEditPageLoading = false;
         state.status = `Ready to edit ${action.name}`;
@@ -1666,7 +1736,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         if (page.id === 'gmail' || page.id === 'google-calendar') {
           await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name);
         } else {
-          await openIntegrationPage(page.url, page.allowedOrigins, domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name);
+          await openIntegrationPage(page.url, page.allowedOrigins, domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name, integration.id, page.id);
         }
       } catch (error) {
         state.integrationActionFetchPendingId = null;

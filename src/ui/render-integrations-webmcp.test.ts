@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { state } from '../state';
 import { approveIntegrationWebMcpTool, webMcpCapabilityId, type IntegrationWebMcpToolDescriptor } from '../integrationWebMcp';
-import { renderIntegrationActionBuilderDialog, renderIntegrationPageErrorDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderIntegrationActionBuilderDialog, renderIntegrationNavigationDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 
 const integrationRegistry = {
   version: 1 as const,
@@ -20,6 +20,59 @@ describe('integration page errors', () => {
     expect(html).toContain('Couldn’t add web page');
     expect(html).toContain('Use a valid local page.');
     expect(html).toContain('data-action="close-integration-page-error"');
+  });
+});
+
+describe('integration page navigation', () => {
+  it('allows additional redirect origins to be configured in page settings', () => {
+    const html = renderIntegrationReadyChecksDialog({
+      ...state,
+      integrationRegistry,
+      integrationReadyChecksDialogOpen: true,
+      integrationReadyChecksIntegrationId: 'integration',
+      integrationReadyChecksPageId: 'page',
+      integrationReadyChecksDraft: { urlMode: 'strict-url', urlValue: 'https://example.com/', elements: [] },
+      integrationAllowedOriginsDraft: 'https://example.com\nhttps://redirect.example',
+    });
+    expect(html).toContain('Allowed navigation origins');
+    expect(html).toContain('name="allowedOrigins"');
+    expect(html).toContain('https://example.com\nhttps://redirect.example');
+    expect(html).toContain('Redirects and new windows remain inside Galaxy');
+  });
+
+  it('prompts before saving and following a new origin', () => {
+    const html = renderIntegrationNavigationDialog({
+      ...state,
+      integrationNavigationRequest: {
+        profileId: 'profile',
+        integrationId: 'integration',
+        pageId: 'page',
+        currentUrl: 'https://messages.google.com/web/',
+        requestedUrl: 'https://www.android.com/google-messages/',
+        navigationKind: 'main-frame',
+      },
+    });
+    expect(html).toContain('https://messages.google.com');
+    expect(html).toContain('https://www.android.com');
+    expect(html).toContain('data-action="reject-integration-navigation"');
+    expect(html).toContain('data-action="approve-integration-navigation"');
+  });
+
+  it('describes Tauri frame navigation as embedded content that will remain in its frame', () => {
+    const html = renderIntegrationNavigationDialog({
+      ...state,
+      integrationNavigationRequest: {
+        profileId: 'profile',
+        integrationId: 'integration',
+        pageId: 'page',
+        currentUrl: 'https://messages.google.com/web/',
+        requestedUrl: 'https://ogs.google.com/u/0/widget/app',
+        navigationKind: 'frame-or-main',
+      },
+    });
+    expect(html).toContain('Allow content from this origin?');
+    expect(html).toContain('embedded content remains in its own frame');
+    expect(html).toContain('Allow and reload');
   });
 });
 

@@ -132,7 +132,7 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
       const pageId = String(data.get('pageId') ?? '');
       if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') {
         const expectedValues = Object.fromEntries([...data.entries()].flatMap(([key, value]) => key.startsWith('readyValue:') ? [[key.slice('readyValue:'.length), String(value)]] : []));
-        handlers.saveIntegrationReadyChecks(integrationId, pageId, mode, String(data.get('urlValue') ?? ''), expectedValues);
+        handlers.saveIntegrationReadyChecks(integrationId, pageId, mode, String(data.get('urlValue') ?? ''), String(data.get('allowedOrigins') ?? ''), expectedValues);
       }
     }
     if (form.dataset.form === 'add-integration-profile') {

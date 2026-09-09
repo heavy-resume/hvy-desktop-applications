@@ -710,8 +710,10 @@ export function integrationBrowserCommand(
   payload?: unknown,
   foreground?: boolean,
   windowName?: string,
+  integrationId?: string,
+  pageId?: string,
 ): Promise<void> {
-  return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode, payload, foreground, windowName });
+  return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode, payload, foreground, windowName, integrationId, pageId });
 }
 
 export function integrationBrowserIsOpen(profileId?: string): Promise<boolean> {

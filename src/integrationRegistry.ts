@@ -61,6 +61,28 @@ export function integrationPageExpectedOrigins(page: Pick<IntegrationPageDefinit
   return matching.length ? matching : [new URL(page.url).origin];
 }
 
+export function normalizeIntegrationPageAllowedOrigins(pageUrl: string, value: string): string[] {
+  const pageOrigin = new URL(pageUrl).origin;
+  const origins = value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+    const url = new URL(entry);
+    const hostname = url.hostname.toLowerCase();
+    const ipv4 = hostname.split('.').map(Number);
+    const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const localHttp = url.protocol === 'http:' && (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' || loopbackIpv4);
+    if (url.protocol !== 'https:' && !localHttp) throw new Error('Allowed origins must use HTTPS, except for local development pages.');
+    return url.origin;
+  });
+  return [...new Set([pageOrigin, ...origins])];
+}
+
+export function integrationNavigationResumeUrl(
+  navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address',
+  currentUrl: string,
+  requestedUrl: string,
+): string {
+  return navigationKind === 'frame-or-main' ? currentUrl : requestedUrl;
+}
+
 export interface IntegrationRetrievalSourceDefinition {
   id: string;
   name: string;

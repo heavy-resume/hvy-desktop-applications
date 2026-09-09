@@ -631,7 +631,7 @@ async function handleCommand(command, args) {
     case 'read_plugin_project_files': return readPluginProjectFiles(args.workspacePath, args.directoryName);
     case 'write_plugin_project_file': return writePluginProjectFile(args.request);
     case 'write_plugin_project_build': return writePluginProjectBuild(args.request);
-    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName);
+    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName, args.integrationId, args.pageId);
     case 'integration_browser_is_open': {
       const browser = integrationBrowsers.get(args.profileId || 'default-google');
       return Boolean(browser?.window && !browser.window.isDestroyed() && !browser.closePromise);
@@ -758,11 +758,29 @@ function setIntegrationToolbarInspectionState(browser, state = {}) {
   void browser.toolbarContents.executeJavaScript(`window.hvySetInspectionState?.(${JSON.stringify(state)})`);
 }
 
+function requestIntegrationNavigationApproval(browser, requestedUrl, navigationKind) {
+  const requestedOrigin = new URL(requestedUrl).origin;
+  if (!browser.pageId || !isAllowedIntegrationUrl(requestedUrl, new Set([requestedOrigin]))) {
+    void shell.openExternal(requestedUrl);
+    return;
+  }
+  mainWindow?.webContents.send('hvy:integration-inspection-result', {
+    kind: 'integration-navigation-request',
+    profileId: browser.profileId,
+    integrationId: browser.integrationId,
+    pageId: browser.pageId,
+    currentUrl: browser.contents.getURL(),
+    requestedUrl,
+    navigationKind,
+  });
+  raiseWindow(mainWindow);
+}
+
 function integrationInspectorOptions(payload) {
   return { ...(payload && typeof payload === 'object' ? payload : {}), externalToolbar: true };
 }
 
-function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload, foreground = true, windowName) {
+function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload, foreground = true, windowName, integrationId, pageId) {
   if (command === 'open') {
     if (!loadIntegrationVaultStatus().configured) {
       setupIntegrationVault();
@@ -773,7 +791,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
     if (customUrl && !customAllowedOrigins.has(new URL(customUrl).origin)) {
       throw new Error('The custom page origin is not allowed.');
     }
-    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode, payload, foreground, windowName);
+    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode, payload, foreground, windowName, integrationId, pageId);
   }
   const browser = integrationBrowsers.get(profileId);
   const integrationWindow = browser?.window;
@@ -1283,11 +1301,11 @@ async function probeIntegrationCookieStorage() {
   };
 }
 
-function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName) {
+function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId) {
   const previous = integrationBrowserOpenQueues.get(profileId);
-  const requestKey = JSON.stringify({ url, actionMode, pendingExtraction: pendingExtraction || null });
+  const requestKey = JSON.stringify({ url, actionMode, pendingExtraction: pendingExtraction || null, integrationId, pageId });
   if (previous?.requestKey === requestKey) return previous.promise;
-  const queued = (previous?.promise || Promise.resolve()).catch(() => {}).then(() => openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName));
+  const queued = (previous?.promise || Promise.resolve()).catch(() => {}).then(() => openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId));
   const entry = { requestKey, promise: queued };
   integrationBrowserOpenQueues.set(profileId, entry);
   return queued.finally(() => {
@@ -1330,7 +1348,7 @@ function executePendingIntegrationExtraction(browser) {
   return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
 }
 
-async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName) {
+async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId) {
   let browser = integrationBrowsers.get(profileId);
   if (browser?.closePromise) await browser.closePromise;
   if (!browser || browser.window.isDestroyed()) {
@@ -1378,7 +1396,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     };
     layoutBrowserView();
     integrationWindow.on('resize', layoutBrowserView);
-    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null };
+    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null, integrationId, pageId };
     integrationBrowsers.set(profileId, browser);
     buildMenu();
     const browserUserAgent = browser.contents.getUserAgent()
@@ -1396,7 +1414,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) {
         void browser.contents.loadURL(requestedUrl);
       } else {
-        void shell.openExternal(requestedUrl);
+        requestIntegrationNavigationApproval(browser, requestedUrl, 'new-window');
       }
       return { action: 'deny' };
     });
@@ -1440,7 +1458,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         event.preventDefault();
         const targetUrl = Buffer.from(requestedUrl.slice(navigatePrefix.length), 'base64url').toString('utf8');
         if (isAllowedIntegrationUrl(targetUrl, browser.allowedOrigins)) void browser.contents.loadURL(targetUrl);
-        else void shell.openExternal(targetUrl);
+        else requestIntegrationNavigationApproval(browser, targetUrl, 'address');
         return;
       }
     });
@@ -1484,7 +1502,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       }
       if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
       event.preventDefault();
-      void shell.openExternal(requestedUrl);
+      requestIntegrationNavigationApproval(browser, requestedUrl, 'main-frame');
     });
     browser.contents.on('did-finish-load', () => {
       const currentUrl = browser.contents.getURL();
@@ -1537,6 +1555,8 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.window.setTitle(`HVY Galaxy Integrations — ${browser.name}`);
   buildMenu();
   browser.allowedOrigins = allowedOrigins;
+  browser.integrationId = integrationId;
+  browser.pageId = pageId;
   browser.actionModePending = actionMode;
   browser.pendingExtraction = pendingExtraction || null;
   await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);

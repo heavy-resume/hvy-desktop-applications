@@ -83,12 +83,15 @@ export interface UiHandlers {
   openIntegrationReadyChecks(integrationId: string, pageId: string): void;
   cancelIntegrationReadyChecks(): void;
   cancelIntegrationReadyCheckSelection(): void;
-  requestIntegrationReadyCheck(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, expectedValues: Record<string, string>): void;
+  requestIntegrationReadyCheck(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, allowedOrigins: string, expectedValues: Record<string, string>): void;
   completeIntegrationReadyCheck(value: unknown): void;
-  testIntegrationReadyChecks(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, expectedValues: Record<string, string>): void;
+  testIntegrationReadyChecks(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, allowedOrigins: string, expectedValues: Record<string, string>): void;
   completeIntegrationReadyCheckValidation(value: unknown): void;
   removeIntegrationReadyCheck(checkId: string): void;
-  saveIntegrationReadyChecks(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, expectedValues: Record<string, string>): void;
+  saveIntegrationReadyChecks(integrationId: string, pageId: string, urlMode: import('../integrationRegistry').IntegrationPageReadyChecks['urlMode'], urlValue: string, allowedOrigins: string, expectedValues: Record<string, string>): void;
+  requestIntegrationNavigationApproval(value: unknown): void;
+  approveIntegrationNavigation(): void;
+  rejectIntegrationNavigation(): void;
   setIntegrationQuickViewProfile(integrationId: string, pageId: string, profileId: string, visible: boolean): void;
   addActionForIntegrationPage(integrationId: string, pageId: string): void;
   requestAddIntegrationRecordType(integrationId: string, pageId: string): void;

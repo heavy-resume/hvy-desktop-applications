@@ -93,6 +93,8 @@ describe('WebMCP runtime fresh-page invocation', () => {
       }),
       false,
       profile.name,
+      undefined,
+      page.id,
     );
     expect(controlIntegrationBrowser).not.toHaveBeenCalledWith('discover-webmcp-tools', profile.id, expect.anything());
     const extraction = openIntegrationPage.mock.calls[0][5] as { payload: { requestId: string } };

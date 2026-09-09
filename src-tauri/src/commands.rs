@@ -519,11 +519,23 @@ static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock:
 static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
 static INTEGRATION_ALLOWED_ORIGINS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>> = OnceLock::new();
+#[derive(Clone, Default)]
+struct IntegrationPageContext {
+    integration_id: Option<String>,
+    page_id: Option<String>,
+}
+static INTEGRATION_PAGE_CONTEXTS: OnceLock<Mutex<HashMap<String, Arc<Mutex<IntegrationPageContext>>>>> = OnceLock::new();
 
 fn integration_allowed_origins(profile_id: &str) -> AppResult<Arc<Mutex<Vec<String>>>> {
     let mut origins = INTEGRATION_ALLOWED_ORIGINS.get_or_init(|| Mutex::new(HashMap::new())).lock()
         .map_err(|error| AppError::Message(error.to_string()))?;
     Ok(origins.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(Vec::new()))).clone())
+}
+
+fn integration_page_context(profile_id: &str) -> AppResult<Arc<Mutex<IntegrationPageContext>>> {
+    let mut contexts = INTEGRATION_PAGE_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(contexts.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(IntegrationPageContext::default()))).clone())
 }
 
 fn integration_browser_label(profile_id: &str) -> String {
@@ -1431,7 +1443,7 @@ fn integration_extraction_script(extraction: &serde_json::Value) -> String {
 }
 
 #[tauri::command]
-async fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>) -> AppResult<()> {
+async fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>, integration_id: Option<String>, page_id: Option<String>) -> AppResult<()> {
     let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
     let window_label = integration_browser_label(&profile_id);
     let content_label = integration_content_label(&profile_id);
@@ -1446,6 +1458,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         extractions.entry(profile_id.clone()).or_insert_with(|| Arc::new(Mutex::new(None))).clone()
     };
     let profile_allowed_origins = integration_allowed_origins(&profile_id)?;
+    let profile_page_context = integration_page_context(&profile_id)?;
     if command == "open" {
         let foreground = foreground.unwrap_or(true);
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
@@ -1466,6 +1479,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             integration_destination_url(destination.as_deref().unwrap_or(""))?
         };
         *profile_allowed_origins.lock().map_err(|error| AppError::Message(error.to_string()))? = navigation_allowed_origins;
+        *profile_page_context.lock().map_err(|error| AppError::Message(error.to_string()))? = IntegrationPageContext { integration_id, page_id };
         let blank_url = tauri::Url::parse("about:blank")
             .map_err(|error| AppError::Message(error.to_string()))?;
         if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
@@ -1506,6 +1520,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let toolbar_allowed_origins = profile_allowed_origins.clone();
         let new_window_allowed_origins = profile_allowed_origins.clone();
         let navigation_allowed_origins = profile_allowed_origins.clone();
+        let new_window_page_context = profile_page_context.clone();
+        let navigation_page_context = profile_page_context.clone();
+        let toolbar_page_context = profile_page_context.clone();
         let new_window_app = app.clone();
         let new_window_profile_id = profile_id.clone();
         let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
@@ -1571,6 +1588,28 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             if allowed {
                 if let Some(content) = new_window_app.get_webview(&integration_content_label(&new_window_profile_id)) {
                     let _ = content.navigate(requested_url);
+                }
+            } else if requested_url.scheme() == "https" || is_local_integration_http(&requested_url) {
+                let context = new_window_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                if context.page_id.is_some() {
+                    let current_url = new_window_app.get_webview(&integration_content_label(&new_window_profile_id))
+                        .and_then(|content| content.url().ok())
+                        .map(|url| url.to_string())
+                        .unwrap_or_default();
+                    let _ = new_window_app.emit("integration-inspection-result", serde_json::json!({
+                        "kind": "integration-navigation-request",
+                        "profileId": new_window_profile_id,
+                        "integrationId": context.integration_id,
+                        "pageId": context.page_id,
+                        "currentUrl": current_url,
+                        "requestedUrl": requested_url.as_str(),
+                        "navigationKind": "new-window",
+                    }));
+                    if let Some(main_window) = new_window_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window.as_ref().window());
+                    }
+                } else {
+                    let _ = open_external_url(requested_url.to_string());
                 }
             }
             tauri::webview::NewWindowResponse::Deny
@@ -1690,7 +1729,31 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 return false;
             }
-            navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(requested_url, &origins)).unwrap_or(false)
+            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(requested_url, &origins)).unwrap_or(false);
+            if !allowed && (requested_url.scheme() == "https" || is_local_integration_http(requested_url)) {
+                let context = navigation_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                if context.page_id.is_some() {
+                    let current_url = integration_app.get_webview(&integration_content_label(&result_profile_id))
+                        .and_then(|content| content.url().ok())
+                        .map(|url| url.to_string())
+                        .unwrap_or_default();
+                    let _ = integration_app.emit("integration-inspection-result", serde_json::json!({
+                        "kind": "integration-navigation-request",
+                        "profileId": result_profile_id,
+                        "integrationId": context.integration_id,
+                        "pageId": context.page_id,
+                        "currentUrl": current_url,
+                        "requestedUrl": requested_url.as_str(),
+                        "navigationKind": "frame-or-main",
+                    }));
+                    if let Some(main_window) = integration_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window.as_ref().window());
+                    }
+                } else {
+                    let _ = open_external_url(requested_url.to_string());
+                }
+            }
+            allowed
         });
         #[cfg(target_os = "macos")]
         let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?);
@@ -1758,6 +1821,25 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                             let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
                             if allowed {
                                 let _ = toolbar_remote.navigate(url);
+                            } else if url.scheme() == "https" || is_local_integration_http(&url) {
+                                let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                                if context.page_id.is_some() {
+                                    let current_url = toolbar_remote.url().map(|current| current.to_string()).unwrap_or_default();
+                                    let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
+                                        "kind": "integration-navigation-request",
+                                        "profileId": toolbar_profile_id,
+                                        "integrationId": context.integration_id,
+                                        "pageId": context.page_id,
+                                        "currentUrl": current_url,
+                                        "requestedUrl": url.as_str(),
+                                        "navigationKind": "address",
+                                    }));
+                                    if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                                        let _ = raise_integration_window(&main_window.as_ref().window());
+                                    }
+                                } else {
+                                    let _ = open_external_url(url.to_string());
+                                }
                             }
                         }
                     }

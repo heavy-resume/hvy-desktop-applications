@@ -136,6 +136,15 @@ export interface AppState {
   integrationReadyChecksIntegrationId: string | null;
   integrationReadyChecksPageId: string | null;
   integrationReadyChecksDraft: IntegrationPageReadyChecks | null;
+  integrationAllowedOriginsDraft: string;
+  integrationNavigationRequest: {
+    profileId: string;
+    integrationId?: string;
+    pageId?: string;
+    requestedUrl: string;
+    currentUrl: string;
+    navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address';
+  } | null;
   integrationReadyCheckSelectionPending: boolean;
   integrationReadyCheckValidationPending: boolean;
   integrationReadyCheckValidationResult: IntegrationPageReadinessResult | null;
@@ -483,6 +492,8 @@ export const state: AppState = {
   integrationReadyChecksIntegrationId: null,
   integrationReadyChecksPageId: null,
   integrationReadyChecksDraft: null,
+  integrationAllowedOriginsDraft: '',
+  integrationNavigationRequest: null,
   integrationReadyCheckSelectionPending: false,
   integrationReadyCheckValidationPending: false,
   integrationReadyCheckValidationResult: null,

@@ -33,8 +33,8 @@ export function openIntegrationBrowser(destination: IntegrationBrowserDestinatio
   return integrationBrowserCommand('open', destination, profileId, undefined, undefined, browserStoreId, actionMode, extraction, foreground, windowName);
 }
 
-export function openIntegrationPage(url: string, allowedOrigins: string[], profileId = DEFAULT_INTEGRATION_PROFILE_ID, browserStoreId = 'default-google', actionMode = false, extraction?: unknown, foreground = true, windowName?: string): Promise<void> {
-  return integrationBrowserCommand('open', undefined, profileId, url, allowedOrigins, browserStoreId, actionMode, extraction, foreground, windowName);
+export function openIntegrationPage(url: string, allowedOrigins: string[], profileId = DEFAULT_INTEGRATION_PROFILE_ID, browserStoreId = 'default-google', actionMode = false, extraction?: unknown, foreground = true, windowName?: string, integrationId?: string, pageId?: string): Promise<void> {
+  return integrationBrowserCommand('open', undefined, profileId, url, allowedOrigins, browserStoreId, actionMode, extraction, foreground, windowName, integrationId, pageId);
 }
 
 export function controlIntegrationBrowser(command: Exclude<IntegrationBrowserCommand, 'open'>, profileId = DEFAULT_INTEGRATION_PROFILE_ID, payload?: unknown): Promise<void> {

@@ -271,7 +271,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
         const data = new FormData(form);
         const mode = String(data.get('urlMode'));
         const expectedValues = Object.fromEntries([...data.entries()].flatMap(([key, value]) => key.startsWith('readyValue:') ? [[key.slice('readyValue:'.length), String(value)]] : []));
-        if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') handlers.requestIntegrationReadyCheck(target.dataset.integrationId, target.dataset.pageId, mode, String(data.get('urlValue') ?? ''), expectedValues);
+        if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') handlers.requestIntegrationReadyCheck(target.dataset.integrationId, target.dataset.pageId, mode, String(data.get('urlValue') ?? ''), String(data.get('allowedOrigins') ?? ''), expectedValues);
       }
     }
     if (action === 'test-integration-ready-checks') {
@@ -280,7 +280,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
         const data = new FormData(form);
         const mode = String(data.get('urlMode'));
         const expectedValues = Object.fromEntries([...data.entries()].flatMap(([key, value]) => key.startsWith('readyValue:') ? [[key.slice('readyValue:'.length), String(value)]] : []));
-        if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') handlers.testIntegrationReadyChecks(target.dataset.integrationId, target.dataset.pageId, mode, String(data.get('urlValue') ?? ''), expectedValues);
+        if (mode === 'strict-url' || mode === 'strict-domain' || mode === 'domain-regex') handlers.testIntegrationReadyChecks(target.dataset.integrationId, target.dataset.pageId, mode, String(data.get('urlValue') ?? ''), String(data.get('allowedOrigins') ?? ''), expectedValues);
       }
     }
     if (action === 'add-action-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
@@ -366,6 +366,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'select-webmcp-record-path' && target instanceof HTMLInputElement) handlers.selectIntegrationWebMcpRecordPath(target.value);
     if (action === 'cancel-add-integration-page') handlers.cancelAddIntegrationPage();
     if (action === 'close-integration-page-error') handlers.closeIntegrationPageError();
+    if (action === 'approve-integration-navigation') handlers.approveIntegrationNavigation();
+    if (action === 'reject-integration-navigation') handlers.rejectIntegrationNavigation();
     if (action === 'request-add-integration-profile') handlers.requestAddIntegrationProfile();
     if (action === 'cancel-add-integration-profile') handlers.cancelAddIntegrationProfile();
     if (action === 'set-inspection-privacy' && target.dataset.path) {

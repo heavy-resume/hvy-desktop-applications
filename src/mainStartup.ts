@@ -59,6 +59,11 @@ export async function boot(): Promise<void> {
       void handleAppCloseRequest();
     });
     await onIntegrationInspectionResult(async (result) => {
+      if (result && typeof result === 'object'
+        && (result as { kind?: unknown }).kind === 'integration-navigation-request') {
+        handlers.requestIntegrationNavigationApproval(result);
+        return;
+      }
       if (handleIntegrationWebMcpResult(result)) return;
       if (handleWebCapabilityIntegrationResult(result)) return;
       if (result && typeof result === 'object'

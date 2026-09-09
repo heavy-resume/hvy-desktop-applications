@@ -42,6 +42,7 @@ async function dispatch(
   payload: Record<string, unknown>,
   openIfClosed: boolean,
   foreground: boolean,
+  integrationId?: string,
 ): Promise<void> {
   const browserOpen = await isIntegrationBrowserOpen(profile.id);
   if (!browserOpen && !openIfClosed) throw new Error(`The browser profile “${profile.name}” is closed. Open it in Galaxy before running this WebMCP tool.`);
@@ -49,7 +50,7 @@ async function dispatch(
     kind: command === 'discover-webmcp-tools' ? 'webmcp-discovery' : 'webmcp-invocation',
     payload: { ...payload, waitForTools: true },
     context: { expectedOrigin: new URL(page.url).origin },
-  }, foreground, profile.name);
+  }, foreground, profile.name, integrationId, page.id);
 }
 
 export function discoverIntegrationWebMcpTools(
@@ -87,7 +88,7 @@ export function invokeIntegrationWebMcpTool(
         descriptor: approval.descriptor,
         arguments: args,
         fromOrigins: page.allowedOrigins,
-      }, openIfClosed, foreground);
+      }, openIfClosed, foreground, approval.integrationId);
     } catch (error) { rejectPending(requestId, error); }
     return result;
   });

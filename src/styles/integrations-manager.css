@@ -519,6 +519,37 @@
   gap: 10px;
 }
 
+.integration-allowed-origins {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0;
+}
+
+.integration-allowed-origins-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+}
+
+.integration-navigation-dialog {
+  width: min(560px, 100%);
+}
+
+.integration-navigation-destination {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.integration-navigation-destination span {
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 0.86rem;
+}
+
 .integration-ready-url {
   margin: 18px 0;
   grid-template-columns: minmax(150px, 0.45fr) minmax(260px, 1fr);

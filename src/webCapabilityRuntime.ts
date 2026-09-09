@@ -100,6 +100,8 @@ async function openForOperation(
     extraction,
     context.foreground ?? true,
     context.profile.name,
+    config.source?.integrationId,
+    config.source?.pageId,
   );
 }
 
