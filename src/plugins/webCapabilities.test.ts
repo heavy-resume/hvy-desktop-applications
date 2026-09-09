@@ -11,8 +11,9 @@ import { queueWebCapabilityScriptOperation } from './webCapabilityScripting';
 import type { VisualBlock } from '../../../heavy-file-format/src/editor/types';
 
 test('record template actions are claimed from the built-in viewer dispatcher', () => {
-  const actionRoot = { dataset: { visibleState: 'pending' }, removeAttribute: vi.fn() };
+  const actionRoot = { classList: { add: vi.fn() }, dataset: { visibleState: 'pending' }, removeAttribute: vi.fn() };
   const actionButton = {
+    classList: { add: vi.fn() },
     closest: vi.fn(() => actionRoot),
     removeAttribute: vi.fn(),
   } as unknown as HTMLButtonElement;
@@ -20,8 +21,10 @@ test('record template actions are claimed from the built-in viewer dispatcher', 
   claimRenderedRecordActionButton(actionButton);
 
   expect(actionButton.removeAttribute).toHaveBeenCalledWith('data-action');
+  expect(actionButton.classList.add).toHaveBeenCalledWith('hvy-web-action-button');
   expect(actionButton.closest).toHaveBeenCalledWith('[data-hvy-button="true"]');
   expect(actionRoot.removeAttribute).toHaveBeenCalledWith('data-hvy-button');
+  expect(actionRoot.classList.add).toHaveBeenCalledWith('hvy-web-action-control');
   expect(actionRoot.dataset.visibleState).toBe('visible');
 });
 

@@ -1907,7 +1907,9 @@
       && Math.abs(left.pageLeft - right.pageLeft) <= positionTolerance;
   };
 
-  const extractAcrossPage = async (pattern = {}) => {
+  let extractionRun = 0;
+
+  const extractAcrossPage = async (pattern = {}, runId = extractionRun) => {
     window.__hvyGalaxyInspector.stop();
     const effectivePattern = { ...pattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) };
     const recordLimit = Number.isFinite(pattern.recordLimit)
@@ -1997,8 +1999,10 @@
       for (let top = 0; top < maximum && positions.length < 60; top += step) positions.push(top);
       positions.push(maximum);
       for (const top of positions) {
+        if (runId !== extractionRun) break;
         scroller.scrollTop = top;
         await settle();
+        if (runId !== extractionRun) break;
         collect();
         if (records.size >= recordLimit) break;
       }
@@ -2021,7 +2025,7 @@
     };
   };
 
-  const extractLiveExamples = async (pattern = {}) => {
+  const extractLiveExamples = async (pattern = {}, runId = extractionRun) => {
     const usedRecords = new Set();
     const records = [];
     for (let exampleIndex = 0; exampleIndex < (pattern.parents || []).length; exampleIndex += 1) {
@@ -2036,7 +2040,8 @@
           snapshots: exampleSnapshot ? [exampleSnapshot] : [],
         };
       });
-      const extraction = await extractAcrossPage({ ...pattern, parents: [pattern.parents[exampleIndex]], targets });
+      const extraction = await extractAcrossPage({ ...pattern, parents: [pattern.parents[exampleIndex]], targets }, runId);
+      if (runId !== extractionRun) break;
       const available = extraction.records.find((record) => {
         const identity = recordContentIdentity(record);
         return !usedRecords.has(identity);
@@ -2769,6 +2774,7 @@
       return result;
     },
     async extractAndPublish(pattern = {}, context = {}) {
+      const runId = ++extractionRun;
       const readiness = pageReadiness(context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] });
       if (!readiness.ready) {
         const result = {
@@ -2785,8 +2791,9 @@
         return result;
       }
       const extraction = context.mode === 'examples'
-        ? await extractLiveExamples(pattern)
-        : await extractAcrossPage(pattern);
+        ? await extractLiveExamples(pattern, runId)
+        : await extractAcrossPage(pattern, runId);
+      if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
       publish({
         kind: 'integration-extraction',
         context,
@@ -2794,6 +2801,9 @@
         ...extraction,
       });
       return extraction;
+    },
+    cancelExtraction() {
+      extractionRun += 1;
     },
     extractAcrossPage(pattern = {}) {
       return extractAcrossPage(pattern);

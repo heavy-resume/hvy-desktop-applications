@@ -201,9 +201,12 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   };
   const openPageForStructuredSource = async (page: ReturnType<typeof integrationPageContext>['page'], profile: ReturnType<typeof integrationPageContext>['profile'], payload: unknown) => openIntegrationDefinitionPage(page, profile, payload, false);
   const integrationBrowserUnavailable = (error: unknown) => error instanceof Error
-    && (error.message.includes('Open Gmail or Google Calendar first')
+    && (error.message.includes('Open the integration browser first')
       || error.message.includes('Script failed to execute')
       || error.message.includes('destroyed'));
+  const cancelIntegrationInspection = () => {
+    void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId).catch(() => undefined);
+  };
   const updateReadyChecksDraft = (
     urlMode: IntegrationPageReadyChecks['urlMode'],
     urlValue: string,
@@ -1126,7 +1129,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   cancelIntegrationReadyChecks: () => {
-    if (state.integrationReadyCheckSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    if (state.integrationReadyCheckSelectionPending) cancelIntegrationInspection();
     state.integrationReadyChecksDialogOpen = false;
     state.integrationPageDeleteDialogOpen = false;
     state.integrationReadyChecksIntegrationId = null;
@@ -1139,7 +1142,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   cancelIntegrationReadyCheckSelection: () => {
-    if (state.integrationReadyCheckSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    if (state.integrationReadyCheckSelectionPending) cancelIntegrationInspection();
     state.integrationReadyCheckSelectionPending = false;
     state.integrationReadyChecksDialogOpen = true;
     state.status = 'Canceled ready check selection';
@@ -1496,7 +1499,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   closeIntegrationActionBuilder: () => {
     if (state.integrationActionSelectionPending) {
-      void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+      cancelIntegrationInspection();
     }
     if (integrationActionDraftJson() !== state.integrationActionBuilderInitialJson) {
       state.integrationActionDiscardDialogOpen = true;
@@ -1517,7 +1520,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   cancelIntegrationActionSelection: () => {
-    void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    cancelIntegrationInspection();
     state.integrationActionSelectionPending = false;
     state.status = 'Canceled page selection';
     rerender({ preserveMountedDocument: true });
@@ -1828,7 +1831,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     startIntegrationCommandRecording();
   },
   cancelIntegrationCommandBuilder: () => {
-    if (state.integrationCommandSelectionPending) void controlIntegrationBrowser('cancel-inspect', state.selectedIntegrationProfileId);
+    if (state.integrationCommandSelectionPending) cancelIntegrationInspection();
     state.integrationCommandBuilderOpen = false;
     state.integrationCommandSelectionPending = false;
     state.integrationCommandDraftSteps = [];

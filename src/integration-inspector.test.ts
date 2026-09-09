@@ -89,6 +89,8 @@ interface InspectorApi {
   };
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
   extractLiveExamples(pattern: Parameters<InspectorApi['extractPattern']>[0] & { targets: Array<{ label: string; snapshot: InspectorSnapshot; exampleSnapshots: Array<InspectorSnapshot | null> }> }): Promise<{ matches: number; records: Array<ReturnType<InspectorApi['extractPattern']>['records'][number] | null> }>;
+  extractAndPublish(pattern: Parameters<InspectorApi['extractPattern']>[0], context?: Record<string, unknown>): Promise<{ status?: string; matches: number; records: unknown[] }>;
+  cancelExtraction(): void;
   pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
   validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown> };
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
@@ -1937,6 +1939,32 @@ describe('integration structural inspector', () => {
     expect(result.matches).toBe(7);
     expect(result.finalTop).toBe(result.initialTop);
     expect(result.scrollEvents).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('stops an in-progress page extraction without publishing partial records', async () => {
+    await page.setContent(`<main class="events" style="height:120px;overflow:auto">${Array.from({ length: 60 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const scroller = document.querySelector<HTMLElement>('.events')!;
+      const parent = scroller.querySelector('.event')!;
+      let published = false;
+      window.__hvyGalaxyPublish = () => { published = true; };
+      const operation = window.__hvyGalaxyInspector.extractAndPublish({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'EVENT', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }],
+      }, {
+        readyChecks: { urlMode: 'strict-url', urlValue: location.href, elements: [] },
+      });
+      window.setTimeout(() => window.__hvyGalaxyInspector.cancelExtraction(), 50);
+      const extraction = await operation;
+      return { extraction, published, scrollTop: scroller.scrollTop };
+    });
+
+    expect(result.extraction).toMatchObject({ status: 'cancelled', matches: 0, records: [] });
+    expect(result.published).toBe(false);
+    expect(result.scrollTop).toBe(0);
     expect(pageErrors).toEqual([]);
   });
 

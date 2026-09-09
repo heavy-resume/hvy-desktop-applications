@@ -607,9 +607,13 @@ function createRecordActionBlock(label: string, componentId: string): VisualBloc
 
 export function claimRenderedRecordActionButton(actionButton: HTMLButtonElement): void {
   actionButton.removeAttribute('data-action');
+  actionButton.classList.add('hvy-web-action-button');
   const actionRoot = actionButton.closest<HTMLElement>('[data-hvy-button="true"]');
   actionRoot?.removeAttribute('data-hvy-button');
-  if (actionRoot) actionRoot.dataset.visibleState = 'visible';
+  if (actionRoot) {
+    actionRoot.classList.add('hvy-web-action-control');
+    actionRoot.dataset.visibleState = 'visible';
+  }
 }
 
 export function claimRenderedRecordTemplate(element: HTMLElement): void {
@@ -624,6 +628,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
   root.className = 'hvy-web-capability';
   const resultSessionKey = state.document?.versionId;
   let pending = false;
+  let fetchController: AbortController | null = null;
   let error = '';
   let templatePreviews: HvyPluginComponentTemplateRenderInstance[] = [];
   let subscribedResultKey = '';
@@ -681,27 +686,45 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
         review.addEventListener('click', () => openAuthorizationModal(config, sync));
         root.appendChild(review);
       } else {
-        const fetch = button(pending ? 'Fetching…' : hasFetchedRecords ? 'Refresh records' : 'Fetch records', true);
-        fetch.disabled = pending;
-        fetch.addEventListener('click', () => {
-          pending = true;
-          error = '';
-          sync();
-          void executeWebRecordsCapability(localRecordsConfig(config), {
-            documentPath: state.document?.source.path ?? '',
-            profile,
-            authorizations: state.appSettings.webCapabilityAuthorizations,
-            readyChecks: localReadyChecks(config),
-          }).then((result) => {
-            setWebRecordResults(ctx.rawDocument, resultKey, result.records, resultSessionKey);
-          }).catch((caught: unknown) => {
-            error = caught instanceof Error ? caught.message : String(caught);
-          }).finally(() => {
-            pending = false;
+        if (pending) {
+          const fetchState = document.createElement('div');
+          fetchState.className = 'hvy-web-fetch-state';
+          const fetching = document.createElement('span');
+          fetching.className = 'hvy-web-fetch-label';
+          fetching.setAttribute('role', 'status');
+          fetching.textContent = 'Fetching...';
+          const stop = button('Stop');
+          stop.classList.add('hvy-web-action-button');
+          stop.addEventListener('click', () => fetchController?.abort(new Error('The fetch was stopped.')));
+          fetchState.append(fetching, stop);
+          root.appendChild(fetchState);
+        } else {
+          const fetch = button(hasFetchedRecords ? 'Refresh' : 'Fetch', true);
+          fetch.classList.add('hvy-web-action-button');
+          fetch.addEventListener('click', () => {
+            const controller = new AbortController();
+            fetchController = controller;
+            pending = true;
+            error = '';
             sync();
+            void executeWebRecordsCapability(localRecordsConfig(config), {
+              documentPath: state.document?.source.path ?? '',
+              profile,
+              authorizations: state.appSettings.webCapabilityAuthorizations,
+              readyChecks: localReadyChecks(config),
+              signal: controller.signal,
+            }).then((result) => {
+              setWebRecordResults(ctx.rawDocument, resultKey, result.records, resultSessionKey);
+            }).catch((caught: unknown) => {
+              if (!controller.signal.aborted) error = caught instanceof Error ? caught.message : String(caught);
+            }).finally(() => {
+              if (fetchController === controller) fetchController = null;
+              pending = false;
+              sync();
+            });
           });
-        });
-        root.appendChild(fetch);
+          root.appendChild(fetch);
+        }
       }
     }
     if (error) {
@@ -813,6 +836,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
       if (typeof candidate.parent === 'string' && profile) {
         for (const command of config.record.commands) {
           const run = button(command.name);
+          run.classList.add('hvy-web-action-button');
           run.addEventListener('click', () => {
             openCommandInputsModal(command, (inputs) => {
               void executeWebRecordCommandCapability(config, command.id, candidate.parent as string, {
@@ -850,6 +874,7 @@ function createRecordsInstance(ctx: HvyPluginContext): HvyPluginInstance {
     element: root,
     refresh: sync,
     unmount: () => {
+      fetchController?.abort(new Error('The web records block was closed.'));
       unsubscribeRecords();
       disposeTemplatePreviews();
     },
@@ -878,6 +903,7 @@ function createCommandInstance(ctx: HvyPluginContext): HvyPluginInstance {
     if (profile) {
       const authorized = isWebCapabilityAuthorized(state.appSettings.webCapabilityAuthorizations, state.document?.source.path ?? '', config, profile.id);
       const run = button(authorized ? (pending ? 'Running…' : config.command.name) : 'Review and allow', true);
+      run.classList.add('hvy-web-action-button');
       run.disabled = pending;
       run.addEventListener('click', () => {
         if (!authorized) {

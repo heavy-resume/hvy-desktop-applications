@@ -541,7 +541,7 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
-export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'extract-pattern' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export interface IntegrationStorageProbeResult {
   cookieName: string;

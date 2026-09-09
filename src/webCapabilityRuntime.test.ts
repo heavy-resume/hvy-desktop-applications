@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IntegrationProfileDefinition } from './integrationRegistry';
 import type { WebRecordsCapabilityConfig } from './webCapabilities';
 
-const { openIntegrationPage } = vi.hoisted(() => ({
+const { controlIntegrationBrowser, openIntegrationPage } = vi.hoisted(() => ({
+  controlIntegrationBrowser: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
   openIntegrationPage: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
 }));
 
-vi.mock('./integrationBrowser', () => ({ openIntegrationPage }));
+vi.mock('./integrationBrowser', () => ({ controlIntegrationBrowser, openIntegrationPage }));
 vi.mock('./webCapabilities', async (importOriginal) => ({
   ...await importOriginal<typeof import('./webCapabilities')>(),
   isWebCapabilityAuthorized: () => true,
@@ -56,6 +57,7 @@ function executionContext(foreground: boolean) {
 afterEach(() => {
   vi.useRealTimers();
   openIntegrationPage.mockClear();
+  controlIntegrationBrowser.mockClear();
 });
 
 describe('web capability operation timeouts', () => {
@@ -103,6 +105,17 @@ describe('web capability operation timeouts', () => {
     })).toBe(true);
 
     await rejection;
+  });
+
+  it('stops a pending record fetch and cancels extraction in the browser', async () => {
+    const controller = new AbortController();
+    const operation = executeWebRecordsCapability(config, { ...executionContext(true), signal: controller.signal });
+    await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+
+    controller.abort(new Error('The fetch was stopped.'));
+
+    await expect(operation).rejects.toThrow('The fetch was stopped.');
+    expect(controlIntegrationBrowser).toHaveBeenCalledWith('cancel-extraction', profile.id);
   });
 });
 

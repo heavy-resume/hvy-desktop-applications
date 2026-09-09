@@ -1,7 +1,7 @@
 import type { IntegrationProfileDefinition } from './integrationRegistry';
 import { integrationPageExpectedOrigins } from './integrationRegistry';
 import type { IntegrationPageReadyChecks } from './integrationRegistry';
-import { openIntegrationPage } from './integrationBrowser';
+import { controlIntegrationBrowser, openIntegrationPage } from './integrationBrowser';
 import {
   isWebCapabilityAuthorized,
   type WebCapabilityAuthorizations,
@@ -17,6 +17,7 @@ export interface WebCapabilityExecutionContext {
   authorizations: WebCapabilityAuthorizations;
   foreground?: boolean;
   readyChecks?: IntegrationPageReadyChecks;
+  signal?: AbortSignal;
 }
 
 export interface WebRecordsExecutionResult {
@@ -42,6 +43,7 @@ type PendingOperation = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: ReturnType<typeof setTimeout>;
+  cleanupAbort?: () => void;
 };
 
 const pendingOperations = new Map<string, PendingOperation>();
@@ -68,21 +70,31 @@ function assertAuthorized(config: WebCapabilityConfig, context: WebCapabilityExe
   )) throw new WebCapabilityAuthorizationError();
 }
 
-function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], timeoutMs: number): Promise<T> {
+function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], timeoutMs: number, profileId: string, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingOperations.delete(requestId);
+      signal?.removeEventListener('abort', abort);
       const watch = pendingRecordWatches.get(requestId);
       if (watch) clearTimeout(watch.timeout);
       pendingRecordWatches.delete(requestId);
+      if (kind === 'records') void controlIntegrationBrowser('cancel-extraction', profileId).catch(() => undefined);
       reject(new Error('The web capability timed out while waiting for the page.'));
     }, timeoutMs);
+    const abort = () => {
+      if (!pendingOperations.has(requestId)) return;
+      if (kind === 'records') void controlIntegrationBrowser('cancel-extraction', profileId).catch(() => undefined);
+      rejectPendingOperation(requestId, signal?.reason instanceof Error ? signal.reason : new Error('The fetch was stopped.'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     pendingOperations.set(requestId, {
       kind,
       resolve: (value) => resolve(value as T),
       reject,
       timeout,
+      cleanupAbort: () => signal?.removeEventListener('abort', abort),
     });
+    if (signal?.aborted) abort();
   });
 }
 
@@ -111,11 +123,14 @@ export async function executeWebRecordsCapability(
 ): Promise<WebRecordsExecutionResult> {
   assertAuthorized(config, context);
   return enqueueWebCapabilityForProfile(context.profile.id, async () => {
+    context.signal?.throwIfAborted();
     const requestId = crypto.randomUUID();
     const result = waitForResult<WebRecordsExecutionResult>(
       requestId,
       'records',
       context.foreground === false ? BACKGROUND_OPERATION_TIMEOUT_MS : INTERACTIVE_OPERATION_TIMEOUT_MS,
+      context.profile.id,
+      context.signal,
     );
     try {
       await openForOperation(config, context, {
@@ -157,6 +172,8 @@ async function executeCommand(
       requestId,
       'command',
       context.foreground === false ? BACKGROUND_OPERATION_TIMEOUT_MS : INTERACTIVE_OPERATION_TIMEOUT_MS,
+      context.profile.id,
+      context.signal,
     );
     if (command.scope === 'record' && onRecordChange) {
       const timeout = setTimeout(() => pendingRecordWatches.delete(requestId), 15_000);
@@ -219,6 +236,7 @@ function rejectPendingOperation(requestId: string, error: unknown): void {
   const pending = pendingOperations.get(requestId);
   if (!pending) return;
   clearTimeout(pending.timeout);
+  pending.cleanupAbort?.();
   pendingOperations.delete(requestId);
   pending.reject(error instanceof Error ? error : new Error(String(error)));
 }
@@ -246,6 +264,7 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
   if ((pending.kind === 'records' && result.kind !== 'integration-extraction')
     || (pending.kind === 'command' && result.kind !== 'integration-command-result')) return false;
   clearTimeout(pending.timeout);
+  pending.cleanupAbort?.();
   pendingOperations.delete(requestId);
   if (pending.kind === 'command' && result.status !== 'executed') {
     const watch = pendingRecordWatches.get(requestId);

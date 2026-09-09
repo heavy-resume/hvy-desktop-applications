@@ -1929,10 +1929,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
     }
 
     let (Some(host_window), Some(window)) = (app.get_window(&window_label), app.get_webview(&content_label)) else {
-        if command == "close" {
+        if command == "close" || command == "cancel-inspect" {
             return Ok(());
         }
-        return Err(AppError::Message("Open Gmail or Google Calendar first.".into()));
+        return Err(AppError::Message("Open the integration browser first.".into()));
     };
     if command == "inspect" || command == "inspect-parent" || command == "inspect-target" {
         action_mode_pending.store(true, Ordering::SeqCst);
@@ -1957,6 +1957,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "cancel-extraction" => window.eval("window.__hvyGalaxyInspector?.cancelExtraction()"),
         "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),

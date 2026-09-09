@@ -280,8 +280,9 @@ export function pageCommandExecutionPayload(command: IntegrationCommandDefinitio
 
 export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {
   const rawUrl = urlValue.trim();
+  const hasExplicitScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(rawUrl);
   const localWithoutScheme = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(rawUrl);
-  const url = new URL(localWithoutScheme ? `http://${rawUrl}` : rawUrl);
+  const url = new URL(hasExplicitScheme ? rawUrl : `${localWithoutScheme ? 'http' : 'https'}://${rawUrl}`);
   const hostname = url.hostname.toLowerCase();
   const ipv4 = hostname.split('.').map(Number);
   const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);

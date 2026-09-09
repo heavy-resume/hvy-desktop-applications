@@ -802,8 +802,8 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   const browser = integrationBrowsers.get(profileId);
   const integrationWindow = browser?.window;
   if (!integrationWindow || integrationWindow.isDestroyed()) {
-    if (command === 'close') return null;
-    throw new Error('Open Gmail or Google Calendar first.');
+    if (command === 'close' || command === 'cancel-inspect') return null;
+    throw new Error('Open the integration browser first.');
   }
   const browserContents = browser.contents;
   if (command === 'back' && browserContents.canGoBack()) browserContents.goBack();
@@ -822,6 +822,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
   if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
   if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'cancel-extraction') return browserContents.executeJavaScript('window.__hvyGalaxyInspector?.cancelExtraction()');
   if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
   if (command === 'discover-sources') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
   if (command === 'fetch-source') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);

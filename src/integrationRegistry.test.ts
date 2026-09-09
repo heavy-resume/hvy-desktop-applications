@@ -23,6 +23,14 @@ describe('integration registry', () => {
     expect(() => createCustomPageIntegration('Lookalike', 'http://127.example.com:5173')).toThrow('must use HTTPS');
   });
 
+  it('normalizes bare public integration page URLs to HTTPS', () => {
+    const integration = createCustomPageIntegration('Google', 'google.com/search?q=hvy');
+    expect(integration.pages[0]).toMatchObject({
+      url: 'https://google.com/search?q=hvy',
+      allowedOrigins: ['https://google.com'],
+    });
+  });
+
   it('normalizes explicitly allowed redirect origins and retains the configured page origin', () => {
     expect(normalizeIntegrationPageAllowedOrigins(
       'https://messages.google.com/web/',

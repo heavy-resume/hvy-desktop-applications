@@ -47,6 +47,24 @@
   gap: 0.6rem;
 }
 
+.hvy-web-fetch-state {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.hvy-web-fetch-label {
+  font-weight: 650;
+}
+
+.hvy-web-capability .hvy-web-action-button,
+.hvy-web-capability .hvy-web-action-control {
+  width: 100%;
+  max-width: 20rem;
+  box-sizing: border-box;
+  justify-self: center;
+  margin-inline: auto;
+}
+
 .hvy-web-records article {
   display: grid;
   gap: 0.35rem;
