@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { buildWorkspaceChatContext, openWorkspaceChat, resolveWorkspaceHref } from './workspaceChat';
+import {
+  buildWorkspaceChatContext,
+  buildWorkspaceCitationRepairPrompt,
+  invalidWorkspaceCitationTargets,
+  openWorkspaceChat,
+  removeInvalidWorkspaceCitations,
+  resolveWorkspaceHref,
+} from './workspaceChat';
 import { state } from './state';
 import type { Workspace } from './backend';
 
@@ -41,9 +48,15 @@ describe('workspace chat helpers', () => {
 
   it('resolves relative workspace links against the current document folder', () => {
     state.document = {
-      path: '/tmp/work/Projects/Chat.hvy',
-      name: 'Chat.hvy',
-      extension: '.hvy',
+      documentId: 'document:chat',
+      versionId: 'version:chat',
+      source: {
+        documentId: 'document:chat',
+        workingVersionId: 'version:chat',
+        path: '/tmp/work/Projects/Chat.hvy',
+        name: 'Chat.hvy',
+        extension: '.hvy',
+      },
       mode: 'viewer',
       dirty: false,
       readOnly: false,
@@ -52,6 +65,7 @@ describe('workspace chat helpers', () => {
       metaOpen: false,
       mounted: null,
       recoveryBackupId: null,
+      recoveryModified: false,
     };
 
     expect(resolveWorkspaceHref('../Notes.hvy')).toBe('/tmp/work/Notes.hvy');
@@ -90,6 +104,45 @@ describe('workspace chat helpers', () => {
     expect(context).toContain('Source 1: [Meeting Minutes.hvy](/Meeting%20Minutes.hvy#minutes)');
     expect(context).not.toContain('Path:');
     expect(context).not.toContain('/tmp/work/Meeting Minutes.hvy');
+  });
+
+  it('lints rewritten workspace citation targets without flagging allowed or external links', () => {
+    const output = [
+      '[Bad](/Work/Notes%20for%20%20Petro%20Park.hvy)',
+      '[Good](/Notes%20for%20Petro%20Park.hvy#minutes)',
+      '[Website](https://example.com)',
+    ].join('\n');
+
+    expect(invalidWorkspaceCitationTargets(output, [
+      '/Notes%20for%20Petro%20Park.hvy',
+      '/Notes%20for%20Petro%20Park.hvy#minutes',
+    ])).toEqual(['/Work/Notes%20for%20%20Petro%20Park.hvy']);
+  });
+
+  it('builds a repair prompt with the invalid target and original source choices', () => {
+    const prompt = buildWorkspaceCitationRepairPrompt(
+      ['/Work/Wrong.hvy'],
+      ['[Notes.hvy](/Projects/Notes.hvy)', '[Plan.hvy](/Projects/Plan.hvy)'],
+    );
+
+    expect(prompt).toContain('Invalid link targets:\n- /Work/Wrong.hvy');
+    expect(prompt).toContain('- [Notes.hvy](/Projects/Notes.hvy)');
+    expect(prompt).toContain('- [Plan.hvy](/Projects/Plan.hvy)');
+    expect(prompt).toContain('Return the complete corrected answer');
+  });
+
+  it('removes only links that remain invalid while preserving their labels and the rest of the answer', () => {
+    const output = [
+      'See [Petro notes](/Work/Notes%20for%20%20Petro%20Park.hvy) for details.',
+      'Keep [the valid source](/Stop-Petro-Disc-Golf%206.hvy).',
+      'The same typo appears [again](/Work/Notes%20for%20%20Petro%20Park.hvy).',
+    ].join('\n');
+
+    expect(removeInvalidWorkspaceCitations(output, ['/Work/Notes%20for%20%20Petro%20Park.hvy'])).toBe([
+      'See Petro notes for details.',
+      'Keep [the valid source](/Stop-Petro-Disc-Golf%206.hvy).',
+      'The same typo appears again.',
+    ].join('\n'));
   });
 });
 

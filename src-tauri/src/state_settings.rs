@@ -13,16 +13,6 @@ fn document_backup_matches_saved_file(snapshot: &DocumentBackupSnapshot, snapsho
     if snapshot.document_path.is_empty() {
         return false;
     }
-    if let (Ok(metadata), Ok(created_at)) = (
-        fs::metadata(&snapshot.document_path),
-        DateTime::parse_from_rfc3339(&snapshot.created_at),
-    ) {
-        if let Ok(modified) = metadata.modified() {
-            if DateTime::<Utc>::from(modified) >= created_at.with_timezone(&Utc) {
-                return true;
-            }
-        }
-    }
     let Ok(saved_bytes) = fs::read(&snapshot.document_path) else {
         return false;
     };
@@ -182,7 +172,7 @@ fn refresh_menu_items(app: &AppHandle, menu: &tauri::menu::Menu<tauri::Wry>) -> 
     replace_recent_menu_items(
         app,
         &recent_workspaces,
-        &recent.workspaces,
+        &recent.recent_workspaces,
         "recent-workspace:",
         "No Recent Workspaces",
     )?;
@@ -197,12 +187,15 @@ fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuSta
         .get("file-menu")
         .and_then(|item| item.as_submenu().cloned())
         .ok_or_else(|| AppError::Message("File menu is unavailable.".into()))?;
+    set_submenu_item_enabled(&file, "open-homepage", state.open_homepage)?;
     set_submenu_item_enabled(&file, "close-document", state.close_document)?;
     set_submenu_item_enabled(&file, "save", state.save)?;
     set_submenu_item_enabled(&file, "save-as", state.save_as)?;
     set_submenu_item_enabled(&file, "save-to-workspace", state.save_to_workspace)?;
     set_submenu_item_enabled(&file, "export-pdf", state.export_pdf)?;
     set_submenu_item_enabled(&file, "import-current", state.import_current)?;
+    set_submenu_item_enabled(&file, "encrypt-document", state.encrypt_document)?;
+    set_submenu_item_enabled(&file, "decrypt-document", state.decrypt_document)?;
     Ok(())
 }
 
@@ -270,13 +263,24 @@ fn read_recent_state(path: &Path) -> AppResult<RecentState> {
         return Ok(RecentState::default());
     }
     let state: RecentState = serde_json::from_slice(&fs::read(path)?)?;
+    let workspaces: Vec<String> = state
+        .workspaces
+        .into_iter()
+        .filter(|entry| Path::new(entry).is_dir())
+        .take(RECENT_LIMIT)
+        .collect();
+    let mut recent_workspaces: Vec<String> = state
+        .recent_workspaces
+        .into_iter()
+        .filter(|entry| Path::new(entry).is_dir())
+        .take(RECENT_LIMIT)
+        .collect();
+    if recent_workspaces.is_empty() {
+        recent_workspaces = workspaces.clone();
+    }
     Ok(RecentState {
-        workspaces: state
-            .workspaces
-            .into_iter()
-            .filter(|entry| Path::new(entry).is_dir())
-            .take(RECENT_LIMIT)
-            .collect(),
+        workspaces,
+        recent_workspaces,
         files: state
             .files
             .into_iter()
@@ -325,10 +329,83 @@ fn read_app_settings(path: &Path) -> AppResult<AppSettings> {
 }
 
 fn normalize_app_settings(settings: AppSettings) -> AppSettings {
+    let mut power_scripting_allowed_files: Vec<String> = settings.power_scripting_allowed_files
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
+    power_scripting_allowed_files.sort();
+    power_scripting_allowed_files.dedup();
+    let power_script_acceptances = settings.power_script_acceptances
+        .into_iter()
+        .filter_map(|(path, fingerprints)| {
+            let path = path.trim().to_string();
+            let mut fingerprints: Vec<String> = fingerprints.into_iter()
+                .map(|fingerprint| fingerprint.trim().to_string())
+                .filter(|fingerprint| !fingerprint.is_empty())
+                .collect();
+            fingerprints.sort();
+            fingerprints.dedup();
+            if path.is_empty() || fingerprints.is_empty() { None } else { Some((path, fingerprints)) }
+        })
+        .collect();
+    let power_script_acceptance_scripts = settings.power_script_acceptance_scripts;
     AppSettings {
+        homepage: normalize_homepage_setting(settings.homepage),
         image_attachment_max_dimensions: normalize_image_attachment_max_dimensions(settings.image_attachment_max_dimensions),
+        power_scripting_allowed_files,
+        power_script_acceptances,
+        power_script_acceptance_scripts,
         debug_semantic_search: settings.debug_semantic_search,
         debug_log_max_bytes: normalize_debug_log_max_bytes(settings.debug_log_max_bytes),
+        plugin_policies: settings.plugin_policies.into_iter()
+            .filter(|(key, policy)| !key.trim().is_empty() && matches!(policy.as_str(), "disabled" | "enabled" | "conditional"))
+            .collect(),
+        plugin_acceptances: settings.plugin_acceptances.into_iter()
+            .filter(|(path, keys)| !path.trim().is_empty() && !keys.is_empty())
+            .collect(),
+        web_capability_profile_bindings: settings.web_capability_profile_bindings.into_iter()
+            .filter_map(|(path, bindings)| {
+                let path = path.trim().to_string();
+                let bindings = bindings.into_iter()
+                    .filter_map(|(capability_id, profile_id)| {
+                        let capability_id = capability_id.trim().to_string();
+                        let profile_id = profile_id.trim().to_string();
+                        if capability_id.is_empty() || profile_id.is_empty() { None } else { Some((capability_id, profile_id)) }
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                if path.is_empty() || bindings.is_empty() { None } else { Some((path, bindings)) }
+            })
+            .collect(),
+        web_capability_authorizations: settings.web_capability_authorizations.into_iter()
+            .filter_map(|(path, authorizations)| {
+                let path = path.trim().to_string();
+                let authorizations = authorizations.into_iter()
+                    .filter(|(capability_id, authorization)| {
+                        !capability_id.trim().is_empty()
+                            && authorization.capability_id.trim() == capability_id.trim()
+                            && !authorization.profile_id.trim().is_empty()
+                            && !authorization.capability_hash.trim().is_empty()
+                            && !authorization.authorized_at.trim().is_empty()
+                    })
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                if path.is_empty() || authorizations.is_empty() { None } else { Some((path, authorizations)) }
+            })
+            .collect(),
+        integration_web_mcp_approvals: settings.integration_web_mcp_approvals,
+    }
+}
+
+fn normalize_homepage_setting(setting: HomepageSetting) -> HomepageSetting {
+    match setting {
+        HomepageSetting::Included { id } if matches!(id.as_str(), "hvy-galaxy-guide" | "hvy-guide") => {
+            HomepageSetting::Included { id }
+        }
+        HomepageSetting::File { path } if !path.trim().is_empty() => {
+            HomepageSetting::File { path: path.trim().to_string() }
+        }
+        HomepageSetting::None => HomepageSetting::None,
+        _ => HomepageSetting::default(),
     }
 }
 

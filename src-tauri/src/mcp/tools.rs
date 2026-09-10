@@ -149,8 +149,79 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
                 "required": ["path", "command"],
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "search_hvy_document",
+            "description": "Find ranked candidate sections or components related to a concept in one existing HVY document. Use for searchable batch work, not as proof that the whole document was reviewed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path of the .hvy, .thvy, .phvy, or .md document to search."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Concept or content to find in the HVY document."
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Optional maximum candidate paths to return, from 1 through 20."
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Optional opaque continuation cursor returned by a previous search with the same query."
+                    }
+                },
+                "required": ["path", "query"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "apply_hvy_patch",
+            "description": "Apply exact contextual updates to several existing writable virtual files in one HVY document. Each file is atomic; failed files remain unchanged while later files continue.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path of the writable .hvy, .thvy, .phvy, or .md document to edit."
+                    },
+                    "patch": {
+                        "type": "string",
+                        "description": "Patch text using Begin Patch, Update File with absolute virtual paths, @@ hunks, and exact context/remove/add lines."
+                    }
+                },
+                "required": ["path", "patch"],
+                "additionalProperties": false
+            }
         }
     ])
+}
+
+pub(crate) fn mcp_tool_list_with_integration_access(integration_access: &str) -> serde_json::Value {
+    let mut tools = mcp_tool_list().as_array().cloned().unwrap_or_default();
+    if normalize_mcp_integration_access(integration_access) != "off" {
+        tools.push(serde_json::json!({
+            "name": "webmcp_list_tools",
+            "description": "List site-provided WebMCP tools that the user explicitly exposed through Galaxy MCP.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        }));
+        tools.push(serde_json::json!({
+            "name": "webmcp_call_tool",
+            "description": "Call one explicitly exposed WebMCP capability through its Galaxy-bound browser profile.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "capabilityId": { "type": "string", "description": "Capability ID returned by webmcp_list_tools." },
+                    "arguments": { "type": "object", "description": "Structured arguments matching the tool input schema." }
+                },
+                "required": ["capabilityId"],
+                "additionalProperties": false
+            }
+        }));
+    }
+    serde_json::Value::Array(tools)
 }
 
 fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult<serde_json::Value> {
@@ -215,6 +286,8 @@ fn handle_mcp_tool_call_from_with_access_config_and_archive_path(
         "document_archive" => mcp_document_archive_from(workspaces, arguments)?,
         "hvy_guidance" => mcp_hvy_guidance()?,
         "document_cli_based_editor" => mcp_document_cli_from(workspaces, arguments)?,
+        "search_hvy_document" => mcp_search_hvy_document_from(workspaces, arguments)?,
+        "apply_hvy_patch" => mcp_apply_hvy_patch_from(workspaces, arguments)?,
         _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
     };
     Ok(mcp_tool_result(result))
@@ -231,8 +304,12 @@ pub(crate) fn ensure_mcp_tool_allowed(name: &str, write_access: &str) -> AppResu
 
 fn mcp_tool_required_access(name: &str) -> u8 {
     match name {
-        "workspace_list" | "workspace_tree" | "workspace_search" | "hvy_guidance" => 0,
-        "document_cli_based_editor" => 1,
+        "workspace_list"
+        | "workspace_tree"
+        | "workspace_search"
+        | "hvy_guidance"
+        | "search_hvy_document" => 0,
+        "document_cli_based_editor" | "apply_hvy_patch" => 1,
         "workspace_create" | "workspace_archive" | "document_create" | "document_archive" => 2,
         _ => 2,
     }
@@ -553,6 +630,104 @@ pub(crate) fn mcp_document_cli_from(
     }))
 }
 
+pub(crate) fn mcp_search_hvy_document_from(
+    workspaces: &[Workspace],
+    arguments: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let path = arguments
+        .get("path")
+        .and_then(|path| path.as_str())
+        .ok_or_else(|| AppError::Message("search_hvy_document requires a document path.".into()))?;
+    let query = arguments
+        .get("query")
+        .and_then(|query| query.as_str())
+        .ok_or_else(|| AppError::Message("search_hvy_document requires a query.".into()))?
+        .trim();
+    if query.is_empty() {
+        return Err(AppError::Message("search_hvy_document requires a non-empty query.".into()));
+    }
+    let document_path = PathBuf::from(path);
+    mcp_visible_document_file(workspaces, &document_path, "search_hvy_document")?;
+    let mut request = serde_json::json!({
+        "filePath": path,
+        "query": query,
+    });
+    if let Some(limit) = arguments.get("limit") {
+        request["limit"] = limit.clone();
+    }
+    if let Some(cursor) = arguments.get("cursor") {
+        request["cursor"] = cursor.clone();
+    }
+    mcp_run_agent_tool("searchHvyFile", request)
+}
+
+pub(crate) fn mcp_apply_hvy_patch_from(
+    workspaces: &[Workspace],
+    arguments: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let path = arguments
+        .get("path")
+        .and_then(|path| path.as_str())
+        .ok_or_else(|| AppError::Message("apply_hvy_patch requires a document path.".into()))?;
+    let patch = arguments
+        .get("patch")
+        .and_then(|patch| patch.as_str())
+        .ok_or_else(|| AppError::Message("apply_hvy_patch requires a patch.".into()))?;
+    if patch.trim().is_empty() {
+        return Err(AppError::Message("apply_hvy_patch requires a non-empty patch.".into()));
+    }
+    let document_path = PathBuf::from(path);
+    let (workspace, document_file) =
+        mcp_visible_document_file(workspaces, &document_path, "apply_hvy_patch")?;
+    if file_locked(&document_file) || file_archived(&document_file) {
+        return Err(AppError::Message(
+            "apply_hvy_patch cannot edit locked or archived files.".into(),
+        ));
+    }
+    let result = mcp_run_agent_tool(
+        "applyHvyPatchOnFile",
+        serde_json::json!({ "filePath": path, "patch": patch }),
+    )?;
+    if result
+        .get("appliedFileCount")
+        .and_then(|count| count.as_u64())
+        .unwrap_or(0)
+        > 0
+    {
+        touch_workspace_manifest(Path::new(&workspace.path))?;
+    }
+    Ok(result)
+}
+
+fn mcp_visible_document_file<'a>(
+    workspaces: &'a [Workspace],
+    document_path: &Path,
+    tool_name: &str,
+) -> AppResult<(&'a Workspace, FlatWorkspaceFile)> {
+    let workspace = workspaces
+        .iter()
+        .find(|workspace| workspace_contains_visible_document(workspace, document_path))
+        .ok_or_else(|| {
+            AppError::Message(format!(
+                "{tool_name} path must be an HVY document in an added workspace."
+            ))
+        })?;
+    let document_file = flatten_workspace_file_nodes(&workspace.files)
+        .into_iter()
+        .find(|file| Path::new(&file.path) == document_path)
+        .ok_or_else(|| {
+            AppError::Message(format!(
+                "{tool_name} path must be an HVY document in an added workspace."
+            ))
+        })?;
+    document_extension(document_path).ok_or_else(|| {
+        AppError::Message(format!(
+            "{tool_name} supports .hvy, .thvy, .phvy, and .md documents."
+        ))
+    })?;
+    Ok((workspace, document_file))
+}
+
 fn mcp_run_read_only_cli_command(document_path: &Path, cwd: &str, command: &str) -> AppResult<serde_json::Value> {
     let temp_document_path = mcp_read_only_cli_temp_path(document_path);
     fs::copy(document_path, &temp_document_path)?;
@@ -603,6 +778,25 @@ fn mcp_run_cli_command(document_path: &Path, cwd: &str, command: &str) -> AppRes
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+fn mcp_run_agent_tool(
+    export_name: &str,
+    request: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let package_root = mcp_cli_package_root()?;
+    let output = Command::new("node")
+        .current_dir(package_root)
+        .arg("--input-type=module")
+        .arg("--eval")
+        .arg(MCP_AGENT_TOOL_NODE_EVAL)
+        .arg(export_name)
+        .arg(request.to_string())
+        .output()?;
+    if !output.status.success() {
+        return Err(AppError::Message(mcp_cli_runner_error(&output)));
+    }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
 fn workspace_contains_visible_document(workspace: &Workspace, path: &Path) -> bool {
     flatten_workspace_file_nodes(&workspace.files)
         .iter()
@@ -618,6 +812,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 path,
                 relative_path,
                 hidden_from_ai,
+                encrypted_folder_manifest,
                 children,
             } => {
                 if *hidden_from_ai {
@@ -629,6 +824,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                     path: path.clone(),
                     relative_path: relative_path.clone(),
                     hidden_from_ai: *hidden_from_ai,
+                    encrypted_folder_manifest: encrypted_folder_manifest.clone(),
                     children,
                 })
             }
@@ -640,6 +836,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 extension,
                 archived,
                 locked,
+                encrypted,
                 hidden_from_ai,
             } => Some(WorkspaceTreeNode::File {
                 name: name.clone(),
@@ -648,6 +845,7 @@ fn mcp_visible_workspace_nodes(nodes: &[WorkspaceTreeNode]) -> Vec<WorkspaceTree
                 extension: extension.clone(),
                 archived: *archived,
                 locked: *locked,
+                encrypted: *encrypted,
                 hidden_from_ai: *hidden_from_ai,
             }),
         })
@@ -671,6 +869,22 @@ import { runHvyCliOnFile } from 'heavy-file-format-ref-impl/mcp-cli-runner';
 
 try {
   const result = await runHvyCliOnFile(JSON.parse(process.argv[1]));
+  process.stdout.write(JSON.stringify(result));
+} catch (error) {
+  process.stderr.write(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+  process.exit(1);
+}
+"#;
+
+const MCP_AGENT_TOOL_NODE_EVAL: &str = r#"
+import * as runner from 'heavy-file-format-ref-impl/mcp-cli-runner';
+
+try {
+  const tool = runner[process.argv[1]];
+  if (typeof tool !== 'function') {
+    throw new Error(`Unknown heavy-file-format agent tool export: ${process.argv[1]}`);
+  }
+  const result = await tool(JSON.parse(process.argv[2]));
   process.stdout.write(JSON.stringify(result));
 } catch (error) {
   process.stderr.write(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));

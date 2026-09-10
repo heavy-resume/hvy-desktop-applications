@@ -1,0 +1,217 @@
+import { describe, expect, it } from 'vitest';
+import {
+  authorizeWebCapabilityRecord,
+  createWebCommandCapabilityConfig,
+  createWebRecordsCapabilityConfig,
+  isWebCapabilityAuthorized,
+  readWebRecordsCapabilityConfig,
+  reviewWebCapabilityAuthorization,
+  setWebCapabilityProfileBinding,
+  webCapabilityHash,
+} from './webCapabilities';
+import type { IntegrationActionDefinition, IntegrationCommandDefinition, IntegrationPageDefinition } from './integrationRegistry';
+
+const snapshot = {
+  selected: {
+    directText: 'Private subject',
+    accessibleName: 'Private subject',
+    shape: { tag: 'strong', roles: ['heading'] },
+    relativePath: [{ tag: 'strong' }],
+  },
+};
+
+const page: IntegrationPageDefinition = {
+  id: 'mail',
+  name: 'Mail',
+  url: 'https://mail.example.com/inbox',
+  allowedOrigins: ['https://mail.example.com'],
+  editable: true,
+  readyChecks: {
+    urlMode: 'strict-url',
+    urlValue: 'https://mail.example.com/inbox',
+    elements: [{ id: 'account', name: 'Account marker', snapshot, expectedValue: 'Personal account' }],
+  },
+};
+
+const itemCommand: IntegrationCommandDefinition = {
+  id: 'open',
+  name: 'Open message',
+  scope: 'record',
+  steps: [{ gesture: 'click', target: snapshot }],
+};
+
+const action: IntegrationActionDefinition = {
+  id: 'messages',
+  integrationId: 'mail',
+  name: 'Messages',
+  description: 'Inbox messages',
+  pageIds: ['mail'],
+  script: 'structural-pattern-v1',
+  resultSchema: { type: 'array' },
+  permissions: ['dom:read'],
+  version: 1,
+  pattern: {
+    recordLabel: 'Message',
+    minimumConfidence: 0.8,
+    parents: [snapshot],
+    fields: [{ id: 'subject', label: 'Subject', cardinality: 'single', optional: false, snapshot }],
+  },
+  commands: [itemCommand],
+};
+
+describe('web capabilities', () => {
+  it('copies a portable record definition without private inspection text or profiles', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const serialized = JSON.stringify(config);
+
+    expect(config.capabilityId).toBe('inbox');
+    expect(config.record.commands[0]?.steps[0]?.target).toEqual({
+      selected: { shape: snapshot.selected.shape, relativePath: snapshot.selected.relativePath },
+    });
+    expect(serialized).not.toContain('Private subject');
+    expect(serialized).not.toContain('Personal account');
+    expect(config.page.readyChecks.elements[0]).not.toHaveProperty('expectedValue');
+    expect(serialized).not.toContain('profile');
+    expect(readWebRecordsCapabilityConfig(JSON.parse(serialized))).toEqual(config);
+  });
+
+  it('keeps MCP item commands disabled unless record reads are exposed', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const parsed = readWebRecordsCapabilityConfig({
+      ...config,
+      mcp: { exposeRead: false, commandIds: ['open'] },
+    });
+
+    expect(parsed?.mcp).toEqual({ exposeRead: false, commandIds: [] });
+  });
+
+  it('defaults and normalizes the fetched record limit', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    expect(config.record.limit).toBe(100);
+    expect(config.record.scrollPage).toBe(true);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, limit: 12.9 },
+    })?.record.limit).toBe(12);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, limit: 500 },
+    })?.record.limit).toBe(100);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, scrollPage: false },
+    })?.record.scrollPage).toBe(false);
+    expect(readWebRecordsCapabilityConfig({
+      ...config,
+      record: { ...config.record, scrollPage: 'no' },
+    })?.record.scrollPage).toBe(true);
+    expect(createWebRecordsCapabilityConfig('mail', page, { ...action, scrollPage: false }, 'loaded-inbox').record.scrollPage).toBe(false);
+  });
+
+  it('round-trips template field and action mappings while dropping stale mappings', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const parsed = readWebRecordsCapabilityConfig({
+      ...config,
+      render: {
+        template: 'message-card',
+        flavor: 'compact',
+        fields: { title: 'Subject', removed: 'Missing field' },
+        actions: { 'primary-actions': 'open', removed: 'missing-command' },
+      },
+    });
+
+    expect(parsed?.render).toEqual({
+      template: 'message-card',
+      flavor: 'compact',
+      fields: { title: 'Subject' },
+      actions: { 'primary-actions': 'open' },
+    });
+  });
+
+  it('hashes execution behavior but not MCP exposure or source registry IDs', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const initialHash = webCapabilityHash(config);
+
+    expect(webCapabilityHash({ ...config, mcp: { exposeRead: true, commandIds: ['open'] } })).toBe(initialHash);
+    expect(webCapabilityHash({ ...config, source: { integrationId: 'other', pageId: 'other' } })).toBe(initialHash);
+    expect(webCapabilityHash({
+      ...config,
+      render: { template: 'message-card', fields: { title: 'Subject' }, actions: { actions: 'open' } },
+    })).toBe(initialHash);
+    expect(webCapabilityHash({ ...config, page: { ...config.page, url: 'https://mail.example.com/archive' } })).not.toBe(initialHash);
+  });
+
+  it('binds profiles locally and authorizes an exact capability/profile pair', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const bindings = setWebCapabilityProfileBinding({}, '/docs/inbox.hvy', 'inbox', 'work');
+    const authorizations = authorizeWebCapabilityRecord({}, '/docs/inbox.hvy', config, 'work');
+
+    expect(bindings['/docs/inbox.hvy']).toEqual({ inbox: 'work' });
+    expect(isWebCapabilityAuthorized(authorizations, '/docs/inbox.hvy', config, 'work')).toBe(true);
+    expect(isWebCapabilityAuthorized(authorizations, '/docs/inbox.hvy', config, 'personal')).toBe(false);
+  });
+
+  it('explains which capability categories changed', () => {
+    const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
+    const authorizations = authorizeWebCapabilityRecord({}, '/docs/inbox.hvy', config, 'work');
+    const changed = {
+      ...config,
+      page: { ...config.page, allowedOrigins: [...config.page.allowedOrigins, 'https://auth.example.com'] },
+      record: {
+        ...config.record,
+        commands: [{ ...config.record.commands[0]!, name: 'Open selected message' }],
+      },
+    };
+
+    expect(reviewWebCapabilityAuthorization(authorizations, '/docs/inbox.hvy', changed, 'work')).toMatchObject({
+      reason: 'capability-changed',
+      changedCategories: ['origins', 'commands'],
+    });
+  });
+
+  it('creates portable page-command definitions', () => {
+    const command: IntegrationCommandDefinition = {
+      id: 'subject',
+      name: 'Enter subject',
+      scope: 'page',
+      inputs: [{ id: 'subject', name: 'Subject', required: true }],
+      steps: [{ gesture: 'click', target: snapshot }, { gesture: 'type', target: snapshot, inputId: 'subject' }],
+    };
+
+    const config = createWebCommandCapabilityConfig('mail', page, command, 'enter-subject');
+
+    expect(config.command.steps[0]?.target).toEqual({
+      selected: { shape: snapshot.selected.shape, relativePath: snapshot.selected.relativePath },
+    });
+    expect(config.command.inputs).toEqual([{ id: 'subject', name: 'Subject', required: true }]);
+    expect(config.command.steps[1]).toMatchObject({ gesture: 'type', inputId: 'subject' });
+    expect(JSON.stringify(config)).not.toContain('Private subject');
+  });
+
+  it('preserves fixed and parameterized dropdown selections in portable commands', () => {
+    const command: IntegrationCommandDefinition = {
+      id: 'choose-list',
+      name: 'Choose list',
+      scope: 'page',
+      inputs: [{
+        id: 'list',
+        name: 'List',
+        required: true,
+        options: [{ value: 'inbox', label: 'Inbox' }, { value: 'follow-up', label: 'Follow up' }],
+      }],
+      steps: [
+        { gesture: 'select', target: snapshot, value: 'inbox', valueLabel: 'Inbox' },
+        { gesture: 'select', target: snapshot, inputId: 'list' },
+      ],
+    };
+
+    const config = createWebCommandCapabilityConfig('mail', page, command, 'choose-list');
+
+    expect(config.command.inputs?.[0]).toEqual(command.inputs?.[0]);
+    expect(config.command.steps).toMatchObject([
+      { gesture: 'select', value: 'inbox', valueLabel: 'Inbox' },
+      { gesture: 'select', inputId: 'list' },
+    ]);
+    expect(JSON.stringify(config)).not.toContain('Private subject');
+  });
+});

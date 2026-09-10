@@ -19,4 +19,15 @@ contextBridge.exposeInMainWorld('hvyElectron', {
     ipcRenderer.on('hvy:app-close-requested', listener);
     return () => ipcRenderer.removeListener('hvy:app-close-requested', listener);
   },
+  onIntegrationInspectionResult(callback) {
+    const listener = (_event, result) => callback(result);
+    ipcRenderer.on('hvy:integration-inspection-result', listener);
+    return () => ipcRenderer.removeListener('hvy:integration-inspection-result', listener);
+  },
+  onWebMcpBrokerRequest(callback) {
+    const listener = (_event, request) => callback(request);
+    ipcRenderer.on('hvy:webmcp-broker-request', listener);
+    ipcRenderer.send('hvy:webmcp-broker-renderer-ready');
+    return () => ipcRenderer.removeListener('hvy:webmcp-broker-request', listener);
+  },
 });

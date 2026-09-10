@@ -1,7 +1,9 @@
-import { openExternalUrl, saveBinaryAsDialog, type DocumentExtension } from './backend';
+import { openAttachmentFile, openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
 import { createDesktopEmbeddingProvider } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
+import { recallUserFileAttachmentBytes } from '../../heavy-file-format/src/document-attachment-actions';
+import { canPreviewUserFileAttachment, resolveUserFileAttachment } from '../../heavy-file-format/src/document-attachments';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
 import { setReferenceAppConfig } from '../../heavy-file-format/src/reference-config';
@@ -11,6 +13,9 @@ import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapsh
 import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
+import { enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
 import type {
   ComponentDefinition,
   HvyEditorClipboardHost,
@@ -23,6 +28,13 @@ import type {
   HvySearchSnapshotInput,
 } from '../../heavy-file-format/src/search/types';
 import type { HvyChatContextProvider } from '../../heavy-file-format/src/types';
+import {
+  documentEncryptionKeyring,
+  ensureDocumentKeysLoaded,
+  extractEncryptionKeyIds,
+  flushDocumentKeyPersistence,
+  queueGeneratedDocumentKey,
+} from './documentKeys';
 
 export type HvyMode = 'viewer' | 'ai' | 'editor' | 'hvy' | 'advanced';
 type HvyEmbedModule = typeof import('../../heavy-file-format/src/embed-full');
@@ -32,7 +44,8 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState' | 'setThemeOverrides'> & {
+  encryptDocumentAsync?: HvyEmbedMount['encryptDocumentAsync'];
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
@@ -66,6 +79,33 @@ export interface MountedDocument {
   document: VisualDocument;
 }
 
+export function powerScriptDescriptors(document: VisualDocument): Array<{ id: string; hash: string }> {
+  const scripts: Array<{ id: string; hash: string }> = [];
+  const visitBlocks = (blocks: VisualDocument['sections'][number]['blocks']): void => {
+    for (const block of blocks) {
+      if (block.schema.component === 'plugin' && block.schema.plugin === 'hvy.power-scripting') {
+        scripts.push({
+          id: block.schema.id,
+          hash: `sha256-${bytesToHex(sha256(new TextEncoder().encode(block.text)))}`,
+        });
+      }
+      visitBlocks(block.schema.containerBlocks ?? []);
+      visitBlocks(block.schema.componentListBlocks ?? []);
+      visitBlocks((block.schema.gridItems ?? []).map((item) => item.block));
+      visitBlocks(block.schema.expandableStubBlocks?.children ?? []);
+      visitBlocks(block.schema.expandableContentBlocks?.children ?? []);
+    }
+  };
+  const visitSections = (sections: VisualDocument['sections']): void => {
+    for (const section of sections) {
+      visitBlocks(section.blocks);
+      visitSections(section.children);
+    }
+  };
+  visitSections(document.sections);
+  return scripts;
+}
+
 export interface MountHvyDocumentOptions {
   onDocumentChange?: HvyDocumentChangeCallback;
   onEmbeddingIndexPrepared?: () => void | Promise<void>;
@@ -76,6 +116,10 @@ export interface MountHvyDocumentOptions {
   imageAttachmentMaxDimensions?: ImageAttachmentMaxDimensions;
   chatContextProvider?: HvyChatContextProvider | null;
   initialChatState?: Parameters<HvyEmbedMount['setChatState']>[0];
+  themeOverrides?: Parameters<HvyEmbedMount['setThemeOverrides']>[0];
+  powerScripts?: Parameters<HvyEmbedModule['mountHvy']>[0]['powerScripts'];
+  getPowerScriptAcceptance?: Parameters<HvyEmbedModule['mountHvy']>[0]['getPowerScriptAcceptance'];
+  onPowerScriptAcceptanceChanged?: Parameters<HvyEmbedModule['mountHvy']>[0]['onPowerScriptAcceptanceChanged'];
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -112,13 +156,22 @@ function ensureReferenceSemanticFilterProvider(): void {
 }
 
 export async function deserializeHvy(bytes: Uint8Array, extension: DocumentExtension): Promise<VisualDocument> {
-  const { deserializeDocumentBytes } = await loadHvyEmbed();
-  return deserializeDocumentBytes(bytes, extension);
+  const { deserializeDocumentBytesAsync } = await loadHvyEmbed();
+  await ensureDocumentKeysLoaded(extractEncryptionKeyIds(bytes));
+  return deserializeDocumentBytesAsync(bytes, extension, {
+    encryption: { keyring: documentEncryptionKeyring() },
+  });
 }
 
 export async function serializeHvy(document: VisualDocument): Promise<Uint8Array> {
-  const { serializeDocumentBytesAsync } = await loadHvyEmbed();
-  return serializeDocumentBytesAsync(document);
+  const { encryptDocumentBytes, serializeDocumentBytesAsync } = await loadHvyEmbed();
+  await flushDocumentKeyPersistence();
+  const encryption = { keyring: documentEncryptionKeyring() };
+  const bytes = await serializeDocumentBytesAsync(document, null, { encryption });
+  if (document.encryption?.encrypted !== true || document.encryption.algorithm !== 'fernet') return bytes;
+  const key = documentEncryptionKeyring()[document.encryption.keyId];
+  if (!key) throw new Error(`Missing Fernet key for encrypted HVY document: ${document.encryption.keyId}`);
+  return (await encryptDocumentBytes(bytes, { keyId: document.encryption.keyId, key })).bytes;
 }
 
 export async function profileHvySerializationCosts(document: VisualDocument): Promise<HvySerializationCostProfile> {
@@ -238,28 +291,81 @@ export async function mountHvyDocument(
     return mountRawHvyDocument(root, document, options);
   }
   const embedMode = mode === 'advanced' ? 'editor' : mode;
+  const documentPath = state.document?.source.path ?? '';
+  const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
+  const activeBuiltInPlugins = builtInPlugins.filter((plugin) => state.appSettings.pluginPolicies[plugin.id] !== 'disabled');
+  const plugins = [
+    ...activeBuiltInPlugins,
+    ...downloadedPlugins.filter((plugin) => !activeBuiltInPlugins.some((builtIn) => builtIn.id === plugin.id)),
+  ];
+  const mountKeyring = documentEncryptionKeyring();
   const mount = mountHvy({
     root,
     document,
     mode: embedMode,
     showAdvancedEditor: mode === 'advanced',
-    plugins: builtInPlugins,
+    plugins,
+    pluginAuthorization: 'prompt',
+    getPluginAuthorization: (request) => (
+      (state.appSettings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(request))
+    ),
+    onPluginAuthorizationChanged: (request) => {
+      const key = pluginAcceptanceKey(request);
+      const current = state.appSettings.pluginAcceptances[documentPath] ?? [];
+      const next = request.accepted
+        ? [...new Set([...current, key])]
+        : current.filter((candidate) => candidate !== key);
+      const settings = {
+        ...state.appSettings,
+        pluginAcceptances: {
+          ...state.appSettings.pluginAcceptances,
+          [documentPath]: next,
+        },
+      };
+      state.appSettings = settings;
+      void saveAppSettings(settings).then((saved) => {
+        state.appSettings = saved;
+      });
+    },
     chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
     initialChatState: options.initialChatState ?? null,
+    themeOverrides: options.themeOverrides ?? null,
     chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),
     chatContextProvider: options.chatContextProvider ?? null,
     embeddingProvider: options.hiddenFromAI ? null : createDesktopEmbeddingProvider(state.aiSettings),
     crossDocumentLinks: true,
+    attachmentAction: async (request) => {
+      const bytes = await request.getBytes();
+      if (!bytes) throw new Error(`Attachment "${request.name}" is unavailable.`);
+      if (request.action === 'preview' && canPreviewUserFileAttachment(request.mediaType)) {
+        await openAttachmentFile({ filename: request.filename, bytes });
+      } else {
+        await saveBinaryAsDialog({ suggestedName: request.filename, bytes });
+      }
+      return { handled: true };
+    },
     imageAttachmentMaxDimensions: options.imageAttachmentMaxDimensions,
     semanticFilterProvider: options.hiddenFromAI ? null : desktopSemanticFilterProvider,
+    semanticFilterConcurrency: state.aiSettings.maxConcurrentSemanticFilters,
     editorClipboard: editorClipboardHost,
+    encryption: {
+      keyring: mountKeyring,
+      onKeyGenerated: ({ keyId, key }) => queueGeneratedDocumentKey(keyId, key),
+    },
+    showComponentEncryptionControls: true,
     storageKey: null,
+    powerScripts: options.powerScripts ?? 'prompt',
+    getPowerScriptAcceptance: options.getPowerScriptAcceptance,
+    onPowerScriptAcceptanceChanged: options.onPowerScriptAcceptanceChanged,
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
   const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, withEmbeddedSearchCollapsedSurface(root, mount)), options);
   const interactiveMount = withViewerCarouselInteractions(root, mounted);
-  const finalMount = withAttachmentDownload(root, withExternalLinkOpening(root, mode, interactiveMount));
+  const finalMount = withAttachmentDownload(
+    root,
+    withDesktopAttachmentLinkOpening(root, document, withExternalLinkOpening(root, mode, interactiveMount)),
+  );
   return {
     mount: finalMount,
     get document() {
@@ -321,6 +427,38 @@ function withAttachmentDownload(root: HTMLElement, mount: HvyMount): HvyMount {
       console.error('[hvy:download] Failed to save attachment.', error);
     });
   }, { signal: cleanup.signal });
+  const destroy = mount.destroy;
+  return {
+    ...mount,
+    destroy() {
+      cleanup.abort();
+      destroy.call(mount);
+    },
+  };
+}
+
+function withDesktopAttachmentLinkOpening(root: HTMLElement, document: VisualDocument, mount: HvyMount): HvyMount {
+  const cleanup = new AbortController();
+  root.addEventListener('click', (event) => {
+    const link = event.target instanceof Element
+      ? event.target.closest<HTMLAnchorElement>('a[data-hvy-attachment-id]')
+      : null;
+    if (!link || !root.contains(link)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const resolution = resolveUserFileAttachment(document, link.dataset.hvyAttachmentTarget ?? '');
+    if (resolution.status !== 'resolved') return;
+    void recallUserFileAttachmentBytes(document, resolution.attachment).then(async (bytes) => {
+      if (!bytes) throw new Error(`Attachment "${resolution.attachment.name}" is unavailable.`);
+      if (canPreviewUserFileAttachment(resolution.attachment.mediaType)) {
+        await openAttachmentFile({ filename: resolution.attachment.filename, bytes });
+      } else {
+        await saveBinaryAsDialog({ suggestedName: resolution.attachment.filename, bytes });
+      }
+    }).catch((error) => {
+      console.error('[hvy:attachment] Failed to open attachment.', error);
+    });
+  }, { capture: true, signal: cleanup.signal });
   const destroy = mount.destroy;
   return {
     ...mount,
@@ -460,6 +598,7 @@ export async function createHvyDocumentFilterSnapshot(
   const { createDocumentFilterSnapshot } = await loadHvyEmbed();
   return createDocumentFilterSnapshot({
     semanticFilterProvider: desktopSemanticFilterProvider,
+    semanticFilterConcurrency: state.aiSettings.maxConcurrentSemanticFilters,
     ...request,
   });
 }
@@ -822,11 +961,11 @@ async function mountRawHvyDocument(
     isDirty() {
       return dirty || textarea.value !== lastSavedText;
     },
-    undo() {
+    async undo() {
       textarea.focus();
       documentOwner().execCommand('undo');
     },
-    redo() {
+    async redo() {
       textarea.focus();
       documentOwner().execCommand('redo');
     },
@@ -835,6 +974,14 @@ async function mountRawHvyDocument(
     },
     setChatState() {
       return undefined;
+    },
+    setThemeOverrides(overrides) {
+      for (const name of Array.from(root.style)) {
+        if (name.startsWith('--hvy-')) root.style.removeProperty(name);
+      }
+      for (const [name, value] of Object.entries(overrides ?? {})) {
+        root.style.setProperty(name, value);
+      }
     },
     async buildImportPlan(importOptions) {
       const { buildImportPlanForDocument } = await import('../../heavy-file-format/src/ai-document-import');
@@ -866,6 +1013,7 @@ async function mountRawHvyDocument(
       return result;
     },
   };
+  mount.setThemeOverrides(options.themeOverrides ?? null);
   return { mount, get document() { return currentDocument; } };
 }
 
@@ -929,9 +1077,16 @@ function installMetaTemplateContextMenu(
   const controller = new AbortController();
   const closeMenu = () => root.querySelector('.hvy-meta-template-context-menu')?.remove();
 
-  root.addEventListener('contextmenu', (event) => {
+  documentOwner().addEventListener('contextmenu', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
-    const hit = target ? getMetaTemplateHit(target) : null;
+    if (!target || !root.contains(target)) return;
+    if (target?.closest('.reusable-definition-modal')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeMenu();
+      return;
+    }
+    const hit = getMetaTemplateHit(target);
     if (!hit) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1408,8 +1563,27 @@ export function serializeMountedDocument(mounted: MountedDocument): Uint8Array {
   return mounted.mount.serializeDocumentBytes();
 }
 
-export function serializeMountedDocumentAsync(mounted: MountedDocument): Promise<Uint8Array> {
+export async function serializeMountedDocumentAsync(mounted: MountedDocument): Promise<Uint8Array> {
+  await flushDocumentKeyPersistence();
   return mounted.mount.serializeDocumentBytesAsync();
+}
+
+export async function encryptMountedDocumentAsync(mounted: MountedDocument): Promise<string> {
+  if (!mounted.mount.encryptDocumentAsync) throw new Error('Document encryption is unavailable in the current mode.');
+  const generated = await mounted.mount.encryptDocumentAsync();
+  await flushDocumentKeyPersistence();
+  return generated.keyId;
+}
+
+export function encryptMountedDocumentWithKey(mounted: MountedDocument, keyId: string): string {
+  mounted.document.encryption = { algorithm: 'fernet', keyId, encrypted: true };
+  return keyId;
+}
+
+export function removeMountedDocumentEncryption(mounted: MountedDocument): string | null {
+  const keyId = mounted.document.encryption?.encrypted === true ? mounted.document.encryption.keyId : null;
+  mounted.document.encryption = undefined;
+  return keyId;
 }
 
 export function getMountedRecoveryState(mounted: MountedDocument): string | null {
@@ -1420,12 +1594,12 @@ export function applyMountedRecoveryState(mounted: MountedDocument, recoveryStat
   mounted.mount.applyRecoveryState?.(recoveryState);
 }
 
-export function undoMountedDocument(mounted: MountedDocument): void {
-  mounted.mount.undo();
+export function undoMountedDocument(mounted: MountedDocument): Promise<void> {
+  return mounted.mount.undo();
 }
 
-export function redoMountedDocument(mounted: MountedDocument): void {
-  mounted.mount.redo();
+export function redoMountedDocument(mounted: MountedDocument): Promise<void> {
+  return mounted.mount.redo();
 }
 
 export function getMountedDocument(mounted: MountedDocument): VisualDocument {

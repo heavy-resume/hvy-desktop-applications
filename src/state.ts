@@ -1,16 +1,25 @@
-import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentExtension, type ImportSourceFile, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode, type RecentState } from './backend';
+import { defaultAiSettings, defaultAppSettings, defaultMcpClientInstallStatus, defaultMcpServerStatus, defaultMcpSettings, defaultMcpStdioLaunchConfig, emptyDocumentKeyVaultStatus, type AiSettings, type AppSettings, type ArchivedWorkspace, type DocumentBackup, type DocumentCreationType, type DocumentKeyMetadata, type DocumentKeyVaultStatus, type ImportSourceFile, type IntegrationStorageProbeResult, type IntegrationVaultStatus, type McpClientInstallStatus, type McpServerStatus, type McpSettings, type McpStdioLaunchConfig, type SavedTemplate, type TemplateScope, type Workspace, type RecentState } from './backend';
+import { loadIntegrationRegistry, type InspectionPrivacyRule, type IntegrationInteractionStepDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRegistry } from './integrationRegistry';
 import { defaultColorThemeSettings, type ColorThemeSettings } from './colorTheme';
 import type { DebugLogEntry } from './debugLog';
 import type { HvyMode, MountedDocument } from './hvy';
 import type { HvyDocumentSearchMode, HvySearchSnapshot, SearchFilterMode } from '../../heavy-file-format/src/search/types';
 import type { WorkspaceEmbeddingIndexProgress } from './embeddingIndex';
 import type { SavedVersion } from './revisionModel';
+import type { IntegrationStructuredSource } from './integrationBrowser';
+import type { IntegrationWebMcpToolDescriptor } from './integrationWebMcp';
+import type { RuntimeDocument } from './runtimeDocuments';
+import type { ReviewedDocumentKey } from './documentKeys';
+import type { DocumentKeyUsage } from './documentKeyUsage';
+export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
 export interface OpenDocument {
-  path: string;
-  name: string;
-  extension: DocumentExtension;
-  virtual?: 'workspaceChat' | 'versionHistory';
+  documentId: string;
+  versionId: string;
+  source: RuntimeDocument;
+  displayName?: string;
+  virtual?: 'workspaceChat' | 'versionHistory' | 'recoveryDraft' | 'defaultDocument';
+  includedDocumentId?: string;
   historySourcePath?: string;
   historySourceName?: string;
   historyVersionId?: string;
@@ -22,10 +31,13 @@ export interface OpenDocument {
   metaOpen: boolean;
   mounted: MountedDocument | null;
   recoveryBackupId: string | null;
+  recoveryModified: boolean;
 }
 
 export interface OpenDocumentTab {
-  path: string;
+  versionId: string;
+  documentId: string;
+  sourcePath: string;
   name: string;
   dirty: boolean;
   readOnly: boolean;
@@ -41,6 +53,8 @@ export interface AppState {
   selectedFilePath: string | null;
   recent: RecentState;
   appSettings: AppSettings;
+  homepageError: string | null;
+  homepagePickerMode: 'settings' | 'recovery' | null;
   aiSettings: AiSettings;
   mcpSettings: McpSettings;
   mcpServerStatus: McpServerStatus;
@@ -59,8 +73,11 @@ export interface AppState {
   workspaceInitializationName: string | null;
   workspaceManagerOpen: boolean;
   openWorkspaceActionsPath: string | null;
+  integrationsSectionExpanded: boolean;
+  workspacesSectionExpanded: boolean;
   newFolderWorkspacePath: string | null;
   newFolderParentDirectory: string;
+  newFolderEncrypted: boolean;
   workspaceExpanded: Record<string, boolean>;
   workspaceFolderExpanded: Record<string, Record<string, boolean>>;
   newWorkspaceLocation: 'managed' | 'choose';
@@ -83,11 +100,152 @@ export interface AppState {
   saveAsKind: 'document' | 'template';
   saveAsScope: 'workspace' | 'anywhere';
   exportPdfSavePromptOpen: boolean;
+  exportPdfPlaintextConfirmed: boolean;
   exportedPdfPath: string | null;
   appSettingsDialogOpen: boolean;
+  integrationsDialogOpen: boolean;
+  integrationStorageProbeResult: IntegrationStorageProbeResult | null;
+  integrationInspectionResult: unknown;
+  integrationVaultStatus: IntegrationVaultStatus | null;
+  integrationVaultResetDialogOpen: boolean;
+  documentKeyImportDialogOpen: boolean;
+  documentKeyManagerDialogOpen: boolean;
+  documentKeyImportKeys: ReviewedDocumentKey[];
+  documentKeyImportSelection: string[];
+  documentKeyImportMatchingIds: string[];
+  documentKeyImportConflictIds: string[];
+  documentKeyImportConflictNames: Record<string, string>;
+  documentKeyImportConflictMigrations: Record<string, 'new' | 'renamed'>;
+  documentKeyImportBusy: boolean;
+  documentKeyImportProgress: string;
+  documentKeyMetadata: DocumentKeyMetadata[];
+  documentKeyVaultStatus: DocumentKeyVaultStatus;
+  documentKeyDeleteId: string | null;
+  documentKeyExportSelection: string[];
+  documentEncryptionDialogOpen: boolean;
+  documentEncryptionAction: 'encrypt' | 'decrypt' | null;
+  documentEncryptionKeyId: string | null;
+  documentEncryptionKeyLabel: string;
+  documentEncryptionKeyUsage: Record<string, DocumentKeyUsage>;
+  documentKeyUsageLoaded: boolean;
+  documentKeyDataLoading: boolean;
+  integrationRegistry: IntegrationRegistry;
+  addIntegrationPageDialogOpen: boolean;
+  integrationPageError: string | null;
+  integrationReadyChecksDialogOpen: boolean;
+  integrationPageDeleteDialogOpen: boolean;
+  integrationReadyChecksIntegrationId: string | null;
+  integrationReadyChecksPageId: string | null;
+  integrationReadyChecksDraft: IntegrationPageReadyChecks | null;
+  integrationAllowedOriginsDraft: string;
+  integrationNavigationRequest: {
+    profileId: string;
+    integrationId?: string;
+    pageId?: string;
+    requestedUrl: string;
+    currentUrl: string;
+    navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address';
+  } | null;
+  integrationReadyCheckSelectionPending: boolean;
+  integrationReadyCheckValidationPending: boolean;
+  integrationReadyCheckValidationResult: IntegrationPageReadinessResult | null;
+  inspectionPrivacyRules: InspectionPrivacyRule[];
+  integrationActionBuilderOpen: boolean;
+  integrationActionDiscardDialogOpen: boolean;
+  integrationActionExamples: unknown[];
+  integrationActionExampleRules: InspectionPrivacyRule[][];
+  integrationActionTargetLabels: string[];
+  integrationActionTargetIds: string[];
+  integrationActionTargetCardinalities: Array<'single' | 'list'>;
+  integrationActionTargetOptional: boolean[];
+  integrationActionTargetParentIndexes: number[];
+  integrationActionTargetSelectionParentIndex: number;
+  integrationActionTargetSelectionFieldIndex: number | null;
+  integrationActionTargetVariants: unknown[][];
+  integrationActionTargetNegativeVariants: unknown[][];
+  integrationActionTargetAbsentExamples: boolean[][];
+  integrationActionSelectedParentIndex: number;
+  integrationActionMinimumConfidence: number;
+  integrationActionScrollPage: boolean;
+  integrationActionScope: unknown | null;
+  integrationActionAnchors: unknown[];
+  integrationActionAnchorRules: InspectionPrivacyRule[][];
+  integrationActionSelectionKind: 'parent' | 'target' | 'example' | 'scope';
+  integrationActionSelectionPending: boolean;
+  integrationActionDraftIntegrationId: string | null;
+  integrationActionDraftPageId: string | null;
+  integrationActionDraftActionId: string | null;
+  integrationActionBuilderStep: 'define' | 'preview' | 'save';
+  integrationActionDraftName: string;
+  integrationActionDraftDescription: string;
+  integrationActionBuilderInitialJson: string;
+  integrationActionPreviewRecords: unknown[];
+  integrationActionLiveExampleRecords: unknown[];
+  integrationActionPreviewDiagnostics: unknown;
+  integrationActionPreviewPending: boolean;
+  integrationActionEditPageLoading: boolean;
+  integrationActionResultOpen: boolean;
+  integrationActionResultName: string;
+  integrationActionResultRecords: unknown[];
+  integrationActionResultActionId: string | null;
+  integrationActionFetchPendingId: string | null;
+  integrationActionFetchError: string | null;
+  integrationRecordSourceDialogOpen: boolean;
+  integrationRecordSourceIntegrationId: string | null;
+  integrationRecordSourcePageId: string | null;
+  integrationRecordSourceStep: 'source' | 'webmcp';
+  integrationStructuredSourcePageId: string | null;
+  integrationStructuredSourcePending: boolean;
+  integrationStructuredSources: IntegrationStructuredSource[];
+  integrationStructuredSourceError: string | null;
+  integrationStructuredResultOpen: boolean;
+  integrationStructuredResultName: string;
+  integrationStructuredResult: unknown;
+  integrationWebMcpIntegrationId: string | null;
+  integrationWebMcpPageId: string | null;
+  integrationWebMcpProfileId: string | null;
+  integrationWebMcpScanId: string | null;
+  integrationWebMcpTools: IntegrationWebMcpToolDescriptor[];
+  integrationWebMcpPending: boolean;
+  integrationWebMcpError: string | null;
+  integrationWebMcpReviewTool: IntegrationWebMcpToolDescriptor | null;
+  integrationWebMcpReviewIntegrationId: string | null;
+  integrationWebMcpReviewPageId: string | null;
+  integrationWebMcpReviewProfileId: string | null;
+  integrationWebMcpInvokeCapabilityId: string | null;
+  integrationWebMcpInvokeForRecordType: boolean;
+  integrationWebMcpInvokeActionId: string | null;
+  integrationWebMcpResultOpen: boolean;
+  integrationWebMcpResultForRecordType: boolean;
+  integrationWebMcpResult: unknown;
+  integrationWebMcpResultCapabilityId: string | null;
+  integrationWebMcpRecordBuilderOpen: boolean;
+  integrationWebMcpRecordBuilderPath: string;
+  integrationWebMcpConfigureAfterReview: boolean;
+  integrationCommandBuilderOpen: boolean;
+  integrationCommandSelectionPending: boolean;
+  integrationCommandDraftIntegrationId: string | null;
+  integrationCommandDraftActionId: string | null;
+  integrationCommandDraftPageId: string | null;
+  integrationCommandDraftScope: 'page' | 'record';
+  integrationCommandDraftSteps: IntegrationInteractionStepDefinition[];
+  integrationCommandRunRequest: { integrationId: string; actionId?: string; pageId?: string; commandId: string; recordParent?: string } | null;
+  integrationCommandDeleteDialogOpen: boolean;
+  integrationCommandDeleteIntegrationId: string | null;
+  integrationCommandDeleteActionId: string | null;
+  integrationCommandDeletePageId: string | null;
+  integrationCommandDeleteCommandId: string | null;
+  integrationRecordDeleteDialogOpen: boolean;
+  integrationRecordDeleteIntegrationId: string | null;
+  integrationRecordDeleteActionId: string | null;
+  selectedIntegrationId: string;
+  selectedIntegrationProfileId: string;
+  addIntegrationProfileDialogOpen: boolean;
+  appSettingsDialogMode: 'settings' | 'plugins';
   appSettingsDraft: AppSettings | null;
   appSettingsDialogInitialJson: string | null;
   appSettingsDiscardDialogOpen: boolean;
+  scriptingReviewDialogOpen: boolean;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -103,19 +261,39 @@ export interface AppState {
   debugLogDialogOpen: boolean;
   debugLogEntries: DebugLogEntry[];
   recoveryDialogOpen: boolean;
-  versionHistoryDialogOpen: boolean;
+  versionHistorySidebarOpen: boolean;
+  versionHistorySourcePath: string | null;
+  versionHistorySourceName: string | null;
   savedDocumentVersions: SavedVersion[];
   selectedSavedVersionId: string | null;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
   closeDocumentDraftDialogOpen: boolean;
+  saveConflictDialogOpen: boolean;
+  saveConflictKind: import('./recoveryDocuments').SaveConflictKind | null;
+  saveConflictSavingDocumentId: string | null;
+  saveConflictOtherDocumentId: string | null;
+  saveConflictContinuation: 'save' | 'saveAndCloseDocument' | 'saveBeforeExportPdf' | 'saveAndCloseApp';
   tabStackOpen: boolean;
   tabStackIndex: number;
   appCloseDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
   workspaceClipboard: WorkspaceClipboardState | null;
+  workspaceFileOperationPromptOpen: boolean;
+  pendingWorkspaceFileOperation: PendingWorkspaceFileOperation | null;
+  encryptedAIAccessPrompt: null | {
+    kind: 'file' | 'folder';
+    workspacePath: string;
+    targetDirectory: string;
+    path: string;
+    name: string;
+    openAIWhenEnabled?: boolean;
+  };
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
+  renameEncryptedFolderWorkspacePath: string | null;
+  renameEncryptedFolderDirectory: string;
+  renameEncryptedFolderCurrentName: string | null;
   deleteFilePath: string | null;
   deleteFileName: string | null;
   deleteFolderWorkspacePath: string | null;
@@ -216,6 +394,15 @@ export interface WorkspaceClipboardState {
   name: string;
 }
 
+export type PendingWorkspaceFileOperation =
+  | { kind: 'copyClipboard'; path: string; name: string }
+  | { kind: 'cutClipboard'; path: string; name: string }
+  | { kind: 'openTransfer'; path: string; name: string; mode: 'copyFile' | 'moveFile' }
+  | { kind: 'pasteCopy'; path: string; name: string; workspacePath: string; targetDirectory: string }
+  | { kind: 'pasteCut'; path: string; name: string; workspacePath: string; targetDirectory: string }
+  | { kind: 'moveToFolder'; path: string; name: string; workspacePath: string; targetDirectory: string }
+  | { kind: 'convert'; path: string; name: string; workspacePath: string; toTemplate: boolean };
+
 export const state: AppState = {
   workspaces: [],
   workspaceEntries: [],
@@ -224,6 +411,8 @@ export const state: AppState = {
   selectedFilePath: null,
   recent: { workspaces: [], files: [] },
   appSettings: defaultAppSettings(),
+  homepageError: null,
+  homepagePickerMode: null,
   aiSettings: defaultAiSettings(),
   mcpSettings: defaultMcpSettings(),
   mcpServerStatus: defaultMcpServerStatus(),
@@ -242,8 +431,11 @@ export const state: AppState = {
   workspaceInitializationName: null,
   workspaceManagerOpen: false,
   openWorkspaceActionsPath: null,
+  integrationsSectionExpanded: true,
+  workspacesSectionExpanded: true,
   newFolderWorkspacePath: null,
   newFolderParentDirectory: '',
+  newFolderEncrypted: false,
   workspaceExpanded: {},
   workspaceFolderExpanded: {},
   newWorkspaceLocation: 'managed',
@@ -266,11 +458,145 @@ export const state: AppState = {
   saveAsKind: 'document',
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
+  exportPdfPlaintextConfirmed: false,
   exportedPdfPath: null,
   appSettingsDialogOpen: false,
+  integrationsDialogOpen: false,
+  integrationStorageProbeResult: null,
+  integrationInspectionResult: null,
+  integrationVaultStatus: null,
+  integrationVaultResetDialogOpen: false,
+  documentKeyImportDialogOpen: false,
+  documentKeyManagerDialogOpen: false,
+  documentKeyImportKeys: [],
+  documentKeyImportSelection: [],
+  documentKeyImportMatchingIds: [],
+  documentKeyImportConflictIds: [],
+  documentKeyImportConflictNames: {},
+  documentKeyImportConflictMigrations: {},
+  documentKeyImportBusy: false,
+  documentKeyImportProgress: '',
+  documentKeyMetadata: [],
+  documentKeyVaultStatus: emptyDocumentKeyVaultStatus(),
+  documentKeyDeleteId: null,
+  documentKeyExportSelection: [],
+  documentEncryptionDialogOpen: false,
+  documentEncryptionAction: null,
+  documentEncryptionKeyId: null,
+  documentEncryptionKeyLabel: '',
+  documentEncryptionKeyUsage: {},
+  documentKeyUsageLoaded: false,
+  documentKeyDataLoading: false,
+  integrationRegistry: loadIntegrationRegistry(),
+  addIntegrationPageDialogOpen: false,
+  integrationPageError: null,
+  integrationReadyChecksDialogOpen: false,
+  integrationPageDeleteDialogOpen: false,
+  integrationReadyChecksIntegrationId: null,
+  integrationReadyChecksPageId: null,
+  integrationReadyChecksDraft: null,
+  integrationAllowedOriginsDraft: '',
+  integrationNavigationRequest: null,
+  integrationReadyCheckSelectionPending: false,
+  integrationReadyCheckValidationPending: false,
+  integrationReadyCheckValidationResult: null,
+  inspectionPrivacyRules: [],
+  integrationActionBuilderOpen: false,
+  integrationActionDiscardDialogOpen: false,
+  integrationActionExamples: [],
+  integrationActionExampleRules: [],
+  integrationActionTargetLabels: [],
+  integrationActionTargetIds: [],
+  integrationActionTargetCardinalities: [],
+  integrationActionTargetOptional: [],
+  integrationActionTargetParentIndexes: [],
+  integrationActionTargetSelectionParentIndex: 0,
+  integrationActionTargetSelectionFieldIndex: null,
+  integrationActionTargetVariants: [],
+  integrationActionTargetNegativeVariants: [],
+  integrationActionTargetAbsentExamples: [],
+  integrationActionSelectedParentIndex: 0,
+  integrationActionMinimumConfidence: 0.8,
+  integrationActionScrollPage: true,
+  integrationActionScope: null,
+  integrationActionAnchors: [],
+  integrationActionAnchorRules: [],
+  integrationActionSelectionKind: 'parent',
+  integrationActionSelectionPending: false,
+  integrationActionDraftIntegrationId: null,
+  integrationActionDraftPageId: null,
+  integrationActionDraftActionId: null,
+  integrationActionBuilderStep: 'define',
+  integrationActionDraftName: '',
+  integrationActionDraftDescription: '',
+  integrationActionBuilderInitialJson: '',
+  integrationActionPreviewRecords: [],
+  integrationActionLiveExampleRecords: [],
+  integrationActionPreviewDiagnostics: null,
+  integrationActionPreviewPending: false,
+  integrationActionEditPageLoading: false,
+  integrationActionResultOpen: false,
+  integrationActionResultName: '',
+  integrationActionResultRecords: [],
+  integrationActionResultActionId: null,
+  integrationActionFetchPendingId: null,
+  integrationActionFetchError: null,
+  integrationRecordSourceDialogOpen: false,
+  integrationRecordSourceIntegrationId: null,
+  integrationRecordSourcePageId: null,
+  integrationRecordSourceStep: 'source',
+  integrationStructuredSourcePageId: null,
+  integrationStructuredSourcePending: false,
+  integrationStructuredSources: [],
+  integrationStructuredSourceError: null,
+  integrationStructuredResultOpen: false,
+  integrationStructuredResultName: '',
+  integrationStructuredResult: null,
+  integrationWebMcpIntegrationId: null,
+  integrationWebMcpPageId: null,
+  integrationWebMcpProfileId: null,
+  integrationWebMcpScanId: null,
+  integrationWebMcpTools: [],
+  integrationWebMcpPending: false,
+  integrationWebMcpError: null,
+  integrationWebMcpReviewTool: null,
+  integrationWebMcpReviewIntegrationId: null,
+  integrationWebMcpReviewPageId: null,
+  integrationWebMcpReviewProfileId: null,
+  integrationWebMcpInvokeCapabilityId: null,
+  integrationWebMcpInvokeForRecordType: false,
+  integrationWebMcpInvokeActionId: null,
+  integrationWebMcpResultOpen: false,
+  integrationWebMcpResultForRecordType: false,
+  integrationWebMcpResult: null,
+  integrationWebMcpResultCapabilityId: null,
+  integrationWebMcpRecordBuilderOpen: false,
+  integrationWebMcpRecordBuilderPath: '',
+  integrationWebMcpConfigureAfterReview: false,
+  integrationCommandBuilderOpen: false,
+  integrationCommandSelectionPending: false,
+  integrationCommandDraftIntegrationId: null,
+  integrationCommandDraftActionId: null,
+  integrationCommandDraftPageId: null,
+  integrationCommandDraftScope: 'record',
+  integrationCommandDraftSteps: [],
+  integrationCommandRunRequest: null,
+  integrationCommandDeleteDialogOpen: false,
+  integrationCommandDeleteIntegrationId: null,
+  integrationCommandDeleteActionId: null,
+  integrationCommandDeletePageId: null,
+  integrationCommandDeleteCommandId: null,
+  integrationRecordDeleteDialogOpen: false,
+  integrationRecordDeleteIntegrationId: null,
+  integrationRecordDeleteActionId: null,
+  selectedIntegrationId: '',
+  selectedIntegrationProfileId: 'default-google',
+  addIntegrationProfileDialogOpen: false,
+  appSettingsDialogMode: 'settings',
   appSettingsDraft: null,
   appSettingsDialogInitialJson: null,
   appSettingsDiscardDialogOpen: false,
+  scriptingReviewDialogOpen: false,
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
@@ -286,19 +612,32 @@ export const state: AppState = {
   debugLogDialogOpen: false,
   debugLogEntries: [],
   recoveryDialogOpen: false,
-  versionHistoryDialogOpen: false,
+  versionHistorySidebarOpen: false,
+  versionHistorySourcePath: null,
+  versionHistorySourceName: null,
   savedDocumentVersions: [],
   selectedSavedVersionId: null,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
   closeDocumentDraftDialogOpen: false,
+  saveConflictDialogOpen: false,
+  saveConflictKind: null,
+  saveConflictSavingDocumentId: null,
+  saveConflictOtherDocumentId: null,
+  saveConflictContinuation: 'save',
   tabStackOpen: false,
   tabStackIndex: 0,
   appCloseDialogOpen: false,
   recoveryBackups: [],
   workspaceClipboard: null,
+  workspaceFileOperationPromptOpen: false,
+  pendingWorkspaceFileOperation: null,
+  encryptedAIAccessPrompt: null,
   renameFilePath: null,
   renameFileCurrentName: null,
+  renameEncryptedFolderWorkspacePath: null,
+  renameEncryptedFolderDirectory: '',
+  renameEncryptedFolderCurrentName: null,
   deleteFilePath: null,
   deleteFileName: null,
   deleteFolderWorkspacePath: null,
@@ -338,45 +677,3 @@ export const state: AppState = {
   appZoom: 1,
   documentZoom: 1,
 };
-
-export function findFileInWorkspace(workspace: Workspace, path: string): WorkspaceFileNode | null {
-  const visit = (nodes: WorkspaceTreeNode[]): WorkspaceFileNode | null => {
-    for (const node of nodes) {
-      if (node.kind === 'file' && node.path === path) {
-        return node;
-      }
-      if (node.kind === 'folder') {
-        const match = visit(node.children);
-        if (match) {
-          return match;
-        }
-      }
-    }
-    return null;
-  };
-  return visit(workspace.files);
-}
-
-export function workspacePathForFileInWorkspaces(workspaces: Workspace[], path: string): string | null {
-  return workspaces.find((workspace) => findFileInWorkspace(workspace, path))?.path ?? null;
-}
-
-export function workspaceFileAccessInWorkspaces(
-  workspaces: Workspace[],
-  path: string,
-): { archived: boolean; locked: boolean; hiddenFromAI: boolean; readOnly: boolean } {
-  for (const workspace of workspaces) {
-    const file = findFileInWorkspace(workspace, path);
-    if (file) {
-      const archived = file.archived === true;
-      const locked = file.locked === true;
-      return {
-        archived,
-        locked,
-        hiddenFromAI: file.hiddenFromAI === true,
-        readOnly: archived || locked,
-      };
-    }
-  }
-  return { archived: false, locked: false, hiddenFromAI: false, readOnly: false };
-}

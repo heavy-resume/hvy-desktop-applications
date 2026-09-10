@@ -1,23 +1,213 @@
-import { archiveDocumentFile, chooseWorkspaceFolder, copyDocumentToWorkspace, deleteDocumentFile, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
+import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
-import { getPhvyCompatibilityErrors, openMountedDocumentMeta, serializeHvy } from './hvy';
-import { state } from './state';
-import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, renameDocumentTabPath, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, moveBackupTracking, discardRecoveryStateForBackup, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, workspaceFilterDocumentCache } from './main';
+import { applyMountedRecoveryState, encryptMountedDocumentWithKey, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, removeMountedDocumentEncryption, serializeHvy } from './hvy';
+import { findFileInWorkspace, state, type PendingWorkspaceFileOperation } from './state';
+import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, updateOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, relocateRecoveryDraftsForDocument, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath } from './main';
 import type { UiHandlers } from './ui';
+import { clearDocumentHistory } from './documentHistory';
+import { deleteDocumentEmbeddingSidecar, removeDocumentEmbeddingAttachments } from './embeddingIndex';
+import { documentEncryptionKeyring, ensureDocumentKeysLoaded, generateStoredDocumentKey } from './documentKeys';
+import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename } from './encryptedFolders';
+
+function pendingWorkspaceFileOperationBusyLabel(operation: PendingWorkspaceFileOperation): string | null {
+  if (operation.kind === 'pasteCopy') return 'Copying file...';
+  if (operation.kind === 'pasteCut' || operation.kind === 'moveToFolder') return 'Moving file...';
+  if (operation.kind === 'convert') return operation.toTemplate ? 'Converting to template...' : 'Converting to document...';
+  return null;
+}
+
+async function reloadWorkspace(path: string, unlockEncryptedFolders: boolean): Promise<void> {
+  await loadWorkspaceEntry(path, { unlockEncryptedFolders });
+  if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
+  await refreshRecents();
+}
+
+async function performWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
+  if (operation.kind === 'copyClipboard' || operation.kind === 'cutClipboard') {
+    const mode = operation.kind === 'copyClipboard' ? 'copy' : 'cut';
+    state.workspaceClipboard = { mode, path: operation.path, name: operation.name };
+    state.status = `${mode === 'copy' ? 'Copied' : 'Cut'} ${operation.name}`;
+    rerender({ preserveMountedDocument: true });
+    try {
+      await writeSystemFileClipboard({ paths: [operation.path], operation: mode });
+    } catch (error) {
+      state.status = `${mode === 'copy' ? 'Copied' : 'Cut'} in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
+      rerender({ preserveMountedDocument: true });
+    }
+    return;
+  }
+  if (operation.kind === 'openTransfer') {
+    openWorkspaceTransfer(operation.mode, operation.name, operation.path, null);
+    return;
+  }
+  if (operation.kind === 'pasteCopy') {
+    await copyOpenWorkspaceFileToWorkspace(operation.path, operation.workspacePath, operation.targetDirectory);
+    return;
+  }
+  if (operation.kind === 'pasteCut') {
+    await moveOpenWorkspaceFileToWorkspace(operation.path, operation.workspacePath, operation.targetDirectory);
+    state.workspaceClipboard = null;
+    return;
+  }
+  if (operation.kind === 'moveToFolder') {
+    await moveOpenWorkspaceFileToWorkspace(operation.path, operation.workspacePath, operation.targetDirectory);
+    return;
+  }
+  await convertOpenWorkspaceFileKind(operation.path, operation.workspacePath, operation.toTemplate);
+}
+
+async function executeWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
+  state.pendingWorkspaceFileOperation = null;
+  state.workspaceFileOperationPromptOpen = false;
+  const busyLabel = pendingWorkspaceFileOperationBusyLabel(operation);
+  if (busyLabel) {
+    await runBusy(busyLabel, () => performWorkspaceFileOperation(operation), { preserveMountedDocument: true });
+    return;
+  }
+  await performWorkspaceFileOperation(operation);
+}
+
+async function requestWorkspaceFileOperation(operation: PendingWorkspaceFileOperation): Promise<void> {
+  preserveCurrentDocumentSession();
+  const activeDirtyDocumentId = state.document?.source.path === operation.path && state.document.dirty && !state.document.readOnly
+    ? state.document.versionId
+    : null;
+  const dirtySession = [...documentSessions.values()].find((session) => session.source.path === operation.path && session.dirty && !session.readOnly);
+  const dirtyDocumentId = activeDirtyDocumentId ?? dirtySession?.versionId ?? null;
+  if (!dirtyDocumentId) {
+    await executeWorkspaceFileOperation(operation);
+    return;
+  }
+  await selectDocumentTab(dirtyDocumentId);
+  if (state.document?.versionId === dirtyDocumentId && !state.document.dirty) {
+    setDocumentDirty(true, { preserveStatus: true });
+  }
+  state.pendingWorkspaceFileOperation = operation;
+  state.workspaceFileOperationPromptOpen = true;
+  state.status = 'Ready';
+  rerender({ preserveMountedDocument: true });
+}
+
+async function resumeWorkspaceFileOperationAfterSave(): Promise<void> {
+  const operation = state.pendingWorkspaceFileOperation;
+  if (!operation || state.saveConflictDialogOpen) return;
+  if (state.document?.source.path !== operation.path || state.document.dirty) {
+    state.workspaceFileOperationPromptOpen = true;
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  await executeWorkspaceFileOperation(operation);
+}
+
+function selectWorkspaceFile(path: string): void {
+  if (state.document?.source.path === path) return;
+  const openSessions = [...documentSessions.values()].filter((session) => session.source.path === path);
+  const openSession = openSessions.find((session) => session.dirty || session.virtual === 'recoveryDraft') ?? openSessions[0];
+  void selectDocumentTab(openSession?.versionId ?? path);
+}
 
 export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDocumentInWorkspace']): Partial<UiHandlers> {
   return {
+  requestDocumentEncryption: (action) => {
+    const document = state.document;
+    if (!document?.mounted || document.readOnly || document.source.extension === '.md' || document.mode === 'hvy') return;
+    const encrypted = document.mounted.document.encryption?.encrypted === true;
+    if ((action === 'encrypt' && encrypted) || (action === 'decrypt' && !encrypted)) return;
+    state.documentEncryptionKeyId = null;
+    state.documentEncryptionKeyLabel = '';
+    if (action === 'encrypt') {
+      state.documentKeyMetadata = [];
+      state.documentKeyDataLoading = true;
+      state.documentEncryptionAction = action;
+      state.documentEncryptionDialogOpen = true;
+      state.status = 'Ready';
+      rerender({ preserveMountedDocument: true });
+      void (async () => {
+        try {
+          state.documentKeyMetadata = await listDocumentKeyMetadata();
+        } catch (error) {
+          state.error = error instanceof Error ? error.message : String(error);
+        } finally {
+          state.documentKeyDataLoading = false;
+          rerender({ preserveMountedDocument: true });
+        }
+      })();
+    } else {
+      state.documentEncryptionAction = action;
+      state.documentEncryptionDialogOpen = true;
+      state.status = 'Ready';
+      rerender({ preserveMountedDocument: true });
+    }
+  },
+  selectDocumentEncryptionKey: (keyId) => {
+    state.documentEncryptionKeyId = keyId || null;
+    rerender({ preserveMountedDocument: true });
+  },
+  setDocumentEncryptionKeyLabel: (label) => {
+    state.documentEncryptionKeyLabel = label;
+  },
+  confirmDocumentEncryption: () => {
+    const action = state.documentEncryptionAction;
+    const encryptionKeyId = state.documentEncryptionKeyId;
+    const encryptionKeyLabel = state.documentEncryptionKeyLabel.trim();
+    state.documentEncryptionDialogOpen = false;
+    state.documentEncryptionAction = null;
+    state.documentEncryptionKeyId = null;
+    if (!action) return;
+    const busyLabel = action === 'encrypt' ? 'Enabling document encryption...' : 'Removing document encryption...';
+    state.status = busyLabel;
+    rerender({ preserveMountedDocument: true });
+    void (async () => {
+      let persistEncryptionChange = false;
+      await runBusy(busyLabel, async () => {
+        const openDocument = state.document;
+        const mounted = openDocument?.mounted;
+        if (!mounted) throw new Error('No mounted document is available.');
+        if (action === 'encrypt') {
+          if (encryptionKeyId) {
+            await ensureDocumentKeysLoaded([encryptionKeyId]);
+            encryptMountedDocumentWithKey(mounted, encryptionKeyId);
+          } else {
+            const generated = encryptionKeyLabel
+              ? await generateStoredDocumentKey(encryptionKeyLabel)
+              : await generateStoredDocumentKey();
+            encryptMountedDocumentWithKey(mounted, generated.keyId);
+          }
+          removeDocumentEmbeddingAttachments(mounted.document);
+          await clearDocumentHistory(openDocument.source.path);
+          await clearRecoveryDraftsForDocument(openDocument.source.path, openDocument.source.name);
+          await deleteDocumentEmbeddingSidecar(openDocument.source.path);
+          openDocument.hiddenFromAI = true;
+          if (openDocument.mode === 'ai') openDocument.mode = 'viewer';
+          state.status = 'Saving encrypted document...';
+        } else {
+          removeMountedDocumentEncryption(mounted);
+          openDocument.hiddenFromAI = workspaceFileAiAccess(openDocument.source.path).hiddenFromAI;
+          state.status = 'Saving decrypted document...';
+        }
+        persistEncryptionChange = true;
+        setDocumentDirty(true, { preserveStatus: true });
+        rerender({ preserveMountedDocument: true });
+      }, { preserveMountedDocument: true });
+      if (persistEncryptionChange) await saveCurrentDocument();
+    })();
+  },
+  cancelDocumentEncryption: () => {
+    state.documentEncryptionDialogOpen = false;
+    state.documentEncryptionAction = null;
+    state.documentEncryptionKeyId = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   restoreBackup: (id) => void runBusy('Restoring unsaved edits...', async () => {
     const file = await measureDebugAsync('load', 'recovery:restoreBackup', { backupId: id }, () => restoreDocumentBackup(id));
     if (file.path) {
-      documentSessions.delete(file.path);
-      workspaceFilterDocumentCache.delete(file.path);
       deleteBackupTracking(backupDocumentKey(file.path, file.name));
     }
     state.recoveryDialogOpen = false;
     state.recoveryBackups = [];
-    await openDocument(file, { recovered: true, deferMount: true, recoveryBackupId: id });
+    await openDocument(file, { versionId: recoveryDocumentId(id), recovered: true, deferMount: true, recoveryBackupId: id });
   }),
   discardBackup: (id) => void runBusy('Discarding recovery draft...', async () => {
     const backup = state.recoveryBackups.find((candidate) => candidate.id === id);
@@ -37,7 +227,10 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   openVersionHistory: () => void openVersionHistory(),
   selectSavedVersion: (id) => void openSavedVersionPreview(id),
   closeVersionHistory: () => {
-    state.versionHistoryDialogOpen = false;
+    state.versionHistorySidebarOpen = false;
+    state.versionHistorySourcePath = null;
+    state.versionHistorySourceName = null;
+    state.savedDocumentVersions = [];
     state.selectedSavedVersionId = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -46,6 +239,47 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.closeDocumentDialogOpen = false;
     state.closeDocumentDraftDialogOpen = false;
     state.closeDocumentTargetPath = null;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  confirmSaveConflict: () => void confirmSaveConflict().then(() => resumeWorkspaceFileOperationAfterSave()),
+  cancelSaveConflict: () => {
+    cancelSaveConflict();
+    if (state.pendingWorkspaceFileOperation) {
+      state.workspaceFileOperationPromptOpen = true;
+      rerender({ preserveMountedDocument: true });
+    }
+  },
+  saveBeforeWorkspaceFileOperation: () => {
+    state.workspaceFileOperationPromptOpen = false;
+    rerender({ preserveMountedDocument: true });
+    void saveCurrentDocument().then(() => resumeWorkspaceFileOperationAfterSave());
+  },
+  discardBeforeWorkspaceFileOperation: () => {
+    const operation = state.pendingWorkspaceFileOperation;
+    if (!operation) return;
+    state.workspaceFileOperationPromptOpen = false;
+    state.pendingWorkspaceFileOperation = null;
+    void runBusy('Discarding unsaved edits...', async () => {
+      await closeCurrentDocument({ discard: true });
+      for (const session of [...documentSessions.values()]) {
+        if (session.source.path !== operation.path) continue;
+        documentSessions.delete(session.versionId);
+        removeDocumentTabPath(session.versionId);
+        deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
+      }
+      const access = workspaceFileAiAccess(operation.path);
+      await openDocument(await readDocumentFile(operation.path), {
+        deferMount: true,
+        readOnly: access.readOnly,
+        hiddenFromAI: access.hiddenFromAI,
+      });
+      await performWorkspaceFileOperation(operation);
+    });
+  },
+  cancelWorkspaceFileOperation: () => {
+    state.workspaceFileOperationPromptOpen = false;
+    state.pendingWorkspaceFileOperation = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -73,7 +307,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     const candidate = await chooseWorkspaceFolder();
     if (!candidate) return;
     const workspace = candidate.hasManifest
-      ? await loadWorkspace(candidate.path)
+      ? await loadWorkspace(candidate.path, { recordRecent: true })
       : requestWorkspaceInitialization(candidate.path, candidate.defaultName);
     if (!workspace) {
       state.status = 'Ready';
@@ -92,7 +326,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     await refreshRecents();
   }),
   openRecentWorkspace: (path) => void (async () => {
-    await loadWorkspaceEntry(path);
+    await loadWorkspaceEntry(path, { recordRecent: true });
     if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
     await refreshRecents();
     await refreshArchivedWorkspaces();
@@ -102,16 +336,15 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     await openDocument(await readDocumentFile(path), { deferMount: true });
     await refreshRecents();
   }),
-  selectFile: (path) => void runBusy('Opening file...', async () => {
-    const access = workspaceFileAiAccess(path);
-    await openDocument(await readDocumentFile(path), { deferMount: true, readOnly: access.readOnly, hiddenFromAI: access.hiddenFromAI });
-    await refreshRecents();
-  }),
+  selectFile: (path) => selectWorkspaceFile(path),
   refreshWorkspace: (path) => void (async () => {
-    await loadWorkspaceEntry(path);
-    if (state.workspaces.some((workspace) => workspace.path === path)) state.selectedWorkspacePath = path;
-    await refreshRecents();
+    const workspace = state.workspaces.find((candidate) => candidate.path === path);
+    const hasDeferredEncryptedFolders = workspace?.files.some(function hasDeferred(nodes): boolean {
+      return nodes.kind === 'folder' && (nodes.encryptionState === 'locked' || nodes.children.some(hasDeferred));
+    }) === true;
+    await reloadWorkspace(path, !hasDeferredEncryptedFolders);
   })(),
+  unlockEncryptedFolders: (path) => void reloadWorkspace(path, true),
   retryWorkspace: (path) => void retryWorkspaceEntry(path),
   showFileInFolder: (path) => void runBusy('Showing file...', async () => {
     await revealDocumentFile(path);
@@ -125,12 +358,14 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   },
   archiveFile: (path, currentName) => void runBusy('Archiving file...', async () => {
     const workspace = await archiveDocumentFile(path);
+    await clearHomepageDocumentPath(path);
+    await clearRecoveryDraftsForDocument(path, currentName);
     upsertWorkspace(await loadWorkspace(workspace.path));
     if (state.selectedFilePath === path) state.selectedFilePath = null;
     syncOpenDocumentWorkspaceAccess(path);
     await refreshSavedTemplates(workspace.path);
     state.status = `Archived ${currentName}`;
-  }),
+  }, { preserveMountedDocument: true }),
   restoreFile: (path, currentName) => void runBusy('Restoring file...', async () => {
     const workspace = await restoreDocumentFile(path);
     upsertWorkspace(await loadWorkspace(workspace.path));
@@ -142,7 +377,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   setFileLocked: (path, currentName, locked) => void runBusy(`${locked ? 'Locking' : 'Unlocking'} file...`, async () => {
     const workspace = await updateWorkspaceFileAiAccess(path, { locked });
     ensureWorkspaceFileAiAccess(workspace, path, { locked });
-    upsertWorkspace(workspace);
+    upsertWorkspace(await loadWorkspace(workspace.path));
     syncOpenDocumentAiAccess(path, { locked });
     state.status = `${locked ? 'Locked' : 'Unlocked'} ${currentName}`;
   }),
@@ -168,17 +403,39 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.deleteFilePath = null;
     state.deleteFileName = null;
     void runBusy('Deleting file...', async () => {
-      const workspace = await deleteDocumentFile(path);
+      const workspacePath = workspacePathForFile(path);
+      const currentWorkspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const workspaceFile = currentWorkspace ? findFileInWorkspace(currentWorkspace, path) : null;
+      const workspace = workspacePath && currentWorkspace && workspaceFile?.encryptedFolderKeyId
+        ? await (async () => {
+          const parts = workspaceFile.relativePath.replaceAll('\\', '/').split('/');
+          const physicalName = parts.pop() ?? '';
+          const parentDirectory = parts.join('/');
+          const entryId = physicalName.slice(0, Math.max(0, physicalName.length - workspaceFile.extension.length));
+          const folder = findEncryptedFolder(currentWorkspace, parentDirectory);
+          if (!folder || (workspaceFile.extension !== '.hvy' && workspaceFile.extension !== '.thvy' && workspaceFile.extension !== '.phvy')) {
+            throw new Error('Encrypted parent folder was not found.');
+          }
+          const mutation = await prepareEncryptedFolderEntryRemoval(folder, entryId, documentEncryptionKeyring());
+          return deleteEncryptedFolderDocument({
+            workspacePath,
+            folderDirectory: parentDirectory,
+            documentId: entryId,
+            extension: workspaceFile.extension,
+            previousManifestBytes: mutation.previousManifestBytes,
+            manifestBytes: mutation.manifestBytes,
+          });
+        })()
+        : await deleteDocumentFile(path);
       if (workspace) {
         upsertWorkspace(await loadWorkspace(workspace.path));
         await refreshSavedTemplates(workspace.path);
       }
-      documentSessions.delete(path);
+      removeOpenDocumentFile(path);
       workspaceFilterDocumentCache.delete(path);
-      removeDocumentTabPath(path);
       deleteBackupTracking(backupDocumentKey(path, name));
       if (state.selectedFilePath === path) state.selectedFilePath = null;
-      if (state.document?.path === path) {
+      if (state.document?.source.path === path) {
         state.document = null;
         setPendingMountState(null, null);
       }
@@ -192,55 +449,36 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  copyWorkspaceFile: (path, currentName) => {
-    state.workspaceClipboard = { mode: 'copy', path, name: currentName };
-    state.status = `Copied ${currentName}`;
-    rerender({ preserveMountedDocument: true });
-    void writeSystemFileClipboard({ paths: [path], operation: 'copy' }).catch((error) => {
-      state.status = `Copied in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
-      rerender({ preserveMountedDocument: true });
-    });
-  },
-  cutWorkspaceFile: (path, currentName) => {
-    state.workspaceClipboard = { mode: 'cut', path, name: currentName };
-    state.status = `Cut ${currentName}`;
-    rerender({ preserveMountedDocument: true });
-    void writeSystemFileClipboard({ paths: [path], operation: 'cut' }).catch((error) => {
-      state.status = `Cut in HVY, but could not copy to Finder: ${error instanceof Error ? error.message : String(error)}`;
-      rerender({ preserveMountedDocument: true });
-    });
-  },
+  copyWorkspaceFile: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'copyClipboard', path, name: currentName }),
+  cutWorkspaceFile: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'cutClipboard', path, name: currentName }),
   pasteWorkspaceClipboard: (workspacePath, targetDirectory = '') => {
     const clipboard = state.workspaceClipboard;
-    void runBusy(`${clipboard?.mode === 'cut' ? 'Moving' : 'Copying'} file...`, async () => {
-      if (!clipboard) {
+    if (!clipboard) {
+      void runBusy('Copying file...', async () => {
         const result = await pasteSystemFilesToWorkspace(workspacePath, targetDirectory);
         await finishAddingFilesToWorkspace(result, `Pasted ${result.copiedPaths.length} file${result.copiedPaths.length === 1 ? '' : 's'}`);
-        return;
-      }
-      if (clipboard.mode === 'copy') {
-        const file = await copyDocumentToWorkspace({ path: clipboard.path, workspacePath, targetDirectory });
-        upsertWorkspace(await loadWorkspace(workspacePath));
-        state.selectedWorkspacePath = workspacePath;
-        state.status = `Pasted ${file.name}`;
-        await refreshRecents();
-        return;
-      }
-      await moveOpenWorkspaceFileToWorkspace(clipboard.path, workspacePath, targetDirectory);
-      state.workspaceClipboard = null;
-    });
+      });
+      return;
+    }
+    const kind = clipboard.mode === 'copy' ? 'pasteCopy' : 'pasteCut';
+    void requestWorkspaceFileOperation({ kind, path: clipboard.path, name: clipboard.name, workspacePath, targetDirectory });
   },
-  copyFileToWorkspace: (path, currentName) => {
-    openWorkspaceTransfer('copyFile', currentName, path, null);
-  },
-  moveFileToWorkspace: (path, currentName) => {
-    openWorkspaceTransfer('moveFile', currentName, path, null);
-  },
-  moveWorkspaceFileToFolder: (path, workspacePath, targetDirectory = '') => {
-    void runBusy('Moving file...', async () => {
-      await moveOpenWorkspaceFileToWorkspace(path, workspacePath, targetDirectory);
-    });
-  },
+  copyFileToWorkspace: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'openTransfer', mode: 'copyFile', path, name: currentName }),
+  moveFileToWorkspace: (path, currentName) => void requestWorkspaceFileOperation({ kind: 'openTransfer', mode: 'moveFile', path, name: currentName }),
+  moveWorkspaceFileToFolder: (path, workspacePath, targetDirectory = '') => void requestWorkspaceFileOperation({
+    kind: 'moveToFolder',
+    path,
+    name: fileNameFromPath(path),
+    workspacePath,
+    targetDirectory,
+  }),
+  convertWorkspaceFileKind: (path, workspacePath, toTemplate) => void requestWorkspaceFileOperation({
+    kind: 'convert',
+    path,
+    name: fileNameFromPath(path),
+    workspacePath,
+    toTemplate,
+  }),
   submitRenameFile: (name) => {
     const path = state.renameFilePath;
     const currentName = state.renameFileCurrentName;
@@ -261,26 +499,52 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.renameFilePath = null;
     state.renameFileCurrentName = null;
     void runBusy('Renaming file...', async () => {
+      preserveCurrentDocumentSession();
       const workspacePath = workspacePathForFile(path);
-      const currentDocument = state.document?.path === path ? state.document : null;
+      const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const workspaceFile = workspace ? findFileInWorkspace(workspace, path) : null;
+      const currentDocument = state.document?.source.path === path && state.document.virtual !== 'versionHistory'
+        ? state.document
+        : null;
       const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
-      const oldBackupKey = currentDocument ? backupDocumentKey(currentDocument.path, currentDocument.name) : null;
+      if (workspacePath && workspace && workspaceFile?.encryptedFolderKeyId) {
+        const relativePath = workspaceFile.relativePath ?? '';
+        const parts = relativePath.replaceAll('\\', '/').split('/');
+        const physicalName = parts.pop() ?? '';
+        const parentDirectory = parts.join('/');
+        const entryId = physicalName.slice(0, Math.max(0, physicalName.length - workspaceFile.extension.length));
+        const encryptedFolder = findEncryptedFolder(workspace, parentDirectory);
+        if (!encryptedFolder) throw new Error('Encrypted parent folder was not found.');
+        const logicalName = `${trimmed}${workspaceFile.extension}`;
+        const mutation = await prepareEncryptedFolderEntryRename(encryptedFolder, entryId, logicalName, documentEncryptionKeyring());
+        const updatedWorkspace = await updateEncryptedFolderManifest({
+          workspacePath,
+          folderDirectory: parentDirectory,
+          previousManifestBytes: mutation.previousManifestBytes,
+          manifestBytes: mutation.manifestBytes,
+        });
+        const renamedFile = { path, name: logicalName, extension: workspaceFile.extension };
+        updateOpenDocumentFile(path, renamedFile);
+        await relocateRecoveryDraftsForDocument(path, currentName, renamedFile);
+        upsertWorkspace(updatedWorkspace);
+        state.status = `Renamed to ${logicalName}`;
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
       const file = await renameDocumentFile({ path, name: trimmed });
+      await updateHomepageDocumentPath(path, file.path);
       const renamedOpenTemplateMetadata = Boolean(
         currentDocument
         && mountedDocument
         && isWorkspaceTemplatePath(state, path)
         && syncRenamedTemplateMetadata(mountedDocument, currentStem, documentTitle(file.name))
       );
-      documentSessions.delete(path);
-      renameDocumentTabPath(path, file.path);
+      updateOpenDocumentFile(path, file);
+      await relocateRecoveryDraftsForDocument(path, currentName, file);
       if (state.selectedFilePath === path) {
         state.selectedFilePath = file.path;
       }
       if (currentDocument) {
-        currentDocument.path = file.path;
-        currentDocument.name = file.name;
-        currentDocument.extension = file.extension;
         if (mountedDocument) {
           updateCurrentDocumentSession(mountedDocument);
         }
@@ -291,18 +555,16 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
             updateModeMetaChrome();
           }
         }
-        if (oldBackupKey) {
-          moveBackupTracking(oldBackupKey, backupDocumentKey(file.path, file.name));
-        }
       }
       if (workspacePath) {
         upsertWorkspace(await loadWorkspace(workspacePath));
+        await refreshSavedTemplates(workspacePath);
       } else {
         await refreshOpenWorkspaceForFile(file.path);
       }
       await refreshRecents();
       state.status = `Renamed to ${file.name}`;
-    });
+    }, { preserveMountedDocument: true });
   },
   cancelRenameFile: () => {
     state.renameFilePath = null;
@@ -312,7 +574,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   },
   saveCurrentToWorkspace: () => {
     if (!currentDocumentCanSaveToWorkspace()) return;
-    openWorkspaceTransfer('saveCurrent', state.document!.name, null, currentDocumentWorkspacePath(state));
+    openWorkspaceTransfer('saveCurrent', state.document!.source.name, null, currentDocumentWorkspacePath(state));
   },
   submitWorkspaceTransfer: (workspacePath, name, targetDirectory = '') => {
     if (!workspacePath || !state.workspaceTransfer) return;
@@ -331,14 +593,11 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       }
       if (!transfer.sourcePath) return;
       if (transfer.mode === 'copyFile') {
-        const file = await copyDocumentToWorkspace({ path: transfer.sourcePath, workspacePath, targetDirectory });
-        upsertWorkspace(await loadWorkspace(workspacePath));
-        state.status = `Copied to ${file.name}`;
-        await refreshRecents();
+        await copyOpenWorkspaceFileToWorkspace(transfer.sourcePath, workspacePath, targetDirectory);
         return;
       }
       await moveOpenWorkspaceFileToWorkspace(transfer.sourcePath, workspacePath, targetDirectory);
-    });
+    }, { preserveMountedDocument: true });
   },
   cancelWorkspaceTransfer: () => {
     state.workspaceTransfer = null;
@@ -354,23 +613,45 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       return;
     }
     if (state.document.hiddenFromAI && mode === 'ai') {
+      const workspacePath = workspacePathForFile(state.document.source.path);
+      const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
+      const workspaceFile = workspace ? findFileInWorkspace(workspace, state.document.source.path) : null;
+      if (workspacePath && workspaceFile?.encryptedFolderKeyId) {
+        state.encryptedAIAccessPrompt = {
+          kind: 'file',
+          workspacePath,
+          targetDirectory: '',
+          path: workspaceFile.path,
+          name: workspaceFile.name,
+          openAIWhenEnabled: true,
+        };
+        state.status = 'AI access requires confirmation';
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
       state.status = 'This document is hidden from AI';
       rerender();
       void mountCurrentDocument();
       return;
     }
     const document = state.document.mounted?.document;
+    const recoveryState = state.document.mounted ? getMountedRecoveryState(state.document.mounted) : null;
+    const documentId = state.document.versionId;
     const scrollRatio = captureMountScrollRatio(mountRoot);
     state.document.mode = mode;
     state.document.metaOpen = false;
-    writeDocumentModePreference(state.document.path, mode);
+    writeDocumentModePreference(state.document.source.path, mode);
     if (document) {
       updateCurrentDocumentSession(document);
     } else {
       writeHotReloadSessionSnapshot();
     }
     rerender();
-    void mountCurrentDocument(document).then(() => restoreMountScrollRatio(mountRoot, scrollRatio));
+    void mountCurrentDocument(document).then(() => {
+      if (state.document?.versionId !== documentId || state.document.mode !== mode || !state.document.mounted) return;
+      applyMountedRecoveryState(state.document.mounted, recoveryState);
+      restoreMountScrollRatio(mountRoot, scrollRatio);
+    });
   },
   openDocumentMeta: () => {
     if (!state.document) return;
@@ -421,7 +702,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     openSaveAsDialog();
   },
   setSaveAsKind: (kind) => {
-    if (kind === 'template' && state.document?.extension === '.md') return;
+    if (kind === 'template' && state.document?.source.extension === '.md') return;
     state.saveAsKind = kind;
     state.error = null;
     rerender({ preserveMountedDocument: true });
@@ -453,12 +734,12 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   },
   saveAndCloseDocument: () => void saveAndCloseDocument(),
   openSaveTemplate: () => void (async () => {
-    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
     state.saveAsDialogOpen = true;
     state.saveAsKind = 'template';
-    state.saveTemplateScope = workspacePathForFile(state.document.path) ? 'workspace' : 'app';
+    state.saveTemplateScope = workspacePathForFile(state.document.source.path) ? 'workspace' : 'app';
     state.error = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -486,20 +767,21 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   saveBeforeExportPdf: () => void saveBeforeExportPdf(),
   cancelExportPdfSavePrompt: () => {
     state.exportPdfSavePromptOpen = false;
+    state.exportPdfPlaintextConfirmed = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
   setSaveTemplateScope: (scope) => {
-    if (scope === 'workspace' && !workspacePathForFile(state.document?.path ?? '')) return;
+    if (scope === 'workspace' && !workspacePathForFile(state.document?.source.path ?? '')) return;
     state.saveTemplateScope = scope;
     state.error = null;
     rerender({ preserveMountedDocument: true });
   },
   saveAsTemplate: (name, scope, extension: TemplateExtension) => void runBusy('Saving template...', async () => {
-    if (!state.document || state.document.readOnly || state.document.extension === '.md') return;
+    if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
-    const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.path) : null;
+    const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.source.path) : null;
     if (scope === 'workspace' && !workspacePath) {
       throw new Error('Workspace template requires a document in an open workspace.');
     }

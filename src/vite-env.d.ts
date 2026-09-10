@@ -12,9 +12,16 @@ declare module 'virtual:hvy-built-in-plugins' {
     form?: HvyPlugin;
     progressBar?: HvyPlugin;
     scripting?: HvyPlugin;
+    canvas?: HvyPlugin;
+    powerScripting?: HvyPlugin;
     graph?: HvyPlugin;
+    diagram?: HvyPlugin;
     qrCode?: HvyPlugin;
     video?: HvyPlugin;
+    editableText?: HvyPlugin;
+    webRecords?: HvyPlugin;
+    webCommand?: HvyPlugin;
+    webMcpTool?: HvyPlugin;
   }>;
   export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }
@@ -22,6 +29,11 @@ declare module 'virtual:hvy-built-in-plugins' {
 declare module 'virtual:hvy-brython-minimal-vfs' {
   const source: string;
   export default source;
+}
+
+declare module 'virtual:hvy-brython-plugin-vfs' {
+  const pythonLibraryVfsByName: Record<string, Record<string, unknown>>;
+  export default pythonLibraryVfsByName;
 }
 
 declare module 'pdfmake/build/pdfmake.js';

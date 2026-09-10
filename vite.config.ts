@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { defineConfig, type Plugin } from 'vite';
+import type { Plugin } from 'vite';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { createBrythonMinimalVfsPlugin } from 'heavy-file-format-ref-impl/brython-minimal-vfs-plugin';
 
 const require = createRequire(import.meta.url);
@@ -8,13 +9,14 @@ const packageJson = require('./package.json') as { version: string };
 const BUILT_IN_PLUGINS_ID = 'virtual:hvy-built-in-plugins';
 const BUILT_IN_PLUGINS_RESOLVED_ID = `\0${BUILT_IN_PLUGINS_ID}`;
 const HVY_REFERENCE_ROOT = resolve('../heavy-file-format');
+const HVY_APP_ROOT = resolve('.');
 
 const builtInDefinitions = [
   {
     id: 'hvy.db-table',
     key: 'dbTable',
     exportName: 'dbTablePlugin',
-    modulePath: 'src/plugins/db-table-plugin.ts',
+    modulePath: 'src/plugins/db-table/db-table-component.ts',
   },
   {
     id: 'hvy.form',
@@ -35,10 +37,28 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/scripting/scripting.ts',
   },
   {
+    id: 'hvy.canvas',
+    key: 'canvas',
+    exportName: 'canvasPlugin',
+    modulePath: 'src/plugins/canvas/canvas.ts',
+  },
+  {
+    id: 'hvy.power-scripting',
+    key: 'powerScripting',
+    exportName: 'powerScriptingPlugin',
+    modulePath: 'src/plugins/power-scripting/power-scripting.ts',
+  },
+  {
     id: 'hvy.graph',
     key: 'graph',
     exportName: 'graphPlugin',
     modulePath: 'src/plugins/graph.ts',
+  },
+  {
+    id: 'hvy.diagram',
+    key: 'diagram',
+    exportName: 'diagramPlugin',
+    modulePath: 'src/plugins/diagram.ts',
   },
   {
     id: 'hvy.qr-code',
@@ -52,11 +72,38 @@ const builtInDefinitions = [
     exportName: 'videoPlugin',
     modulePath: 'src/plugins/video/video.ts',
   },
+  {
+    id: 'hvy.editable-text',
+    key: 'editableText',
+    exportName: 'editableTextPlugin',
+    modulePath: 'src/plugins/editable-text/editable-text.ts',
+  },
+  {
+    id: 'hvy.web-records',
+    key: 'webRecords',
+    exportName: 'webRecordsPlugin',
+    modulePath: 'src/plugins/webCapabilities.ts',
+    root: 'app',
+  },
+  {
+    id: 'hvy.web-command',
+    key: 'webCommand',
+    exportName: 'webCommandPlugin',
+    modulePath: 'src/plugins/webCapabilities.ts',
+    root: 'app',
+  },
+  {
+    id: 'hvy.webmcp-tool',
+    key: 'webMcpTool',
+    exportName: 'webMcpToolPlugin',
+    modulePath: 'src/plugins/webMcpTool.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
   const imports = builtInDefinitions.map((definition, index) => {
-    const modulePath = `/@fs/${resolve(HVY_REFERENCE_ROOT, definition.modulePath)}`;
+    const modulePath = `/@fs/${resolve('root' in definition && definition.root === 'app' ? HVY_APP_ROOT : HVY_REFERENCE_ROOT, definition.modulePath)}`;
     return `import { ${definition.exportName} as plugin${index} } from ${JSON.stringify(modulePath)};`;
   });
 
@@ -91,7 +138,18 @@ export default defineConfig({
   },
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   optimizeDeps: {
-    entries: ['index.html'],
+    entries: ['index.html', 'plugin-builder.html'],
+  },
+  test: {
+    setupFiles: ['./src/test/vitest.setup.ts'],
+    exclude: [
+      ...configDefaults.exclude,
+      '**/.electron-dev/**',
+      '**/dist-electron/**',
+      '**/src-tauri/target/**',
+      '**/*.browser.test.ts',
+      'src/integration-inspector.test.ts',
+    ],
   },
   resolve: {
     alias: {
@@ -102,11 +160,25 @@ export default defineConfig({
   },
   build: {
     target: ['safari13'],
+    rollupOptions: {
+      input: {
+        main: resolve('index.html'),
+        pluginBuilder: resolve('plugin-builder.html'),
+      },
+    },
   },
   server: {
     host: '127.0.0.1',
     port: 1420,
     strictPort: true,
+    watch: {
+      ignored: [
+        '**/.electron-dev/**',
+        '**/dist-electron/**',
+        '**/dist/**',
+        '**/src-tauri/target/**',
+      ],
+    },
     fs: {
       allow: ['..'],
     },

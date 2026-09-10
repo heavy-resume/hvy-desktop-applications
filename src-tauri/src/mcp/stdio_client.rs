@@ -67,7 +67,21 @@ fn handle_mcp_stdio_message<W: Write>(
         }
     };
     let is_tool_call = mcp_request_method(&request) == Some("tools/call");
-    let response = if is_tool_call {
+    let is_webmcp_call = is_tool_call && request
+        .get("params")
+        .and_then(|params| params.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|name| name == "webmcp_list_tools" || name == "webmcp_call_tool");
+    let response = if is_webmcp_call {
+        let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+        let broker_path = workspace_config_path.with_file_name(WEBMCP_BROKER_CONNECTION);
+        match webmcp_tool_call(&broker_path, &params, &workspace_config.integration_access) {
+            Some(Ok(result)) => json_rpc_result(id, result),
+            Some(Err(error)) => json_rpc_error(Some(id), -32000, &error.to_string()),
+            None => json_rpc_error(Some(id), -32602, "Unknown WebMCP tool."),
+        }
+    } else if is_tool_call {
         let workspaces = load_mcp_stdio_workspaces(workspace_paths)?;
         handle_mcp_tool_call_from_with_access_and_config(
             &workspaces,
@@ -84,7 +98,13 @@ fn handle_mcp_stdio_message<W: Write>(
             json_rpc_error(Some(id), -32000, &error.to_string())
         })
     } else {
-        handle_mcp_json_rpc_for_workspaces(&[], request)
+        handle_mcp_json_rpc_for_workspaces_with_policy(
+            &[],
+            request,
+            &workspace_config.write_access,
+            &workspace_config.integration_access,
+            Some(&workspace_config_path.with_file_name(WEBMCP_BROKER_CONNECTION)),
+        )
     };
     if !response.is_null() {
         write_mcp_stdio_message(output, &response, message.framing)?;
@@ -157,6 +177,7 @@ where
     Ok(McpWorkspaceConfig {
         workspaces,
         write_access: workspace_config.write_access,
+        integration_access: workspace_config.integration_access,
     })
 }
 
@@ -165,6 +186,7 @@ pub(crate) fn read_mcp_workspace_config_paths(paths: &[PathBuf]) -> AppResult<Mc
     for path in paths {
         let config = read_mcp_workspace_config(path)?;
         merged.write_access = config.write_access;
+        merged.integration_access = config.integration_access;
         merged.workspaces.extend(config.workspaces);
     }
     Ok(merged)
@@ -176,6 +198,7 @@ pub(crate) fn read_mcp_workspace_config(path: &Path) -> AppResult<McpWorkspaceCo
     }
     let config: McpWorkspaceConfig = serde_json::from_slice(&fs::read(path)?)?;
     let write_access = normalize_mcp_write_access(&config.write_access);
+    let integration_access = normalize_mcp_integration_access(&config.integration_access);
     let config_directory = path.parent().unwrap_or_else(|| Path::new("."));
     let workspaces = config
         .workspaces
@@ -193,6 +216,7 @@ pub(crate) fn read_mcp_workspace_config(path: &Path) -> AppResult<McpWorkspaceCo
     Ok(McpWorkspaceConfig {
         workspaces,
         write_access,
+        integration_access,
     })
 }
 
@@ -369,6 +393,7 @@ fn write_mcp_stdio_workspace_config(app: &AppHandle, config: &McpWorkspaceConfig
 fn write_mcp_stdio_settings(app: &AppHandle, settings: &McpSettings) -> AppResult<()> {
     let mut config = read_mcp_stdio_workspace_config(app).unwrap_or_else(|_| McpWorkspaceConfig::default());
     config.write_access = settings.write_access.clone();
+    config.integration_access = settings.integration_access.clone();
     write_mcp_stdio_workspace_config(app, &config)
 }
 

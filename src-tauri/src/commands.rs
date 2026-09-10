@@ -3,6 +3,39 @@ fn load_recent_state(app: AppHandle) -> AppResult<RecentState> {
     read_recent_state(&recent_state_path(&app)?)
 }
 
+#[cfg(target_os = "macos")]
+fn raise_integration_window(window: &tauri::Window) -> AppResult<()> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSWindow};
+
+    if window.outer_position().map(|position| position.x < -5000).unwrap_or(false) {
+        window.center().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    window.show().map_err(|error| AppError::Message(error.to_string()))?;
+    let target = window.clone();
+    window.run_on_main_thread(move || {
+        let mtm = MainThreadMarker::new().expect("window activation must run on the macOS main thread");
+        let application = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        application.activateIgnoringOtherApps(true);
+        let native_window = unsafe { &*target.ns_window().expect("native window is available").cast::<NSWindow>() };
+        native_window.makeKeyAndOrderFront(None);
+        native_window.orderFrontRegardless();
+        target.set_focus().expect("raised window accepts focus");
+    }).map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_integration_window(window: &tauri::Window) -> AppResult<()> {
+    if window.outer_position().map(|position| position.x < -5000).unwrap_or(false) {
+        window.center().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    window.show().map_err(|error| AppError::Message(error.to_string()))?;
+    window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn save_workspace_order(app: AppHandle, workspaces: Vec<String>) -> AppResult<RecentState> {
     let recent_path = recent_state_path(&app)?;
@@ -60,20 +93,2004 @@ fn save_app_settings(app: AppHandle, settings: AppSettings) -> AppResult<AppSett
     Ok(settings)
 }
 
-#[tauri::command]
-fn load_default_guide(app: AppHandle) -> AppResult<DocumentFile> {
-    let resource_path = app
-        .path()
-        .resolve("resources/hvy-galaxy.hvy", tauri::path::BaseDirectory::Resource)
-        .map_err(|error| AppError::Message(error.to_string()))?;
-    read_document_at(&resource_path)
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledPluginPackageFile {
+    name: String,
+    path: String,
+    bytes: Vec<u8>,
 }
 
 #[tauri::command]
-fn load_hvy_guide(app: AppHandle) -> AppResult<DocumentFile> {
+fn load_installed_plugin_packages(app: AppHandle) -> AppResult<Vec<InstalledPluginPackageFile>> {
+    let directory = app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("plugins");
+    fs::create_dir_all(&directory)?;
+    let mut entries = fs::read_dir(&directory)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().map(|kind| kind.is_file()).unwrap_or(false))
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".hvy.plugin"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    entries.into_iter().map(|entry| {
+        let path = entry.path();
+        Ok(InstalledPluginPackageFile {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            path: path_to_string(&path),
+            bytes: fs::read(path)?,
+        })
+    }).collect()
+}
+
+#[tauri::command]
+fn install_plugin_package(app: AppHandle, name: String, bytes: Vec<u8>) -> AppResult<()> {
+    let file_name = Path::new(&name)
+        .file_name()
+        .ok_or_else(|| AppError::Message("Choose a .hvy.plugin package.".into()))?;
+    if !name.ends_with(".hvy.plugin") || file_name.to_string_lossy() != name {
+        return Err(AppError::Message("Choose a .hvy.plugin package.".into()));
+    }
+    let directory = app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join("plugins");
+    fs::create_dir_all(&directory)?;
+    fs::write(directory.join(file_name), bytes)?;
+    Ok(())
+}
+
+const PLUGIN_BUILDER_WINDOW_LABEL: &str = "plugin-builder";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectRecord {
+    directory_name: String,
+    path: String,
+    manifest: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectSourceFile {
+    path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePluginProjectRequest {
+    workspace_path: String,
+    directory_name: String,
+    files: Vec<PluginProjectSourceFile>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectFile {
+    path: String,
+    content: Option<String>,
+    bytes: Option<Vec<u8>>,
+    modified_at: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WritePluginProjectFileRequest {
+    workspace_path: String,
+    directory_name: String,
+    path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WritePluginProjectBuildRequest {
+    workspace_path: String,
+    directory_name: String,
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginProjectBuildResult {
+    path: String,
+    name: String,
+}
+
+#[tauri::command]
+fn open_plugin_builder_window(
+    app: AppHandle,
+    workspace_paths: Vec<String>,
+    selected_workspace_path: Option<String>,
+) -> AppResult<()> {
+    if let Some(window) = app.get_webview_window(PLUGIN_BUILDER_WINDOW_LABEL) {
+        return raise_integration_window(&window.as_ref().window());
+    }
+    let mut url = "plugin-builder.html".to_string();
+    if !workspace_paths.is_empty() || selected_workspace_path.is_some() {
+        let mut query_url = tauri::Url::parse("http://plugin-builder.local/")
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        {
+            let mut query = query_url.query_pairs_mut();
+            for path in workspace_paths.iter().map(String::as_str).map(str::trim).filter(|path| !path.is_empty()) {
+                query.append_pair("workspace", path);
+            }
+            if let Some(path) = selected_workspace_path.as_deref().map(str::trim).filter(|path| !path.is_empty()) {
+                query.append_pair("selectedWorkspace", path);
+            }
+        }
+        if let Some(query) = query_url.query() {
+            url.push('?');
+            url.push_str(query);
+        }
+    }
+    let window = tauri::WebviewWindowBuilder::new(
+        &app,
+        PLUGIN_BUILDER_WINDOW_LABEL,
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title("Plugin Builder — HVY Galaxy")
+    .inner_size(1180.0, 780.0)
+    .min_inner_size(820.0, 560.0)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    let menu_app = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Ok(menu) = build_menu(&menu_app) {
+                let _ = menu_app.set_menu(menu);
+            }
+        }
+    });
+    let menu = build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?;
+    app.set_menu(menu).map_err(|error| AppError::Message(error.to_string()))?;
+    raise_integration_window(&window.as_ref().window())
+}
+
+fn plugin_projects_directory(workspace_path: &Path) -> AppResult<PathBuf> {
+    ensure_workspace(workspace_path)?;
+    Ok(workspace_path.join("plugins"))
+}
+
+fn plugin_project_record(path: &Path, directory_name: String) -> PluginProjectRecord {
+    let manifest_path = path.join("hvy-plugin.json");
+    match fs::read(&manifest_path)
+        .map_err(AppError::from)
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(AppError::from))
+    {
+        Ok(manifest) if manifest.is_object() => PluginProjectRecord {
+            directory_name,
+            path: path_to_string(path),
+            manifest: Some(manifest),
+            error: None,
+        },
+        Ok(_) => PluginProjectRecord {
+            directory_name,
+            path: path_to_string(path),
+            manifest: None,
+            error: Some("hvy-plugin.json must contain a JSON object.".into()),
+        },
+        Err(error) => PluginProjectRecord {
+            directory_name,
+            path: path_to_string(path),
+            manifest: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+#[tauri::command]
+fn list_plugin_projects(workspace_path: String) -> AppResult<Vec<PluginProjectRecord>> {
+    let directory = plugin_projects_directory(Path::new(&workspace_path))?;
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    Ok(entries.into_iter().map(|entry| {
+        let directory_name = entry.file_name().to_string_lossy().into_owned();
+        plugin_project_record(&entry.path(), directory_name)
+    }).collect())
+}
+
+fn normalized_plugin_project_directory_name(value: &str) -> AppResult<String> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+        && value.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-');
+    if !valid {
+        return Err(AppError::Message(
+            "Plugin directory name must use lowercase letters, numbers, and single hyphens.".into(),
+        ));
+    }
+    Ok(value.into())
+}
+
+fn normalized_plugin_project_file_path(value: &str) -> AppResult<PathBuf> {
+    let normalized = value.replace('\\', "/");
+    let path = PathBuf::from(&normalized);
+    let valid = !normalized.is_empty()
+        && !path.is_absolute()
+        && path.components().all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !valid {
+        return Err(AppError::Message(format!(
+            "Plugin project file path \"{normalized}\" is not normalized."
+        )));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+fn create_plugin_project(request: CreatePluginProjectRequest) -> AppResult<PluginProjectRecord> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    let directory_name = normalized_plugin_project_directory_name(&request.directory_name)?;
+    let files = request.files.into_iter().map(|file| {
+        Ok((normalized_plugin_project_file_path(&file.path)?, file.content))
+    }).collect::<AppResult<Vec<_>>>()?;
+    if !files.iter().any(|(path, _)| path == Path::new("hvy-plugin.json")) {
+        return Err(AppError::Message("Plugin project must include hvy-plugin.json.".into()));
+    }
+    let projects_directory = plugin_projects_directory(&workspace_path)?;
+    fs::create_dir_all(&projects_directory)?;
+    let project_path = projects_directory.join(&directory_name);
+    if project_path.exists() {
+        return Err(AppError::Message("A plugin project already exists with this directory name.".into()));
+    }
+    fs::create_dir(&project_path)?;
+    for (relative_path, content) in files {
+        let destination = project_path.join(relative_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(destination, content)?;
+    }
+    touch_workspace_manifest(&workspace_path)?;
+    Ok(plugin_project_record(&project_path, directory_name))
+}
+
+fn plugin_project_path(workspace_path: &Path, directory_name: &str) -> AppResult<PathBuf> {
+    let directory_name = normalized_plugin_project_directory_name(directory_name)?;
+    let path = plugin_projects_directory(workspace_path)?.join(directory_name);
+    if !path.is_dir() {
+        return Err(AppError::Message("Plugin project was not found.".into()));
+    }
+    Ok(path)
+}
+
+fn read_plugin_project_directory(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<PluginProjectFile>,
+) -> AppResult<()> {
+    let mut entries = fs::read_dir(directory)?.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || (directory == root && name == "dist") {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            read_plugin_project_directory(root, &path, files)?;
+        } else if path.is_file() {
+            let modified_at = entry.metadata().ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64);
+            let bytes = fs::read(&path)?;
+            let content = String::from_utf8(bytes.clone()).ok();
+            files.push(PluginProjectFile {
+                path: relative_path(root, &path),
+                bytes: content.is_none().then_some(bytes),
+                content,
+                modified_at,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn read_plugin_project_files(workspace_path: String, directory_name: String) -> AppResult<Vec<PluginProjectFile>> {
+    let project_path = plugin_project_path(Path::new(&workspace_path), &directory_name)?;
+    let mut files = Vec::new();
+    read_plugin_project_directory(&project_path, &project_path, &mut files)?;
+    Ok(files)
+}
+
+#[tauri::command]
+fn write_plugin_project_file(request: WritePluginProjectFileRequest) -> AppResult<()> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    let project_path = plugin_project_path(&workspace_path, &request.directory_name)?;
+    let relative_path = normalized_plugin_project_file_path(&request.path)?;
+    let destination = project_path.join(relative_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(destination, request.content)?;
+    touch_workspace_manifest(&workspace_path)
+}
+
+#[tauri::command]
+fn write_plugin_project_build(request: WritePluginProjectBuildRequest) -> AppResult<PluginProjectBuildResult> {
+    let project_path = plugin_project_path(Path::new(&request.workspace_path), &request.directory_name)?;
+    let file_name = Path::new(&request.name).file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Plugin build name must end with .hvy.plugin.".into()))?;
+    if file_name != request.name || !file_name.ends_with(".hvy.plugin") {
+        return Err(AppError::Message("Plugin build name must end with .hvy.plugin.".into()));
+    }
+    let directory = project_path.join("dist");
+    fs::create_dir_all(&directory)?;
+    let artifact_path = directory.join(file_name);
+    fs::write(&artifact_path, request.bytes)?;
+    Ok(PluginProjectBuildResult { path: path_to_string(&artifact_path), name: file_name.into() })
+}
+
+const INTEGRATION_BROWSER_LABEL: &str = "integration-browser";
+const INTEGRATION_TOOLBAR_HEIGHT: f64 = 52.0;
+#[cfg(target_os = "macos")]
+const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 15.0;
+#[cfg(not(target_os = "macos"))]
+const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 0.0;
+const INTEGRATION_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.integration-vault";
+const INTEGRATION_VAULT_ACCOUNT: &str = "default";
+const INTEGRATION_VAULT_FILE: &str = "integration-cookie-vault-tauri.json";
+const INTEGRATION_VAULT_AAD: &[u8] = b"hvy-galaxy-integration-vault-v1";
+const DOCUMENT_KEY_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.document-keys";
+const DOCUMENT_KEY_VAULT_ACCOUNT: &str = "vault-wrapping-key-v1";
+const DOCUMENT_KEY_VAULT_FILE: &str = "document-key-vault-v1.json";
+const DOCUMENT_KEY_VAULT_AAD: &[u8] = b"hvy-galaxy-document-key-vault-v1";
+const DOCUMENT_KEY_MIGRATION_PREFIX: &str = "document-key-migration-";
+static DOCUMENT_KEY_VAULT_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static DOCUMENT_KEY_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
+
+fn integration_result_is_background(result: &serde_json::Value) -> bool {
+    result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-ready-check-validation")
+        || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-record-watch-result")
+        || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
+        && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
+        || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
+            && result.pointer("/context/automatic").and_then(serde_json::Value::as_bool) == Some(true))
+        || (result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind.starts_with("integration-webmcp-"))
+            && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true))
+}
+
+fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, mut result: serde_json::Value) {
+    if let Some(object) = result.as_object_mut() {
+        object.insert("profileId".into(), serde_json::Value::String(profile_id.into()));
+    }
+    let is_background = integration_result_is_background(&result);
+    action_mode.store(false, Ordering::SeqCst);
+    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+        let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+    }
+    let _ = app.emit("integration-inspection-result", result);
+    if !is_background {
+        if let Some(main_window) = app.get_webview_window("main") {
+            let _ = raise_integration_window(&main_window.as_ref().window());
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn install_integration_message_handler(webview: &tauri::Webview, app: AppHandle, action_mode: Arc<AtomicBool>, profile_id: String) -> AppResult<()> {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::ICoreWebView2,
+        WebMessageReceivedEventHandler,
+    };
+    use windows_core::PWSTR;
+
+    webview.with_webview(move |platform_webview| unsafe {
+        let Ok(core_webview): Result<ICoreWebView2, _> = platform_webview.controller().CoreWebView2() else {
+            return;
+        };
+        let mut token = 0;
+        let _ = core_webview.add_WebMessageReceived(
+            &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+                let Some(args) = args else { return Ok(()); };
+                let mut message = PWSTR::null();
+                args.TryGetWebMessageAsString(&mut message)?;
+                let message = webview2_com::take_pwstr(message);
+                let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&message) else { return Ok(()); };
+                let Some(result) = envelope.get("hvyGalaxyIntegrationResult").cloned() else { return Ok(()); };
+                emit_integration_result(&app, &action_mode, &profile_id, result);
+                Ok(())
+            })),
+            &mut token,
+        );
+    }).map_err(|error| AppError::Message(error.to_string()))
+}
+#[cfg(target_os = "macos")]
+const DEFAULT_INTEGRATION_DATA_STORE_ID: [u8; 16] = [
+    0x48, 0x56, 0x59, 0x47, 0x41, 0x4c, 0x41, 0x58,
+    0x59, 0x47, 0x4f, 0x4f, 0x47, 0x4c, 0x45, 0x01,
+];
+static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
+static INTEGRATION_ALLOWED_ORIGINS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>> = OnceLock::new();
+#[derive(Clone, Default)]
+struct IntegrationPageContext {
+    integration_id: Option<String>,
+    page_id: Option<String>,
+}
+static INTEGRATION_PAGE_CONTEXTS: OnceLock<Mutex<HashMap<String, Arc<Mutex<IntegrationPageContext>>>>> = OnceLock::new();
+
+fn integration_allowed_origins(profile_id: &str) -> AppResult<Arc<Mutex<Vec<String>>>> {
+    let mut origins = INTEGRATION_ALLOWED_ORIGINS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(origins.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(Vec::new()))).clone())
+}
+
+fn integration_page_context(profile_id: &str) -> AppResult<Arc<Mutex<IntegrationPageContext>>> {
+    let mut contexts = INTEGRATION_PAGE_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(contexts.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(IntegrationPageContext::default()))).clone())
+}
+
+fn integration_browser_label(profile_id: &str) -> String {
+    format!("{INTEGRATION_BROWSER_LABEL}-{}", profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect::<String>())
+}
+
+fn integration_toolbar_label(profile_id: &str) -> String {
+    format!("{}-toolbar", integration_browser_label(profile_id))
+}
+
+fn integration_content_label(profile_id: &str) -> String {
+    format!("{}-content", integration_browser_label(profile_id))
+}
+
+#[cfg(target_os = "macos")]
+fn integration_data_store_id(browser_store_id: &str) -> AppResult<[u8; 16]> {
+    if browser_store_id == DEFAULT_INTEGRATION_PROFILE_ID { return Ok(DEFAULT_INTEGRATION_DATA_STORE_ID); }
+    let hex = browser_store_id.replace('-', "");
+    if hex.len() != 32 { return Err(AppError::Message("Invalid integration browser store ID.".into())); }
+    let mut bytes = [0_u8; 16];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(bytes)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationVaultStatus {
+    configured: bool,
+    has_vault: bool,
+    storage_mode: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationVaultEnvelope {
+    version: u8,
+    algorithm: String,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyVaultStatus {
+    configured: bool,
+    has_vault: bool,
+    storage_mode: String,
+    state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredDocumentKey {
+    key: String,
+    created_at: String,
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bundle_labels: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DocumentKeyVault {
+    version: u8,
+    keys: HashMap<String, StoredDocumentKey>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreDocumentKeyEntry {
+    key_id: String,
+    key: String,
+    created_at: Option<String>,
+    source: Option<String>,
+    label: Option<String>,
+    clear_label: Option<bool>,
+    bundle_label: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DocumentKeyFileSource {
+    path: String,
+    name: String,
+    text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMetadata {
+    key_id: String,
+    created_at: String,
+    source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bundle_labels: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMigrationKeyChange {
+    key_id: String,
+    preserved_key_id: String,
+    original_created_at: Option<String>,
+    original_source: Option<String>,
+    original_label: Option<String>,
+    #[serde(default)]
+    original_bundle_labels: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeginDocumentKeyMigrationRequest {
+    migration_id: String,
+    key_changes: Vec<DocumentKeyMigrationKeyChange>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StageDocumentKeyMigrationFileRequest {
+    migration_id: String,
+    path: String,
+    previous_bytes: Vec<u8>,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMigrationEntry {
+    path: String,
+    staged_path: String,
+    backup_path: String,
+    previous_hash: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentKeyMigrationJournal {
+    version: u8,
+    migration_id: String,
+    phase: String,
+    created_at: String,
+    key_changes: Vec<DocumentKeyMigrationKeyChange>,
+    entries: Vec<DocumentKeyMigrationEntry>,
+    #[serde(default)]
+    committed: usize,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Serialize, Deserialize)]
+struct IntegrationCookieVault {
+    cookies: Vec<IntegrationVaultCookie>,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationVaultCookie {
+    name: String,
+    value: String,
+    domain: Option<String>,
+    path: Option<String>,
+    secure: Option<bool>,
+    http_only: Option<bool>,
+    same_site: Option<String>,
+    #[serde(default)]
+    expires_unix: Option<i64>,
+}
+
+fn integration_vault_entry() -> AppResult<keyring::Entry> {
+    keyring::Entry::new(INTEGRATION_VAULT_SERVICE, INTEGRATION_VAULT_ACCOUNT)
+        .map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn integration_vault_path(app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join(INTEGRATION_VAULT_FILE))
+}
+
+fn write_integration_vault(app: &AppHandle, key: &[u8], plaintext: &[u8]) -> AppResult<()> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher.encrypt(&nonce, aes_gcm::aead::Payload { msg: plaintext, aad: INTEGRATION_VAULT_AAD })
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let envelope = IntegrationVaultEnvelope {
+        version: 1,
+        algorithm: "AES-256-GCM".into(),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(ciphertext),
+    };
+    write_json_atomically(&integration_vault_path(app)?, &envelope)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_integration_vault(app: &AppHandle, key: &[u8]) -> AppResult<IntegrationCookieVault> {
+    let envelope: IntegrationVaultEnvelope = serde_json::from_slice(&fs::read(integration_vault_path(app)?)?)?;
+    if envelope.version != 1 || envelope.algorithm != "AES-256-GCM" {
+        return Err(AppError::Message("Unsupported integration vault format.".into()));
+    }
+    let nonce = BASE64.decode(envelope.nonce).map_err(|error| AppError::Message(error.to_string()))?;
+    let ciphertext = BASE64.decode(envelope.ciphertext).map_err(|error| AppError::Message(error.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let plaintext = cipher.decrypt(aes_gcm::Nonce::from_slice(&nonce), aes_gcm::aead::Payload { msg: &ciphertext, aad: INTEGRATION_VAULT_AAD })
+        .map_err(|_| AppError::Message("Could not decrypt the integration vault.".into()))?;
+    serde_json::from_slice(&plaintext).map_err(AppError::from)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn integration_vault_key() -> AppResult<Vec<u8>> {
+    let cache = INTEGRATION_VAULT_KEY_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cached_key = cache.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    if let Some(key) = cached_key.clone() {
+        return Ok(key);
+    }
+    let key = integration_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::Message("The integration vault key is invalid.".into()));
+    }
+    *cached_key = Some(key.clone());
+    Ok(key)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn restore_integration_cookies(app: &AppHandle, window: &tauri::Webview) -> AppResult<()> {
+    let key = integration_vault_key()?;
+    let vault = read_integration_vault(app, &key)?;
+    for stored in vault.cookies {
+        let host_prefixed = stored.name.starts_with("__Host-");
+        let secure_prefixed = stored.name.starts_with("__Secure-");
+        let mut cookie = tauri::webview::Cookie::build((stored.name, stored.value));
+        if !host_prefixed {
+            if let Some(domain) = stored.domain { cookie = cookie.domain(domain); }
+        }
+        if host_prefixed {
+            cookie = cookie.path("/").secure(true);
+        } else {
+            if let Some(path) = stored.path { cookie = cookie.path(path); }
+            if secure_prefixed {
+                cookie = cookie.secure(true);
+            } else if let Some(secure) = stored.secure {
+                cookie = cookie.secure(secure);
+            }
+        }
+        if let Some(http_only) = stored.http_only { cookie = cookie.http_only(http_only); }
+        cookie = match stored.same_site.as_deref() {
+            Some("strict") => cookie.same_site(tauri::webview::cookie::SameSite::Strict),
+            Some("lax") => cookie.same_site(tauri::webview::cookie::SameSite::Lax),
+            Some("none") => cookie.same_site(tauri::webview::cookie::SameSite::None),
+            _ => cookie,
+        };
+        if let Some(expires_unix) = stored.expires_unix {
+            let expires = tauri::webview::cookie::time::OffsetDateTime::from_unix_timestamp(expires_unix)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            cookie = cookie.expires(expires);
+        }
+        window.set_cookie(cookie.build()).map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn save_integration_cookies(app: &AppHandle, window: &tauri::Webview) -> AppResult<()> {
+    let key = integration_vault_key()?;
+    let cookies = window.cookies().map_err(|error| AppError::Message(error.to_string()))?
+        .into_iter()
+        .filter(|cookie| cookie.domain().is_some_and(|domain| domain == "google.com" || domain.ends_with(".google.com")))
+        .map(|cookie| IntegrationVaultCookie {
+            name: cookie.name().into(),
+            value: cookie.value().into(),
+            domain: cookie.domain().map(str::to_string),
+            path: cookie.path().map(str::to_string),
+            secure: cookie.secure(),
+            http_only: cookie.http_only(),
+            same_site: cookie.same_site().map(|value| match value {
+                tauri::webview::cookie::SameSite::Strict => "strict".into(),
+                tauri::webview::cookie::SameSite::Lax => "lax".into(),
+                tauri::webview::cookie::SameSite::None => "none".into(),
+            }),
+            expires_unix: cookie.expires_datetime().map(|value| value.unix_timestamp()),
+        })
+        .collect();
+    let plaintext = serde_json::to_vec(&IntegrationCookieVault { cookies })?;
+    write_integration_vault(app, &key, &plaintext)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn save_open_integration_cookies(app: &AppHandle) -> AppResult<()> {
+    for (label, webview) in app.webviews() {
+        if label.starts_with(INTEGRATION_BROWSER_LABEL) && label.ends_with("-content") {
+            save_integration_cookies(app, &webview)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn load_integration_vault_status(_app: AppHandle) -> AppResult<IntegrationVaultStatus> {
+    #[cfg(target_os = "macos")]
+    return Ok(IntegrationVaultStatus {
+        configured: true,
+        has_vault: true,
+        storage_mode: "webkitProfile".into(),
+    });
+    #[cfg(not(target_os = "macos"))]
+    let has_vault = integration_vault_path(&_app)?.exists();
+    #[cfg(not(target_os = "macos"))]
+    Ok(IntegrationVaultStatus {
+        configured: has_vault,
+        has_vault,
+        storage_mode: "encryptedVault".into(),
+    })
+}
+
+#[tauri::command]
+fn setup_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    integration_vault_entry()?.set_secret(&key).map_err(|error| AppError::Message(error.to_string()))?;
+    *INTEGRATION_VAULT_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|error| AppError::Message(error.to_string()))? = Some(key.to_vec());
+    write_integration_vault(&app, &key, b"{\"cookies\":[]}")?;
+    load_integration_vault_status(app)
+}
+
+#[tauri::command]
+async fn reset_integration_vault(app: AppHandle) -> AppResult<IntegrationVaultStatus> {
+    if let Some(window) = app.get_window(&integration_browser_label(DEFAULT_INTEGRATION_PROFILE_ID)) {
+        window.close().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        app.remove_data_store(DEFAULT_INTEGRATION_DATA_STORE_ID).await
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        return load_integration_vault_status(app);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+    let path = integration_vault_path(&app)?;
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    let entry = integration_vault_entry()?;
+    if entry.get_secret().is_ok() {
+        entry.delete_credential().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    *INTEGRATION_VAULT_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|error| AppError::Message(error.to_string()))? = None;
+    load_integration_vault_status(app)
+    }
+}
+
+fn document_key_vault_entry() -> AppResult<keyring::Entry> {
+    keyring::Entry::new(DOCUMENT_KEY_VAULT_SERVICE, DOCUMENT_KEY_VAULT_ACCOUNT)
+        .map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn document_key_vault_key(allow_interaction: bool) -> AppResult<Vec<u8>> {
+    let cache = DOCUMENT_KEY_VAULT_KEY_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cached_key = cache.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    if let Some(key) = cached_key.clone() {
+        return Ok(key);
+    }
+    #[cfg(target_os = "macos")]
+    let _interaction_lock = if allow_interaction {
+        None
+    } else {
+        Some(security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+            .map_err(|error| AppError::Message(error.to_string()))?)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let _ = allow_interaction;
+    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::Message("The document key vault wrapping key is invalid.".into()));
+    }
+    *cached_key = Some(key.clone());
+    Ok(key)
+}
+
+fn document_key_vault_path(app: &AppHandle) -> AppResult<PathBuf> {
+    Ok(app.path().app_data_dir()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .join(DOCUMENT_KEY_VAULT_FILE))
+}
+
+fn write_document_key_vault(app: &AppHandle, key: &[u8], vault: &DocumentKeyVault) -> AppResult<()> {
+    write_document_key_vault_at(&document_key_vault_path(app)?, key, vault)
+}
+
+fn write_document_key_vault_at(path: &Path, key: &[u8], vault: &DocumentKeyVault) -> AppResult<()> {
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let plaintext = serde_json::to_vec(vault)?;
+    let ciphertext = cipher.encrypt(&nonce, aes_gcm::aead::Payload { msg: &plaintext, aad: DOCUMENT_KEY_VAULT_AAD })
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    write_json_atomically(path, &IntegrationVaultEnvelope {
+        version: 1,
+        algorithm: "AES-256-GCM".into(),
+        nonce: BASE64.encode(nonce),
+        ciphertext: BASE64.encode(ciphertext),
+    })
+}
+
+fn read_document_key_vault(app: &AppHandle, key: &[u8]) -> AppResult<DocumentKeyVault> {
+    read_document_key_vault_at(&document_key_vault_path(app)?, key)
+}
+
+fn read_document_key_vault_at(path: &Path, key: &[u8]) -> AppResult<DocumentKeyVault> {
+    let envelope: IntegrationVaultEnvelope = serde_json::from_slice(&fs::read(path)?)?;
+    if envelope.version != 1 || envelope.algorithm != "AES-256-GCM" {
+        return Err(AppError::Message("Unsupported document key vault format.".into()));
+    }
+    let nonce = BASE64.decode(envelope.nonce).map_err(|error| AppError::Message(error.to_string()))?;
+    let ciphertext = BASE64.decode(envelope.ciphertext).map_err(|error| AppError::Message(error.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|error| AppError::Message(error.to_string()))?;
+    let plaintext = cipher.decrypt(aes_gcm::Nonce::from_slice(&nonce), aes_gcm::aead::Payload { msg: &ciphertext, aad: DOCUMENT_KEY_VAULT_AAD })
+        .map_err(|_| AppError::Message("Could not decrypt the document key vault.".into()))?;
+    let vault: DocumentKeyVault = serde_json::from_slice(&plaintext)?;
+    if vault.version != 1 {
+        return Err(AppError::Message("Unsupported document key vault format.".into()));
+    }
+    Ok(vault)
+}
+
+fn delete_document_key_from_vault_at(path: &Path, key: &[u8], key_id: &str) -> AppResult<()> {
+    let mut vault = read_document_key_vault_at(path, key)?;
+    if vault.keys.remove(key_id).is_none() {
+        return Err(AppError::Message(format!("Encryption key {key_id} is not stored on this device.")));
+    }
+    write_document_key_vault_at(path, key, &vault)
+}
+
+fn document_key_vault_status(app: &AppHandle) -> AppResult<DocumentKeyVaultStatus> {
+    let has_vault = document_key_vault_path(app)?.exists();
+    let status = |configured: bool, state: &str, message: Option<&str>| DocumentKeyVaultStatus {
+        configured,
+        has_vault,
+        storage_mode: "nativeKeyringVault".into(),
+        state: state.into(),
+        message: message.map(str::to_owned),
+    };
+    if let Some(key) = DOCUMENT_KEY_VAULT_KEY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .clone()
+    {
+        if !has_vault {
+            return Ok(status(true, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match.")));
+        }
+        if read_document_key_vault(app, &key).is_err() {
+            return Ok(status(true, "corrupt", Some("The protected local vault could not be read or decrypted.")));
+        }
+        return Ok(status(true, "ready", None));
+    }
+    match document_key_vault_entry()?.get_secret() {
+        Ok(key) => {
+            if !has_vault {
+                return Ok(status(true, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match.")));
+            }
+            if key.len() != 32 || read_document_key_vault(app, &key).is_err() {
+                return Ok(status(true, "corrupt", Some("The protected local vault could not be read or decrypted.")));
+            }
+            *DOCUMENT_KEY_VAULT_KEY_CACHE
+                .get_or_init(|| Mutex::new(None))
+                .lock()
+                .map_err(|error| AppError::Message(error.to_string()))? = Some(key);
+            Ok(status(true, "ready", None))
+        }
+        Err(keyring::Error::NoEntry) if has_vault => Ok(status(false, "incomplete", Some("The protected local vault is incomplete. Its protected key and encrypted data file do not match."))),
+        Err(keyring::Error::NoEntry) => Ok(status(false, "empty", None)),
+        Err(keyring::Error::NoStorageAccess(_)) => Ok(status(false, "denied", Some("Access to operating-system protected storage was denied or the store is locked."))),
+        Err(keyring::Error::PlatformFailure(_)) => Ok(status(false, "unavailable", Some("Operating-system protected storage is unavailable."))),
+        Err(_) => Ok(status(false, "corrupt", Some("The protected local vault could not be read."))),
+    }
+}
+
+fn require_usable_document_key_vault(status: &DocumentKeyVaultStatus) -> AppResult<()> {
+    if status.state == "ready" {
+        return Ok(());
+    }
+    Err(AppError::Message(status.message.clone().unwrap_or_else(|| format!("The protected local vault is {}.", status.state))))
+}
+
+#[tauri::command]
+fn load_document_key_vault_status(app: AppHandle) -> AppResult<DocumentKeyVaultStatus> {
+    document_key_vault_status(&app)
+}
+
+#[tauri::command]
+fn load_document_keys(app: AppHandle, key_ids: Vec<String>) -> AppResult<HashMap<String, String>> {
+    if key_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let status = document_key_vault_status(&app)?;
+    if status.state == "empty" {
+        return Ok(HashMap::new());
+    }
+    require_usable_document_key_vault(&status)?;
+    let key = document_key_vault_key(true)?;
+    let vault = read_document_key_vault(&app, &key)?;
+    Ok(key_ids.into_iter().filter_map(|key_id| vault.keys.get(&key_id).map(|entry| (key_id, entry.key.clone()))).collect())
+}
+
+#[tauri::command]
+fn try_load_document_keys(app: AppHandle, key_ids: Vec<String>) -> AppResult<Option<HashMap<String, String>>> {
+    if key_ids.is_empty() || !document_key_vault_path(&app)?.exists() {
+        return Ok(Some(HashMap::new()));
+    }
+    let key = match document_key_vault_key(false) {
+        Ok(key) => key,
+        Err(_) => return Ok(None),
+    };
+    let vault = read_document_key_vault(&app, &key)?;
+    Ok(Some(key_ids.into_iter().filter_map(|key_id| vault.keys.get(&key_id).map(|entry| (key_id, entry.key.clone()))).collect()))
+}
+
+#[tauri::command]
+fn list_document_key_metadata(app: AppHandle) -> AppResult<Vec<DocumentKeyMetadata>> {
+    let status = document_key_vault_status(&app)?;
+    if status.state == "empty" {
+        return Ok(Vec::new());
+    }
+    require_usable_document_key_vault(&status)?;
+    let key = document_key_vault_key(true)?;
+    let vault = read_document_key_vault(&app, &key)?;
+    let mut metadata: Vec<DocumentKeyMetadata> = vault.keys.into_iter().map(|(key_id, entry)| DocumentKeyMetadata {
+        key_id,
+        created_at: entry.created_at,
+        source: entry.source,
+        label: entry.label,
+        bundle_labels: entry.bundle_labels,
+    }).collect();
+    metadata.sort_by(|left, right| left.key_id.cmp(&right.key_id));
+    Ok(metadata)
+}
+
+#[tauri::command]
+fn store_document_keys(app: AppHandle, entries: Vec<StoreDocumentKeyEntry>) -> AppResult<DocumentKeyVaultStatus> {
+    if entries.is_empty() {
+        return document_key_vault_status(&app);
+    }
+    let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let status = document_key_vault_status(&app)?;
+    if status.state != "empty" {
+        require_usable_document_key_vault(&status)?;
+    }
+    let (key, mut vault) = if status.state == "ready" {
+        let key = document_key_vault_key(true)?;
+        let vault = read_document_key_vault(&app, &key)?;
+        (key, vault)
+    } else {
+        let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+        document_key_vault_entry()?.set_secret(&key).map_err(|error| AppError::Message(error.to_string()))?;
+        *DOCUMENT_KEY_VAULT_KEY_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map_err(|error| AppError::Message(error.to_string()))? = Some(key.clone());
+        (key, DocumentKeyVault { version: 1, keys: HashMap::new() })
+    };
+    for entry in entries {
+        if entry.key_id.trim().is_empty() || entry.key.trim().is_empty() {
+            return Err(AppError::Message("Invalid document key entry.".into()));
+        }
+        if let Some(existing) = vault.keys.get_mut(&entry.key_id) {
+            if existing.key != entry.key {
+                return Err(AppError::Message(format!("A different key is already stored for {}.", entry.key_id)));
+            }
+            if let Some(bundle_label) = entry.bundle_label.filter(|label| !label.trim().is_empty()) {
+                let bundle_label = bundle_label.trim().to_string();
+                if !existing.bundle_labels.contains(&bundle_label) {
+                    existing.bundle_labels.push(bundle_label);
+                }
+            }
+            if let Some(label) = entry.label.filter(|label| !label.trim().is_empty()) {
+                existing.label = Some(label.trim().to_string());
+            }
+            if entry.clear_label == Some(true) {
+                existing.label = None;
+            }
+            continue;
+        }
+        let source = if entry.source.as_deref() == Some("generated") { "generated" } else { "imported" };
+        vault.keys.insert(entry.key_id, StoredDocumentKey {
+            key: entry.key,
+            created_at: entry.created_at.unwrap_or_else(|| Utc::now().to_rfc3339()),
+            source: source.into(),
+            label: entry.label.filter(|label| !label.trim().is_empty()),
+            bundle_labels: entry.bundle_label.filter(|label| !label.trim().is_empty()).map(|label| vec![label.trim().to_string()]).unwrap_or_default(),
+        });
+    }
+    write_document_key_vault(&app, &key, &vault)?;
+    document_key_vault_status(&app)
+}
+
+#[tauri::command]
+fn delete_document_key(app: AppHandle, key_id: String) -> AppResult<DocumentKeyVaultStatus> {
+    if key_id.trim().is_empty() {
+        return Err(AppError::Message("Invalid document key ID.".into()));
+    }
+    let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let status = document_key_vault_status(&app)?;
+    require_usable_document_key_vault(&status)?;
+    let key = document_key_vault_key(true)?;
+    delete_document_key_from_vault_at(&document_key_vault_path(&app)?, &key, &key_id)?;
+    document_key_vault_status(&app)
+}
+
+fn document_key_migration_journal_path(app: &AppHandle, migration_id: &str) -> AppResult<PathBuf> {
+    if migration_id.len() != 36 || !migration_id.chars().all(|character| character.is_ascii_hexdigit() || character == '-') {
+        return Err(AppError::Message("Invalid document key migration ID.".into()));
+    }
+    let directory = app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    Ok(directory.join(format!("{DOCUMENT_KEY_MIGRATION_PREFIX}{migration_id}.json")))
+}
+
+fn read_document_key_migration(app: &AppHandle, migration_id: &str) -> AppResult<(PathBuf, DocumentKeyMigrationJournal)> {
+    let journal_path = document_key_migration_journal_path(app, migration_id)?;
+    if !journal_path.exists() {
+        return Err(AppError::Message("Document key migration journal was not found.".into()));
+    }
+    let journal = serde_json::from_slice(&fs::read(&journal_path)?)?;
+    Ok((journal_path, journal))
+}
+
+fn migration_bytes_hash(bytes: &[u8]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[tauri::command]
+fn begin_document_key_migration(app: AppHandle, request: BeginDocumentKeyMigrationRequest) -> AppResult<()> {
+    let journal_path = document_key_migration_journal_path(&app, &request.migration_id)?;
+    if journal_path.exists() {
+        return Err(AppError::Message("Document key migration is already in progress.".into()));
+    }
+    if request.key_changes.iter().any(|change| change.key_id.trim().is_empty() || change.preserved_key_id.trim().is_empty()) {
+        return Err(AppError::Message("Document key migration key changes are invalid.".into()));
+    }
+    write_json_atomically(&journal_path, &DocumentKeyMigrationJournal {
+        version: 1,
+        migration_id: request.migration_id,
+        phase: "staging".into(),
+        created_at: Utc::now().to_rfc3339(),
+        key_changes: request.key_changes,
+        entries: Vec::new(),
+        committed: 0,
+    })
+}
+
+#[tauri::command]
+fn stage_document_key_migration_file(app: AppHandle, request: StageDocumentKeyMigrationFileRequest) -> AppResult<()> {
+    let (journal_path, mut journal) = read_document_key_migration(&app, &request.migration_id)?;
+    if journal.phase != "staging" {
+        return Err(AppError::Message("Document key migration is no longer accepting files.".into()));
+    }
+    let target = fs::canonicalize(PathBuf::from(&request.path))?;
+    if !target.is_file() || journal.entries.iter().any(|entry| Path::new(&entry.path) == target) {
+        return Err(AppError::Message("Document key migration target is invalid or duplicated.".into()));
+    }
+    if fs::read(&target)? != request.previous_bytes {
+        return Err(AppError::Message("A file changed while the document key migration was being prepared.".into()));
+    }
+    let parent = target.parent().ok_or_else(|| AppError::Message("Document key migration target has no parent directory.".into()))?;
+    let name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| AppError::Message("Document key migration target name is invalid.".into()))?;
+    let staged_path = parent.join(format!(".{name}.{}.hvy-key-next", request.migration_id));
+    let backup_path = parent.join(format!(".{name}.{}.hvy-key-old", request.migration_id));
+    if staged_path.exists() || backup_path.exists() {
+        return Err(AppError::Message("Document key migration staging files already exist.".into()));
+    }
+    write_file_atomically(&staged_path, &request.bytes)?;
+    journal.entries.push(DocumentKeyMigrationEntry {
+        path: path_to_string(&target),
+        staged_path: path_to_string(&staged_path),
+        backup_path: path_to_string(&backup_path),
+        previous_hash: migration_bytes_hash(&request.previous_bytes),
+    });
+    if let Err(error) = write_json_atomically(&journal_path, &journal) {
+        let _ = fs::remove_file(staged_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn commit_document_key_migration(app: AppHandle, migration_id: String) -> AppResult<()> {
+    let (journal_path, mut journal) = read_document_key_migration(&app, &migration_id)?;
+    if journal.phase != "staging" {
+        return Err(AppError::Message("Document key migration cannot be committed from its current state.".into()));
+    }
+    for entry in &journal.entries {
+        if migration_bytes_hash(&fs::read(&entry.path)?) != entry.previous_hash || !Path::new(&entry.staged_path).is_file() {
+            return Err(AppError::Message("A file changed before the document key migration could be committed.".into()));
+        }
+    }
+    journal.phase = "committing".into();
+    journal.committed = 0;
+    write_json_atomically(&journal_path, &journal)?;
+    let result = (|| -> AppResult<()> {
+        for entry in &journal.entries {
+            fs::rename(&entry.path, &entry.backup_path)?;
+            if let Err(error) = fs::rename(&entry.staged_path, &entry.path) {
+                fs::rename(&entry.backup_path, &entry.path)?;
+                return Err(error.into());
+            }
+            journal.committed += 1;
+            write_json_atomically(&journal_path, &journal)?;
+        }
+        journal.phase = "swapped".into();
+        write_json_atomically(&journal_path, &journal)
+    })();
+    result
+}
+
+fn restore_document_key_migration_vault(app: &AppHandle, journal: &DocumentKeyMigrationJournal) -> AppResult<()> {
+    if journal.key_changes.is_empty() || !document_key_vault_path(app)?.exists() {
+        return Ok(());
+    }
+    let _write_guard = DOCUMENT_KEY_VAULT_WRITE_LOCK.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let key = document_key_vault_key(true)?;
+    let mut vault = read_document_key_vault(app, &key)?;
+    for change in &journal.key_changes {
+        if let Some(preserved) = vault.keys.get(&change.preserved_key_id).cloned() {
+            vault.keys.insert(change.key_id.clone(), StoredDocumentKey {
+                key: preserved.key,
+                created_at: change.original_created_at.clone().unwrap_or(preserved.created_at),
+                source: change.original_source.clone().unwrap_or_else(|| "imported".into()),
+                label: change.original_label.clone(),
+                bundle_labels: change.original_bundle_labels.clone(),
+            });
+            vault.keys.remove(&change.preserved_key_id);
+        }
+    }
+    write_document_key_vault(app, &key, &vault)
+}
+
+fn rollback_document_key_migration_at(app: &AppHandle, migration_id: &str) -> AppResult<()> {
+    let (journal_path, journal) = read_document_key_migration(app, migration_id)?;
+    if journal.phase == "complete" {
+        for entry in &journal.entries {
+            let backup = Path::new(&entry.backup_path);
+            let staged = Path::new(&entry.staged_path);
+            if backup.exists() { fs::remove_file(backup)?; }
+            if staged.exists() { fs::remove_file(staged)?; }
+        }
+        fs::remove_file(journal_path)?;
+        return Ok(());
+    }
+    for entry in journal.entries.iter().rev() {
+        let target = Path::new(&entry.path);
+        let backup = Path::new(&entry.backup_path);
+        let staged = Path::new(&entry.staged_path);
+        if backup.exists() {
+            if target.exists() { fs::remove_file(target)?; }
+            fs::rename(backup, target)?;
+        }
+        if staged.exists() { fs::remove_file(staged)?; }
+    }
+    restore_document_key_migration_vault(app, &journal)?;
+    if journal_path.exists() { fs::remove_file(journal_path)?; }
+    Ok(())
+}
+
+#[tauri::command]
+fn rollback_document_key_migration(app: AppHandle, migration_id: String) -> AppResult<()> {
+    rollback_document_key_migration_at(&app, &migration_id)
+}
+
+#[tauri::command]
+fn finalize_document_key_migration(app: AppHandle, migration_id: String) -> AppResult<()> {
+    let (journal_path, mut journal) = read_document_key_migration(&app, &migration_id)?;
+    if journal.phase != "swapped" {
+        return Err(AppError::Message("Document key migration has not finished swapping files.".into()));
+    }
+    journal.phase = "complete".into();
+    write_json_atomically(&journal_path, &journal)?;
+    for entry in &journal.entries {
+        let backup = Path::new(&entry.backup_path);
+        let staged = Path::new(&entry.staged_path);
+        if backup.exists() { fs::remove_file(backup)?; }
+        if staged.exists() { fs::remove_file(staged)?; }
+    }
+    fs::remove_file(journal_path)?;
+    Ok(())
+}
+
+fn recover_pending_document_key_migrations(app: &AppHandle) -> AppResult<()> {
+    let directory = app.path().app_data_dir().map_err(|error| AppError::Message(error.to_string()))?;
+    if !directory.exists() { return Ok(()); }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(DOCUMENT_KEY_MIGRATION_PREFIX) || !name.ends_with(".json") { continue; }
+        let migration_id = name.trim_start_matches(DOCUMENT_KEY_MIGRATION_PREFIX).trim_end_matches(".json");
+        let (_, journal) = read_document_key_migration(app, migration_id)?;
+        if journal.phase == "complete" {
+            for file in &journal.entries {
+                let backup = Path::new(&file.backup_path);
+                let staged = Path::new(&file.staged_path);
+                if backup.exists() { fs::remove_file(backup)?; }
+                if staged.exists() { fs::remove_file(staged)?; }
+            }
+            fs::remove_file(entry.path())?;
+        } else {
+            rollback_document_key_migration_at(app, migration_id)?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_document_key_file_dialog() -> AppResult<Vec<DocumentKeyFileSource>> {
+    let Some(paths) = rfd::FileDialog::new()
+        .add_filter("HVY encryption keys", &["hvykey"])
+        .pick_files()
+    else {
+        return Ok(Vec::new());
+    };
+    paths.into_iter().map(|path| {
+        if path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("hvykey")) != Some(true) {
+            return Err(AppError::Message("Only .hvykey files can be imported.".into()));
+        }
+        let bytes = fs::read(&path)?;
+        if bytes.len() > 1024 * 1024 {
+            return Err(AppError::Message("HVY key files must not exceed 1 MB.".into()));
+        }
+        let text = String::from_utf8(bytes).map_err(|_| AppError::Message("HVY key files must be UTF-8 JSON.".into()))?;
+        Ok(DocumentKeyFileSource {
+            path: path_to_string(&path),
+            name: path.file_name().and_then(|value| value.to_str()).unwrap_or("key.hvykey").into(),
+            text,
+        })
+    }).collect()
+}
+const INTEGRATION_INSPECTOR: &str = include_str!("../../src/integration-inspector.js");
+const WEBMCP_POLYFILL: &str = include_str!("../../node_modules/@mcp-b/webmcp-polyfill/dist/index.iife.js");
+const INTEGRATION_WEBMCP_BRIDGE: &str = include_str!("../../src/integration-webmcp-bridge.js");
+
+fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
+    let value = match destination {
+        "msn" => "https://www.msn.com/",
+        "gmail" => "https://mail.google.com/",
+        "calendar" => "https://calendar.google.com/",
+        _ => return Err(AppError::Message("Unknown integration browser destination.".into())),
+    };
+    value.parse::<tauri::Url>().map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn allowed_integration_url(url: &tauri::Url) -> bool {
+    allowed_integration_url_for_origins(url, &[])
+}
+
+fn is_local_integration_http(url: &tauri::Url) -> bool {
+    url.scheme() == "http" && url.host_str().is_some_and(|host| {
+        host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|address| address.is_loopback())
+    })
+}
+
+fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> bool {
+    if !origins.is_empty() {
+        return (url.scheme() == "https" || is_local_integration_http(url)) && origins.iter().any(|origin| origin == url.origin().ascii_serialization().as_str());
+    }
+    url.scheme() == "https"
+        && url.host_str().is_some_and(|host| {
+            host == "msn.com"
+                || host.ends_with(".msn.com")
+                || host == "google.com"
+                || host.ends_with(".google.com")
+        })
+}
+
+fn integration_extraction_script(extraction: &serde_json::Value) -> String {
+    if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
+        let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
+        format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("ready-check-validation") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
+        format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
+        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
+    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
+        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
+    } else {
+        format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+    }
+}
+
+#[tauri::command]
+async fn integration_browser_command(app: AppHandle, command: String, destination: Option<String>, profile_id: Option<String>, url: Option<String>, allowed_origins: Option<Vec<String>>, browser_store_id: Option<String>, action_mode: Option<bool>, payload: Option<serde_json::Value>, foreground: Option<bool>, window_name: Option<String>, integration_id: Option<String>, page_id: Option<String>) -> AppResult<()> {
+    let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
+    let window_label = integration_browser_label(&profile_id);
+    let content_label = integration_content_label(&profile_id);
+    let action_mode_pending = {
+        let mut modes = INTEGRATION_ACTION_MODES.get_or_init(|| Mutex::new(HashMap::new())).lock()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        modes.entry(profile_id.clone()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone()
+    };
+    let pending_extraction = {
+        let mut extractions = INTEGRATION_PENDING_EXTRACTIONS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        extractions.entry(profile_id.clone()).or_insert_with(|| Arc::new(Mutex::new(None))).clone()
+    };
+    let profile_allowed_origins = integration_allowed_origins(&profile_id)?;
+    let profile_page_context = integration_page_context(&profile_id)?;
+    if command == "open" {
+        let foreground = foreground.unwrap_or(true);
+        action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
+        *pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))? = payload.clone();
+        #[cfg(not(target_os = "macos"))]
+        if !load_integration_vault_status(app.clone())?.configured {
+            setup_integration_vault(app.clone())?;
+        }
+        let navigation_allowed_origins = allowed_origins.unwrap_or_default();
+        let url = if let Some(value) = url {
+            let parsed = value.parse::<tauri::Url>().map_err(|error| AppError::Message(error.to_string()))?;
+            if parsed.scheme() != "https" && !is_local_integration_http(&parsed) { return Err(AppError::Message("Integration pages must use HTTPS, except for local development pages.".into())); }
+            if !navigation_allowed_origins.iter().any(|origin| origin == parsed.origin().ascii_serialization().as_str()) {
+                return Err(AppError::Message("The custom page origin is not allowed.".into()));
+            }
+            parsed
+        } else {
+            integration_destination_url(destination.as_deref().unwrap_or(""))?
+        };
+        *profile_allowed_origins.lock().map_err(|error| AppError::Message(error.to_string()))? = navigation_allowed_origins;
+        *profile_page_context.lock().map_err(|error| AppError::Message(error.to_string()))? = IntegrationPageContext { integration_id, page_id };
+        let blank_url = tauri::Url::parse("about:blank")
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
+            window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            if content.url().map(|current| current == url).unwrap_or(false) {
+                if action_mode_pending.load(Ordering::SeqCst) {
+                    content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
+                        .map_err(|error| AppError::Message(error.to_string()))?;
+                } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
+                    content.eval(integration_extraction_script(&extraction)).map_err(|error| AppError::Message(error.to_string()))?;
+                }
+            } else {
+                content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            }
+            if foreground {
+                raise_integration_window(&window)?;
+            } else if !window.is_visible().unwrap_or(false) {
+                window.center().map_err(|error| AppError::Message(error.to_string()))?;
+                window.show().map_err(|error| AppError::Message(error.to_string()))?;
+                if let Some(main_window) = app.get_webview_window("main") {
+                    raise_integration_window(&main_window.as_ref().window())?;
+                }
+            }
+            app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            window.remove_menu().map_err(|error| AppError::Message(error.to_string()))?;
+            return Ok(());
+        }
+        let integration_app = app.clone();
+        let integration_window_label = window_label.clone();
+        let result_profile_id = profile_id.clone();
+        let page_load_profile_id = result_profile_id.clone();
+        let page_load_action_mode = action_mode_pending.clone();
+        let page_load_extraction = pending_extraction.clone();
+        let navigation_action_mode = action_mode_pending.clone();
+        let page_load_allowed_origins = profile_allowed_origins.clone();
+        let toolbar_allowed_origins = profile_allowed_origins.clone();
+        let new_window_allowed_origins = profile_allowed_origins.clone();
+        let navigation_allowed_origins = profile_allowed_origins.clone();
+        let new_window_page_context = profile_page_context.clone();
+        let navigation_page_context = profile_page_context.clone();
+        let toolbar_page_context = profile_page_context.clone();
+        let new_window_app = app.clone();
+        let new_window_profile_id = profile_id.clone();
+        let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
+        #[cfg(target_os = "windows")]
+        let integration_inspector = format!(
+            "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\nwindow.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}",
+            WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR,
+        );
+        #[cfg(not(target_os = "windows"))]
+        let integration_inspector = format!("window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}", WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR);
+        let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
+            .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
+            .visible(false)
+            .inner_size(1080.0, 700.0)
+            .min_inner_size(720.0, 520.0)
+            .center()
+            .build()
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        let builder = tauri::webview::WebviewBuilder::new(
+            &content_label,
+            tauri::WebviewUrl::External(blank_url),
+        )
+        .initialization_script(integration_inspector)
+        .on_document_title_changed(move |window, title| {
+            let site_title = title.trim();
+            if !site_title.is_empty() {
+                let _ = window.window().set_title(&format!("{site_title} — {title_profile_name}"));
+            }
+        })
+        .on_page_load(move |window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                if let Some(toolbar) = window.app_handle().get_webview(&integration_toolbar_label(&page_load_profile_id)) {
+                    let allowed = page_load_allowed_origins.lock().map(|origins| origins.clone()).unwrap_or_default();
+                    let state = serde_json::json!({ "url": payload.url().as_str(), "allowed": allowed });
+                    let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
+                }
+                let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
+                if page_load_action_mode.load(Ordering::SeqCst) {
+                    let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR);
+                    let _ = window.eval(&script);
+                } else if let Ok(mut pending) = page_load_extraction.lock() {
+                    let current_origin = payload.url().origin().ascii_serialization();
+                    let expected_origins = pending.as_ref()
+                        .and_then(|value| value.pointer("/context/expectedOrigins"))
+                        .and_then(serde_json::Value::as_array);
+                    let expected_origin = pending.as_ref()
+                        .and_then(|value| value.pointer("/context/expectedOrigin"))
+                        .and_then(serde_json::Value::as_str);
+                    let at_expected_origin = expected_origins
+                        .map(|origins| origins.iter().any(|origin| origin.as_str() == Some(current_origin.as_str())))
+                        .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
+                    if at_expected_origin {
+                      if let Some(extraction) = pending.take() {
+                        let script = integration_extraction_script(&extraction);
+                        let _ = window.eval(&script);
+                      }
+                    }
+                }
+            }
+        })
+        .on_new_window(move |requested_url, _features| {
+            let allowed = new_window_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&requested_url, &origins)).unwrap_or(false);
+            if allowed {
+                if let Some(content) = new_window_app.get_webview(&integration_content_label(&new_window_profile_id)) {
+                    let _ = content.navigate(requested_url);
+                }
+            } else if requested_url.scheme() == "https" || is_local_integration_http(&requested_url) {
+                let context = new_window_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                if context.page_id.is_some() {
+                    let current_url = new_window_app.get_webview(&integration_content_label(&new_window_profile_id))
+                        .and_then(|content| content.url().ok())
+                        .map(|url| url.to_string())
+                        .unwrap_or_default();
+                    let _ = new_window_app.emit("integration-inspection-result", serde_json::json!({
+                        "kind": "integration-navigation-request",
+                        "profileId": new_window_profile_id,
+                        "integrationId": context.integration_id,
+                        "pageId": context.page_id,
+                        "currentUrl": current_url,
+                        "requestedUrl": requested_url.as_str(),
+                        "navigationKind": "new-window",
+                    }));
+                    if let Some(main_window) = new_window_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window.as_ref().window());
+                    }
+                } else {
+                    let _ = open_external_url(requested_url.to_string());
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_navigation(move |requested_url| {
+            if requested_url.as_str() == "about:blank" {
+                return true;
+            }
+            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
+                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
+                    if browser_command == "back" { let _ = window.eval("window.history.back()"); }
+                    if browser_command == "forward" { let _ = window.eval("window.history.forward()"); }
+                    if browser_command == "reload" { let _ = window.reload(); }
+                    if browser_command == "inspect" {
+                        navigation_action_mode.store(true, Ordering::SeqCst);
+                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR));
+                    }
+                    if browser_command == "close" {
+                        #[cfg(not(target_os = "macos"))]
+                        let _ = save_integration_cookies(&integration_app, &window);
+                        if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
+                    }
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(value) = String::from_utf8(bytes) {
+                        if let Ok(url) = value.parse::<tauri::Url>() {
+                            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                            if allowed {
+                                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
+                                    let _ = window.navigate(url);
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+            if requested_url.as_str() == "hvy-integration://close" {
+                if let Some(_window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = save_integration_cookies(&integration_app, &_window);
+                    if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://inspection/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(object) = result.as_object_mut() {
+                            object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
+                        }
+                        let is_background_result = result
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("integration-ready-check-validation");
+                        let is_background_result = is_background_result || result
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("integration-record-watch-result");
+                        let is_background_result = is_background_result || (result
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("integration-extraction")
+                            && result
+                                .get("context")
+                                .and_then(|context| context.get("mode"))
+                                .and_then(serde_json::Value::as_str)
+                                == Some("examples"));
+                        let is_background_result = is_background_result
+                            || (result
+                                .get("kind")
+                                .and_then(serde_json::Value::as_str)
+                                == Some("integration-source-discovery")
+                                && result
+                                    .get("context")
+                                    .and_then(|context| context.get("automatic"))
+                                    .and_then(serde_json::Value::as_bool)
+                                    == Some(true));
+                        let is_background_result = is_background_result
+                            || (result.get("kind").and_then(serde_json::Value::as_str)
+                                .is_some_and(|kind| kind.starts_with("integration-webmcp-"))
+                                && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true));
+                        navigation_action_mode.store(false, Ordering::SeqCst);
+                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                            let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+                        }
+                        let _ = integration_app.emit("integration-inspection-result", result);
+                        if !is_background_result {
+                            if let Some(main_window) = integration_app.get_webview_window("main") {
+                                let _ = raise_integration_window(&main_window.as_ref().window());
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://toolbar-state/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                            let _ = toolbar.eval(format!("window.hvySetInspectionState?.({state})"));
+                        }
+                    }
+                }
+                return false;
+            }
+            if requested_url.as_str() == "hvy-integration://inspection-cancel" {
+                navigation_action_mode.store(false, Ordering::SeqCst);
+                if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                    let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+                }
+                if let Some(main_window) = integration_app.get_webview_window("main") {
+                    let _ = raise_integration_window(&main_window.as_ref().window());
+                }
+                return false;
+            }
+            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(requested_url, &origins)).unwrap_or(false);
+            if !allowed && (requested_url.scheme() == "https" || is_local_integration_http(requested_url)) {
+                let context = navigation_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                if context.page_id.is_some() {
+                    let current_url = integration_app.get_webview(&integration_content_label(&result_profile_id))
+                        .and_then(|content| content.url().ok())
+                        .map(|url| url.to_string())
+                        .unwrap_or_default();
+                    let _ = integration_app.emit("integration-inspection-result", serde_json::json!({
+                        "kind": "integration-navigation-request",
+                        "profileId": result_profile_id,
+                        "integrationId": context.integration_id,
+                        "pageId": context.page_id,
+                        "currentUrl": current_url,
+                        "requestedUrl": requested_url.as_str(),
+                        "navigationKind": "frame-or-main",
+                    }));
+                    if let Some(main_window) = integration_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window.as_ref().window());
+                    }
+                } else {
+                    let _ = open_external_url(requested_url.to_string());
+                }
+            }
+            allowed
+        });
+        #[cfg(target_os = "macos")]
+        let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?);
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.incognito(true);
+        let scale = native_window.scale_factor().map_err(|error| AppError::Message(error.to_string()))?;
+        let size = native_window.inner_size().map_err(|error| AppError::Message(error.to_string()))?;
+        let logical_size = size.to_logical::<f64>(scale);
+        let toolbar_view_height = INTEGRATION_TOOLBAR_HEIGHT + INTEGRATION_TOOLBAR_WINDOW_INSET;
+        let remote_webview = native_window.add_child(
+            builder,
+            tauri::LogicalPosition::new(0.0, toolbar_view_height),
+            tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)),
+        ).map_err(|error| AppError::Message(error.to_string()))?;
+        #[cfg(target_os = "windows")]
+        install_integration_message_handler(
+            &remote_webview,
+            app.clone(),
+            action_mode_pending.clone(),
+            profile_id.clone(),
+        )?;
+        let toolbar_label = integration_toolbar_label(&profile_id);
+        let toolbar_remote = remote_webview.clone();
+        let toolbar_window = native_window.clone();
+        let toolbar_app = app.clone();
+        let toolbar_profile_id = profile_id.clone();
+        let toolbar_origins = toolbar_allowed_origins;
+        let toolbar_action_mode = action_mode_pending.clone();
+        let toolbar = tauri::webview::WebviewBuilder::new(
+            toolbar_label,
+            tauri::WebviewUrl::App("integration-browser-toolbar.html".into()),
+        ).on_navigation(move |requested_url| {
+            if let Some(action) = requested_url.as_str().strip_prefix("hvy-integration://toolbar/") {
+                let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
+                    "kind": "integration-toolbar-action",
+                    "action": action,
+                    "profileId": toolbar_profile_id,
+                }));
+                if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                    let _ = raise_integration_window(&main_window.as_ref().window());
+                }
+                return false;
+            }
+            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
+                if browser_command == "back" { let _ = toolbar_remote.eval("window.history.back()"); }
+                if browser_command == "forward" { let _ = toolbar_remote.eval("window.history.forward()"); }
+                if browser_command == "reload" { let _ = toolbar_remote.reload(); }
+                if browser_command == "inspect" {
+                    toolbar_action_mode.store(true, Ordering::SeqCst);
+                    let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
+                }
+                if browser_command == "close" { let _ = toolbar_window.close(); }
+                return false;
+            }
+            if let Some(control) = requested_url.as_str().strip_prefix("hvy-integration://inspector-control/") {
+                if matches!(control, "navigate" | "undo" | "done") {
+                    let _ = toolbar_remote.eval(&format!("window.__hvyGalaxyInspector?.control({control:?})"));
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
+                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
+                    if let Ok(value) = String::from_utf8(bytes) {
+                        if let Ok(url) = value.parse::<tauri::Url>() {
+                            let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                            if allowed {
+                                let _ = toolbar_remote.navigate(url);
+                            } else if url.scheme() == "https" || is_local_integration_http(&url) {
+                                let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                                if context.page_id.is_some() {
+                                    let current_url = toolbar_remote.url().map(|current| current.to_string()).unwrap_or_default();
+                                    let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
+                                        "kind": "integration-navigation-request",
+                                        "profileId": toolbar_profile_id,
+                                        "integrationId": context.integration_id,
+                                        "pageId": context.page_id,
+                                        "currentUrl": current_url,
+                                        "requestedUrl": url.as_str(),
+                                        "navigationKind": "address",
+                                    }));
+                                    if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                                        let _ = raise_integration_window(&main_window.as_ref().window());
+                                    }
+                                } else {
+                                    let _ = open_external_url(url.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            }
+            true
+        });
+        let toolbar_webview = native_window.add_child(
+            toolbar,
+            tauri::LogicalPosition::new(0.0, 0.0),
+            tauri::LogicalSize::new(logical_size.width, toolbar_view_height),
+        ).map_err(|error| AppError::Message(error.to_string()))?;
+        let resized_remote = remote_webview.clone();
+        let resized_toolbar = toolbar_webview.clone();
+        native_window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Resized(size) = event {
+                let logical_size = size.to_logical::<f64>(scale);
+                let _ = resized_remote.set_bounds(tauri::Rect {
+                    position: tauri::LogicalPosition::new(0.0, toolbar_view_height).into(),
+                    size: tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)).into(),
+                });
+                let _ = resized_toolbar.set_bounds(tauri::Rect {
+                    position: tauri::LogicalPosition::new(0.0, 0.0).into(),
+                    size: tauri::LogicalSize::new(logical_size.width, toolbar_view_height).into(),
+                });
+            }
+        });
+        if !foreground {
+            if let Some(main_window) = app.get_webview_window("main") {
+                raise_integration_window(&main_window.as_ref().window())?;
+            }
+        }
+        app.set_menu(build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        native_window.remove_menu().map_err(|error| AppError::Message(error.to_string()))?;
+        let menu_app = app.clone();
+        let destroyed_action_mode = action_mode_pending.clone();
+        let destroyed_profile_id = profile_id.clone();
+        native_window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                if destroyed_action_mode.swap(false, Ordering::SeqCst) {
+                    let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
+                        "kind": "integration-browser-closed",
+                        "profileId": destroyed_profile_id,
+                    }));
+                    if let Some(main_window) = menu_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window.as_ref().window());
+                    }
+                }
+                if let Ok(menu) = build_menu(&menu_app) {
+                    let _ = menu_app.set_menu(menu);
+                }
+            }
+        });
+        #[cfg(not(target_os = "macos"))]
+        restore_integration_cookies(&app, &remote_webview)?;
+        remote_webview.navigate(url)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        native_window.show().map_err(|error| AppError::Message(error.to_string()))?;
+        if foreground {
+            raise_integration_window(&native_window)?;
+        } else if let Some(main_window) = app.get_webview_window("main") {
+            raise_integration_window(&main_window.as_ref().window())?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let close_started = Arc::new(AtomicBool::new(false));
+        #[cfg(not(target_os = "macos"))]
+        let close_window = native_window.clone();
+        #[cfg(not(target_os = "macos"))]
+        let close_webview = remote_webview.clone();
+        #[cfg(not(target_os = "macos"))]
+        let close_app = app.clone();
+        #[cfg(not(target_os = "macos"))]
+        native_window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if close_started.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_close();
+                let _ = save_integration_cookies(&close_app, &close_webview);
+                let _ = close_webview.clear_all_browsing_data();
+                let _ = close_window.close();
+            }
+        });
+        return Ok(());
+    }
+
+    let (Some(host_window), Some(window)) = (app.get_window(&window_label), app.get_webview(&content_label)) else {
+        if command == "close" || command == "cancel-inspect" {
+            return Ok(());
+        }
+        return Err(AppError::Message("Open the integration browser first.".into()));
+    };
+    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" {
+        action_mode_pending.store(true, Ordering::SeqCst);
+    } else if command == "cancel-inspect" {
+        action_mode_pending.store(false, Ordering::SeqCst);
+    }
+    let foreground_extraction = command == "extract-pattern" && payload.as_ref().and_then(|value| value.get("foreground")).and_then(serde_json::Value::as_bool) != Some(false);
+    if command == "inspect" || command == "inspect-parent" || command == "inspect-target" || command == "test-pattern" || foreground_extraction || command == "execute-command" || command == "focus-browser" {
+        raise_integration_window(&host_window)?;
+    }
+    if command == "cancel-inspect" || command == "focus-main" {
+        if let Some(main_window) = app.get_webview_window("main") {
+            raise_integration_window(&main_window.as_ref().window())?;
+        }
+    }
+    match command.as_str() {
+        "back" => window.eval("window.history.back()"),
+        "forward" => window.eval("window.history.forward()"),
+        "reload" => window.reload(),
+        "inspect" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR)),
+        "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "cancel-extraction" => window.eval("window.__hvyGalaxyInspector?.cancelExtraction()"),
+        "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "discover-webmcp-tools" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
+        "invoke-webmcp-tool" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
+        "cancel-webmcp-tool" => window.eval(&format!("window.__hvyGalaxyWebMcp?.cancel(({}).requestId)", payload.unwrap_or_default())),
+        "cancel-inspect" => {
+            if let Some(toolbar) = app.get_webview(&integration_toolbar_label(&profile_id)) {
+                let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+            }
+            window.eval("window.__hvyGalaxyInspector?.stop()")
+        },
+        "focus-browser" | "focus-main" => Ok(()),
+        "close" => {
+            #[cfg(not(target_os = "macos"))]
+            save_integration_cookies(&app, &window)?;
+            host_window.close()
+        },
+        _ => return Err(AppError::Message("Unknown integration browser command.".into())),
+    }
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn integration_browser_is_open(app: AppHandle, profile_id: Option<String>) -> bool {
+    let profile_id = profile_id.unwrap_or_else(|| DEFAULT_INTEGRATION_PROFILE_ID.into());
+    app.get_window(&integration_browser_label(&profile_id)).is_some()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationStorageProbeResult {
+    cookie_name: String,
+    inserted: bool,
+    extracted: bool,
+    fresh_store_empty: bool,
+    restored: bool,
+    deleted: bool,
+}
+
+#[tauri::command]
+fn probe_integration_cookie_storage(app: AppHandle) -> AppResult<IntegrationStorageProbeResult> {
+    let cookie_name = "hvy_galaxy_storage_probe";
+    let cookie_value = "round-trip";
+    let cookie_url = "https://www.msn.com/".parse::<tauri::Url>()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let probe_id = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .as_nanos();
+    let source_label = format!("integration-storage-probe-source-{probe_id}");
+    let restored_label = format!("integration-storage-probe-restored-{probe_id}");
+    let source_window = tauri::WebviewWindowBuilder::new(
+        &app,
+        &source_label,
+        tauri::WebviewUrl::External(cookie_url.clone()),
+    )
+    .title("HVY Galaxy Storage Probe")
+    .visible(false)
+    .incognito(true)
+    .on_navigation(allowed_integration_url)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    let restored_window = tauri::WebviewWindowBuilder::new(
+        &app,
+        &restored_label,
+        tauri::WebviewUrl::External(cookie_url.clone()),
+    )
+    .title("HVY Galaxy Storage Probe")
+    .visible(false)
+    .incognito(true)
+    .on_navigation(allowed_integration_url)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    let cookie = tauri::webview::Cookie::build((cookie_name, cookie_value))
+        .domain("www.msn.com")
+        .path("/")
+        .secure(true)
+        .http_only(true)
+        .same_site(tauri::webview::cookie::SameSite::Lax)
+        .build();
+    source_window.set_cookie(cookie.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+    let inserted_cookies = source_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let extracted = inserted_cookies.iter()
+        .any(|candidate| candidate.name() == cookie_name && candidate.value() == cookie_value);
+    let extracted_cookie = inserted_cookies.into_iter()
+        .find(|candidate| candidate.name() == cookie_name && candidate.value() == cookie_value)
+        .ok_or_else(|| AppError::Message("The ephemeral source store did not return the inserted cookie.".into()))?;
+    let fresh_store_empty = !restored_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name);
+    restored_window.set_cookie(extracted_cookie.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let restored = restored_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name && candidate.value() == cookie_value);
+    source_window.delete_cookie(extracted_cookie.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    restored_window.delete_cookie(extracted_cookie)
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let source_deleted = !source_window.cookies_for_url(cookie_url.clone())
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name);
+    let restored_deleted = !restored_window.cookies_for_url(cookie_url)
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.name() == cookie_name);
+    source_window.close().map_err(|error| AppError::Message(error.to_string()))?;
+    restored_window.close().map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(IntegrationStorageProbeResult {
+        cookie_name: cookie_name.into(),
+        inserted: true,
+        extracted,
+        fresh_store_empty,
+        restored,
+        deleted: source_deleted && restored_deleted,
+    })
+}
+
+#[tauri::command]
+fn load_included_document(app: AppHandle, id: String) -> AppResult<DocumentFile> {
+    let resource = match id.as_str() {
+        "hvy-galaxy-guide" => "resources/hvy-galaxy.hvy",
+        "hvy-guide" => "resources/hvy-guide.hvy",
+        _ => return Err(AppError::Message(format!("Unknown included document: {id}"))),
+    };
     let resource_path = app
         .path()
-        .resolve("resources/hvy-guide.hvy", tauri::path::BaseDirectory::Resource)
+        .resolve(resource, tauri::path::BaseDirectory::Resource)
         .map_err(|error| AppError::Message(error.to_string()))?;
     read_document_at(&resource_path)
 }
@@ -156,11 +2173,18 @@ fn initialize_workspace_path(app: AppHandle, path: String) -> AppResult<Workspac
 }
 
 #[tauri::command]
-fn load_workspace(app: AppHandle, path: String, include_templates: Option<bool>) -> AppResult<Workspace> {
+fn load_workspace(
+    app: AppHandle,
+    path: String,
+    include_templates: Option<bool>,
+    record_recent: Option<bool>,
+) -> AppResult<Workspace> {
     let path = PathBuf::from(path);
     let workspace = ensure_workspace(&path)?;
     remove_archived_workspace(&app, &path)?;
-    add_recent_workspace(&app, &path)?;
+    if record_recent.unwrap_or(false) {
+        add_recent_workspace(&app, &path)?;
+    }
     if include_templates.unwrap_or(false) {
         return load_workspace_from_path_with_options(&path, true);
     }
@@ -273,15 +2297,9 @@ fn unarchive_workspace(app: AppHandle, path: String) -> AppResult<Workspace> {
 
 #[tauri::command]
 fn create_workspace_folder(app: AppHandle, request: WorkspaceFolderRequest) -> AppResult<Workspace> {
-    let workspace_path = PathBuf::from(request.workspace_path);
+    let workspace_path = PathBuf::from(&request.workspace_path);
     ensure_workspace(&workspace_path)?;
-    let parent = workspace_target_directory(&workspace_path, &request.parent_directory)?;
-    let folder_path = parent.join(normalized_folder_name(&request.name)?);
-    if folder_path.exists() {
-        return Err(AppError::Message("A folder already exists at that path.".into()));
-    }
-    fs::create_dir(&folder_path)?;
-    touch_workspace_manifest(&workspace_path)?;
+    create_workspace_folder_at(&workspace_path, &request.parent_directory, &request.name, request.encrypted.as_ref())?;
     add_recent_workspace(&app, &workspace_path)?;
     load_workspace_from_path(&workspace_path)
 }
@@ -301,6 +2319,9 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
 
     let mut copied = Vec::new();
     let mut copied_templates = Vec::new();
+    let mut relocated_archived_files = Vec::new();
+    let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let installs_workspace_templates = destination_root == workspace_templates_dir_path(&workspace_path);
     for source in paths {
         if document_extension(&source).is_none() {
             return Err(AppError::Message(
@@ -310,14 +2331,12 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
-        let destination_root = if template_extension(&source).is_some() {
-            workspace_templates_dir(&workspace_path)?
-        } else {
-            workspace_target_directory(&workspace_path, &target_directory)?
-        };
-        let destination = unique_copy_path(&destination_root, file_name);
+        let is_template = installs_workspace_templates && template_extension(&source).is_some();
+        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let destination = incoming.destination;
+        relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
-        if template_extension(&source).is_some() {
+        if is_template {
             copied_templates.push(destination);
         } else {
             copied.push(destination);
@@ -333,7 +2352,34 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
         copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
+        relocated_archived_files,
     }))
+}
+
+#[tauri::command]
+fn select_workspace_document_files() -> AppResult<Option<Vec<DroppedWorkspaceFile>>> {
+    let Some(paths) = rfd::FileDialog::new()
+        .add_filter("Encrypted-folder documents", &["hvy", "thvy", "phvy"])
+        .pick_files()
+    else {
+        return Ok(None);
+    };
+    let mut files = Vec::with_capacity(paths.len());
+    for source in paths {
+        let extension = document_extension(&source);
+        if !matches!(extension.as_deref(), Some(".hvy" | ".thvy" | ".phvy")) {
+            return Err(AppError::Message(
+                "Encrypted folders support .hvy, .thvy, and .phvy documents.".into(),
+            ));
+        }
+        let name = source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| AppError::Message("Selected file has no valid file name.".into()))?
+            .to_string();
+        files.push(DroppedWorkspaceFile { name, bytes: fs::read(source)? });
+    }
+    Ok(Some(files))
 }
 
 #[tauri::command]
@@ -347,6 +2393,9 @@ fn add_dropped_files_to_workspace(
     ensure_workspace(&workspace_path)?;
     let mut copied = Vec::new();
     let mut copied_templates = Vec::new();
+    let mut relocated_archived_files = Vec::new();
+    let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let installs_workspace_templates = destination_root == workspace_templates_dir_path(&workspace_path);
 
     for file in files {
         if document_extension(Path::new(&file.name)).is_none() {
@@ -354,13 +2403,10 @@ fn add_dropped_files_to_workspace(
                 "Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.".into(),
             ));
         }
-        let is_template = template_extension(Path::new(&file.name)).is_some();
-        let destination_root = if is_template {
-            workspace_templates_dir(&workspace_path)?
-        } else {
-            workspace_target_directory(&workspace_path, &target_directory)?
-        };
-        let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file.name));
+        let is_template = installs_workspace_templates && template_extension(Path::new(&file.name)).is_some();
+        let incoming = incoming_workspace_file(&workspace_path, &destination_root, std::ffi::OsStr::new(&file.name))?;
+        let destination = incoming.destination;
+        relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::write(&destination, file.bytes)?;
         if is_template {
             copied_templates.push(destination);
@@ -378,6 +2424,7 @@ fn add_dropped_files_to_workspace(
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths: copied.iter().map(|path| path_to_string(path)).collect(),
         copied_template_paths: copied_templates.iter().map(|path| path_to_string(path)).collect(),
+        relocated_archived_files,
     })
 }
 
@@ -668,6 +2715,76 @@ fn save_binary_as_dialog(suggested_name: String, bytes: Vec<u8>) -> AppResult<Op
 }
 
 #[tauri::command]
+fn open_attachment_file(app: AppHandle, filename: String, bytes: Vec<u8>) -> AppResult<()> {
+    materialize_and_open_attachment(&app, &filename, &bytes)
+}
+
+#[tauri::command]
+fn open_attachment_file_raw(app: AppHandle, request: tauri::ipc::Request<'_>) -> AppResult<()> {
+    let filename = decode_ipc_header(request.headers(), "x-hvy-attachment-filename")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(AppError::Message("Expected raw attachment bytes.".into()));
+    };
+    materialize_and_open_attachment(&app, &filename, bytes)
+}
+
+fn materialize_and_open_attachment(app: &AppHandle, filename: &str, bytes: &[u8]) -> AppResult<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| AppError::Message(error.to_string()))?
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "hvy-galaxy-attachment-{}-{timestamp}",
+        std::process::id(),
+    ));
+    fs::create_dir(&directory)?;
+    let path = directory.join(safe_attachment_filename(filename));
+    fs::write(&path, bytes)?;
+    let url = tauri::Url::from_file_path(&path)
+        .map_err(|_| AppError::Message("Attachment preview path could not be converted to a file URL.".into()))?;
+    let window_label = format!("attachment-preview-{}-{timestamp}", std::process::id());
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        &window_label,
+        tauri::WebviewUrl::External(url),
+    )
+    .title(format!("{} — HVY Galaxy", safe_attachment_filename(filename)))
+    .inner_size(980.0, 820.0)
+    .min_inner_size(480.0, 360.0)
+    .build()
+    .map_err(|error| AppError::Message(error.to_string()))?;
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let _ = fs::remove_dir_all(&directory);
+        }
+    });
+    Ok(())
+}
+
+fn safe_attachment_filename(filename: &str) -> String {
+    let leaf = Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+    let sanitized = leaf
+        .chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim();
+    if sanitized.is_empty() || sanitized.chars().all(|character| character == '.') {
+        "attachment".into()
+    } else {
+        sanitized.into()
+    }
+}
+
+#[tauri::command]
 fn list_saved_templates(app: AppHandle, workspace_path: Option<String>) -> AppResult<Vec<SavedTemplate>> {
     let mut templates = Vec::new();
     append_saved_templates(&mut templates, &app_templates_dir(&app)?, "app")?;
@@ -754,6 +2871,38 @@ fn create_document_file(
     touch_workspace_manifest(&workspace_path)?;
     add_recent_file(&app, &path)?;
     Ok(read_document_at(&path)?)
+}
+
+#[tauri::command]
+fn create_encrypted_folder_document(
+    app: AppHandle,
+    request: CreateEncryptedFolderDocumentRequest,
+) -> AppResult<DocumentFile> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let path = create_encrypted_folder_document_at(&workspace_path, &request)?;
+    add_recent_file(&app, &path)?;
+    read_document_at(&path)
+}
+
+#[tauri::command]
+fn create_encrypted_folder_child(
+    request: CreateEncryptedFolderChildRequest,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    create_encrypted_folder_child_at(&workspace_path, &request)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn update_encrypted_folder_manifest(
+    request: UpdateEncryptedFolderManifestRequest,
+) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    update_encrypted_folder_manifest_at(&workspace_path, &request)?;
+    load_workspace_from_path(&workspace_path)
 }
 
 #[tauri::command]
@@ -848,6 +2997,44 @@ fn archive_document_file(path: String) -> AppResult<Workspace> {
     let workspace_path = workspace_root_for_document(parent)
         .ok_or_else(|| AppError::Message("Document must be inside a workspace.".into()))?;
     update_archived_document_file(&workspace_path, &path, true)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn delete_encrypted_folder_document(app: AppHandle, request: DeleteEncryptedFolderDocumentRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let deleted_path = delete_encrypted_folder_document_at(&workspace_path, &request)?;
+    update_archived_document_file(&workspace_path, &deleted_path, false)?;
+    update_workspace_file_ai_access_at(
+        &workspace_path,
+        &deleted_path,
+        WorkspaceFileAiAccessUpdate { locked: Some(false), hidden_from_ai: Some(false) },
+    )?;
+    remove_recent_file(&app, &deleted_path)?;
+    load_workspace_from_path(&workspace_path)
+}
+
+#[tauri::command]
+fn delete_encrypted_folder_child(request: DeleteEncryptedFolderChildRequest) -> AppResult<Workspace> {
+    let workspace_path = PathBuf::from(&request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    delete_encrypted_folder_child_at(&workspace_path, &request)?;
+    let deleted_relative = format!(
+        "{}/{}",
+        request.folder_directory.trim().replace('\\', "/"),
+        request.child_folder_id,
+    );
+    let manifest_path = workspace_manifest_path(&workspace_path)
+        .ok_or_else(|| AppError::Message("Workspace manifest is missing.".into()))?;
+    let mut manifest = read_manifest(&manifest_path)?;
+    let outside_deleted = |entry: &String| entry != &deleted_relative && !entry.starts_with(&format!("{deleted_relative}/"));
+    manifest.archived_files.retain(outside_deleted);
+    manifest.locked_files.retain(outside_deleted);
+    manifest.hidden_from_ai_files.retain(outside_deleted);
+    manifest.hidden_from_ai_folders.retain(outside_deleted);
+    manifest.updated_at = Utc::now().to_rfc3339();
+    write_json_atomically(&manifest_path, &manifest)?;
     load_workspace_from_path(&workspace_path)
 }
 
@@ -1006,12 +3193,16 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, file_name);
+    let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let destination = incoming.destination;
     fs::copy(&path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;
-    read_document_at(&destination)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -1038,7 +3229,8 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let destination = unique_copy_path(&target_root, file_name);
+    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let destination = incoming.destination;
     fs::rename(&path, &destination)?;
     if let Some(source_workspace) = source_workspace {
         if fs::canonicalize(&source_workspace)? == fs::canonicalize(&workspace_path)? {
@@ -1047,6 +3239,60 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
             touch_workspace_manifest(&source_workspace)?;
         }
     }
+    touch_workspace_manifest(&workspace_path)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    add_recent_file(&app, &destination)?;
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
+}
+
+#[tauri::command]
+fn convert_workspace_document_kind(
+    app: AppHandle,
+    path: String,
+    workspace_path: String,
+    to_template: bool,
+) -> AppResult<DocumentFile> {
+    let path = PathBuf::from(path);
+    let extension = document_extension(&path)
+        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, and .phvy files can be converted.".into()))?;
+    if extension == ".md" {
+        return Err(AppError::Message("Only .hvy, .thvy, and .phvy files can be converted.".into()));
+    }
+    if !path.is_file() {
+        return Err(AppError::Message("Document file does not exist.".into()));
+    }
+    let source_parent = path
+        .parent()
+        .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
+    let source_workspace = workspace_root_for_document(source_parent)
+        .ok_or_else(|| AppError::Message("Document must be inside the selected workspace.".into()))?;
+    let workspace_path = PathBuf::from(workspace_path);
+    ensure_workspace(&workspace_path)?;
+    if fs::canonicalize(&source_workspace)? != fs::canonicalize(&workspace_path)? {
+        return Err(AppError::Message("Document must be inside the selected workspace.".into()));
+    }
+    let next_extension = if extension == ".phvy" {
+        ".phvy"
+    } else if to_template {
+        ".thvy"
+    } else {
+        ".hvy"
+    };
+    let destination_root = if to_template {
+        workspace_templates_dir(&workspace_path)?
+    } else {
+        workspace_path.clone()
+    };
+    let stem = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
+    let file_name = format!("{stem}{next_extension}");
+    let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file_name));
+    fs::rename(&path, &destination)?;
+    rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;
@@ -1101,6 +3347,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
         return Err(AppError::Message("No files are available to paste.".into()));
     }
     let mut copied_paths = Vec::new();
+    let mut relocated_archived_files = Vec::new();
     for source in source_paths {
         if document_extension(&source).is_none() || !source.is_file() {
             continue;
@@ -1108,7 +3355,10 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
         let file_name = source
             .file_name()
             .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-        let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, file_name);
+        let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
+        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let destination = incoming.destination;
+        relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
         add_recent_file(&app, &destination)?;
         copied_paths.push(destination.to_string_lossy().to_string());
@@ -1122,6 +3372,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
         workspace: load_workspace_from_path(&workspace_path)?,
         copied_paths,
         copied_template_paths: Vec::new(),
+        relocated_archived_files,
     })
 }
 
@@ -1237,6 +3488,7 @@ fn restore_document_backup(app: AppHandle, id: String) -> AppResult<DocumentFile
         locked: false,
         hidden_from_ai: false,
         recovery_state: snapshot.recovery_state,
+        relocated_archived_files: Vec::new(),
     })
 }
 
@@ -1280,6 +3532,24 @@ fn clear_document_recovery_drafts(app: AppHandle, request: DocumentRecoveryDraft
 }
 
 #[tauri::command]
+fn relocate_document_recovery_drafts(app: AppHandle, request: RelocateDocumentRecoveryDraftsRequest) -> AppResult<()> {
+    let previous_key = document_recovery_draft_key(&request.previous_document_path, &request.previous_name);
+    for path in read_document_backup_snapshot_paths(&app)? {
+        let Ok(mut snapshot) = read_document_backup_snapshot(&path) else {
+            continue;
+        };
+        if document_backup_key(&snapshot) != previous_key {
+            continue;
+        }
+        snapshot.document_path = request.document_path.clone();
+        snapshot.name = request.name.clone();
+        snapshot.extension = request.extension.clone();
+        write_json_atomically(&path, &snapshot)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn open_external_url(url: String) -> AppResult<()> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:")) {
@@ -1309,13 +3579,27 @@ fn open_external_url(url: String) -> AppResult<()> {
 
 #[tauri::command]
 fn close_app_window(app: AppHandle) -> AppResult<()> {
+    #[cfg(not(target_os = "macos"))]
+    save_open_integration_cookies(&app)?;
     app.exit(0);
     Ok(())
 }
 
 #[tauri::command]
 fn update_file_menu_state(app: AppHandle, native_menu: State<NativeMenuState>, state: FileMenuState) -> AppResult<()> {
-    *native_menu.file_menu.lock().unwrap() = state.clone();
+    let unsaved_changes_visibility_changed = {
+        let mut current = native_menu.file_menu.lock().unwrap();
+        let changed = current.document_encryption_unsaved_changes != state.document_encryption_unsaved_changes;
+        *current = state.clone();
+        changed
+    };
+    if unsaved_changes_visibility_changed {
+        let menu = build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?;
+        set_file_menu_state(&menu, &state)?;
+        app.set_menu(menu)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        return Ok(());
+    }
     if let Some(menu) = app.menu() {
         set_file_menu_state(&menu, &state)?;
     }

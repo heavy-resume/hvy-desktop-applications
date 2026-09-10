@@ -135,7 +135,7 @@ export async function applyWorkspaceFilterToCurrentDocument(): Promise<void> {
   const openDocument = state.document;
   const document = openDocument?.mounted?.document ?? pendingMountDocument;
   if (!openDocument || !document) return;
-  const snapshot = await createWorkspaceFilterSnapshotForDocument(openDocument.path, openDocument.name, document);
+  const snapshot = await createWorkspaceFilterSnapshotForDocument(openDocument.source.path, openDocument.source.name, document);
   if (openDocument.mounted) {
     setMountedSearchSnapshot(openDocument.mounted, snapshot);
     applyAppColorTheme();
@@ -399,7 +399,7 @@ export async function buildWorkspaceFilterDocuments(
     if (candidates && !candidates.has(normalizeFilePath(file.path))) continue;
     if (scope && !workspaceFilterFileRelativePath(file, workspace.path).startsWith(`${scope}/`)) continue;
     const session = documentSessions.get(file.path);
-    const openDocument = state.document?.path === file.path ? state.document : null;
+    const openDocument = state.document?.source.path === file.path ? state.document : null;
     const liveDocument = openDocument?.mounted?.document ?? (openDocument ? pendingMountDocument : null) ?? session?.document ?? null;
     if (liveDocument) {
       documents.push({
@@ -431,7 +431,7 @@ export function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFile
   return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
 }
 
-export function workspaceFileAiAccess(path: string): { archived: boolean; locked: boolean; hiddenFromAI: boolean; readOnly: boolean } {
+export function workspaceFileAiAccess(path: string): { archived: boolean; locked: boolean; hiddenFromAI: boolean; encryptedAIAllowed: boolean; readOnly: boolean } {
   return workspaceFileAccessInWorkspaces(state.workspaces, path);
 }
 
@@ -460,13 +460,13 @@ export function syncOpenDocumentWorkspaceAccess(path: string, access: { locked?:
   const hiddenFromAI = typeof access.hiddenFromAI === 'boolean'
     ? access.hiddenFromAI
     : workspaceAccess.hiddenFromAI;
-  const session = documentSessions.get(path);
-  if (session) {
+  for (const session of documentSessions.values()) {
+    if (session.source.path !== path) continue;
     session.readOnly = readOnly;
     session.hiddenFromAI = hiddenFromAI;
     if (session.hiddenFromAI && session.mode === 'ai') session.mode = 'viewer';
   }
-  if (state.document?.path !== path) return;
+  if (state.document?.source.path !== path) return;
   state.document.readOnly = readOnly;
   state.document.hiddenFromAI = hiddenFromAI;
   if (state.document.readOnly || (state.document.hiddenFromAI && state.document.mode === 'ai')) {

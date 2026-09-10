@@ -1,0 +1,362 @@
+export interface IntegrationPageDefinition {
+  id: string;
+  name: string;
+  url: string;
+  allowedOrigins: string[];
+  editable: boolean;
+  readyChecks?: IntegrationPageReadyChecks;
+  visibleProfileIds?: string[];
+  commands?: IntegrationCommandDefinition[];
+  retrievalSources?: IntegrationRetrievalSourceDefinition[];
+}
+
+export interface IntegrationPageReadyCheck {
+  id: string;
+  name: string;
+  snapshot: unknown;
+  expectedValue?: string;
+}
+
+export interface IntegrationPageReadyChecks {
+  urlMode: 'strict-url' | 'strict-domain' | 'domain-regex';
+  urlValue: string;
+  elements: IntegrationPageReadyCheck[];
+}
+
+export interface IntegrationPageReadinessResult {
+  ready: boolean;
+  urlReady: boolean;
+  elements: Array<{
+    id: string;
+    name: string;
+    ready: boolean;
+    reason?: 'element_not_found' | 'value_changed';
+  }>;
+  message: string;
+}
+
+export function defaultIntegrationPageReadyChecks(urlValue: string, urlMode: IntegrationPageReadyChecks['urlMode'] = 'strict-url'): IntegrationPageReadyChecks {
+  const url = new URL(urlValue);
+  return {
+    urlMode,
+    urlValue: urlMode === 'strict-url' ? url.href : url.hostname,
+    elements: [],
+  };
+}
+
+export function integrationPageReadyChecks(page: Pick<IntegrationPageDefinition, 'url' | 'readyChecks'>): IntegrationPageReadyChecks {
+  return page.readyChecks ?? defaultIntegrationPageReadyChecks(page.url);
+}
+
+export function integrationPageExpectedOrigins(page: Pick<IntegrationPageDefinition, 'url' | 'allowedOrigins' | 'readyChecks'>): string[] {
+  const checks = integrationPageReadyChecks(page);
+  const matching = page.allowedOrigins.filter((origin) => {
+    const hostname = new URL(origin).hostname;
+    if (checks.urlMode === 'strict-domain') return hostname === checks.urlValue;
+    if (checks.urlMode === 'domain-regex') {
+      try { return new RegExp(checks.urlValue).test(hostname); } catch { return false; }
+    }
+    try { return origin === new URL(checks.urlValue).origin; } catch { return false; }
+  });
+  return matching.length ? matching : [new URL(page.url).origin];
+}
+
+export function normalizeIntegrationPageAllowedOrigins(pageUrl: string, value: string): string[] {
+  const pageOrigin = new URL(pageUrl).origin;
+  const origins = value.split(/[\n,]/).map((entry) => entry.trim()).filter(Boolean).map((entry) => {
+    const url = new URL(entry);
+    const hostname = url.hostname.toLowerCase();
+    const ipv4 = hostname.split('.').map(Number);
+    const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const localHttp = url.protocol === 'http:' && (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' || loopbackIpv4);
+    if (url.protocol !== 'https:' && !localHttp) throw new Error('Allowed origins must use HTTPS, except for local development pages.');
+    return url.origin;
+  });
+  return [...new Set([pageOrigin, ...origins])];
+}
+
+export function integrationNavigationResumeUrl(
+  navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address',
+  currentUrl: string,
+  requestedUrl: string,
+): string {
+  return navigationKind === 'frame-or-main' ? currentUrl : requestedUrl;
+}
+
+export interface IntegrationRetrievalSourceDefinition {
+  id: string;
+  name: string;
+  kind: 'rss' | 'atom' | 'json-feed' | 'json-api';
+  url: string;
+  method: 'GET';
+  responsePath?: string;
+}
+
+export interface IntegrationActionDefinition {
+  id: string;
+  integrationId: string;
+  name: string;
+  description: string;
+  pageIds: string[];
+  script: string;
+  resultSchema: Record<string, unknown>;
+  permissions: Array<'dom:read' | 'image:read'>;
+  version: number;
+  status?: 'draft' | 'ready';
+  examples?: unknown[];
+  anchors?: unknown[];
+  pattern?: IntegrationActionPatternDefinition;
+  source?: IntegrationWebMcpRecordSourceDefinition;
+  commands?: IntegrationCommandDefinition[];
+  scrollPage?: boolean;
+}
+
+export interface IntegrationWebMcpRecordSourceDefinition {
+  kind: 'webmcp';
+  capabilityId: string;
+  recordsPath: string;
+  fields: Array<{ name: string; label: string }>;
+}
+
+export interface IntegrationCommandDefinition {
+  id: string;
+  name: string;
+  scope: 'page' | 'record';
+  inputs?: IntegrationCommandInputDefinition[];
+  steps: IntegrationInteractionStepDefinition[];
+}
+
+export interface IntegrationCommandInputDefinition {
+  id: string;
+  name: string;
+  required: boolean;
+  options?: IntegrationCommandInputOptionDefinition[];
+  allowCustom?: boolean;
+}
+
+export interface IntegrationCommandInputOptionDefinition {
+  value: string;
+  label: string;
+}
+
+export interface IntegrationInteractionStepDefinition {
+  gesture: 'click' | 'double-click' | 'right-click' | 'type' | 'select';
+  target: unknown;
+  inputId?: string;
+  value?: string;
+  valueLabel?: string;
+  options?: IntegrationCommandInputOptionDefinition[];
+  allowCustom?: boolean;
+  fromState?: string;
+  toState?: string;
+}
+
+export interface IntegrationActionFieldDefinition {
+  id: string;
+  label: string;
+  cardinality: 'single' | 'list';
+  optional: boolean;
+  snapshot: unknown;
+  snapshots?: unknown[];
+  negativeSnapshots?: unknown[];
+  exampleSnapshots?: Array<unknown | null>;
+  absentExampleIndexes?: number[];
+}
+
+export interface IntegrationActionPatternDefinition {
+  recordLabel: string;
+  minimumConfidence: number;
+  scope?: unknown;
+  parents: unknown[];
+  fields: IntegrationActionFieldDefinition[];
+}
+
+export interface IntegrationDefinition {
+  id: string;
+  name: string;
+  profileProviderId: string;
+  editable: boolean;
+  pages: IntegrationPageDefinition[];
+  actions: IntegrationActionDefinition[];
+}
+
+export interface IntegrationProfileDefinition {
+  id: string;
+  name: string;
+  providerId: string;
+  browserStoreId: string;
+}
+
+export interface IntegrationRegistry {
+  version: 1;
+  integrations: IntegrationDefinition[];
+  profiles: IntegrationProfileDefinition[];
+}
+
+export interface InspectionPrivacyRule {
+  path: string;
+  action: 'label' | 'remove';
+  label?: string;
+}
+
+const STORAGE_KEY = 'hvy-galaxy-integration-registry-v1';
+
+export function defaultIntegrationRegistry(): IntegrationRegistry {
+  return {
+    version: 1,
+    profiles: [{
+      id: 'default-google',
+      name: 'Personal',
+      providerId: 'google',
+      browserStoreId: 'default-google',
+    }],
+    integrations: [],
+  };
+}
+
+export function loadIntegrationRegistry(): IntegrationRegistry {
+  const fallback = defaultIntegrationRegistry();
+  const value = localStorage.getItem(STORAGE_KEY);
+  if (!value) return fallback;
+  const saved = JSON.parse(value) as IntegrationRegistry;
+  const custom = saved.integrations.filter((integration) => integration.editable && !fallback.integrations.some((builtIn) => builtIn.id === integration.id)).map((integration) => ({
+    ...integration,
+    pages: integration.pages.map((page) => ({
+      ...page,
+      commands: [
+        ...(page.commands ?? []),
+        ...integration.actions.filter((action) => action.pageIds[0] === page.id).flatMap((action) => action.commands?.filter((command) => command.scope === 'page') ?? []),
+      ],
+    })),
+    actions: integration.actions.map((action) => ({
+      ...action,
+      commands: action.commands?.filter((command) => command.scope === 'record') ?? [],
+    })),
+  }));
+  const profiles = (saved.profiles ?? fallback.profiles).map((profile) => (
+    profile.id === 'default-google' && profile.name === 'Google account'
+      ? { ...profile, name: 'Personal' }
+      : profile
+  ));
+  return { version: 1, integrations: custom, profiles };
+}
+
+export function saveIntegrationRegistry(registry: IntegrationRegistry): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(registry));
+}
+
+export function matcherSnapshot(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown; pagePath?: unknown } }).selected;
+  return {
+    selected: {
+      shape: selected?.shape,
+      relativePath: selected?.relativePath ?? null,
+      ...(selected?.pagePath ? { pagePath: selected.pagePath } : {}),
+    },
+  };
+}
+
+export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; scope?: unknown; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[]; exampleSnapshots: Array<unknown | null> }> } | null {
+  if (!action.pattern) return null;
+  return {
+    minimumConfidence: action.pattern.minimumConfidence ?? 0.85,
+    ...(action.pattern.scope ? { scope: action.pattern.scope } : {}),
+    parents: action.pattern.parents,
+    targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [], exampleSnapshots: field.exampleSnapshots ?? [] })),
+  };
+}
+
+export function commandExecutionPayload(action: IntegrationActionDefinition, command: IntegrationCommandDefinition, recordParent?: string, inputs?: Record<string, string>): { pattern: NonNullable<ReturnType<typeof actionPatternPayload>>; command: IntegrationCommandDefinition; recordParent?: string; inputs?: Record<string, string> } | null {
+  const pattern = actionPatternPayload(action);
+  if (!pattern || !command.steps.length) return null;
+  return { pattern, command, ...(recordParent ? { recordParent } : {}), ...(inputs ? { inputs } : {}) };
+}
+
+export function pageCommandExecutionPayload(command: IntegrationCommandDefinition, inputs?: Record<string, string>): { pattern: { minimumConfidence: number; parents: never[]; targets: never[] }; command: IntegrationCommandDefinition; inputs?: Record<string, string> } | null {
+  if (command.scope !== 'page' || !command.steps.length) return null;
+  return { pattern: { minimumConfidence: 0.8, parents: [], targets: [] }, command, ...(inputs ? { inputs } : {}) };
+}
+
+export function createCustomPageIntegration(name: string, urlValue: string): IntegrationDefinition {
+  const rawUrl = urlValue.trim();
+  const hasExplicitScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(rawUrl);
+  const localWithoutScheme = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:[/?#]|$)/i.test(rawUrl);
+  const url = new URL(hasExplicitScheme ? rawUrl : `${localWithoutScheme ? 'http' : 'https'}://${rawUrl}`);
+  const hostname = url.hostname.toLowerCase();
+  const ipv4 = hostname.split('.').map(Number);
+  const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+  const localHttp = url.protocol === 'http:' && (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' || loopbackIpv4);
+  if (url.protocol !== 'https:' && !localHttp) throw new Error('Integration pages must use HTTPS, except for local development pages.');
+  if (!name.trim()) throw new Error('Enter a name for this integration page.');
+  const id = `custom-${crypto.randomUUID()}`;
+  return {
+    id,
+    name: name.trim(),
+    profileProviderId: 'browser',
+    editable: true,
+    pages: [{ id: `${id}-page`, name: name.trim(), url: url.href, allowedOrigins: [url.origin], editable: true, readyChecks: defaultIntegrationPageReadyChecks(url.href) }],
+    actions: [],
+  };
+}
+
+export function createIntegrationProfile(providerId: string, name: string): IntegrationProfileDefinition {
+  const id = `profile-${crypto.randomUUID()}`;
+  return { id, name: name.trim(), providerId, browserStoreId: crypto.randomUUID() };
+}
+
+export function jsonPathFor(parent: string, key: string | number): string {
+  return `${parent}/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`;
+}
+
+export function applyInspectionPrivacyRules(value: unknown, rules: InspectionPrivacyRule[]): unknown {
+  const rulesByPath = new Map(rules.map((rule) => [rule.path, rule]));
+  const transform = (current: unknown, path: string): unknown => {
+    const rule = rulesByPath.get(path);
+    if (rule?.action === 'remove') return undefined;
+    if (rule?.action === 'label') return `{{${(rule.label || 'REDACTED').trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')}}}`;
+    if (Array.isArray(current)) {
+      return current.map((item, index) => transform(item, jsonPathFor(path, index))).filter((item) => item !== undefined);
+    }
+    if (current && typeof current === 'object') {
+      return Object.fromEntries(Object.entries(current)
+        .map(([key, item]) => [key, transform(item, jsonPathFor(path, key))] as const)
+        .filter((entry) => entry[1] !== undefined));
+    }
+    return current;
+  };
+  return transform(value, '');
+}
+
+export function matchingInspectionPrivacyRules(value: unknown, path: string, action: 'label' | 'remove', label?: string): InspectionPrivacyRule[] {
+  const parts = path.split('/').slice(1).map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+  let selected = value;
+  for (const part of parts) {
+    if (!selected || typeof selected !== 'object') return [{ path, action, label }];
+    selected = (selected as Record<string, unknown>)[part];
+  }
+  if (selected !== null && typeof selected === 'object') return [{ path, action, label }];
+  const matches: InspectionPrivacyRule[] = [];
+  const visit = (current: unknown, currentPath: string) => {
+    if (current === selected) matches.push({ path: currentPath, action, label });
+    if (Array.isArray(current)) current.forEach((item, index) => visit(item, jsonPathFor(currentPath, index)));
+    else if (current && typeof current === 'object') Object.entries(current).forEach(([key, item]) => visit(item, jsonPathFor(currentPath, key)));
+  };
+  visit(value, '');
+  return matches;
+}
+
+export function selectedInspectionContent(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const selected = (value as { selected?: unknown }).selected;
+  if (!selected || typeof selected !== 'object') return '';
+  const item = selected as Record<string, unknown>;
+  for (const key of ['directText', 'accessibleName', 'descendantText']) {
+    if (typeof item[key] === 'string' && item[key].trim()) return item[key].trim();
+  }
+  const image = item.image;
+  if (image && typeof image === 'object' && typeof (image as Record<string, unknown>).alt === 'string') {
+    return String((image as Record<string, unknown>).alt);
+  }
+  return '';
+}

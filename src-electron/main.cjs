@@ -1,10 +1,20 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, shell, clipboard, session, safeStorage } = require('electron');
 const { execFile, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
+const { pathToFileURL } = require('node:url');
 const { promisify } = require('node:util');
+const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
+
+for (const stream of [process.stdout, process.stderr]) {
+  stream?.on('error', (error) => {
+    if (error?.code === 'EIO' || error?.code === 'EPIPE') return;
+    throw error;
+  });
+}
 
 const WORKSPACE_MANIFEST = '.hvyworkspace.json';
 const LEGACY_WORKSPACE_MANIFEST = '.hvygalaxy.json';
@@ -12,6 +22,14 @@ const RECENT_STATE = 'recent.json';
 const ARCHIVED_WORKSPACES = 'archived-workspaces.json';
 const AI_SETTINGS = 'ai-settings.json';
 const APP_SETTINGS = 'app-settings.json';
+const INTEGRATION_VAULT_FILE = 'integration-cookie-vault-electron.json';
+const INTEGRATION_VAULT_KEY_FILE = 'integration-vault-key-electron.bin';
+const DOCUMENT_KEY_VAULT_FILE = 'document-key-vault-v1.json';
+const DOCUMENT_KEY_VAULT_KEY_FILE = 'document-key-vault-key-electron.bin';
+const DOCUMENT_KEY_MIGRATION_PREFIX = 'document-key-migration-';
+const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
+const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
+const DOCUMENT_ENCRYPTION_PREFIX = Buffer.from('---HVY-ENCRYPTED---\n');
 const MCP_SETTINGS = 'mcp-settings.json';
 const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
 const RECENT_LIMIT = 12;
@@ -37,6 +55,10 @@ if (handleSquirrelStartupEvent()) {
 }
 
 let mainWindow = null;
+let pluginBuilderWindow = null;
+const attachmentPreviewWindows = new Set();
+const integrationBrowsers = new Map();
+const integrationBrowserOpenQueues = new Map();
 let appCloseAllowed = false;
 let nativeQuitRequested = false;
 let fileMenuState = defaultFileMenuState();
@@ -48,6 +70,18 @@ let mcpStatus = {
   message: 'MCP server is stopped.',
   lastError: null,
 };
+let webMcpBrokerServer = null;
+let webMcpBrokerToken = null;
+let webMcpBrokerRendererReady = false;
+const webMcpBrokerPending = new Map();
+
+function raiseWindow(window) {
+  if (!window || window.isDestroyed()) return;
+  if (process.platform === 'darwin') app.focus({ steal: true });
+  window.show();
+  window.moveTop();
+  window.focus();
+}
 
 app.setName(APP_NAME);
 app.setAppUserModelId(APP_IDENTIFIER);
@@ -58,16 +92,31 @@ app.setAboutPanelOptions({
 });
 app.setPath('userData', electronProfileDir());
 
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+
+app.on('second-instance', (_event, argv, workingDirectory) => {
+  for (const value of argv) {
+    const candidate = path.isAbsolute(value) ? value : path.resolve(workingDirectory, value);
+    enqueueOpenDocumentPath(candidate);
+  }
+  raiseWindow(mainWindow);
+});
+
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
   enqueueOpenDocumentPath(filePath);
 });
 
 app.whenReady().then(async () => {
+  recoverPendingDocumentKeyMigrations();
   mainWindow = createWindow();
   bindWindowShortcuts(mainWindow);
   buildMenu();
   await loadRenderer(mainWindow);
+  await startWebMcpBroker();
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -90,6 +139,8 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   requestNativeAppClose({ quit: true });
 });
+
+app.on('will-quit', () => stopWebMcpBroker());
 
 function handleSquirrelStartupEvent() {
   if (process.platform !== 'win32' || process.argv.length < 2) {
@@ -135,7 +186,13 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: true,
     },
+  });
+  installEditableContextMenu(window);
+  window.webContents.setVisualZoomLevelLimits(1, 1);
+  window.webContents.on('did-start-loading', () => {
+    if (mainWindow === window) webMcpBrokerRendererReady = false;
   });
   window.on('close', (event) => {
     if (appCloseAllowed) return;
@@ -150,7 +207,45 @@ function createWindow() {
       appCloseAllowed = false;
     }
   });
+  window.on('swipe', (_event, direction) => {
+    if (direction === 'left') emitMenu('navigate-forward');
+    if (direction === 'right') emitMenu('navigate-back');
+  });
+  window.webContents.on('app-command', (_event, command) => {
+    if (command === 'browser-backward') emitMenu('navigate-back');
+    if (command === 'browser-forward') emitMenu('navigate-forward');
+  });
   return window;
+}
+
+function installEditableContextMenu(window) {
+  window.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+
+    const spellingItems = params.dictionarySuggestions.map((suggestion) => ({
+      label: suggestion,
+      click: () => window.webContents.replaceMisspelling(suggestion),
+    }));
+    if (params.misspelledWord) {
+      if (spellingItems.length === 0) {
+        spellingItems.push({ label: 'No Spelling Suggestions', enabled: false });
+      }
+      spellingItems.push({
+        label: 'Add to Dictionary',
+        click: () => window.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      spellingItems.push({ type: 'separator' });
+    }
+
+    Menu.buildFromTemplate([
+      ...spellingItems,
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { type: 'separator' },
+      { role: 'selectAll' },
+    ]).popup({ window });
+  });
 }
 
 function bindWindowShortcuts(window) {
@@ -193,6 +288,21 @@ async function loadRenderer(window) {
   await window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
+async function loadPluginBuilderRenderer(window, workspacePaths, selectedWorkspacePath) {
+  const query = {
+    workspaces: JSON.stringify(workspacePaths),
+    ...(selectedWorkspacePath ? { selectedWorkspace: selectedWorkspacePath } : {}),
+  };
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL('/plugin-builder.html', process.env.ELECTRON_RENDERER_URL);
+    url.searchParams.set('workspaces', JSON.stringify(workspacePaths));
+    if (selectedWorkspacePath) url.searchParams.set('selectedWorkspace', selectedWorkspacePath);
+    await window.loadURL(url.toString());
+    return;
+  }
+  await window.loadFile(path.join(__dirname, '..', 'dist', 'plugin-builder.html'), { query });
+}
+
 function buildMenu() {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const template = [
@@ -210,12 +320,14 @@ function buildMenu() {
     {
       label: 'File',
       submenu: [
+        menuItem('Open Homepage', 'open-homepage'),
+        { type: 'separator' },
         menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),
         menuItem('Open Workspace', 'open-workspace', 'CmdOrCtrl+O'),
         menuItem('Manage Workspaces...', 'manage-workspaces'),
         ...(process.platform === 'darwin' ? [] : [menuItem('Settings...', 'app-settings', 'CmdOrCtrl+,')]),
         menuItem('Open File', 'open-file', 'CmdOrCtrl+Shift+O'),
-        recentSubmenu('Recent Workspaces', recent.workspaces, 'recent-workspace:', 'No Recent Workspaces'),
+        recentSubmenu('Recent Workspaces', recentWorkspacePaths(recent), 'recent-workspace:', 'No Recent Workspaces'),
         recentSubmenu('Recent Files', recent.files, 'recent-file:', 'No Recent Files'),
         { type: 'separator' },
         menuItem('Close Document', 'close-document', 'CmdOrCtrl+W'),
@@ -225,6 +337,12 @@ function buildMenu() {
         { type: 'separator' },
         menuItem('Export PDF...', 'export-pdf'),
         menuItem('Import Into Current...', 'import-current'),
+        { type: 'separator' },
+        menuItem('Encrypt Document...', 'encrypt-document'),
+        menuItem('Remove Document Encryption...', 'decrypt-document'),
+        { label: '(unsaved changes)', id: 'document-encryption-unsaved-changes', enabled: false, visible: false },
+        { type: 'separator' },
+        menuItem('Manage Encryption Keys...', 'manage-encryption-keys'),
         { type: 'separator' },
         menuItem('Recover Unsaved Edits...', 'recover-backup'),
         menuItem('Version History...', 'version-history'),
@@ -280,6 +398,30 @@ function buildMenu() {
       ],
     },
     {
+      label: 'Plugins',
+      submenu: [
+        { ...menuItem('Plugin Builder...', 'plugin-builder'), enabled: false },
+        menuItem('Manage Plugins...', 'manage-plugins'),
+        { type: 'separator' },
+        menuItem('Power Scripting...', 'review-scripting'),
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { label: APP_NAME, click: () => raiseWindow(mainWindow) },
+        ...(pluginBuilderWindow && !pluginBuilderWindow.isDestroyed()
+          ? [{ label: 'Plugin Builder — HVY Galaxy', click: () => raiseWindow(pluginBuilderWindow) }]
+          : []),
+        ...[...integrationBrowsers.values()]
+          .filter((browser) => browser.window && !browser.window.isDestroyed())
+          .map((browser) => ({ label: `Integrations — ${browser.name}`, click: () => raiseWindow(browser.window) })),
+      ],
+    },
+    {
       label: 'Help',
       submenu: [
         menuItem('HVY Galaxy Guide', 'open-guide', 'F1'),
@@ -291,6 +433,9 @@ function buildMenu() {
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  for (const browser of integrationBrowsers.values()) {
+    if (browser.window && !browser.window.isDestroyed()) browser.window.removeMenu();
+  }
 }
 
 function menuItem(label, id, accelerator) {
@@ -304,12 +449,15 @@ function menuItem(label, id, accelerator) {
 }
 
 function fileMenuItemEnabled(id) {
+  if (id === 'open-homepage') return fileMenuState.openHomepage;
   if (id === 'close-document') return fileMenuState.closeDocument;
   if (id === 'save') return fileMenuState.save;
   if (id === 'save-as') return fileMenuState.saveAs;
   if (id === 'save-to-workspace') return fileMenuState.saveToWorkspace;
   if (id === 'export-pdf') return fileMenuState.exportPdf;
   if (id === 'import-current') return fileMenuState.importCurrent;
+  if (id === 'encrypt-document') return fileMenuState.encryptDocument;
+  if (id === 'decrypt-document') return fileMenuState.decryptDocument;
   return true;
 }
 
@@ -366,7 +514,7 @@ function loadLaunchDocumentPaths() {
 
 function emitRecent(prefix, index) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-  const entries = prefix === 'recent-file:' ? recent.files : recent.workspaces;
+  const entries = prefix === 'recent-file:' ? recent.files : recentWorkspacePaths(recent);
   const entry = entries?.[index];
   if (entry) emitMenu(`${prefix}${entry}`);
 }
@@ -379,7 +527,7 @@ function refreshMenu() {
   }
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   refreshRecentSubmenu(menu, 'recent-file:', recent.files || [], 'No Recent Files');
-  refreshRecentSubmenu(menu, 'recent-workspace:', recent.workspaces || [], 'No Recent Workspaces');
+  refreshRecentSubmenu(menu, 'recent-workspace:', recentWorkspacePaths(recent), 'No Recent Workspaces');
   refreshFileMenuState(menu);
 }
 
@@ -410,39 +558,54 @@ function refreshFileMenuState(menu) {
     const item = menu.getMenuItemById(id);
     if (item) item.enabled = enabled;
   }
+  const documentEncryptionUnsavedChanges = menu.getMenuItemById('document-encryption-unsaved-changes');
+  if (documentEncryptionUnsavedChanges) {
+    documentEncryptionUnsavedChanges.visible = fileMenuState.documentEncryptionUnsavedChanges;
+  }
 }
 
 function defaultFileMenuState() {
   return {
+    openHomepage: false,
     closeDocument: false,
     save: false,
     saveAs: false,
     saveToWorkspace: false,
     exportPdf: false,
     importCurrent: false,
+    encryptDocument: false,
+    decryptDocument: false,
+    documentEncryptionUnsavedChanges: false,
   };
 }
 
 function normalizeFileMenuState(state) {
   const fallback = defaultFileMenuState();
   return {
+    openHomepage: Boolean(state?.openHomepage ?? fallback.openHomepage),
     closeDocument: Boolean(state?.closeDocument ?? fallback.closeDocument),
     save: Boolean(state?.save ?? fallback.save),
     saveAs: Boolean(state?.saveAs ?? fallback.saveAs),
     saveToWorkspace: Boolean(state?.saveToWorkspace ?? fallback.saveToWorkspace),
     exportPdf: Boolean(state?.exportPdf ?? fallback.exportPdf),
     importCurrent: Boolean(state?.importCurrent ?? fallback.importCurrent),
+    encryptDocument: Boolean(state?.encryptDocument ?? fallback.encryptDocument),
+    decryptDocument: Boolean(state?.decryptDocument ?? fallback.decryptDocument),
+    documentEncryptionUnsavedChanges: Boolean(state?.documentEncryptionUnsavedChanges ?? fallback.documentEncryptionUnsavedChanges),
   };
 }
 
 function fileMenuStateEntries(state) {
   return {
+    'open-homepage': state.openHomepage,
     'close-document': state.closeDocument,
     save: state.save,
     'save-as': state.saveAs,
     'save-to-workspace': state.saveToWorkspace,
     'export-pdf': state.exportPdf,
     'import-current': state.importCurrent,
+    'encrypt-document': state.encryptDocument,
+    'decrypt-document': state.decryptDocument,
   };
 }
 
@@ -454,6 +617,10 @@ ipcMain.handle('hvy:invoke', async (_event, command, args = {}) => {
   }
 });
 
+ipcMain.on('hvy:webmcp-broker-renderer-ready', (event) => {
+  if (mainWindow && event.sender === mainWindow.webContents) webMcpBrokerRendererReady = true;
+});
+
 async function handleCommand(command, args) {
   switch (command) {
     case 'load_recent_state': return readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
@@ -462,6 +629,36 @@ async function handleCommand(command, args) {
     case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
     case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
+    case 'load_installed_plugin_packages': return loadInstalledPluginPackages();
+    case 'install_plugin_package': return installPluginPackage(args.name, args.bytes);
+    case 'open_plugin_builder_window': return openPluginBuilderWindow(args.workspacePaths, args.selectedWorkspacePath);
+    case 'list_plugin_projects': return listPluginProjects(args.workspacePath);
+    case 'create_plugin_project': return createPluginProject(args.request);
+    case 'read_plugin_project_files': return readPluginProjectFiles(args.workspacePath, args.directoryName);
+    case 'write_plugin_project_file': return writePluginProjectFile(args.request);
+    case 'write_plugin_project_build': return writePluginProjectBuild(args.request);
+    case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName, args.integrationId, args.pageId);
+    case 'integration_browser_is_open': {
+      const browser = integrationBrowsers.get(args.profileId || 'default-google');
+      return Boolean(browser?.window && !browser.window.isDestroyed() && !browser.closePromise);
+    }
+    case 'complete_web_mcp_broker_request': return completeWebMcpBrokerRequest(args.requestId, args.value, args.error);
+    case 'probe_integration_cookie_storage': return probeIntegrationCookieStorage();
+    case 'load_integration_vault_status': return loadIntegrationVaultStatus();
+    case 'setup_integration_vault': return setupIntegrationVault();
+    case 'reset_integration_vault': return resetIntegrationVault();
+    case 'load_document_key_vault_status': return loadDocumentKeyVaultStatus();
+    case 'load_document_keys': return loadDocumentKeys(args.keyIds);
+    case 'try_load_document_keys': return null;
+    case 'list_document_key_metadata': return listDocumentKeyMetadata();
+    case 'store_document_keys': return storeDocumentKeys(args.entries);
+    case 'delete_document_key': return deleteDocumentKey(args.keyId);
+    case 'begin_document_key_migration': return beginDocumentKeyMigration(args.request);
+    case 'stage_document_key_migration_file': return stageDocumentKeyMigrationFile(args.request);
+    case 'commit_document_key_migration': return commitDocumentKeyMigration(args.migrationId);
+    case 'finalize_document_key_migration': return finalizeDocumentKeyMigration(args.migrationId);
+    case 'rollback_document_key_migration': return rollbackDocumentKeyMigration(args.migrationId);
+    case 'open_document_key_file_dialog': return openDocumentKeyFileDialog();
     case 'load_ai_settings': return normalizeAiSettings(readJson(dataPath(AI_SETTINGS), defaultAiSettings()));
     case 'save_ai_settings': return writeJson(dataPath(AI_SETTINGS), normalizeAiSettings(args.settings));
     case 'load_mcp_settings': return loadMcpSettings();
@@ -481,15 +678,14 @@ async function handleCommand(command, args) {
       refreshMenu();
       return mcpStatus;
     case 'update_mcp_workspaces': return updateMcpWorkspaces(args.paths);
-    case 'load_default_guide': return readDocumentAt(defaultGuidePath());
-    case 'load_hvy_guide': return readDocumentAt(hvyGuidePath());
+    case 'load_included_document': return readDocumentAt(includedDocumentPath(args.id));
     case 'open_workspace_dialog': return openWorkspaceDialog();
     case 'reauthorize_workspace': return reauthorizeWorkspace(args.path);
     case 'choose_workspace_folder': return chooseWorkspaceFolder();
     case 'create_workspace': return createWorkspace(args.name);
     case 'new_workspace_dialog': return newWorkspaceDialog();
     case 'initialize_workspace_path': return initializeWorkspacePath(args.path);
-    case 'load_workspace': return loadWorkspace(args.path, args.includeTemplates === true);
+    case 'load_workspace': return loadWorkspace(args.path, args.includeTemplates === true, args.recordRecent === true);
     case 'load_archived_workspaces': return loadArchivedWorkspaces();
     case 'rename_workspace': return renameWorkspace(args.path, args.name);
     case 'archive_workspace': return archiveWorkspace(args.path);
@@ -497,6 +693,7 @@ async function handleCommand(command, args) {
     case 'create_workspace_folder': return createWorkspaceFolder(args.request);
     case 'add_files_to_workspace': return addFilesToWorkspace(args.workspacePath, args.targetDirectory || '');
     case 'add_dropped_files_to_workspace': return addDroppedFilesToWorkspace(args.workspacePath, args.files, args.targetDirectory || '');
+    case 'select_workspace_document_files': return selectWorkspaceDocumentFiles();
     case 'open_file_dialog': return openFileDialog();
     case 'open_import_source_dialog': return openImportSourceDialog();
     case 'load_launch_document_paths': return loadLaunchDocumentPaths();
@@ -510,6 +707,7 @@ async function handleCommand(command, args) {
     case 'save_document_as_dialog': return saveDocumentAsDialog(args.suggestedName, args.bytes);
     case 'save_pdf_as_dialog': return savePdfAsDialog(args.suggestedName, args.bytes);
     case 'save_binary_as_dialog': return saveBinaryAsDialog(args.suggestedName, args.bytes);
+    case 'open_attachment_file': return openAttachmentFile(args.filename, args.bytes);
     case 'list_saved_templates': return listSavedTemplates(args.workspacePath);
     case 'save_document_template': return saveDocumentTemplate(args.request);
     case 'update_workspace_template_visibility': return updateWorkspaceTemplateVisibility(args.workspacePath, args.templateVisibility);
@@ -520,6 +718,11 @@ async function handleCommand(command, args) {
     case 'save_color_theme_as_dialog': return saveColorThemeAsDialog(args.suggestedName, args.bytes);
     case 'update_file_menu_state': return updateFileMenuState(args.state);
     case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template);
+    case 'create_encrypted_folder_document': return createEncryptedFolderDocument(args.request);
+    case 'create_encrypted_folder_child': return createEncryptedFolderChild(args.request);
+    case 'update_encrypted_folder_manifest': return updateEncryptedFolderManifest(args.request);
+    case 'delete_encrypted_folder_document': return deleteEncryptedFolderDocument(args.request);
+    case 'delete_encrypted_folder_child': return deleteEncryptedFolderChild(args.request);
     case 'reveal_document_file': return revealDocumentFile(args.path);
     case 'open_document_file': return openDocumentFile(args.path);
     case 'rename_document_file': return renameDocumentFile(args.path, args.name);
@@ -530,6 +733,7 @@ async function handleCommand(command, args) {
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
+    case 'convert_workspace_document_kind': return convertWorkspaceDocumentKind(args.path, args.workspacePath, args.toTemplate === true);
     case 'write_system_file_clipboard': return writeSystemFileClipboard(args.request);
     case 'read_system_clipboard_text': return clipboard.readText();
     case 'paste_system_files_to_workspace': return pasteSystemFilesToWorkspace(args.workspacePath, args.targetDirectory || '');
@@ -538,9 +742,860 @@ async function handleCommand(command, args) {
     case 'restore_document_backup': return restoreDocumentBackup(args.id);
     case 'discard_document_backup': return discardDocumentBackup(args.id);
     case 'clear_document_recovery_drafts': return clearDocumentRecoveryDrafts(args.request);
+    case 'relocate_document_recovery_drafts': return relocateDocumentRecoveryDrafts(args.request);
     case 'open_external_url': return openExternalUrl(args.url);
     case 'close_app_window': return closeAppWindow();
     default: throw new Error(`Unknown Electron command: ${command}`);
+  }
+}
+
+const INTEGRATION_URLS = {
+  msn: 'https://www.msn.com/',
+  gmail: 'https://mail.google.com/',
+  calendar: 'https://calendar.google.com/',
+};
+
+const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
+const INTEGRATION_TOOLBAR = fs.readFileSync(path.join(__dirname, '..', 'public', 'integration-browser-toolbar.html'), 'utf8');
+const INTEGRATION_TOOLBAR_HEIGHT = 52;
+
+function setIntegrationToolbarInspectionState(browser, state = {}) {
+  if (!browser?.toolbarContents || browser.toolbarContents.isDestroyed()) return;
+  void browser.toolbarContents.executeJavaScript(`window.hvySetInspectionState?.(${JSON.stringify(state)})`);
+}
+
+function requestIntegrationNavigationApproval(browser, requestedUrl, navigationKind) {
+  const requestedOrigin = new URL(requestedUrl).origin;
+  if (!browser.pageId || !isAllowedIntegrationUrl(requestedUrl, new Set([requestedOrigin]))) {
+    void shell.openExternal(requestedUrl);
+    return;
+  }
+  mainWindow?.webContents.send('hvy:integration-inspection-result', {
+    kind: 'integration-navigation-request',
+    profileId: browser.profileId,
+    integrationId: browser.integrationId,
+    pageId: browser.pageId,
+    currentUrl: browser.contents.getURL(),
+    requestedUrl,
+    navigationKind,
+  });
+  raiseWindow(mainWindow);
+}
+
+function integrationInspectorOptions(payload) {
+  return { ...(payload && typeof payload === 'object' ? payload : {}), externalToolbar: true };
+}
+
+function integrationBrowserCommand(command, destination, profileId = 'default-google', customUrl, allowedOrigins, actionMode = false, payload, foreground = true, windowName, integrationId, pageId) {
+  if (command === 'open') {
+    if (!loadIntegrationVaultStatus().configured) {
+      setupIntegrationVault();
+    }
+    const url = customUrl || INTEGRATION_URLS[destination];
+    if (!url) throw new Error('Unknown integration browser destination.');
+    const customAllowedOrigins = customUrl ? new Set(allowedOrigins || []) : null;
+    if (customUrl && !customAllowedOrigins.has(new URL(customUrl).origin)) {
+      throw new Error('The custom page origin is not allowed.');
+    }
+    return openIntegrationBrowser(url, profileId, customAllowedOrigins, actionMode, payload, foreground, windowName, integrationId, pageId);
+  }
+  const browser = integrationBrowsers.get(profileId);
+  const integrationWindow = browser?.window;
+  if (!integrationWindow || integrationWindow.isDestroyed()) {
+    if (command === 'close' || command === 'cancel-inspect') return null;
+    throw new Error('Open the integration browser first.');
+  }
+  const browserContents = browser.contents;
+  if (command === 'back' && browserContents.canGoBack()) browserContents.goBack();
+  if (command === 'forward' && browserContents.canGoForward()) browserContents.goForward();
+  if (command === 'reload') browserContents.reload();
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target') browser.actionModePending = true;
+  if (command === 'cancel-inspect') browser.actionModePending = false;
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target' || command === 'test-pattern' || (command === 'extract-pattern' && payload?.foreground !== false) || command === 'execute-command' || command === 'focus-browser') {
+    raiseWindow(integrationWindow);
+  }
+  if (command === 'focus-main') {
+    raiseWindow(mainWindow);
+  }
+  if (command === 'inspect') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
+  if (command === 'inspect-parent') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(integrationInspectorOptions(payload))})`);
+  if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
+  if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
+  if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'cancel-extraction') return browserContents.executeJavaScript('window.__hvyGalaxyInspector?.cancelExtraction()');
+  if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
+  if (command === 'discover-sources') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
+  if (command === 'fetch-source') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'discover-webmcp-tools') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  if (command === 'invoke-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  if (command === 'cancel-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.cancel(${JSON.stringify(payload?.requestId)}) : undefined`);
+  if (command === 'cancel-inspect') {
+    browserContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
+    setIntegrationToolbarInspectionState(browser);
+    raiseWindow(mainWindow);
+  }
+  if (command === 'close') integrationWindow.close();
+  return null;
+}
+
+function loadIntegrationVaultStatus() {
+  return {
+    configured: fs.existsSync(dataPath(INTEGRATION_VAULT_KEY_FILE)),
+    hasVault: fs.existsSync(dataPath(INTEGRATION_VAULT_FILE)),
+  };
+}
+
+function setupIntegrationVault() {
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Operating-system encryption is unavailable.');
+  }
+  const key = crypto.randomBytes(32);
+  writeFileAtomically(dataPath(INTEGRATION_VAULT_KEY_FILE), safeStorage.encryptString(key.toString('base64')));
+  writeElectronIntegrationVault(key, Buffer.from('{"profiles":{}}'));
+  return loadIntegrationVaultStatus();
+}
+
+function writeElectronIntegrationVault(key, plaintext) {
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+  cipher.setAAD(Buffer.from('hvy-galaxy-integration-vault-v1'));
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]);
+  const envelope = {
+    version: 1,
+    algorithm: 'AES-256-GCM',
+    nonce: nonce.toString('base64'),
+    ciphertext: encrypted.toString('base64'),
+  };
+  writeFileAtomically(dataPath(INTEGRATION_VAULT_FILE), Buffer.from(JSON.stringify(envelope, null, 2)));
+}
+
+function readElectronIntegrationVaultKey() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
+  const encryptedKey = fs.readFileSync(dataPath(INTEGRATION_VAULT_KEY_FILE));
+  return Buffer.from(safeStorage.decryptString(encryptedKey), 'base64');
+}
+
+function readElectronIntegrationVault(key) {
+  const envelope = JSON.parse(fs.readFileSync(dataPath(INTEGRATION_VAULT_FILE), 'utf8'));
+  if (envelope.version !== 1 || envelope.algorithm !== 'AES-256-GCM') {
+    throw new Error('Unsupported integration vault format.');
+  }
+  const nonce = Buffer.from(envelope.nonce, 'base64');
+  const encrypted = Buffer.from(envelope.ciphertext, 'base64');
+  const ciphertext = encrypted.subarray(0, encrypted.length - 16);
+  const tag = encrypted.subarray(encrypted.length - 16);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+  decipher.setAAD(Buffer.from('hvy-galaxy-integration-vault-v1'));
+  decipher.setAuthTag(tag);
+  return JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
+}
+
+async function restoreElectronIntegrationCookies(browserSession, profileId) {
+  const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
+  const cookies = vault.profiles?.[profileId]?.cookies ?? (profileId === 'default-google' ? vault.cookies ?? [] : []);
+  for (const cookie of cookies) {
+    const hostname = String(cookie.domain || '').replace(/^\./, '');
+    const hostOnly = cookie.hostOnly ?? !String(cookie.domain || '').startsWith('.');
+    const details = {
+      url: `https://${hostname}${cookie.path || '/'}`,
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.name.startsWith('__Host-') ? '/' : cookie.path || '/',
+      secure: cookie.name.startsWith('__Host-') || cookie.name.startsWith('__Secure-') || cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      expirationDate: cookie.session ? undefined : cookie.expirationDate,
+    };
+    if (!hostOnly && !cookie.name.startsWith('__Host-')) details.domain = cookie.domain || undefined;
+    await browserSession.cookies.set(details);
+  }
+}
+
+async function saveElectronIntegrationCookies(browserSession, profileId, allowedOrigins) {
+  const allowedHosts = allowedOrigins ? new Set([...allowedOrigins].map((origin) => new URL(origin).hostname)) : null;
+  const cookies = (await browserSession.cookies.get({})).filter((cookie) => {
+    const domain = cookie.domain.replace(/^\./, '');
+    if (allowedHosts) return [...allowedHosts].some((host) => domain === host || host.endsWith(`.${domain}`));
+    return domain === 'google.com' || domain.endsWith('.google.com');
+  });
+  const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
+  const profiles = vault.profiles ?? {};
+  profiles[profileId] = { cookies: cookies.map((cookie) => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      sameSite: cookie.sameSite,
+      hostOnly: cookie.hostOnly,
+      session: cookie.session,
+      expirationDate: cookie.expirationDate,
+    })) };
+  delete vault.cookies;
+  vault.profiles = profiles;
+  writeElectronIntegrationVault(readElectronIntegrationVaultKey(), Buffer.from(JSON.stringify(vault)));
+}
+
+async function resetIntegrationVault() {
+  for (const browser of integrationBrowsers.values()) {
+    if (!browser.window.isDestroyed()) {
+      browser.closeReady = true;
+      const browserSession = browser.contents.session;
+      browser.window.destroy();
+      await browserSession.clearStorageData();
+    }
+  }
+  integrationBrowsers.clear();
+  for (const fileName of [INTEGRATION_VAULT_FILE, INTEGRATION_VAULT_KEY_FILE]) {
+    const target = dataPath(fileName);
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+  }
+  return loadIntegrationVaultStatus();
+}
+
+function writeFileAtomically(target, bytes) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, bytes, { mode: 0o600 });
+  fs.renameSync(temporary, target);
+}
+
+function loadDocumentKeyVaultStatus() {
+  const configured = fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE));
+  const hasVault = fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_FILE));
+  const status = (state, message) => ({
+    configured,
+    hasVault,
+    storageMode: 'safeStorageVault',
+    state,
+    ...(message ? { message } : {}),
+  });
+  if (configured !== hasVault) return status('incomplete', 'The protected local vault is incomplete. Its protected key and encrypted data file do not match.');
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return status('unavailable', 'Operating-system protected storage is unavailable.');
+    if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') {
+      return status('unavailable', 'No protected operating-system credential store is available.');
+    }
+  } catch {
+    return status('unavailable', 'Operating-system protected storage is unavailable.');
+  }
+  if (!configured) return status('empty');
+  try {
+    readDocumentKeyVault(readDocumentKeyVaultKey());
+    return status('ready');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/denied|permission|cancel|interaction.*not.*allowed|locked|user.*interaction/i.test(message)) {
+      return status('denied', 'Access to operating-system protected storage was denied or the store is locked.');
+    }
+    return status('corrupt', 'The protected local vault could not be read or decrypted.');
+  }
+}
+
+function requireUsableDocumentKeyVault(status) {
+  if (status.state === 'ready') return;
+  throw new Error(status.message || `The protected local vault is ${status.state}.`);
+}
+
+function setupDocumentKeyVault() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
+  const key = crypto.randomBytes(32);
+  writeFileAtomically(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE), safeStorage.encryptString(key.toString('base64')));
+  writeDocumentKeyVault(key, { version: 1, keys: {} });
+  return key;
+}
+
+function readDocumentKeyVaultKey() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
+  const encryptedKey = fs.readFileSync(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE));
+  const key = Buffer.from(safeStorage.decryptString(encryptedKey), 'base64');
+  if (key.length !== 32) throw new Error('The document key vault wrapping key is invalid.');
+  return key;
+}
+
+function writeDocumentKeyVault(key, vault) {
+  writeDocumentKeyVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key, vault);
+}
+
+function readDocumentKeyVault(key) {
+  return readDocumentKeyVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key);
+}
+
+function loadDocumentKeys(keyIds) {
+  if (!Array.isArray(keyIds) || keyIds.length === 0) return {};
+  const status = loadDocumentKeyVaultStatus();
+  if (status.state === 'empty') return {};
+  requireUsableDocumentKeyVault(status);
+  const vault = readDocumentKeyVault(readDocumentKeyVaultKey());
+  return Object.fromEntries(keyIds.flatMap((keyId) => typeof keyId === 'string' && vault.keys[keyId]?.key
+    ? [[keyId, vault.keys[keyId].key]]
+    : []));
+}
+
+function listDocumentKeyMetadata() {
+  const status = loadDocumentKeyVaultStatus();
+  if (status.state === 'empty') return [];
+  requireUsableDocumentKeyVault(status);
+  const vault = readDocumentKeyVault(readDocumentKeyVaultKey());
+  return Object.entries(vault.keys).map(([keyId, entry]) => ({
+    keyId,
+    createdAt: entry.createdAt,
+    source: entry.source,
+    ...(entry.label ? { label: entry.label } : {}),
+    ...(Array.isArray(entry.bundleLabels) && entry.bundleLabels.length > 0 ? { bundleLabels: entry.bundleLabels } : {}),
+  })).sort((left, right) => left.keyId.localeCompare(right.keyId));
+}
+
+function storeDocumentKeys(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return loadDocumentKeyVaultStatus();
+  const status = loadDocumentKeyVaultStatus();
+  if (status.state !== 'empty') requireUsableDocumentKeyVault(status);
+  const key = status.state === 'ready' ? readDocumentKeyVaultKey() : setupDocumentKeyVault();
+  const vault = readDocumentKeyVault(key);
+  for (const entry of entries) {
+    if (!entry || typeof entry.keyId !== 'string' || typeof entry.key !== 'string') throw new Error('Invalid document key entry.');
+    const existing = vault.keys[entry.keyId];
+    if (existing && existing.key !== entry.key) throw new Error(`A different key is already stored for ${entry.keyId}.`);
+    const bundleLabel = typeof entry.bundleLabel === 'string' && entry.bundleLabel.trim() ? entry.bundleLabel.trim() : null;
+    const bundleLabels = [...new Set([
+      ...(Array.isArray(existing?.bundleLabels) ? existing.bundleLabels : []),
+      ...(bundleLabel ? [bundleLabel] : []),
+    ])];
+    vault.keys[entry.keyId] = {
+      ...(existing ?? {
+        key: entry.key,
+        createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : new Date().toISOString(),
+        source: entry.source === 'generated' ? 'generated' : 'imported',
+        ...(typeof entry.label === 'string' && entry.label.trim() ? { label: entry.label.trim() } : {}),
+      }),
+      ...(typeof entry.label === 'string' && entry.label.trim() ? { label: entry.label.trim() } : {}),
+      ...(bundleLabels.length > 0 ? { bundleLabels } : {}),
+    };
+    if (entry.clearLabel === true) delete vault.keys[entry.keyId].label;
+  }
+  writeDocumentKeyVault(key, vault);
+  return loadDocumentKeyVaultStatus();
+}
+
+function deleteDocumentKey(keyId) {
+  if (typeof keyId !== 'string' || !keyId.trim()) throw new Error('Invalid document key ID.');
+  const status = loadDocumentKeyVaultStatus();
+  requireUsableDocumentKeyVault(status);
+  const key = readDocumentKeyVaultKey();
+  deleteDocumentKeyFromVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key, keyId);
+  return loadDocumentKeyVaultStatus();
+}
+
+function documentKeyMigrationJournalPath(migrationId) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(migrationId || ''))) throw new Error('Invalid document key migration ID.');
+  return dataPath(`${DOCUMENT_KEY_MIGRATION_PREFIX}${migrationId}.json`);
+}
+
+function readDocumentKeyMigration(migrationId) {
+  const journalPath = documentKeyMigrationJournalPath(migrationId);
+  if (!fs.existsSync(journalPath)) throw new Error('Document key migration journal was not found.');
+  return { journalPath, journal: JSON.parse(fs.readFileSync(journalPath, 'utf8')) };
+}
+
+function writeDocumentKeyMigration(journalPath, journal) {
+  writeFileAtomically(journalPath, Buffer.from(JSON.stringify(journal, null, 2)));
+}
+
+function beginDocumentKeyMigration(request) {
+  const migrationId = String(request?.migrationId || '');
+  const journalPath = documentKeyMigrationJournalPath(migrationId);
+  if (fs.existsSync(journalPath)) throw new Error('Document key migration is already in progress.');
+  const keyChanges = Array.isArray(request?.keyChanges) ? request.keyChanges.map((change) => ({
+    keyId: String(change?.keyId || ''),
+    preservedKeyId: String(change?.preservedKeyId || ''),
+    ...(typeof change?.originalCreatedAt === 'string' ? { originalCreatedAt: change.originalCreatedAt } : {}),
+    ...(change?.originalSource === 'generated' || change?.originalSource === 'imported' ? { originalSource: change.originalSource } : {}),
+    ...(typeof change?.originalLabel === 'string' ? { originalLabel: change.originalLabel } : {}),
+    ...(Array.isArray(change?.originalBundleLabels) ? { originalBundleLabels: change.originalBundleLabels.filter((label) => typeof label === 'string') } : {}),
+  })) : [];
+  if (keyChanges.some((change) => !change.keyId || !change.preservedKeyId)) throw new Error('Document key migration key changes are invalid.');
+  writeDocumentKeyMigration(journalPath, {
+    version: 1,
+    migrationId,
+    phase: 'staging',
+    createdAt: new Date().toISOString(),
+    keyChanges,
+    entries: [],
+  });
+}
+
+function stageDocumentKeyMigrationFile(request) {
+  const migrationId = String(request?.migrationId || '');
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase !== 'staging') throw new Error('Document key migration is no longer accepting files.');
+  const target = path.resolve(String(request?.path || ''));
+  if (!path.isAbsolute(target) || !fs.existsSync(target) || !fs.statSync(target).isFile()) throw new Error('Document key migration target was not found.');
+  if (journal.entries.some((entry) => entry.path === target)) throw new Error('Document key migration target was staged more than once.');
+  const previousBytes = Buffer.from(normalizeBytes(request?.previousBytes) || []);
+  const nextBytes = Buffer.from(normalizeBytes(request?.bytes) || []);
+  if (!fs.readFileSync(target).equals(previousBytes)) throw new Error('A file changed while the document key migration was being prepared.');
+  const stagedPath = path.join(path.dirname(target), `.${path.basename(target)}.${migrationId}.hvy-key-next`);
+  const backupPath = path.join(path.dirname(target), `.${path.basename(target)}.${migrationId}.hvy-key-old`);
+  if (fs.existsSync(stagedPath) || fs.existsSync(backupPath)) throw new Error('Document key migration staging files already exist.');
+  fs.writeFileSync(stagedPath, nextBytes, { flag: 'wx', mode: 0o600 });
+  journal.entries.push({
+    path: target,
+    stagedPath,
+    backupPath,
+    previousHash: crypto.createHash('sha256').update(previousBytes).digest('hex'),
+  });
+  try {
+    writeDocumentKeyMigration(journalPath, journal);
+  } catch (error) {
+    fs.unlinkSync(stagedPath);
+    throw error;
+  }
+}
+
+function commitDocumentKeyMigration(migrationId) {
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase !== 'staging') throw new Error('Document key migration cannot be committed from its current state.');
+  for (const entry of journal.entries) {
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(entry.path)).digest('hex');
+    if (hash !== entry.previousHash || !fs.existsSync(entry.stagedPath)) throw new Error('A file changed before the document key migration could be committed.');
+  }
+  journal.phase = 'committing';
+  journal.committed = 0;
+  writeDocumentKeyMigration(journalPath, journal);
+  try {
+    for (const entry of journal.entries) {
+      fs.renameSync(entry.path, entry.backupPath);
+      try {
+        fs.renameSync(entry.stagedPath, entry.path);
+      } catch (error) {
+        fs.renameSync(entry.backupPath, entry.path);
+        throw error;
+      }
+      journal.committed += 1;
+      writeDocumentKeyMigration(journalPath, journal);
+    }
+    journal.phase = 'swapped';
+    writeDocumentKeyMigration(journalPath, journal);
+  } catch (error) { throw error; }
+}
+
+function restoreDocumentKeyMigrationVault(journal) {
+  if (!journal.keyChanges?.length) return;
+  const status = loadDocumentKeyVaultStatus();
+  if (status.state !== 'ready') throw new Error(status.message || 'The protected local vault is unavailable during migration recovery.');
+  const wrappingKey = readDocumentKeyVaultKey();
+  const vault = readDocumentKeyVault(wrappingKey);
+  for (const change of journal.keyChanges) {
+    const preserved = vault.keys[change.preservedKeyId];
+    if (!preserved) continue;
+    vault.keys[change.keyId] = {
+      key: preserved.key,
+      createdAt: change.originalCreatedAt || preserved.createdAt,
+      source: change.originalSource || 'imported',
+      ...(change.originalLabel ? { label: change.originalLabel } : {}),
+      ...(change.originalBundleLabels?.length ? { bundleLabels: change.originalBundleLabels } : {}),
+    };
+    delete vault.keys[change.preservedKeyId];
+  }
+  writeDocumentKeyVault(wrappingKey, vault);
+}
+
+function rollbackDocumentKeyMigration(migrationId) {
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase === 'complete') {
+    for (const entry of journal.entries) {
+      if (fs.existsSync(entry.backupPath)) fs.unlinkSync(entry.backupPath);
+      if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+    }
+    fs.unlinkSync(journalPath);
+    return;
+  }
+  for (const entry of [...journal.entries].reverse()) {
+    if (fs.existsSync(entry.backupPath)) {
+      if (fs.existsSync(entry.path)) fs.unlinkSync(entry.path);
+      fs.renameSync(entry.backupPath, entry.path);
+    }
+    if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+  }
+  restoreDocumentKeyMigrationVault(journal);
+  if (fs.existsSync(journalPath)) fs.unlinkSync(journalPath);
+}
+
+function finalizeDocumentKeyMigration(migrationId) {
+  const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+  if (journal.phase !== 'swapped') throw new Error('Document key migration has not finished swapping files.');
+  journal.phase = 'complete';
+  writeDocumentKeyMigration(journalPath, journal);
+  for (const entry of journal.entries) {
+    if (fs.existsSync(entry.backupPath)) fs.unlinkSync(entry.backupPath);
+    if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+  }
+  fs.unlinkSync(journalPath);
+}
+
+function recoverPendingDocumentKeyMigrations() {
+  const directory = sharedAppDataDir();
+  if (!fs.existsSync(directory)) return;
+  for (const name of fs.readdirSync(directory)) {
+    if (!name.startsWith(DOCUMENT_KEY_MIGRATION_PREFIX) || !name.endsWith('.json')) continue;
+    const migrationId = name.slice(DOCUMENT_KEY_MIGRATION_PREFIX.length, -'.json'.length);
+    try {
+      const { journalPath, journal } = readDocumentKeyMigration(migrationId);
+      if (journal.phase === 'complete') {
+        for (const entry of journal.entries) {
+          if (fs.existsSync(entry.backupPath)) fs.unlinkSync(entry.backupPath);
+          if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
+        }
+        fs.unlinkSync(journalPath);
+      } else {
+        rollbackDocumentKeyMigration(migrationId);
+      }
+    } catch (error) {
+      console.error('Unable to recover document key migration', migrationId, error);
+    }
+  }
+}
+
+async function openDocumentKeyFileDialog() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'HVY encryption keys', extensions: ['hvykey'] }],
+  });
+  if (result.canceled) return [];
+  return result.filePaths.map((selected) => {
+    if (path.extname(selected).toLowerCase() !== '.hvykey') throw new Error('Only .hvykey files can be imported.');
+    const bytes = fs.readFileSync(selected);
+    if (bytes.length > 1024 * 1024) throw new Error('HVY key files must not exceed 1 MB.');
+    return { path: selected, name: path.basename(selected), text: bytes.toString('utf8') };
+  });
+}
+
+async function probeIntegrationCookieStorage() {
+  const cookieName = 'hvy_galaxy_storage_probe';
+  const cookieValue = 'round-trip';
+  const cookieUrl = 'https://www.msn.com/';
+  const probeId = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  const sourceSession = session.fromPartition(`hvy-storage-probe-source-${probeId}`);
+  const restoredSession = session.fromPartition(`hvy-storage-probe-restored-${probeId}`);
+  const cookie = {
+    url: cookieUrl,
+    name: cookieName,
+    value: cookieValue,
+    path: '/',
+    secure: true,
+    httpOnly: true,
+    sameSite: 'lax',
+  };
+  await sourceSession.cookies.set(cookie);
+  const insertedCookies = await sourceSession.cookies.get({ url: cookieUrl, name: cookieName });
+  const extracted = insertedCookies.some((cookie) => cookie.value === cookieValue);
+  const freshStoreCookies = await restoredSession.cookies.get({ url: cookieUrl, name: cookieName });
+  await restoredSession.cookies.set(cookie);
+  const restoredCookies = await restoredSession.cookies.get({ url: cookieUrl, name: cookieName });
+  const restored = restoredCookies.some((candidate) => candidate.value === cookieValue);
+  await sourceSession.cookies.remove(cookieUrl, cookieName);
+  await restoredSession.cookies.remove(cookieUrl, cookieName);
+  const remainingSourceCookies = await sourceSession.cookies.get({ url: cookieUrl, name: cookieName });
+  const remainingRestoredCookies = await restoredSession.cookies.get({ url: cookieUrl, name: cookieName });
+  return {
+    cookieName,
+    inserted: true,
+    extracted,
+    freshStoreEmpty: freshStoreCookies.length === 0,
+    restored,
+    deleted: remainingSourceCookies.length === 0 && remainingRestoredCookies.length === 0,
+  };
+}
+
+function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId) {
+  const previous = integrationBrowserOpenQueues.get(profileId);
+  const requestKey = JSON.stringify({ url, actionMode, pendingExtraction: pendingExtraction || null, integrationId, pageId });
+  if (previous?.requestKey === requestKey) return previous.promise;
+  const queued = (previous?.promise || Promise.resolve()).catch(() => {}).then(() => openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId));
+  const entry = { requestKey, promise: queued };
+  integrationBrowserOpenQueues.set(profileId, entry);
+  return queued.finally(() => {
+    if (integrationBrowserOpenQueues.get(profileId) === entry) integrationBrowserOpenQueues.delete(profileId);
+  });
+}
+
+function executePendingIntegrationExtraction(browser) {
+  const extraction = browser.pendingExtraction;
+  if (!extraction) return Promise.resolve(null);
+  const currentOrigin = new URL(browser.contents.getURL()).origin;
+  if (Array.isArray(extraction.context?.expectedOrigins)
+    ? !extraction.context.expectedOrigins.includes(currentOrigin)
+    : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return Promise.resolve(null);
+  browser.pendingExtraction = null;
+  if (extraction.kind === 'command-target') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
+  }
+  if (extraction.kind === 'command-execution') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
+  }
+  if (extraction.kind === 'ready-check-validation') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
+  }
+  if (extraction.kind === 'pattern-highlight') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
+  }
+  if (extraction.kind === 'source-discovery') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
+  }
+  if (extraction.kind === 'source-fetch') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
+  }
+  if (extraction.kind === 'webmcp-discovery') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  }
+  if (extraction.kind === 'webmcp-invocation') {
+    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+  }
+  return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
+}
+
+async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId) {
+  let browser = integrationBrowsers.get(profileId);
+  if (browser?.closePromise) await browser.closePromise;
+  if (!browser || browser.window.isDestroyed()) {
+    const integrationWindow = new BrowserWindow({
+      show: false,
+      width: 1180,
+      height: 820,
+      minWidth: 720,
+      minHeight: 520,
+      title: `HVY Galaxy Integrations — ${windowName || profileId}`,
+      backgroundColor: '#f7f3ea',
+      icon: iconPath(appIconFileName()),
+      autoHideMenuBar: true,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    const toolbarView = new WebContentsView({
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    });
+    const browserView = new WebContentsView({
+      webPreferences: {
+        partition: `hvy-galaxy-integrations-${profileId}-${Date.now()}`,
+        preload: path.join(__dirname, 'integration-preload.cjs'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: true,
+        sandbox: true,
+        webSecurity: true,
+        backgroundThrottling: false,
+      },
+    });
+    integrationWindow.contentView.addChildView(browserView);
+    integrationWindow.contentView.addChildView(toolbarView);
+    const layoutBrowserView = () => {
+      const [width, height] = integrationWindow.getContentSize();
+      toolbarView.setBounds({ x: 0, y: 0, width, height: INTEGRATION_TOOLBAR_HEIGHT });
+      browserView.setBounds({ x: 0, y: INTEGRATION_TOOLBAR_HEIGHT, width, height: Math.max(0, height - INTEGRATION_TOOLBAR_HEIGHT) });
+    };
+    layoutBrowserView();
+    integrationWindow.on('resize', layoutBrowserView);
+    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null, integrationId, pageId };
+    integrationBrowsers.set(profileId, browser);
+    buildMenu();
+    const browserUserAgent = browser.contents.getUserAgent()
+      .replace(/\sElectron\/[^\s]+/g, '')
+      .replace(/\sHVY(?:[\s-]Galaxy)?\/[^\s]+/gi, '');
+    browser.contents.setUserAgent(browserUserAgent);
+    integrationWindow.removeMenu();
+    browser.contents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.alt && (input.meta || input.control) && input.key.toLowerCase() === 'i') {
+        event.preventDefault();
+        browser.contents.toggleDevTools();
+      }
+    });
+    browser.contents.setWindowOpenHandler(({ url: requestedUrl }) => {
+      if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) {
+        void browser.contents.loadURL(requestedUrl);
+      } else {
+        requestIntegrationNavigationApproval(browser, requestedUrl, 'new-window');
+      }
+      return { action: 'deny' };
+    });
+    browser.toolbarContents.on('will-navigate', (event, requestedUrl) => {
+      const toolbarPrefix = 'hvy-integration://toolbar/';
+      if (requestedUrl.startsWith(toolbarPrefix)) {
+        event.preventDefault();
+        mainWindow?.webContents.send('hvy:integration-inspection-result', {
+          kind: 'integration-toolbar-action',
+          action: requestedUrl.slice(toolbarPrefix.length),
+          profileId,
+        });
+        raiseWindow(mainWindow);
+        return;
+      }
+      const browserCommandPrefix = 'hvy-integration://browser/';
+      if (requestedUrl.startsWith(browserCommandPrefix)) {
+        event.preventDefault();
+        const browserCommand = requestedUrl.slice(browserCommandPrefix.length);
+        if (browserCommand === 'back' && browser.contents.canGoBack()) browser.contents.goBack();
+        if (browserCommand === 'forward' && browser.contents.canGoForward()) browser.contents.goForward();
+        if (browserCommand === 'reload') browser.contents.reload();
+        if (browserCommand === 'inspect') {
+          browser.actionModePending = true;
+          browser.contents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", { externalToolbar: true })`);
+        }
+        if (browserCommand === 'close') integrationWindow.close();
+        return;
+      }
+      const inspectorControlPrefix = 'hvy-integration://inspector-control/';
+      if (requestedUrl.startsWith(inspectorControlPrefix)) {
+        event.preventDefault();
+        const control = requestedUrl.slice(inspectorControlPrefix.length);
+        if (['navigate', 'undo', 'done'].includes(control)) {
+          void browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.control(${JSON.stringify(control)})`);
+        }
+        return;
+      }
+      const navigatePrefix = 'hvy-integration://navigate/';
+      if (requestedUrl.startsWith(navigatePrefix)) {
+        event.preventDefault();
+        const targetUrl = Buffer.from(requestedUrl.slice(navigatePrefix.length), 'base64url').toString('utf8');
+        if (isAllowedIntegrationUrl(targetUrl, browser.allowedOrigins)) void browser.contents.loadURL(targetUrl);
+        else requestIntegrationNavigationApproval(browser, targetUrl, 'address');
+        return;
+      }
+    });
+    browser.contents.on('will-navigate', (event, requestedUrl) => {
+      if (requestedUrl === 'hvy-integration://close') {
+        event.preventDefault();
+        integrationWindow.close();
+        return;
+      }
+      const inspectionPrefix = 'hvy-integration://inspection/';
+      if (requestedUrl.startsWith(inspectionPrefix)) {
+        event.preventDefault();
+        const encoded = requestedUrl.slice(inspectionPrefix.length);
+        const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+        result.profileId = profileId;
+        browser.actionModePending = false;
+        setIntegrationToolbarInspectionState(browser);
+        mainWindow?.webContents.send('hvy:integration-inspection-result', result);
+        const isBackgroundResult = result?.kind === 'integration-ready-check-validation'
+          || result?.kind === 'integration-record-watch-result'
+          || (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
+          || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
+          || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
+        if (!isBackgroundResult) raiseWindow(mainWindow);
+        return;
+      }
+      const toolbarStatePrefix = 'hvy-integration://toolbar-state/';
+      if (requestedUrl.startsWith(toolbarStatePrefix)) {
+        event.preventDefault();
+        const encoded = requestedUrl.slice(toolbarStatePrefix.length);
+        const state = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+        setIntegrationToolbarInspectionState(browser, state);
+        return;
+      }
+      if (requestedUrl === 'hvy-integration://inspection-cancel') {
+        event.preventDefault();
+        browser.actionModePending = false;
+        setIntegrationToolbarInspectionState(browser);
+        raiseWindow(mainWindow);
+        return;
+      }
+      if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
+      event.preventDefault();
+      requestIntegrationNavigationApproval(browser, requestedUrl, 'main-frame');
+    });
+    browser.contents.on('did-finish-load', () => {
+      const currentUrl = browser.contents.getURL();
+      void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
+      void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
+        void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
+        if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+        return executePendingIntegrationExtraction(browser);
+      });
+    });
+    browser.contents.on('page-title-updated', (_event, title) => {
+      const siteTitle = String(title || '').trim();
+      if (siteTitle) integrationWindow.setTitle(siteTitle);
+    });
+    integrationWindow.on('closed', () => {
+      if (browser.actionModePending) {
+        browser.actionModePending = false;
+        mainWindow?.webContents.send('hvy:integration-inspection-result', { kind: 'integration-browser-closed', profileId });
+        raiseWindow(mainWindow);
+      }
+      integrationBrowsers.delete(profileId);
+      buildMenu();
+    });
+    integrationWindow.on('close', (event) => {
+      if (browser.closeReady) return;
+      event.preventDefault();
+      if (browser.closePromise) return;
+      const closingWindow = integrationWindow;
+      const browserSession = browser.contents.session;
+      browser.closePromise = saveElectronIntegrationCookies(browserSession, profileId, browser.allowedOrigins)
+        .then(() => {
+          browser.closeReady = true;
+          closingWindow.destroy();
+          return browserSession.clearStorageData();
+        })
+        .finally(() => {
+          browser.closePromise = null;
+        });
+    });
+    try {
+      await restoreElectronIntegrationCookies(browser.contents.session, profileId);
+    } catch (error) {
+      browser.closeReady = true;
+      integrationWindow.destroy();
+      integrationBrowsers.delete(profileId);
+      throw error;
+    }
+  }
+  browser.name = windowName || browser.name || profileId;
+  browser.window.setTitle(`HVY Galaxy Integrations — ${browser.name}`);
+  buildMenu();
+  browser.allowedOrigins = allowedOrigins;
+  browser.integrationId = integrationId;
+  browser.pageId = pageId;
+  browser.actionModePending = actionMode;
+  browser.pendingExtraction = pendingExtraction || null;
+  await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
+  browser.window.removeMenu();
+  if (browser.contents.getURL() === url && !browser.contents.isLoadingMainFrame()) {
+    await browser.contents.executeJavaScript(INTEGRATION_INSPECTOR);
+    if (browser.actionModePending) {
+      await browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+    } else {
+      await executePendingIntegrationExtraction(browser);
+    }
+  } else {
+    await browser.contents.loadURL(url);
+  }
+  if (foreground) raiseWindow(browser.window);
+}
+
+function isAllowedIntegrationUrl(value, allowedOrigins = null) {
+  try {
+    const url = new URL(value);
+    const ipv4 = url.hostname.split('.').map(Number);
+    const loopbackIpv4 = ipv4.length === 4 && ipv4[0] === 127 && ipv4.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+    const localHttp = url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '::1' || url.hostname === '[::1]' || loopbackIpv4);
+    if (allowedOrigins) return (url.protocol === 'https:' || localHttp) && allowedOrigins.has(url.origin);
+    return url.protocol === 'https:' && (
+      url.hostname === 'msn.com'
+      || url.hostname.endsWith('.msn.com')
+      || url.hostname === 'google.com'
+      || url.hostname.endsWith('.google.com')
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -579,6 +1634,12 @@ function defaultGuidePath() {
   return path.join(__dirname, '..', 'src', 'assets', 'hvy-galaxy.hvy');
 }
 
+function includedDocumentPath(id) {
+  if (id === 'hvy-galaxy-guide') return defaultGuidePath();
+  if (id === 'hvy-guide') return hvyGuidePath();
+  throw new Error(`Unknown included document: ${id}`);
+}
+
 function hvyGuidePath() {
   const packaged = path.join(process.resourcesPath || '', 'resources', 'hvy-guide.hvy');
   if (fs.existsSync(packaged)) return packaged;
@@ -596,6 +1657,102 @@ function sharedAppDataDir() {
     return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), APP_IDENTIFIER);
   }
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'), APP_IDENTIFIER);
+}
+
+function webMcpBrokerConnectionPath() {
+  return path.join(sharedAppDataDir(), 'mcp', 'webmcp-broker.json');
+}
+
+function completeWebMcpBrokerRequest(requestId, value, error) {
+  const pending = webMcpBrokerPending.get(requestId);
+  if (!pending) return null;
+  clearTimeout(pending.timeout);
+  webMcpBrokerPending.delete(requestId);
+  pending.resolve(error ? { ok: false, error: String(error) } : { ok: true, value });
+  return null;
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    request.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 1024 * 1024 && !settled) {
+        settled = true;
+        chunks.length = 0;
+        reject(new Error('Broker request exceeded the 1 MB limit.'));
+      } else if (!settled) chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (!settled) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
+    request.on('error', (error) => {
+      if (!settled) reject(error);
+    });
+  });
+}
+
+async function startWebMcpBroker() {
+  if (webMcpBrokerServer) return;
+  webMcpBrokerToken = crypto.randomBytes(32).toString('base64url');
+  webMcpBrokerServer = http.createServer(async (request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.method !== 'POST' || request.url !== '/webmcp') {
+      response.statusCode = 404;
+      response.end(JSON.stringify({ ok: false, error: 'Not found.' }));
+      return;
+    }
+    if (request.headers.authorization !== `Bearer ${webMcpBrokerToken}`) {
+      response.statusCode = 401;
+      response.end(JSON.stringify({ ok: false, error: 'Unauthorized.' }));
+      return;
+    }
+    try {
+      const input = JSON.parse(await readRequestBody(request));
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || !webMcpBrokerRendererReady) {
+        response.statusCode = 503;
+        response.end(JSON.stringify({ ok: false, error: "Galaxy's trusted renderer is unavailable." }));
+        return;
+      }
+      const requestId = crypto.randomUUID();
+      const result = new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          webMcpBrokerPending.delete(requestId);
+          resolve({ ok: false, error: 'Galaxy timed out while executing the WebMCP request.' });
+        }, 65_000);
+        webMcpBrokerPending.set(requestId, { resolve, timeout });
+      });
+      const settings = normalizeMcpSettings(readJson(dataPath(MCP_SETTINGS), defaultMcpSettings()));
+      mainWindow.webContents.send('hvy:webmcp-broker-request', { ...input, requestId, integrationAccess: settings.integrationAccess });
+      response.end(JSON.stringify(await result));
+    } catch (error) {
+      response.statusCode = 400;
+      response.end(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+    }
+  });
+  await new Promise((resolve, reject) => {
+    webMcpBrokerServer.once('error', reject);
+    webMcpBrokerServer.listen(0, '127.0.0.1', resolve);
+  });
+  const address = webMcpBrokerServer.address();
+  const connectionPath = webMcpBrokerConnectionPath();
+  fs.mkdirSync(path.dirname(connectionPath), { recursive: true });
+  writeJson(connectionPath, { schemaVersion: 1, url: `http://127.0.0.1:${address.port}/webmcp`, bearerToken: webMcpBrokerToken, pid: process.pid });
+  try { fs.chmodSync(connectionPath, 0o600); } catch (_) {}
+}
+
+function stopWebMcpBroker() {
+  webMcpBrokerRendererReady = false;
+  webMcpBrokerServer?.close();
+  webMcpBrokerServer = null;
+  for (const pending of webMcpBrokerPending.values()) {
+    clearTimeout(pending.timeout);
+    pending.resolve({ ok: false, error: 'Galaxy is closing.' });
+  }
+  webMcpBrokerPending.clear();
+  try { fs.unlinkSync(webMcpBrokerConnectionPath()); } catch (_) {}
 }
 
 function electronProfileDir() {
@@ -695,10 +1852,10 @@ function initializeWorkspacePath(selectedPath) {
   return workspace;
 }
 
-function loadWorkspace(selectedPath, includeTemplates = false) {
+function loadWorkspace(selectedPath, includeTemplates = false, recordRecent = false) {
   const workspace = ensureWorkspace(selectedPath, includeTemplates);
   removeArchivedWorkspace(selectedPath);
-  addRecentWorkspace(selectedPath);
+  if (recordRecent) addRecentWorkspace(selectedPath);
   return workspace;
 }
 
@@ -803,11 +1960,15 @@ async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
   if (result.canceled || result.filePaths.length === 0) return null;
   const copiedPaths = [];
   const copiedTemplatePaths = [];
+  const relocatedArchivedFiles = [];
+  const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  const installsWorkspaceTemplates = path.resolve(destinationRoot) === path.resolve(workspaceTemplatesDir(workspacePath));
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
-    const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
-    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspaceTargetDirectory(workspacePath, targetDirectory);
-    const destination = uniqueCopyPath(destinationRoot, path.basename(source));
+    const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
+    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, path.basename(source));
+    const destination = incoming.destination;
+    relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     fs.copyFileSync(source, destination);
     if (isTemplate) {
       copiedTemplatePaths.push(destination);
@@ -822,6 +1983,7 @@ async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
     workspace: loadWorkspaceFromPath(workspacePath),
     copiedPaths,
     copiedTemplatePaths,
+    relocatedArchivedFiles,
   };
 }
 
@@ -829,11 +1991,15 @@ function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') 
   ensureWorkspace(workspacePath);
   const copiedPaths = [];
   const copiedTemplatePaths = [];
+  const relocatedArchivedFiles = [];
+  const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  const installsWorkspaceTemplates = path.resolve(destinationRoot) === path.resolve(workspaceTemplatesDir(workspacePath));
   for (const file of files || []) {
     if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
-    const isTemplate = TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
-    const destinationRoot = isTemplate ? workspaceTemplatesDir(workspacePath) : workspaceTargetDirectory(workspacePath, targetDirectory);
-    const destination = uniqueCopyPath(destinationRoot, file.name);
+    const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
+    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, file.name);
+    const destination = incoming.destination;
+    relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     writeBytes(destination, file.bytes);
     if (isTemplate) {
       copiedTemplatePaths.push(destination);
@@ -848,6 +2014,7 @@ function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') 
     workspace: loadWorkspaceFromPath(workspacePath),
     copiedPaths,
     copiedTemplatePaths,
+    relocatedArchivedFiles,
   };
 }
 
@@ -895,6 +2062,23 @@ async function openImportSourceDialog() {
     source.bytes = Array.from(fs.readFileSync(selected));
   }
   return source;
+}
+
+async function selectWorkspaceDocumentFiles() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Encrypted-folder documents', extensions: ['hvy', 'thvy', 'phvy'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths.map((selected) => {
+    const extension = path.extname(selected).toLowerCase();
+    if (extension !== '.hvy' && extension !== '.thvy' && extension !== '.phvy') {
+      throw new Error('Encrypted folders support .hvy, .thvy, and .phvy documents.');
+    }
+    return { name: path.basename(selected), bytes: Array.from(fs.readFileSync(selected)) };
+  });
 }
 
 async function extractPdfText(filePath) {
@@ -1054,6 +2238,224 @@ function createDocumentFile(workspacePath, relativePath, template) {
   return readDocumentAt(destination);
 }
 
+function createEncryptedFolderDocument(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const relative = String(request?.folderDirectory || '').trim();
+  if (!relative) throw new Error('Encrypted folder is required.');
+  const folderPath = path.resolve(workspacePath, relative);
+  const workspaceRoot = path.resolve(workspacePath);
+  if (!folderPath.startsWith(workspaceRoot + path.sep) || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    throw new Error('Encrypted folder path must stay inside the workspace.');
+  }
+  const documentId = String(request?.documentId || '');
+  const extension = String(request?.extension || '');
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(documentId) || !['.hvy', '.thvy', '.phvy'].includes(extension)) throw new Error('Encrypted document identity is invalid.');
+  const documentBytes = Buffer.from(normalizeBytes(request?.documentBytes) || []);
+  if (documentBytes.length === 0) throw new Error('Encrypted document bytes are required.');
+  const folderId = encryptedFolderIdFromPhysicalName(path.basename(folderPath));
+  if (!folderId) throw new Error('Encrypted folder manifest does not match the folder identity.');
+  const previousManifestBytes = Buffer.from(normalizeBytes(request?.previousManifestBytes) || []);
+  const manifestBytes = Buffer.from(normalizeBytes(request?.manifestBytes) || []);
+  for (const bytes of [previousManifestBytes, manifestBytes]) {
+    let envelope;
+    try { envelope = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('Encrypted folder manifest is invalid.'); }
+    if (envelope?.hvy_encrypted_folder !== 1 || envelope?.algorithm !== 'AES-256-GCM' || envelope?.folderId !== folderId) {
+      throw new Error('Encrypted folder manifest does not match the folder identity.');
+    }
+  }
+  const manifestPath = path.join(folderPath, ENCRYPTED_FOLDER_MANIFEST_FILE);
+  if (!fs.readFileSync(manifestPath).equals(previousManifestBytes)) {
+    throw new Error('Encrypted folder changed before the document could be created. Refresh and try again.');
+  }
+  const destination = path.join(folderPath, `${documentId}${extension}`);
+  const staging = path.join(folderPath, `.${documentId}${extension}.creating`);
+  if (fs.existsSync(destination)) throw new Error('An encrypted document already exists with that identity.');
+  if (fs.existsSync(staging)) throw new Error('Encrypted document creation is already staged.');
+  fs.writeFileSync(staging, documentBytes, { flag: 'wx' });
+  fs.renameSync(staging, destination);
+  try {
+    if (!fs.readFileSync(manifestPath).equals(previousManifestBytes)) {
+      throw new Error('Encrypted folder changed before the document could be created. Refresh and try again.');
+    }
+    writeFileAtomically(manifestPath, manifestBytes);
+  } catch (error) {
+    fs.unlinkSync(destination);
+    throw error;
+  }
+  touchWorkspaceManifest(workspacePath);
+  addRecentFile(destination);
+  return readDocumentAt(destination);
+}
+
+function createEncryptedFolderChild(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const relative = String(request?.folderDirectory || '').trim();
+  if (!relative) throw new Error('Encrypted folder is required.');
+  const folderPath = path.resolve(workspacePath, relative);
+  const workspaceRoot = path.resolve(workspacePath);
+  if (!folderPath.startsWith(workspaceRoot + path.sep) || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    throw new Error('Encrypted folder path must stay inside the workspace.');
+  }
+  const childFolderId = String(request?.childFolderId || '');
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(childFolderId)) throw new Error('Encrypted child folder identity is invalid.');
+  const folderId = encryptedFolderIdFromPhysicalName(path.basename(folderPath));
+  if (!folderId) throw new Error('Encrypted folder manifest does not match the folder identity.');
+  const previousManifestBytes = Buffer.from(normalizeBytes(request?.previousManifestBytes) || []);
+  const manifestBytes = Buffer.from(normalizeBytes(request?.manifestBytes) || []);
+  const childManifestBytes = Buffer.from(normalizeBytes(request?.childManifestBytes) || []);
+  const parseIdentity = (bytes, expectedFolderId) => {
+    let envelope;
+    try { envelope = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('Encrypted folder manifest is invalid.'); }
+    if (envelope?.hvy_encrypted_folder !== 1 || envelope?.algorithm !== 'AES-256-GCM' || envelope?.folderId !== expectedFolderId || typeof envelope?.keyId !== 'string') {
+      throw new Error('Encrypted folder manifest does not match the folder identity.');
+    }
+    return envelope.keyId;
+  };
+  const previousKeyId = parseIdentity(previousManifestBytes, folderId);
+  if (parseIdentity(manifestBytes, folderId) !== previousKeyId || parseIdentity(childManifestBytes, childFolderId) !== previousKeyId) {
+    throw new Error('Encrypted child folder must use its parent folder key.');
+  }
+  const manifestPath = path.join(folderPath, ENCRYPTED_FOLDER_MANIFEST_FILE);
+  if (!fs.readFileSync(manifestPath).equals(previousManifestBytes)) {
+    throw new Error('Encrypted folder changed before the child folder could be created. Refresh and try again.');
+  }
+  const destination = path.join(folderPath, encryptedFolderPhysicalName(childFolderId));
+  const staging = path.join(folderPath, `.${childFolderId}.creating`);
+  if (fs.existsSync(destination) || fs.existsSync(staging)) throw new Error('An encrypted child folder already exists with that identity.');
+  fs.mkdirSync(staging);
+  try {
+    fs.writeFileSync(path.join(staging, ENCRYPTED_FOLDER_MANIFEST_FILE), childManifestBytes);
+    fs.renameSync(staging, destination);
+    if (!fs.readFileSync(manifestPath).equals(previousManifestBytes)) {
+      fs.rmSync(destination, { recursive: true });
+      throw new Error('Encrypted folder changed before the child folder could be created. Refresh and try again.');
+    }
+    try {
+      writeFileAtomically(manifestPath, manifestBytes);
+    } catch (error) {
+      fs.rmSync(destination, { recursive: true });
+      throw error;
+    }
+  } catch (error) {
+    if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true });
+    throw error;
+  }
+  touchWorkspaceManifest(workspacePath);
+  return loadWorkspace(workspacePath);
+}
+
+function updateEncryptedFolderManifest(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const relative = String(request?.folderDirectory || '').trim();
+  if (!relative) throw new Error('Encrypted folder is required.');
+  const folderPath = path.resolve(workspacePath, relative);
+  const workspaceRoot = path.resolve(workspacePath);
+  if (!folderPath.startsWith(workspaceRoot + path.sep) || !fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    throw new Error('Encrypted folder path must stay inside the workspace.');
+  }
+  const folderId = encryptedFolderIdFromPhysicalName(path.basename(folderPath));
+  if (!folderId) throw new Error('Encrypted folder manifest does not match the folder identity.');
+  const previousManifestBytes = Buffer.from(normalizeBytes(request?.previousManifestBytes) || []);
+  const manifestBytes = Buffer.from(normalizeBytes(request?.manifestBytes) || []);
+  const parseIdentity = (bytes) => {
+    let envelope;
+    try { envelope = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('Encrypted folder manifest is invalid.'); }
+    if (envelope?.hvy_encrypted_folder !== 1 || envelope?.algorithm !== 'AES-256-GCM' || envelope?.folderId !== folderId || typeof envelope?.keyId !== 'string') {
+      throw new Error('Encrypted folder manifest does not match the folder identity.');
+    }
+    return envelope.keyId;
+  };
+  const previousKeyId = parseIdentity(previousManifestBytes);
+  const nextKeyId = parseIdentity(manifestBytes);
+  const requestedKeyIdChange = request?.keyIdChange;
+  const keyIdChangeMatches = requestedKeyIdChange
+    && requestedKeyIdChange.previousKeyId === previousKeyId
+    && requestedKeyIdChange.nextKeyId === nextKeyId;
+  if (previousKeyId !== nextKeyId && !keyIdChangeMatches) {
+    throw new Error('Encrypted folder manifest key identity changed unexpectedly.');
+  }
+  const manifestPath = path.join(folderPath, ENCRYPTED_FOLDER_MANIFEST_FILE);
+  if (!fs.readFileSync(manifestPath).equals(previousManifestBytes)) {
+    throw new Error('Encrypted folder changed before the update could be saved. Refresh and try again.');
+  }
+  writeFileAtomically(manifestPath, manifestBytes);
+  touchWorkspaceManifest(workspacePath);
+  return loadWorkspace(workspacePath);
+}
+
+function deleteEncryptedFolderDocument(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const relative = String(request?.folderDirectory || '').trim();
+  const documentId = String(request?.documentId || '');
+  const extension = String(request?.extension || '');
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(documentId) || !['.hvy', '.thvy', '.phvy'].includes(extension)) {
+    throw new Error('Encrypted document identity is invalid.');
+  }
+  const folderPath = path.resolve(workspacePath, relative);
+  const workspaceRoot = path.resolve(workspacePath);
+  if (!relative || !folderPath.startsWith(workspaceRoot + path.sep)) throw new Error('Encrypted folder path must stay inside the workspace.');
+  const documentPath = path.join(folderPath, `${documentId}${extension}`);
+  const staging = path.join(folderPath, `.${documentId}${extension}.deleting`);
+  if (!fs.existsSync(documentPath) || !fs.statSync(documentPath).isFile()) throw new Error('Encrypted document was not found.');
+  if (fs.existsSync(staging)) throw new Error('Encrypted document deletion is already staged.');
+  fs.renameSync(documentPath, staging);
+  try {
+    updateEncryptedFolderManifest(request);
+  } catch (error) {
+    fs.renameSync(staging, documentPath);
+    throw error;
+  }
+  fs.unlinkSync(staging);
+  updateArchivedDocumentFile(workspacePath, documentPath, false);
+  updateWorkspaceFileAiAccessAt(workspacePath, documentPath, { locked: false, hiddenFromAI: false });
+  removeRecentFile(documentPath);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
+function deleteEncryptedFolderChild(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const relative = String(request?.folderDirectory || '').trim();
+  const childFolderId = String(request?.childFolderId || '');
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidPattern.test(childFolderId)) throw new Error('Encrypted child folder identity is invalid.');
+  const parentPath = path.resolve(workspacePath, relative);
+  const workspaceRoot = path.resolve(workspacePath);
+  if (!relative || !parentPath.startsWith(workspaceRoot + path.sep)) throw new Error('Encrypted folder path must stay inside the workspace.');
+  const childPath = encryptedFolderChildPath(parentPath, childFolderId);
+  const childPhysicalName = path.basename(childPath);
+  const staging = path.join(parentPath, `.${childPhysicalName}.deleting`);
+  if (!fs.existsSync(childPath) || !fs.statSync(childPath).isDirectory()) throw new Error('Encrypted child folder was not found.');
+  if (fs.existsSync(staging)) throw new Error('Encrypted child folder deletion is already staged.');
+  fs.renameSync(childPath, staging);
+  try {
+    updateEncryptedFolderManifest(request);
+  } catch (error) {
+    fs.renameSync(staging, childPath);
+    throw error;
+  }
+  fs.rmSync(staging, { recursive: true });
+  const deletedRelative = `${relative.replace(/\\/g, '/')}/${childPhysicalName}`;
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) throw new Error('Workspace manifest was not found.');
+  const manifest = readJson(manifestPath, null);
+  for (const key of ['archivedFiles', 'lockedFiles', 'hiddenFromAIFiles', 'hiddenFromAIFolders']) {
+    if (!Array.isArray(manifest[key])) continue;
+    manifest[key] = manifest[key].filter((entry) => entry !== deletedRelative && !entry.startsWith(`${deletedRelative}/`));
+    if (manifest[key].length === 0) delete manifest[key];
+  }
+  manifest.updatedAt = new Date().toISOString();
+  writeJson(manifestPath, manifest);
+  return loadWorkspaceFromPath(workspacePath);
+}
+
 async function revealDocumentFile(filePath) {
   await shell.showItemInFolder(filePath);
   return null;
@@ -1062,6 +2464,33 @@ async function revealDocumentFile(filePath) {
 async function openDocumentFile(filePath) {
   const error = await shell.openPath(filePath);
   if (error) throw new Error(error);
+  return null;
+}
+
+async function openAttachmentFile(filename, bytes) {
+  const directory = fs.mkdtempSync(path.join(app.getPath('temp'), 'hvy-galaxy-attachment-'));
+  const filePath = path.join(directory, safeFileStem(path.basename(String(filename || 'attachment'))));
+  fs.writeFileSync(filePath, Buffer.from(bytes));
+  const previewWindow = new BrowserWindow({
+    width: 980,
+    height: 820,
+    minWidth: 480,
+    minHeight: 360,
+    title: `${path.basename(filePath)} — ${APP_NAME}`,
+    backgroundColor: '#f7f3ea',
+    icon: iconPath(appIconFileName()),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  attachmentPreviewWindows.add(previewWindow);
+  previewWindow.on('closed', () => {
+    attachmentPreviewWindows.delete(previewWindow);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  await previewWindow.loadURL(pathToFileURL(filePath).href);
   return null;
 }
 
@@ -1168,12 +2597,14 @@ function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '
 function copyDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be copied.');
-  const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), path.basename(filePath));
+  const targetRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+  const incoming = incomingWorkspaceFile(workspacePath, targetRoot, path.basename(filePath));
+  const destination = incoming.destination;
   fs.copyFileSync(filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
@@ -1187,7 +2618,8 @@ function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') 
     addRecentFile(filePath);
     return readDocumentAt(filePath);
   }
-  const destination = uniqueCopyPath(targetRoot, path.basename(filePath));
+  const incoming = incomingWorkspaceFile(workspacePath, targetRoot, path.basename(filePath));
+  const destination = incoming.destination;
   fs.renameSync(filePath, destination);
   if (sourceWorkspacePath) {
     if (path.resolve(sourceWorkspacePath) === path.resolve(workspacePath)) {
@@ -1196,6 +2628,26 @@ function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') 
       touchWorkspaceManifest(sourceWorkspacePath);
     }
   }
+  touchWorkspaceManifest(workspacePath);
+  addRecentWorkspace(workspacePath);
+  addRecentFile(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
+}
+
+function convertWorkspaceDocumentKind(filePath, workspacePath, toTemplate) {
+  ensureWorkspace(workspacePath);
+  const extension = documentExtension(filePath);
+  if (!extension || extension === '.md') throw new Error('Only .hvy, .thvy, and .phvy files can be converted.');
+  const sourceWorkspacePath = workspaceRootForDocument(path.dirname(filePath));
+  if (!sourceWorkspacePath || path.resolve(sourceWorkspacePath) !== path.resolve(workspacePath)) {
+    throw new Error('Document must be inside the selected workspace.');
+  }
+  const nextExtension = extension === '.phvy' ? '.phvy' : toTemplate ? '.thvy' : '.hvy';
+  const destinationRoot = toTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
+  fs.mkdirSync(destinationRoot, { recursive: true });
+  const destination = uniqueCopyPath(destinationRoot, `${path.parse(filePath).name}${nextExtension}`);
+  fs.renameSync(filePath, destination);
+  renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
@@ -1222,10 +2674,14 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
   const sourcePaths = readMacClipboardFilePaths();
   if (sourcePaths.length === 0) throw new Error('No files are available to paste.');
   const copiedPaths = [];
+  const relocatedArchivedFiles = [];
   for (const source of sourcePaths) {
     if (!documentExtension(source)) continue;
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
-    const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), path.basename(source));
+    const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
+    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, path.basename(source));
+    const destination = incoming.destination;
+    relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     fs.copyFileSync(source, destination);
     copiedPaths.push(destination);
     addRecentFile(destination);
@@ -1238,6 +2694,7 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
   return {
     workspace: loadWorkspaceFromPath(workspacePath),
     copiedPaths,
+    relocatedArchivedFiles,
   };
 }
 
@@ -1361,9 +2818,6 @@ function discardDocumentBackup(id) {
 
 function documentBackupMatchesSavedFile(snapshot) {
   if (!snapshot.documentPath || !fs.existsSync(snapshot.documentPath)) return false;
-  const savedAt = fs.statSync(snapshot.documentPath).mtimeMs;
-  const createdAt = Date.parse(snapshot.createdAt);
-  if (Number.isFinite(createdAt) && savedAt >= createdAt) return true;
   const savedBytes = fs.readFileSync(snapshot.documentPath);
   try {
     return Buffer.compare(savedBytes, readDocumentBackupBytes(snapshot)) === 0;
@@ -1432,6 +2886,25 @@ function clearDocumentRecoveryDrafts(request) {
         // Best effort cleanup.
       }
     }
+  }
+  return null;
+}
+
+function relocateDocumentRecoveryDrafts(request) {
+  const directory = backupsDir();
+  if (!fs.existsSync(directory)) return null;
+  const previousKey = documentBackupKey({ documentPath: request.previousDocumentPath, name: request.previousName });
+  for (const entry of fs.readdirSync(directory)) {
+    if (!entry.endsWith('.json')) continue;
+    const draftPath = path.join(directory, entry);
+    const snapshot = readJson(draftPath, null);
+    if (!snapshot || documentBackupKey(snapshot) !== previousKey) continue;
+    writeJson(draftPath, {
+      ...snapshot,
+      documentPath: request.documentPath,
+      name: request.name,
+      extension: request.extension,
+    });
   }
   return null;
 }
@@ -1529,22 +3002,73 @@ function normalizedFolderName(name) {
   return trimmed;
 }
 
+function encryptedFolderPhysicalName(folderId) {
+  return `${ENCRYPTED_FOLDER_PHYSICAL_PREFIX}${folderId}`;
+}
+
+function encryptedFolderIdFromPhysicalName(name) {
+  const value = String(name || '');
+  const folderId = value.startsWith(ENCRYPTED_FOLDER_PHYSICAL_PREFIX)
+    ? value.slice(ENCRYPTED_FOLDER_PHYSICAL_PREFIX.length)
+    : value;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(folderId) ? folderId : null;
+}
+
+function encryptedFolderChildPath(parent, folderId) {
+  const labeled = path.join(parent, encryptedFolderPhysicalName(folderId));
+  return fs.existsSync(labeled) ? labeled : path.join(parent, folderId);
+}
+
 function createWorkspaceFolder(request) {
   const workspacePath = String(request?.workspacePath || '');
   ensureWorkspace(workspacePath);
   const parent = workspaceTargetDirectory(workspacePath, request?.parentDirectory || '');
-  const folderPath = path.join(parent, normalizedFolderName(request?.name));
+  const encrypted = request?.encrypted;
+  const folderName = normalizedFolderName(request?.name);
+  const folderId = encrypted?.folderId;
+  if (encrypted && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(folderId || ''))) {
+    throw new Error('Encrypted folder ID is invalid.');
+  }
+  const manifestBytes = encrypted ? Buffer.from(normalizeBytes(encrypted.manifestBytes) || []) : null;
+  if (encrypted && manifestBytes.length === 0) throw new Error('Encrypted folder manifest is required.');
+  if (encrypted) {
+    let envelope;
+    try {
+      envelope = JSON.parse(manifestBytes.toString('utf8'));
+    } catch {
+      throw new Error('Encrypted folder manifest is invalid.');
+    }
+    if (envelope?.hvy_encrypted_folder !== 1 || envelope?.algorithm !== 'AES-256-GCM' || envelope?.folderId !== folderId
+      || typeof envelope?.keyId !== 'string' || typeof envelope?.nonce !== 'string' || typeof envelope?.ciphertext !== 'string') {
+      throw new Error('Encrypted folder manifest does not match the folder identity.');
+    }
+  }
+  const folderPath = path.join(parent, encrypted ? encryptedFolderPhysicalName(folderId) : folderName);
   const workspaceRoot = path.resolve(workspacePath);
   const resolved = path.resolve(folderPath);
   if (!resolved.startsWith(workspaceRoot + path.sep)) throw new Error('Folder path must stay inside the workspace.');
   if (fs.existsSync(folderPath)) throw new Error('A folder already exists at that path.');
-  fs.mkdirSync(folderPath, { recursive: false });
+  if (encrypted) {
+    const stagingPath = path.join(parent, `.${folderId}.creating`);
+    if (fs.existsSync(stagingPath)) throw new Error('Encrypted folder creation is already staged at that path.');
+    fs.mkdirSync(stagingPath, { recursive: false });
+    try {
+      fs.writeFileSync(path.join(stagingPath, ENCRYPTED_FOLDER_MANIFEST_FILE), manifestBytes, { flag: 'wx' });
+      fs.renameSync(stagingPath, folderPath);
+    } catch (error) {
+      fs.rmSync(stagingPath, { recursive: true, force: true });
+      throw error;
+    }
+  } else {
+    fs.mkdirSync(folderPath, { recursive: false });
+  }
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   return loadWorkspaceFromPath(workspacePath);
 }
 
 function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates = false, hiddenFromAIInherited = manifest?.hiddenFromAI === true) {
+  recoverStagedEncryptedDeletions(directory);
   const archivedFiles = new Set(manifest?.archivedFiles ?? []);
   const lockedFiles = new Set(manifest?.lockedFiles ?? []);
   const hiddenFromAIFolders = new Set(manifest?.hiddenFromAIFolders ?? []);
@@ -1556,12 +3080,16 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
       if (entry.isDirectory()) {
         const relativePath = relativeWorkspacePath(root, entryPath);
         const hiddenFromAI = hiddenFromAIInherited || hiddenFromAIFolders.has(relativePath);
+        const encryptedFolderManifestPath = path.join(entryPath, ENCRYPTED_FOLDER_MANIFEST_FILE);
         return {
           kind: 'folder',
           name: entry.name,
           path: entryPath,
           relativePath,
           hiddenFromAI,
+          ...(fs.existsSync(encryptedFolderManifestPath)
+            ? { encryptedFolderManifest: Array.from(fs.readFileSync(encryptedFolderManifestPath)) }
+            : {}),
           children: readWorkspaceChildren(root, entryPath, manifest, includeTemplates, hiddenFromAI),
         };
       }
@@ -1577,6 +3105,7 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
         archived: archivedFiles.has(relativePath),
         locked: lockedFiles.has(relativePath),
         hiddenFromAI: hiddenFromAIInherited || hiddenFromAIFiles.has(relativePath),
+        encrypted: documentFileIsEncrypted(entryPath),
       };
     })
     .filter(Boolean)
@@ -1584,6 +3113,30 @@ function readWorkspaceChildren(root, directory, manifest = {}, includeTemplates 
       if (left.kind !== right.kind) return left.kind === 'folder' ? -1 : 1;
       return left.name.localeCompare(right.name);
     });
+}
+
+function documentFileIsEncrypted(filePath) {
+  const descriptor = fs.openSync(filePath, 'r');
+  try {
+    const prefix = Buffer.alloc(DOCUMENT_ENCRYPTION_PREFIX.length);
+    const bytesRead = fs.readSync(descriptor, prefix, 0, prefix.length, 0);
+    return bytesRead === prefix.length && prefix.equals(DOCUMENT_ENCRYPTION_PREFIX);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function recoverStagedEncryptedDeletions(directory) {
+  if (!fs.existsSync(path.join(directory, ENCRYPTED_FOLDER_MANIFEST_FILE))) return;
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  for (const name of fs.readdirSync(directory)) {
+    if (!name.startsWith('.') || !name.endsWith('.deleting')) continue;
+    const stagedName = name.slice(1, -'.deleting'.length);
+    const identity = stagedName.replace(/\.(?:hvy|thvy|phvy)$/i, '');
+    if (!encryptedFolderIdFromPhysicalName(identity)) continue;
+    const destination = path.join(directory, stagedName);
+    if (!fs.existsSync(destination)) fs.renameSync(path.join(directory, name), destination);
+  }
 }
 
 function readDocumentAt(filePath) {
@@ -1835,6 +3388,30 @@ function uniqueCopyPath(root, fileName) {
   return candidate;
 }
 
+function incomingWorkspaceFile(workspacePath, root, fileName) {
+  const destination = path.join(root, fileName);
+  if (!fs.existsSync(destination)) return { destination, relocatedArchivedFiles: [] };
+  const manifestPath = workspaceManifestPath(workspacePath);
+  if (!manifestPath) return { destination: uniqueCopyPath(root, fileName), relocatedArchivedFiles: [] };
+  const manifest = readJson(manifestPath, null);
+  const relative = relativeWorkspacePath(workspacePath, destination);
+  if (!manifest?.archivedFiles?.includes(relative)) {
+    return { destination: uniqueCopyPath(root, fileName), relocatedArchivedFiles: [] };
+  }
+  const archivedDestination = uniqueCopyPath(root, fileName);
+  fs.renameSync(destination, archivedDestination);
+  renameWorkspaceFileManifestEntries(workspacePath, destination, archivedDestination);
+  return {
+    destination,
+    relocatedArchivedFiles: [{
+      previousPath: destination,
+      path: archivedDestination,
+      name: path.basename(archivedDestination),
+      extension: documentExtension(archivedDestination),
+    }],
+  };
+}
+
 function ensureTemplateFileName(name, requestedExtension = '.thvy') {
   const base = safeFileStem(name || 'Template');
   const extension = path.extname(base).toLowerCase();
@@ -1881,7 +3458,11 @@ function workspaceRootForDocument(directory) {
 
 function addRecentWorkspace(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
-  recent.workspaces = pushRecent(recent.workspaces || [], entryPath);
+  const normalized = path.resolve(entryPath);
+  recent.recentWorkspaces = pushRecent(recentWorkspacePaths(recent), normalized);
+  if (!(recent.workspaces || []).some((entry) => path.resolve(entry) === normalized)) {
+    recent.workspaces = [normalized, ...(recent.workspaces || [])].slice(0, RECENT_LIMIT);
+  }
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }
@@ -1890,6 +3471,7 @@ function removeRecentWorkspace(entryPath) {
   const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
   const normalized = path.resolve(entryPath);
   recent.workspaces = (recent.workspaces || []).filter((entry) => path.resolve(entry) !== normalized);
+  recent.recentWorkspaces = recentWorkspacePaths(recent).filter((entry) => path.resolve(entry) !== normalized);
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
 }
@@ -1955,6 +3537,10 @@ function pushRecent(entries, entryPath) {
   return [normalized, ...entries.filter((entry) => path.resolve(entry) !== normalized)].slice(0, RECENT_LIMIT);
 }
 
+function recentWorkspacePaths(recent) {
+  return recent.recentWorkspaces || recent.workspaces || [];
+}
+
 function menuLabel(entryPath) {
   return path.basename(entryPath) || entryPath;
 }
@@ -1991,12 +3577,21 @@ function defaultAiEmbeddingSettings() {
 
 function defaultAppSettings() {
   return {
+    homepage: { kind: 'included', id: 'hvy-galaxy-guide' },
     imageAttachmentMaxDimensions: {
       width: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
       height: DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION,
     },
+    powerScriptingAllowedFiles: [],
+    powerScriptAcceptances: {},
+    powerScriptAcceptanceScripts: {},
     debugSemanticSearch: false,
     debugLogMaxBytes: 10 * 1024 * 1024,
+    pluginPolicies: {},
+    pluginAcceptances: {},
+    webCapabilityProfileBindings: {},
+    webCapabilityAuthorizations: {},
+    integrationWebMcpApprovals: {},
   };
 }
 
@@ -2004,10 +3599,339 @@ function normalizeAppSettings(settings) {
   return {
     ...defaultAppSettings(),
     ...(settings || {}),
+    homepage: normalizeHomepageSetting(settings?.homepage),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings?.imageAttachmentMaxDimensions),
+    powerScriptingAllowedFiles: normalizePowerScriptingAllowedFiles(settings?.powerScriptingAllowedFiles),
+    powerScriptAcceptances: normalizePowerScriptAcceptances(settings?.powerScriptAcceptances),
+    powerScriptAcceptanceScripts: normalizePowerScriptAcceptanceScripts(settings?.powerScriptAcceptanceScripts),
     debugSemanticSearch: settings?.debugSemanticSearch === true,
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings?.debugLogMaxBytes),
+    pluginPolicies: normalizePluginPolicies(settings?.pluginPolicies),
+    pluginAcceptances: normalizePowerScriptAcceptances(settings?.pluginAcceptances),
+    webCapabilityProfileBindings: normalizeNestedStringMap(settings?.webCapabilityProfileBindings),
+    webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings?.webCapabilityAuthorizations),
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings?.integrationWebMcpApprovals),
   };
+}
+
+function normalizeIntegrationWebMcpApprovals(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([capabilityId, approval]) => (
+    capabilityId && approval && typeof approval === 'object' && !Array.isArray(approval)
+      && approval.capabilityId === capabilityId
+      && typeof approval.integrationId === 'string'
+      && typeof approval.pageId === 'string'
+      && typeof approval.profileId === 'string'
+      && typeof approval.descriptorHash === 'string'
+      && approval.descriptor && typeof approval.descriptor === 'object'
+  )));
+}
+
+function normalizeHomepageSetting(value) {
+  if (value?.kind === 'included' && ['hvy-galaxy-guide', 'hvy-guide'].includes(value.id)) {
+    return { kind: 'included', id: value.id };
+  }
+  if (value?.kind === 'file' && typeof value.path === 'string' && value.path.trim()) {
+    return { kind: 'file', path: value.path.trim() };
+  }
+  if (value?.kind === 'none') return { kind: 'none' };
+  return { kind: 'included', id: 'hvy-galaxy-guide' };
+}
+
+function normalizePluginPolicies(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key, policy]) => String(key).trim() && ['disabled', 'enabled', 'conditional'].includes(policy)));
+}
+
+function normalizeNestedStringMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([documentPath, entries]) => {
+    const normalizedPath = String(documentPath).trim();
+    if (!normalizedPath || !entries || typeof entries !== 'object' || Array.isArray(entries)) return [];
+    const normalizedEntries = Object.fromEntries(Object.entries(entries).flatMap(([key, entry]) => {
+      const normalizedKey = String(key).trim();
+      const normalizedEntry = typeof entry === 'string' ? entry.trim() : '';
+      return normalizedKey && normalizedEntry ? [[normalizedKey, normalizedEntry]] : [];
+    }));
+    return Object.keys(normalizedEntries).length ? [[path.resolve(normalizedPath), normalizedEntries]] : [];
+  }));
+}
+
+function normalizeWebCapabilityAuthorizations(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([documentPath, entries]) => {
+    const normalizedPath = String(documentPath).trim();
+    if (!normalizedPath || !entries || typeof entries !== 'object' || Array.isArray(entries)) return [];
+    const normalizedEntries = Object.fromEntries(Object.entries(entries).flatMap(([capabilityId, authorization]) => {
+      const id = String(capabilityId).trim();
+      if (!id || !authorization || typeof authorization !== 'object' || Array.isArray(authorization)) return [];
+      const profileId = typeof authorization.profileId === 'string' ? authorization.profileId.trim() : '';
+      const capabilityHash = typeof authorization.capabilityHash === 'string' ? authorization.capabilityHash.trim() : '';
+      const authorizedAt = typeof authorization.authorizedAt === 'string' ? authorization.authorizedAt.trim() : '';
+      const summary = authorization.summary;
+      if (!profileId || !capabilityHash || !authorizedAt || !summary || typeof summary !== 'object' || Array.isArray(summary)) return [];
+      if (summary.schemaVersion !== 1 || !['records', 'command'].includes(summary.kind)) return [];
+      const name = typeof summary.name === 'string' ? summary.name.trim() : '';
+      const pageUrl = typeof summary.pageUrl === 'string' ? summary.pageUrl.trim() : '';
+      if (!name || !pageUrl) return [];
+      const normalized = {
+        capabilityId: id,
+        profileId,
+        capabilityHash,
+        authorizedAt,
+        summary: {
+          schemaVersion: 1,
+          kind: summary.kind,
+          name,
+          pageUrl,
+          allowedOrigins: [...new Set((Array.isArray(summary.allowedOrigins) ? summary.allowedOrigins : []).filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort(),
+          fieldLabels: [...new Set((Array.isArray(summary.fieldLabels) ? summary.fieldLabels : []).filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))].sort(),
+          commands: (Array.isArray(summary.commands) ? summary.commands : []).flatMap((command) => {
+            if (!command || typeof command !== 'object' || Array.isArray(command)) return [];
+            const commandId = typeof command.id === 'string' ? command.id.trim() : '';
+            const commandName = typeof command.name === 'string' ? command.name.trim() : '';
+            const gesture = typeof command.gesture === 'string' ? command.gesture.trim() : '';
+            const scope = typeof command.scope === 'string' ? command.scope.trim() : '';
+            return commandId && commandName && gesture && scope ? [{ id: commandId, name: commandName, gesture, scope }] : [];
+          }).sort((left, right) => left.id.localeCompare(right.id)),
+        },
+      };
+      return [[id, normalized]];
+    }));
+    return Object.keys(normalizedEntries).length ? [[path.resolve(normalizedPath), normalizedEntries]] : [];
+  }));
+}
+
+function loadInstalledPluginPackages() {
+  const directory = dataPath('plugins');
+  fs.mkdirSync(directory, { recursive: true });
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.hvy.plugin'))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => {
+      const pluginPath = path.join(directory, entry.name);
+      return { name: entry.name, path: pluginPath, bytes: [...fs.readFileSync(pluginPath)] };
+    });
+}
+
+async function openPluginBuilderWindow(workspacePaths, selectedWorkspacePath) {
+  if (pluginBuilderWindow && !pluginBuilderWindow.isDestroyed()) {
+    raiseWindow(pluginBuilderWindow);
+    return;
+  }
+  pluginBuilderWindow = new BrowserWindow({
+    width: 1180,
+    height: 780,
+    minWidth: 820,
+    minHeight: 560,
+    title: 'Plugin Builder — HVY Galaxy',
+    backgroundColor: '#f7f3ea',
+    icon: iconPath(appIconFileName()),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  pluginBuilderWindow.webContents.setVisualZoomLevelLimits(1, 1);
+  pluginBuilderWindow.on('closed', () => {
+    pluginBuilderWindow = null;
+    buildMenu();
+  });
+  buildMenu();
+  const paths = Array.isArray(workspacePaths) ? workspacePaths.filter((value) => typeof value === 'string') : [];
+  const selected = typeof selectedWorkspacePath === 'string' ? selectedWorkspacePath : '';
+  await loadPluginBuilderRenderer(pluginBuilderWindow, paths, selected);
+  raiseWindow(pluginBuilderWindow);
+}
+
+function pluginProjectsDirectory(workspacePath) {
+  ensureWorkspace(workspacePath);
+  return path.join(workspacePath, 'plugins');
+}
+
+function pluginProjectRecord(projectPath, directoryName) {
+  const manifestPath = path.join(projectPath, 'hvy-plugin.json');
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+      throw new Error('hvy-plugin.json must contain a JSON object.');
+    }
+    return { directoryName, path: projectPath, manifest, error: null };
+  } catch (error) {
+    return {
+      directoryName,
+      path: projectPath,
+      manifest: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function listPluginProjects(workspacePath) {
+  const directory = pluginProjectsDirectory(String(workspacePath || ''));
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map((entry) => pluginProjectRecord(path.join(directory, entry.name), entry.name));
+}
+
+function normalizedPluginProjectDirectoryName(value) {
+  const name = String(value || '').trim();
+  if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error('Plugin directory name must use lowercase letters, numbers, and single hyphens.');
+  }
+  return name;
+}
+
+function normalizedPluginProjectFilePath(value) {
+  const filePath = String(value || '').replaceAll('\\', '/');
+  const segments = filePath.split('/');
+  if (!filePath || path.posix.isAbsolute(filePath) || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error(`Plugin project file path "${filePath}" is not normalized.`);
+  }
+  return filePath;
+}
+
+function createPluginProject(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  const directoryName = normalizedPluginProjectDirectoryName(request?.directoryName);
+  const files = Array.isArray(request?.files) ? request.files.map((file) => ({
+    path: normalizedPluginProjectFilePath(file?.path),
+    content: String(file?.content ?? ''),
+  })) : [];
+  if (!files.some((file) => file.path === 'hvy-plugin.json')) {
+    throw new Error('Plugin project must include hvy-plugin.json.');
+  }
+  const projectsDirectory = pluginProjectsDirectory(workspacePath);
+  fs.mkdirSync(projectsDirectory, { recursive: true });
+  const projectPath = path.join(projectsDirectory, directoryName);
+  if (fs.existsSync(projectPath)) throw new Error('A plugin project already exists with this directory name.');
+  fs.mkdirSync(projectPath);
+  for (const file of files) {
+    const destination = path.join(projectPath, ...file.path.split('/'));
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, file.content, 'utf8');
+  }
+  touchWorkspaceManifest(workspacePath);
+  return pluginProjectRecord(projectPath, directoryName);
+}
+
+function pluginProjectPath(workspacePath, directoryName) {
+  const projectPath = path.join(
+    pluginProjectsDirectory(String(workspacePath || '')),
+    normalizedPluginProjectDirectoryName(directoryName),
+  );
+  if (!fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) {
+    throw new Error('Plugin project was not found.');
+  }
+  return projectPath;
+}
+
+function readPluginProjectFiles(workspacePath, directoryName) {
+  const projectPath = pluginProjectPath(workspacePath, directoryName);
+  const files = [];
+  const visit = (directory, prefix = '') => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name.startsWith('.') || (prefix === '' && entry.name === 'dist')) continue;
+      const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(entryPath, relativePath);
+      else if (entry.isFile()) {
+        const stat = fs.statSync(entryPath);
+        const bytes = fs.readFileSync(entryPath);
+        let content = null;
+        try {
+          content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        } catch {}
+        files.push({
+          path: relativePath,
+          content,
+          bytes: content === null ? [...bytes] : null,
+          modifiedAt: stat.mtimeMs,
+        });
+      }
+    }
+  };
+  visit(projectPath);
+  return files;
+}
+
+function writePluginProjectFile(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  const projectPath = pluginProjectPath(workspacePath, request?.directoryName);
+  const relativePath = normalizedPluginProjectFilePath(request?.path);
+  const destination = path.join(projectPath, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, String(request?.content ?? ''), 'utf8');
+  touchWorkspaceManifest(workspacePath);
+}
+
+function writePluginProjectBuild(request) {
+  const projectPath = pluginProjectPath(request?.workspacePath, request?.directoryName);
+  const name = path.basename(String(request?.name || ''));
+  if (!name.endsWith('.hvy.plugin') || name !== request?.name) throw new Error('Plugin build name must end with .hvy.plugin.');
+  const directory = path.join(projectPath, 'dist');
+  fs.mkdirSync(directory, { recursive: true });
+  const artifactPath = path.join(directory, name);
+  fs.writeFileSync(artifactPath, Buffer.from(request?.bytes || []));
+  return { path: artifactPath, name };
+}
+
+function installPluginPackage(name, bytes) {
+  const fileName = path.basename(String(name || ''));
+  if (!fileName.endsWith('.hvy.plugin') || fileName !== name) {
+    throw new Error('Choose a .hvy.plugin package.');
+  }
+  const directory = dataPath('plugins');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, fileName), Buffer.from(bytes));
+}
+
+function normalizePowerScriptAcceptanceScripts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([filePath, acceptances]) => String(filePath).trim() && acceptances && typeof acceptances === 'object' && !Array.isArray(acceptances))
+    .map(([filePath, acceptances]) => [
+      path.resolve(String(filePath).trim()),
+      Object.fromEntries(Object.entries(acceptances)
+        .map(([fingerprint, scripts]) => [
+          fingerprint,
+          (Array.isArray(scripts) ? scripts : [])
+            .filter((script) => script && typeof script.id === 'string' && script.id.trim() && typeof script.hash === 'string' && script.hash.trim())
+            .map((script) => ({ id: script.id.trim(), hash: script.hash.trim() })),
+        ])
+        .filter(([, scripts]) => scripts.length > 0)),
+    ])
+    .filter(([, acceptances]) => Object.keys(acceptances).length > 0));
+}
+
+function normalizePowerScriptAcceptances(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([filePath]) => String(filePath).trim())
+    .map(([filePath, fingerprints]) => [
+      path.resolve(String(filePath).trim()),
+      [...new Set((Array.isArray(fingerprints) ? fingerprints : [])
+        .filter((fingerprint) => typeof fingerprint === 'string')
+        .map((fingerprint) => fingerprint.trim())
+        .filter(Boolean))].sort(),
+    ])
+    .filter(([filePath, fingerprints]) => filePath && fingerprints.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function normalizePowerScriptingAllowedFiles(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((filePath) => typeof filePath === 'string')
+    .map((filePath) => filePath.trim())
+    .filter(Boolean)
+    .map((filePath) => path.resolve(filePath)))]
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function normalizeDebugLogMaxBytes(value) {
@@ -2091,6 +4015,7 @@ function defaultMcpSettings() {
     startAutomatically: false,
     port: 8794,
     writeAccess: 'hvyCliEdits',
+    integrationAccess: 'off',
     bearerToken: crypto.randomBytes(32).toString('base64url'),
   };
 }
@@ -2110,10 +4035,14 @@ function saveMcpSettings(settings) {
 }
 
 function normalizeMcpSettings(settings) {
-  return {
+  const normalized = {
     ...defaultMcpSettings(),
     ...(settings || {}),
   };
+  normalized.integrationAccess = ['off', 'read', 'actions'].includes(normalized.integrationAccess)
+    ? normalized.integrationAccess
+    : 'off';
+  return normalized;
 }
 
 function mcpStdioWorkspaceConfigPath() {
@@ -2121,10 +4050,11 @@ function mcpStdioWorkspaceConfigPath() {
 }
 
 function readMcpStdioWorkspaceConfig() {
-  const config = readJson(mcpStdioWorkspaceConfigPath(), { workspaces: [], writeAccess: defaultMcpSettings().writeAccess });
+  const config = readJson(mcpStdioWorkspaceConfigPath(), { workspaces: [], writeAccess: defaultMcpSettings().writeAccess, integrationAccess: 'off' });
   return {
     workspaces: Array.isArray(config.workspaces) ? config.workspaces.filter((workspace) => typeof workspace === 'string') : [],
     writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+    integrationAccess: ['off', 'read', 'actions'].includes(config.integrationAccess) ? config.integrationAccess : 'off',
   };
 }
 
@@ -2132,12 +4062,14 @@ function writeMcpStdioWorkspaceConfig(config) {
   return writeJson(mcpStdioWorkspaceConfigPath(), {
     workspaces: Array.isArray(config.workspaces) ? config.workspaces : [],
     writeAccess: typeof config.writeAccess === 'string' ? config.writeAccess : defaultMcpSettings().writeAccess,
+    integrationAccess: ['off', 'read', 'actions'].includes(config.integrationAccess) ? config.integrationAccess : 'off',
   });
 }
 
 function writeMcpStdioSettings(settings) {
   const config = readMcpStdioWorkspaceConfig();
   config.writeAccess = settings.writeAccess;
+  config.integrationAccess = settings.integrationAccess;
   writeMcpStdioWorkspaceConfig(config);
 }
 
@@ -2155,6 +4087,7 @@ function updateMcpWorkspaces(paths) {
   writeMcpStdioWorkspaceConfig({
     workspaces: deduped,
     writeAccess: settings.writeAccess,
+    integrationAccess: settings.integrationAccess,
   });
   return null;
 }

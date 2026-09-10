@@ -1,7 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
+import { deferEncryptedWorkspace, resolveEncryptedWorkspace } from './encryptedFolders';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
+import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
+import { normalizeIntegrationWebMcpApprovals, type IntegrationWebMcpApprovals } from './integrationWebMcp';
+import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
 
 declare global {
   interface Window {
@@ -10,6 +14,8 @@ declare global {
       onMenuEvent(callback: (event: string) => void): () => void;
       onOpenDocumentPath(callback: (path: string) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
+      onIntegrationInspectionResult(callback: (result: unknown) => void): () => void;
+      onWebMcpBrokerRequest(callback: (request: WebMcpBrokerRequest) => void): () => void;
     };
   }
 }
@@ -49,6 +55,9 @@ export interface WorkspaceFileNode {
   archived?: boolean;
   locked?: boolean;
   hiddenFromAI?: boolean;
+  encrypted?: boolean;
+  encryptedFolderKeyId?: string;
+  encryptedAIAllowed?: boolean;
 }
 
 export interface WorkspaceFolderNode {
@@ -57,6 +66,11 @@ export interface WorkspaceFolderNode {
   relativePath: string;
   hiddenFromAI?: boolean;
   children: WorkspaceTreeNode[];
+  encryptedFolderManifest?: number[];
+  encryptedFolderKeyId?: string;
+  encryptedAIAllowed?: boolean;
+  encryptionState?: 'locked' | 'unlocked' | 'missingKey' | 'invalid' | 'incomplete';
+  encryptedFolderIssues?: string[];
 }
 
 export type WorkspaceTreeNode =
@@ -69,15 +83,27 @@ export interface Workspace {
   files: WorkspaceTreeNode[];
 }
 
+export interface WorkspaceFileRelocation {
+  previousPath: string;
+  path: string;
+  name: string;
+  extension: DocumentExtension;
+}
+
 export interface AddFilesResult {
   workspace: Workspace;
   copiedPaths: string[];
   copiedTemplatePaths?: string[];
+  relocatedArchivedFiles?: WorkspaceFileRelocation[];
 }
 
 export interface DroppedWorkspaceFile {
   name: string;
   bytes: number[];
+}
+
+export function selectWorkspaceDocumentFiles(): Promise<DroppedWorkspaceFile[] | null> {
+  return invokeDesktop('select_workspace_document_files');
 }
 
 export interface WorkspaceOpenCandidate {
@@ -88,6 +114,7 @@ export interface WorkspaceOpenCandidate {
 
 export interface RecentState {
   workspaces: string[];
+  recentWorkspaces?: string[];
   files: string[];
   documentModes?: Record<string, string>;
   documentColorUses?: Record<string, boolean>;
@@ -107,6 +134,7 @@ export interface DocumentFile {
   locked?: boolean;
   hiddenFromAI?: boolean;
   recoveryState?: string | null;
+  relocatedArchivedFiles?: WorkspaceFileRelocation[];
 }
 
 export type DocumentFileMetadata = Omit<DocumentFile, 'bytes'>;
@@ -164,10 +192,51 @@ export interface SaveBinaryAsRequest {
   bytes: number[] | Uint8Array;
 }
 
+export interface OpenAttachmentFileRequest {
+  filename: string;
+  bytes: number[] | Uint8Array;
+}
+
 export interface ThemeFile {
   path: string;
   name: string;
   bytes: number[];
+}
+
+export interface DocumentKeyVaultStatus {
+  configured: boolean;
+  hasVault: boolean;
+  storageMode: 'safeStorageVault' | 'nativeKeyringVault';
+  state: 'empty' | 'ready' | 'unavailable' | 'denied' | 'incomplete' | 'corrupt';
+  message?: string;
+}
+
+export function emptyDocumentKeyVaultStatus(): DocumentKeyVaultStatus {
+  return { configured: false, hasVault: false, storageMode: 'safeStorageVault', state: 'empty' };
+}
+
+export interface StoredDocumentKeyInput {
+  keyId: string;
+  key: string;
+  createdAt?: string;
+  source: 'generated' | 'imported';
+  label?: string;
+  clearLabel?: boolean;
+  bundleLabel?: string;
+}
+
+export interface DocumentKeyMetadata {
+  keyId: string;
+  createdAt: string;
+  source: 'generated' | 'imported';
+  label?: string;
+  bundleLabels?: string[];
+}
+
+export interface DocumentKeyFileSource {
+  path: string;
+  name: string;
+  text: string;
 }
 
 export interface SaveThemeAsRequest {
@@ -176,18 +245,82 @@ export interface SaveThemeAsRequest {
 }
 
 export interface FileMenuState {
+  openHomepage: boolean;
   closeDocument: boolean;
   save: boolean;
   saveAs: boolean;
   saveToWorkspace: boolean;
   exportPdf: boolean;
   importCurrent: boolean;
+  encryptDocument: boolean;
+  decryptDocument: boolean;
+  documentEncryptionUnsavedChanges: boolean;
 }
 
 export interface CreateDocumentRequest {
   workspacePath: string;
   relativePath: string;
   template: string;
+}
+
+export interface CreateEncryptedFolderDocumentRequest {
+  workspacePath: string;
+  folderDirectory: string;
+  documentId: string;
+  extension: '.hvy' | '.thvy' | '.phvy';
+  documentBytes: number[] | Uint8Array;
+  previousManifestBytes: number[] | Uint8Array;
+  manifestBytes: number[] | Uint8Array;
+}
+
+export interface CreateEncryptedFolderChildRequest {
+  workspacePath: string;
+  folderDirectory: string;
+  childFolderId: string;
+  childManifestBytes: number[] | Uint8Array;
+  previousManifestBytes: number[] | Uint8Array;
+  manifestBytes: number[] | Uint8Array;
+}
+
+export interface UpdateEncryptedFolderManifestRequest {
+  workspacePath: string;
+  folderDirectory: string;
+  previousManifestBytes: number[] | Uint8Array;
+  manifestBytes: number[] | Uint8Array;
+  keyIdChange?: {
+    previousKeyId: string;
+    nextKeyId: string;
+  };
+}
+
+export interface DocumentKeyMigrationKeyChange {
+  keyId: string;
+  preservedKeyId: string;
+  originalCreatedAt?: string;
+  originalSource?: 'generated' | 'imported';
+  originalLabel?: string;
+  originalBundleLabels?: string[];
+}
+
+export interface BeginDocumentKeyMigrationRequest {
+  migrationId: string;
+  keyChanges: DocumentKeyMigrationKeyChange[];
+}
+
+export interface StageDocumentKeyMigrationFileRequest {
+  migrationId: string;
+  path: string;
+  previousBytes: number[] | Uint8Array;
+  bytes: number[] | Uint8Array;
+}
+
+export interface DeleteEncryptedFolderDocumentRequest extends UpdateEncryptedFolderManifestRequest {
+  documentId: string;
+  extension: '.hvy' | '.thvy' | '.phvy';
+}
+
+export interface DeleteEncryptedFolderChildRequest extends UpdateEncryptedFolderManifestRequest {
+  childFolderId: string;
 }
 
 export interface RenameDocumentRequest {
@@ -208,10 +341,20 @@ export interface WorkspaceDocumentMoveRequest {
   targetDirectory?: string;
 }
 
+export interface WorkspaceDocumentConversionRequest {
+  path: string;
+  workspacePath: string;
+  toTemplate: boolean;
+}
+
 export interface WorkspaceFolderRequest {
   workspacePath: string;
   parentDirectory?: string;
   name: string;
+  encrypted?: {
+    folderId: string;
+    manifestBytes: number[] | Uint8Array;
+  };
 }
 
 export interface DeleteWorkspaceFolderRequest {
@@ -235,6 +378,14 @@ export interface DocumentBackupRequest {
 export interface DocumentRecoveryDraftRequest {
   documentPath: string;
   name: string;
+}
+
+export interface RelocateDocumentRecoveryDraftsRequest {
+  previousDocumentPath: string;
+  previousName: string;
+  documentPath: string;
+  name: string;
+  extension: DocumentExtension;
 }
 
 export interface SaveDocumentTemplateRequest {
@@ -262,11 +413,13 @@ const RECOVERY_DRAFT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 let recoveryDraftDbPromise: Promise<IDBDatabase> | null = null;
 
 export type McpWriteAccess = 'searchOnly' | 'hvyCliEdits' | 'createImportSave';
+export type McpIntegrationAccess = 'off' | 'read' | 'actions';
 
 export interface McpSettings {
   startAutomatically: boolean;
   port: number | null;
   writeAccess: McpWriteAccess;
+  integrationAccess: McpIntegrationAccess;
   bearerToken: string;
 }
 
@@ -337,10 +490,71 @@ export interface ImageAttachmentMaxDimensions {
   height: number;
 }
 
+export type HomepageSetting =
+  | { kind: 'included'; id: string }
+  | { kind: 'file'; path: string }
+  | { kind: 'none' };
+
+export interface IncludedDocument {
+  id: string;
+  name: string;
+}
+
+export const includedDocuments: IncludedDocument[] = [
+  { id: 'hvy-galaxy-guide', name: 'HVY Galaxy Guide' },
+  { id: 'hvy-guide', name: 'HVY Guide' },
+];
+
+export function normalizeHomepageSetting(value: unknown): HomepageSetting {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { kind: 'included', id: 'hvy-galaxy-guide' };
+  }
+  const setting = value as Partial<HomepageSetting>;
+  if (setting.kind === 'included' && typeof setting.id === 'string' && includedDocuments.some((document) => document.id === setting.id)) {
+    return { kind: 'included', id: setting.id };
+  }
+  if (setting.kind === 'file' && typeof setting.path === 'string' && setting.path.trim()) {
+    return { kind: 'file', path: setting.path.trim() };
+  }
+  if (setting.kind === 'none') return { kind: 'none' };
+  return { kind: 'included', id: 'hvy-galaxy-guide' };
+}
+
 export interface AppSettings {
+  homepage: HomepageSetting;
   imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
+  powerScriptingAllowedFiles: string[];
+  powerScriptAcceptances: Record<string, string[]>;
+  powerScriptAcceptanceScripts: Record<string, Record<string, Array<{ id: string; hash: string }>>>;
   debugSemanticSearch: boolean;
   debugLogMaxBytes: number;
+  pluginPolicies: Record<string, 'disabled' | 'enabled' | 'conditional'>;
+  pluginAcceptances: Record<string, string[]>;
+  webCapabilityProfileBindings: WebCapabilityProfileBindings;
+  webCapabilityAuthorizations: WebCapabilityAuthorizations;
+  integrationWebMcpApprovals: IntegrationWebMcpApprovals;
+}
+
+export interface InstalledPluginPackageFile {
+  name: string;
+  path: string;
+  bytes: number[];
+}
+
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
+export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
+export interface IntegrationStorageProbeResult {
+  cookieName: string;
+  inserted: boolean;
+  extracted: boolean;
+  freshStoreEmpty: boolean;
+  restored: boolean;
+  deleted: boolean;
+}
+export interface IntegrationVaultStatus {
+  configured: boolean;
+  hasVault: boolean;
+  storageMode?: 'encryptedVault' | 'webkitProfile';
 }
 
 export function isTauriRuntime(): boolean {
@@ -437,11 +651,128 @@ export function loadAppSettings(): Promise<AppSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultAppSettings());
   }
-  return invokeDesktop('load_app_settings');
+  return invokeDesktop<AppSettings>('load_app_settings').then((settings) => ({
+    ...settings,
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
+  }));
 }
 
 export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
-  return invokeDesktop('save_app_settings', { settings });
+  const normalized = { ...settings, integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals) };
+  return invokeDesktop<AppSettings>('save_app_settings', { settings: normalized }).then((saved) => ({
+    ...saved,
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(saved.integrationWebMcpApprovals),
+  }));
+}
+
+export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFile[]> {
+  if (!isTauriRuntime() && !isElectronRuntime()) return Promise.resolve([]);
+  return invokeDesktop('load_installed_plugin_packages');
+}
+
+export function installPluginPackage(name: string, bytes: number[]): Promise<void> {
+  return invokeDesktop('install_plugin_package', { name, bytes });
+}
+
+export function openPluginBuilderWindow(workspacePaths: string[], selectedWorkspacePath: string | null): Promise<void> {
+  return invokeDesktop('open_plugin_builder_window', { workspacePaths, selectedWorkspacePath });
+}
+
+export function listPluginProjects(workspacePath: string): Promise<PluginProjectRecord[]> {
+  return invokeDesktop<PluginProjectRecord[]>('list_plugin_projects', { workspacePath })
+    .then((projects) => projects.map(normalizePluginProjectRecord));
+}
+
+export function createPluginProject(request: CreatePluginProjectRequest): Promise<PluginProjectRecord> {
+  return invokeDesktop<PluginProjectRecord>('create_plugin_project', { request })
+    .then(normalizePluginProjectRecord);
+}
+
+export function readPluginProjectFiles(workspacePath: string, directoryName: string): Promise<PluginProjectFile[]> {
+  return invokeDesktop('read_plugin_project_files', { workspacePath, directoryName });
+}
+
+export function writePluginProjectFile(request: WritePluginProjectFileRequest): Promise<void> {
+  return invokeDesktop('write_plugin_project_file', { request });
+}
+
+export function writePluginProjectBuild(request: WritePluginProjectBuildRequest): Promise<PluginProjectBuildResult> {
+  return invokeDesktop('write_plugin_project_build', { request });
+}
+
+export function integrationBrowserCommand(
+  command: IntegrationBrowserCommand,
+  destination?: IntegrationBrowserDestination,
+  profileId?: string,
+  url?: string,
+  allowedOrigins?: string[],
+  browserStoreId?: string,
+  actionMode?: boolean,
+  payload?: unknown,
+  foreground?: boolean,
+  windowName?: string,
+  integrationId?: string,
+  pageId?: string,
+): Promise<void> {
+  return invokeDesktop('integration_browser_command', { command, destination, profileId, url, allowedOrigins, browserStoreId, actionMode, payload, foreground, windowName, integrationId, pageId });
+}
+
+export function integrationBrowserIsOpen(profileId?: string): Promise<boolean> {
+  return invokeDesktop('integration_browser_is_open', { profileId });
+}
+
+export function probeIntegrationCookieStorage(): Promise<IntegrationStorageProbeResult> {
+  return invokeDesktop('probe_integration_cookie_storage');
+}
+
+export function loadIntegrationVaultStatus(): Promise<IntegrationVaultStatus> {
+  return invokeDesktop('load_integration_vault_status');
+}
+
+export function setupIntegrationVault(): Promise<IntegrationVaultStatus> {
+  return invokeDesktop('setup_integration_vault');
+}
+
+export function resetIntegrationVault(): Promise<IntegrationVaultStatus> {
+  return invokeDesktop('reset_integration_vault');
+}
+
+export function loadDocumentKeyVaultStatus(): Promise<DocumentKeyVaultStatus> {
+  return invokeDesktop('load_document_key_vault_status');
+}
+
+const loadedDocumentKeyring: Record<string, string> = {};
+
+export function loadedDocumentKeys(): Record<string, string> {
+  return loadedDocumentKeyring;
+}
+
+export async function loadDocumentKeys(keyIds: string[]): Promise<Record<string, string>> {
+  const keys = await invokeDesktop<Record<string, string>>('load_document_keys', { keyIds });
+  Object.assign(loadedDocumentKeyring, keys);
+  return keys;
+}
+
+export async function tryLoadDocumentKeys(keyIds: string[]): Promise<Record<string, string> | null> {
+  const keys = await invokeDesktop<Record<string, string> | null>('try_load_document_keys', { keyIds });
+  if (keys) Object.assign(loadedDocumentKeyring, keys);
+  return keys;
+}
+
+export function listDocumentKeyMetadata(): Promise<DocumentKeyMetadata[]> {
+  return invokeDesktop('list_document_key_metadata');
+}
+
+export function storeDocumentKeys(entries: StoredDocumentKeyInput[]): Promise<DocumentKeyVaultStatus> {
+  return invokeDesktop('store_document_keys', { entries });
+}
+
+export function deleteDocumentKey(keyId: string): Promise<DocumentKeyVaultStatus> {
+  return invokeDesktop('delete_document_key', { keyId });
+}
+
+export function openDocumentKeyFileDialog(): Promise<DocumentKeyFileSource[]> {
+  return invokeDesktop('open_document_key_file_dialog');
 }
 
 export function loadMcpSettings(): Promise<McpSettings> {
@@ -517,9 +848,18 @@ export function defaultAiSettings(): AiSettings {
 
 export function defaultAppSettings(): AppSettings {
   return {
+    homepage: { kind: 'included', id: 'hvy-galaxy-guide' },
     imageAttachmentMaxDimensions: { width: 1080, height: 1080 },
+    powerScriptingAllowedFiles: [],
+    powerScriptAcceptances: {},
+    powerScriptAcceptanceScripts: {},
     debugSemanticSearch: false,
     debugLogMaxBytes: 10 * 1024 * 1024,
+    pluginPolicies: {},
+    pluginAcceptances: {},
+    webCapabilityProfileBindings: {},
+    webCapabilityAuthorizations: {},
+    integrationWebMcpApprovals: {},
   };
 }
 
@@ -528,6 +868,7 @@ export function defaultMcpSettings(): McpSettings {
     startAutomatically: false,
     port: 8794,
     writeAccess: 'hvyCliEdits',
+    integrationAccess: 'off',
     bearerToken: generateMcpBearerToken(),
   };
 }
@@ -625,12 +966,8 @@ export function defaultAiEmbeddingSettings(providerId = 'openai'): AiEmbeddingSe
   };
 }
 
-export function loadDefaultGuide(): Promise<DocumentFile> {
-  return invokeDesktop<DocumentFile>('load_default_guide').then(normalizeDocumentFileBytes);
-}
-
-export function loadHvyGuide(): Promise<DocumentFile> {
-  return invokeDesktop<DocumentFile>('load_hvy_guide').then(normalizeDocumentFileBytes);
+export function loadIncludedDocument(id: string): Promise<DocumentFile> {
+  return invokeDesktop<DocumentFile>('load_included_document', { id }).then(normalizeDocumentFileBytes);
 }
 
 export function openWorkspaceDialog(): Promise<Workspace | null> {
@@ -657,8 +994,21 @@ export function initializeWorkspacePath(path: string): Promise<Workspace> {
   return invokeDesktop('initialize_workspace_path', { path });
 }
 
-export function loadWorkspace(path: string, options: { includeTemplates?: boolean } = {}): Promise<Workspace> {
-  return invokeDesktop('load_workspace', { path, includeTemplates: options.includeTemplates === true });
+export async function loadWorkspace(path: string, options: { includeTemplates?: boolean; recordRecent?: boolean; unlockEncryptedFolders?: boolean } = {}): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('load_workspace', {
+    path,
+    includeTemplates: options.includeTemplates === true,
+    recordRecent: options.recordRecent === true,
+  });
+  if (options.unlockEncryptedFolders !== false) return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+  let interactionRequired = false;
+  const resolved = await resolveEncryptedWorkspace(workspace, async (keyIds) => {
+    const keys = await tryLoadDocumentKeys(keyIds);
+    if (keys !== null) return keys;
+    interactionRequired = true;
+    return {};
+  });
+  return interactionRequired ? deferEncryptedWorkspace(workspace) : resolved;
 }
 
 export function loadArchivedWorkspaces(): Promise<ArchivedWorkspace[]> {
@@ -680,8 +1030,9 @@ export function unarchiveWorkspace(path: string): Promise<Workspace> {
   return invokeDesktop('unarchive_workspace', { path });
 }
 
-export function createWorkspaceFolder(request: WorkspaceFolderRequest): Promise<Workspace> {
-  return invokeDesktop('create_workspace_folder', { request });
+export async function createWorkspaceFolder(request: WorkspaceFolderRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('create_workspace_folder', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
 }
 
 export function addFilesToWorkspace(workspacePath: string, targetDirectory = ''): Promise<AddFilesResult | null> {
@@ -716,6 +1067,12 @@ export function readDocumentFile(path: string): Promise<DocumentFile> {
     }
     return normalizeDocumentFileBytes(await invokeDesktop('read_document_file', { path }));
   });
+}
+
+export function readDocumentFileBytes(path: string): Promise<Uint8Array> {
+  return measureDebugAsync('load', 'backend:readDocumentFileBytes', { path }, async () => (
+    normalizeDesktopBytes(await invokeDesktop<ArrayBuffer | Uint8Array | number[] | BufferJson>('read_document_file_bytes', { path }))
+  ));
 }
 
 export function saveDocumentFile(request: SaveDocumentRequest): Promise<DocumentWriteResult | void> {
@@ -822,6 +1179,40 @@ export function createDocumentFile(request: CreateDocumentRequest): Promise<Docu
   });
 }
 
+export function createEncryptedFolderDocument(request: CreateEncryptedFolderDocumentRequest): Promise<DocumentFile> {
+  return invokeDesktop('create_encrypted_folder_document', { request });
+}
+
+export async function createEncryptedFolderChild(request: CreateEncryptedFolderChildRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('create_encrypted_folder_child', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export async function updateEncryptedFolderManifest(request: UpdateEncryptedFolderManifestRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('update_encrypted_folder_manifest', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export function beginDocumentKeyMigration(request: BeginDocumentKeyMigrationRequest): Promise<void> {
+  return invokeDesktop('begin_document_key_migration', { request });
+}
+
+export function stageDocumentKeyMigrationFile(request: StageDocumentKeyMigrationFileRequest): Promise<void> {
+  return invokeDesktop('stage_document_key_migration_file', { request });
+}
+
+export function commitDocumentKeyMigration(migrationId: string): Promise<void> {
+  return invokeDesktop('commit_document_key_migration', { migrationId });
+}
+
+export function finalizeDocumentKeyMigration(migrationId: string): Promise<void> {
+  return invokeDesktop('finalize_document_key_migration', { migrationId });
+}
+
+export function rollbackDocumentKeyMigration(migrationId: string): Promise<void> {
+  return invokeDesktop('rollback_document_key_migration', { migrationId });
+}
+
 export function revealDocumentFile(path: string): Promise<void> {
   return invokeDesktop('reveal_document_file', { path });
 }
@@ -853,6 +1244,16 @@ export function deleteDocumentFile(path: string): Promise<Workspace | null> {
   return invokeDesktop('delete_document_file', { path });
 }
 
+export async function deleteEncryptedFolderDocument(request: DeleteEncryptedFolderDocumentRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('delete_encrypted_folder_document', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export async function deleteEncryptedFolderChild(request: DeleteEncryptedFolderChildRequest): Promise<Workspace> {
+  const workspace = await invokeDesktop<Workspace>('delete_encrypted_folder_child', { request });
+  return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
 export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Promise<Workspace> {
   return invokeDesktop('delete_workspace_folder', { request });
 }
@@ -882,12 +1283,32 @@ export function saveBinaryAsDialog(request: SaveBinaryAsRequest): Promise<string
   });
 }
 
+export function openAttachmentFile(request: OpenAttachmentFileRequest): Promise<void> {
+  if (isTauriRuntime()) {
+    return invoke<void>('open_attachment_file_raw', toUint8Array(request.bytes), {
+      headers: { 'x-hvy-attachment-filename': encodeURIComponent(request.filename) },
+    });
+  }
+  return invokeDesktop('open_attachment_file', {
+    filename: request.filename,
+    bytes: request.bytes,
+  });
+}
+
 export function copyDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
   return invokeDesktop('copy_document_to_workspace', { path: request.path, workspacePath: request.workspacePath, targetDirectory: request.targetDirectory ?? '' });
 }
 
 export function moveDocumentToWorkspace(request: WorkspaceDocumentMoveRequest): Promise<DocumentFile> {
   return invokeDesktop('move_document_to_workspace', { path: request.path, workspacePath: request.workspacePath, targetDirectory: request.targetDirectory ?? '' });
+}
+
+export function convertWorkspaceDocumentKind(request: WorkspaceDocumentConversionRequest): Promise<DocumentFile> {
+  return invokeDesktop('convert_workspace_document_kind', {
+    path: request.path,
+    workspacePath: request.workspacePath,
+    toTemplate: request.toTemplate,
+  });
 }
 
 export function writeSystemFileClipboard(request: SystemFileClipboardRequest): Promise<void> {
@@ -971,6 +1392,15 @@ export async function clearDocumentRecoveryDrafts(request: DocumentRecoveryDraft
   }
 }
 
+export async function relocateDocumentRecoveryDrafts(request: RelocateDocumentRecoveryDraftsRequest): Promise<void> {
+  if (canUseRecoveryDraftDb()) {
+    await relocateIndexedRecoveryDrafts(request);
+  }
+  if (isTauriRuntime() || isElectronRuntime()) {
+    await invokeDesktop('relocate_document_recovery_drafts', { request });
+  }
+}
+
 function canUseRecoveryDraftDb(): boolean {
   return typeof indexedDB !== 'undefined' && typeof Blob !== 'undefined';
 }
@@ -1042,6 +1472,19 @@ async function clearIndexedRecoveryDrafts(request: DocumentRecoveryDraftRequest)
   await Promise.all(records
     .filter((record) => recoveryDraftDocumentKey(record.documentPath, record.name) === key)
     .map((record) => deleteIndexedRecoveryDraft(record.id)));
+}
+
+async function relocateIndexedRecoveryDrafts(request: RelocateDocumentRecoveryDraftsRequest): Promise<void> {
+  const records = await recoveryDraftStoreRequest<RecoveryDraftRecord[]>('readonly', (store) => store.getAll());
+  const previousKey = recoveryDraftDocumentKey(request.previousDocumentPath, request.previousName);
+  await Promise.all(records
+    .filter((record) => recoveryDraftDocumentKey(record.documentPath, record.name) === previousKey)
+    .map((record) => recoveryDraftStoreRequest('readwrite', (store) => store.put({
+      ...record,
+      documentPath: request.documentPath,
+      name: request.name,
+      extension: request.extension,
+    }))));
 }
 
 async function pruneIndexedRecoveryDrafts(): Promise<void> {
@@ -1118,4 +1561,33 @@ export function onOpenDocumentPath(handler: (path: string) => void): Promise<() 
     return Promise.resolve(() => undefined);
   }
   return listen<string>('open-document-path', (event) => handler(event.payload));
+}
+
+export function onIntegrationInspectionResult(handler: (result: unknown) => void): Promise<() => void> {
+  if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationInspectionResult(handler));
+  if (!isTauriRuntime()) return Promise.resolve(() => undefined);
+  return listen<unknown>('integration-inspection-result', (event) => handler(event.payload));
+}
+
+export interface WebMcpBrokerRequest {
+  requestId: string;
+  operation: 'list' | 'call';
+  integrationAccess: McpIntegrationAccess;
+  capabilityId?: string;
+  arguments?: Record<string, unknown>;
+}
+
+export async function onWebMcpBrokerRequest(handler: (request: WebMcpBrokerRequest) => void): Promise<() => void> {
+  if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onWebMcpBrokerRequest(handler));
+  if (!isTauriRuntime()) return Promise.resolve(() => undefined);
+  const unlisten = await listen<WebMcpBrokerRequest>('webmcp-broker-request', (event) => handler(event.payload));
+  await invokeDesktop('set_web_mcp_broker_renderer_ready', { ready: true });
+  return () => {
+    unlisten();
+    void invokeDesktop('set_web_mcp_broker_renderer_ready', { ready: false });
+  };
+}
+
+export function completeWebMcpBrokerRequest(requestId: string, value?: unknown, error?: string): Promise<void> {
+  return invokeDesktop('complete_web_mcp_broker_request', { requestId, value, error });
 }

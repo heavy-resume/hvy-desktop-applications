@@ -1,8 +1,10 @@
-import { chooseWorkspaceFolder, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
+import { chooseWorkspaceFolder, normalizeHomepageSetting, saveAppSettings, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
 import { getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, saveColorThemeSettings } from './colorTheme';
-import { state } from './state';
+import { filePathBelongsToWorkspace, findFileInWorkspaces, state } from './state';
 import type { HvyMode, VisualDocument } from './hvy';
 import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
+import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
+import { normalizeIntegrationWebMcpApprovals } from './integrationWebMcp';
 
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
@@ -434,10 +436,88 @@ function normalizeEmbeddingBatchSize(value: unknown): number {
 
 export function canonicalAppSettings(settings: AppSettings): AppSettings {
   return {
+    homepage: normalizeHomepageSetting(settings.homepage),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
+    powerScriptingAllowedFiles: normalizePowerScriptingAllowedFiles(settings.powerScriptingAllowedFiles),
+    powerScriptAcceptances: normalizePowerScriptAcceptances(settings.powerScriptAcceptances),
+    powerScriptAcceptanceScripts: normalizePowerScriptAcceptanceScripts(settings.powerScriptAcceptanceScripts),
     debugSemanticSearch: settings.debugSemanticSearch === true,
     debugLogMaxBytes: normalizeDebugLogMaxBytes(settings.debugLogMaxBytes),
+    pluginPolicies: settings.pluginPolicies ?? {},
+    pluginAcceptances: settings.pluginAcceptances ?? {},
+    webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(settings.webCapabilityProfileBindings),
+    webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings.webCapabilityAuthorizations),
+    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
   };
+}
+
+export async function updateHomepageDocumentPath(previousPath: string, nextPath: string): Promise<void> {
+  if (state.appSettings.homepage.kind !== 'file' || state.appSettings.homepage.path !== previousPath) return;
+  state.appSettings = await saveAppSettings({
+    ...state.appSettings,
+    homepage: { kind: 'file', path: nextPath },
+  });
+}
+
+export async function clearHomepageDocumentPath(path: string): Promise<void> {
+  if (state.appSettings.homepage.kind !== 'file' || state.appSettings.homepage.path !== path) return;
+  state.appSettings = await saveAppSettings({
+    ...state.appSettings,
+    homepage: { kind: 'none' },
+  });
+}
+
+export async function clearArchivedHomepageDocument(): Promise<void> {
+  const homepage = state.appSettings.homepage;
+  if (homepage.kind !== 'file') return;
+  if (!state.workspaceEntries.some((entry) => filePathBelongsToWorkspace(homepage.path, entry.path))) {
+    await clearHomepageDocumentPath(homepage.path);
+    return;
+  }
+  const file = findFileInWorkspaces(state.workspaces, homepage.path);
+  if (file?.archived) await clearHomepageDocumentPath(homepage.path);
+}
+
+export function normalizePowerScriptAcceptanceScripts(
+  value: unknown,
+): Record<string, Record<string, Array<{ id: string; hash: string }>>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([path, acceptances]) => {
+    if (!acceptances || typeof acceptances !== 'object' || Array.isArray(acceptances)) return [path, {}];
+    const normalized = Object.fromEntries(Object.entries(acceptances).map(([fingerprint, scripts]) => [
+      fingerprint,
+      (Array.isArray(scripts) ? scripts : []).flatMap((script) => {
+        if (!script || typeof script !== 'object' || Array.isArray(script)) return [];
+        const record = script as Record<string, unknown>;
+        const id = typeof record.id === 'string' ? record.id.trim() : '';
+        const hash = typeof record.hash === 'string' ? record.hash.trim() : '';
+        return id && hash ? [{ id, hash }] : [];
+      }),
+    ]).filter(([, scripts]) => scripts.length > 0));
+    return [path.trim(), normalized];
+  }).filter(([path, acceptances]) => Boolean(path) && Object.keys(acceptances).length > 0));
+}
+
+export function normalizePowerScriptAcceptances(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .map(([path, fingerprints]) => [path.trim(), [...new Set(
+      (Array.isArray(fingerprints) ? fingerprints : [])
+        .filter((fingerprint): fingerprint is string => typeof fingerprint === 'string')
+        .map((fingerprint) => fingerprint.trim())
+        .filter(Boolean),
+    )].sort()] as const)
+    .filter(([path, fingerprints]) => Boolean(path) && fingerprints.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right)));
+}
+
+export function normalizePowerScriptingAllowedFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((path): path is string => typeof path === 'string')
+    .map((path) => path.trim())
+    .filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
 }
 
 export function normalizeDebugLogMaxBytes(value: unknown): number {

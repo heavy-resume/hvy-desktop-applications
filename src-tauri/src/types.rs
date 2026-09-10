@@ -65,11 +65,22 @@ struct Workspace {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct WorkspaceFileRelocation {
+    previous_path: String,
+    path: String,
+    name: String,
+    extension: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct AddFilesResult {
     workspace: Workspace,
     copied_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     copied_template_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relocated_archived_files: Vec<WorkspaceFileRelocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +97,76 @@ struct WorkspaceFolderRequest {
     #[serde(default)]
     parent_directory: String,
     name: String,
+    #[serde(default)]
+    encrypted: Option<EncryptedWorkspaceFolderRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedWorkspaceFolderRequest {
+    folder_id: String,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateEncryptedFolderDocumentRequest {
+    workspace_path: String,
+    folder_directory: String,
+    document_id: String,
+    extension: String,
+    document_bytes: Vec<u8>,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateEncryptedFolderChildRequest {
+    workspace_path: String,
+    folder_directory: String,
+    child_folder_id: String,
+    child_manifest_bytes: Vec<u8>,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct UpdateEncryptedFolderManifestRequest {
+    workspace_path: String,
+    folder_directory: String,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+    key_id_change: Option<EncryptedFolderKeyIdChange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EncryptedFolderKeyIdChange {
+    previous_key_id: String,
+    next_key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DeleteEncryptedFolderDocumentRequest {
+    workspace_path: String,
+    folder_directory: String,
+    document_id: String,
+    extension: String,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct DeleteEncryptedFolderChildRequest {
+    workspace_path: String,
+    folder_directory: String,
+    child_folder_id: String,
+    previous_manifest_bytes: Vec<u8>,
+    manifest_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,7 +185,7 @@ struct WorkspaceOpenCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 enum WorkspaceTreeNode {
     Folder {
         name: String,
@@ -112,6 +193,8 @@ enum WorkspaceTreeNode {
         relative_path: String,
         #[serde(rename = "hiddenFromAI")]
         hidden_from_ai: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encrypted_folder_manifest: Option<Vec<u8>>,
         children: Vec<WorkspaceTreeNode>,
     },
     File {
@@ -121,6 +204,8 @@ enum WorkspaceTreeNode {
         extension: String,
         archived: bool,
         locked: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        encrypted: bool,
         #[serde(rename = "hiddenFromAI")]
         hidden_from_ai: bool,
     },
@@ -154,6 +239,8 @@ struct RecentState {
     #[serde(default, alias = "galaxies")]
     workspaces: Vec<String>,
     #[serde(default)]
+    recent_workspaces: Vec<String>,
+    #[serde(default)]
     files: Vec<String>,
     #[serde(default)]
     document_modes: HashMap<String, String>,
@@ -182,6 +269,8 @@ struct DocumentFile {
     hidden_from_ai: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relocated_archived_files: Vec<WorkspaceFileRelocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -241,12 +330,16 @@ struct DocumentWriteResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct FileMenuState {
+    open_homepage: bool,
     close_document: bool,
     save: bool,
     save_as: bool,
     save_to_workspace: bool,
     export_pdf: bool,
     import_current: bool,
+    encrypt_document: bool,
+    decrypt_document: bool,
+    document_encryption_unsaved_changes: bool,
 }
 
 #[derive(Default)]
@@ -291,6 +384,16 @@ struct SystemFileClipboardRequest {
 struct DocumentRecoveryDraftRequest {
     document_path: String,
     name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RelocateDocumentRecoveryDraftsRequest {
+    previous_document_path: String,
+    previous_name: String,
+    document_path: String,
+    name: String,
+    extension: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -465,24 +568,101 @@ fn default_image_attachment_max_dimension() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum HomepageSetting {
+    Included { id: String },
+    File { path: String },
+    None,
+}
+
+impl Default for HomepageSetting {
+    fn default() -> Self {
+        Self::Included { id: "hvy-galaxy-guide".into() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct AppSettings {
     #[serde(default)]
+    homepage: HomepageSetting,
+    #[serde(default)]
     image_attachment_max_dimensions: ImageAttachmentMaxDimensions,
+    #[serde(default)]
+    power_scripting_allowed_files: Vec<String>,
+    #[serde(default)]
+    power_script_acceptances: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    power_script_acceptance_scripts: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<PowerScriptAcceptanceEntry>>>,
     #[serde(default)]
     debug_semantic_search: bool,
     #[serde(default = "default_debug_log_max_bytes")]
     debug_log_max_bytes: u64,
+    #[serde(default)]
+    plugin_policies: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    plugin_acceptances: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    web_capability_profile_bindings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    web_capability_authorizations: std::collections::BTreeMap<String, std::collections::BTreeMap<String, WebCapabilityAuthorizationRecord>>,
+    #[serde(default)]
+    integration_web_mcp_approvals: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            homepage: HomepageSetting::default(),
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions::default(),
+            power_scripting_allowed_files: Vec::new(),
+            power_script_acceptances: std::collections::BTreeMap::new(),
+            power_script_acceptance_scripts: std::collections::BTreeMap::new(),
             debug_semantic_search: false,
             debug_log_max_bytes: default_debug_log_max_bytes(),
+            plugin_policies: std::collections::BTreeMap::new(),
+            plugin_acceptances: std::collections::BTreeMap::new(),
+            web_capability_profile_bindings: std::collections::BTreeMap::new(),
+            web_capability_authorizations: std::collections::BTreeMap::new(),
+            integration_web_mcp_approvals: std::collections::BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WebCapabilityAuthorizationRecord {
+    capability_id: String,
+    profile_id: String,
+    capability_hash: String,
+    summary: WebCapabilityApprovalSummary,
+    authorized_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WebCapabilityApprovalSummary {
+    schema_version: u8,
+    kind: String,
+    name: String,
+    page_url: String,
+    allowed_origins: Vec<String>,
+    field_labels: Vec<String>,
+    commands: Vec<WebCapabilityApprovalCommand>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WebCapabilityApprovalCommand {
+    id: String,
+    name: String,
+    gesture: String,
+    scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PowerScriptAcceptanceEntry {
+    id: String,
+    hash: String,
 }
 
 fn default_debug_log_max_bytes() -> u64 {

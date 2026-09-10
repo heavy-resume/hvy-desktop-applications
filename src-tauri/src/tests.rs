@@ -4,6 +4,105 @@
     use zip::write::FileOptions;
 
     #[test]
+    fn integration_navigation_allows_only_real_loopback_http_origins() {
+        let local = "http://localhost:5173/".parse::<tauri::Url>().unwrap();
+        let loopback = "http://127.0.0.1:5173/".parse::<tauri::Url>().unwrap();
+        let lookalike = "http://127.example.com:5173/".parse::<tauri::Url>().unwrap();
+        assert!(allowed_integration_url_for_origins(&local, &["http://localhost:5173".into()]));
+        assert!(allowed_integration_url_for_origins(&loopback, &["http://127.0.0.1:5173".into()]));
+        assert!(!allowed_integration_url_for_origins(&lookalike, &["http://127.example.com:5173".into()]));
+    }
+
+    #[test]
+    fn integration_navigation_uses_the_latest_origins_for_an_open_profile() {
+        let profile_id = "origin-switch-regression";
+        let shared = integration_allowed_origins(profile_id).unwrap();
+        *shared.lock().unwrap() = vec!["https://integration-a.example".into()];
+        let callback_origins = shared.clone();
+        let allows = |url: &str| {
+            let url = url.parse::<tauri::Url>().unwrap();
+            callback_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap()
+        };
+        assert!(allows("https://integration-a.example/items"));
+        assert!(!allows("https://integration-b.example/items"));
+
+        *integration_allowed_origins(profile_id).unwrap().lock().unwrap() = vec!["https://integration-b.example".into()];
+
+        assert!(!allows("https://integration-a.example/items"));
+        assert!(allows("https://integration-b.example/items"));
+    }
+
+    #[test]
+    fn workspace_tree_serializes_renderer_field_names() {
+        let node = WorkspaceTreeNode::Folder {
+            name: "folder-id".into(),
+            path: "/workspace/folder-id".into(),
+            relative_path: "folder-id".into(),
+            hidden_from_ai: false,
+            encrypted_folder_manifest: Some(vec![1, 2, 3]),
+            children: Vec::new(),
+        };
+
+        let value = serde_json::to_value(node).unwrap();
+
+        assert_eq!(value.get("relativePath").and_then(serde_json::Value::as_str), Some("folder-id"));
+        assert_eq!(value.get("encryptedFolderManifest"), Some(&serde_json::json!([1, 2, 3])));
+        assert!(value.get("relative_path").is_none());
+        assert!(value.get("encrypted_folder_manifest").is_none());
+    }
+
+    #[test]
+    fn document_key_vault_recovers_persisted_key_after_reopen() {
+        let directory = tempdir().unwrap();
+        let vault_path = directory.path().join("document-key-vault-v1.json");
+        let wrapping_key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+        let key_id = "11111111-1111-4111-8111-111111111111";
+        let document_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+        let mut keys = HashMap::new();
+        keys.insert(key_id.into(), StoredDocumentKey {
+            key: document_key.into(),
+            created_at: "2026-09-02T12:00:00Z".into(),
+            source: "generated".into(),
+            label: None,
+            bundle_labels: vec!["Quarterly planning".into()],
+        });
+        write_document_key_vault_at(&vault_path, &wrapping_key, &DocumentKeyVault { version: 1, keys }).unwrap();
+
+        let persisted_bytes = fs::read(&vault_path).unwrap();
+        assert!(!persisted_bytes.windows(document_key.len()).any(|window| window == document_key.as_bytes()));
+        let reopened = read_document_key_vault_at(&vault_path, &wrapping_key).unwrap();
+        assert_eq!(reopened.keys.get(key_id).unwrap().key, document_key);
+        assert_eq!(reopened.keys.get(key_id).unwrap().bundle_labels, vec!["Quarterly planning"]);
+        delete_document_key_from_vault_at(&vault_path, &wrapping_key, key_id).unwrap();
+        assert!(!read_document_key_vault_at(&vault_path, &wrapping_key).unwrap().keys.contains_key(key_id));
+    }
+
+    #[test]
+    fn recovery_draft_is_hidden_only_when_saved_bytes_match() {
+        let dir = tempdir().unwrap();
+        let document_path = dir.path().join("Notes.hvy");
+        let backup_bytes_path = dir.path().join("draft.bytes");
+        let snapshot_path = dir.path().join("draft.json");
+        fs::write(&document_path, b"newer saved revision").unwrap();
+        fs::write(&backup_bytes_path, b"older unsaved revision").unwrap();
+        let snapshot = DocumentBackupSnapshot {
+            id: "draft".into(),
+            document_path: path_to_string(&document_path),
+            name: "Notes.hvy".into(),
+            extension: ".thvy".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            bytes: Vec::new(),
+            bytes_path: Some("draft.bytes".into()),
+            recovery_state: None,
+        };
+
+        assert!(!document_backup_matches_saved_file(&snapshot, &snapshot_path));
+
+        fs::write(&backup_bytes_path, b"newer saved revision").unwrap();
+        assert!(document_backup_matches_saved_file(&snapshot, &snapshot_path));
+    }
+
+    #[test]
     fn initializes_and_loads_workspace_manifest() {
         let dir = tempdir().unwrap();
         let workspace = initialize_workspace(dir.path()).unwrap();
@@ -16,6 +115,72 @@
 
         let loaded = load_workspace_from_path(dir.path()).unwrap();
         assert_eq!(loaded.manifest.name, workspace.manifest.name);
+    }
+
+    #[test]
+    fn creates_and_lists_workspace_plugin_projects() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Plugin Workspace")).unwrap();
+        let request = CreatePluginProjectRequest {
+            workspace_path: path_to_string(dir.path()),
+            directory_name: "skill-rating".into(),
+            files: vec![
+                PluginProjectSourceFile {
+                    path: "hvy-plugin.json".into(),
+                    content: serde_json::json!({
+                        "formatVersion": "0.2",
+                        "id": "local.plugin-workspace.skill-rating",
+                        "uuid": "skill-rating-primary",
+                        "version": "0.1.0",
+                        "displayName": "Skill Rating",
+                        "entry": "plugin.js",
+                        "styles": [],
+                        "permissions": [],
+                        "hvyApiVersion": "0.1"
+                    }).to_string(),
+                },
+                PluginProjectSourceFile {
+                    path: "plugin.js".into(),
+                    content: "export default {};\n".into(),
+                },
+            ],
+        };
+
+        let created = create_plugin_project(request).unwrap();
+        assert_eq!(created.directory_name, "skill-rating");
+        assert!(dir.path().join("plugins/skill-rating/plugin.js").exists());
+
+        let projects = list_plugin_projects(path_to_string(dir.path())).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].directory_name, "skill-rating");
+        assert_eq!(
+            projects[0].manifest.as_ref().and_then(|manifest| manifest.get("id")).and_then(serde_json::Value::as_str),
+            Some("local.plugin-workspace.skill-rating"),
+        );
+
+        let files = read_plugin_project_files(path_to_string(dir.path()), "skill-rating".into()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|file| file.path == "plugin.js" && file.content.as_deref() == Some("export default {};\n")));
+
+        write_plugin_project_file(WritePluginProjectFileRequest {
+            workspace_path: path_to_string(dir.path()),
+            directory_name: "skill-rating".into(),
+            path: "plugin.js".into(),
+            content: "export default { id: 'updated' };\n".into(),
+        }).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("plugins/skill-rating/plugin.js")).unwrap(),
+            "export default { id: 'updated' };\n",
+        );
+
+        let build = write_plugin_project_build(WritePluginProjectBuildRequest {
+            workspace_path: path_to_string(dir.path()),
+            directory_name: "skill-rating".into(),
+            name: "skill-rating-0.1.0.hvy.plugin".into(),
+            bytes: vec![1, 2, 3],
+        }).unwrap();
+        assert_eq!(build.name, "skill-rating-0.1.0.hvy.plugin");
+        assert_eq!(fs::read(build.path).unwrap(), vec![1, 2, 3]);
     }
 
     #[test]
@@ -119,6 +284,12 @@
     #[test]
     fn import_source_extension_accepts_pdf() {
         assert_eq!(import_source_extension(Path::new("source.pdf")), Some(".pdf".into()));
+    }
+
+    #[test]
+    fn attachment_preview_filename_keeps_extension_and_removes_path_syntax() {
+        assert_eq!(safe_attachment_filename("../Quarterly: report.pdf"), "Quarterly- report.pdf");
+        assert_eq!(safe_attachment_filename("..."), "attachment");
     }
 
     #[test]
@@ -292,7 +463,7 @@
         let dir = tempdir().unwrap();
         fs::create_dir(dir.path().join("notes")).unwrap();
         fs::create_dir(dir.path().join(".git")).unwrap();
-        fs::write(dir.path().join("a.hvy"), "a").unwrap();
+        fs::write(dir.path().join("a.hvy"), b"---HVY-ENCRYPTED---\nenvelope").unwrap();
         fs::write(dir.path().join("notes").join("b.thvy"), "b").unwrap();
         fs::write(dir.path().join(".git").join("hidden.hvy"), "hidden").unwrap();
         fs::write(dir.path().join("skip.txt"), "skip").unwrap();
@@ -314,7 +485,343 @@
         let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder { name, .. } if name == "notes"));
-        assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, .. } if name == "a.hvy"));
+        assert!(matches!(&nodes[1], WorkspaceTreeNode::File { name, encrypted: true, .. } if name == "a.hvy"));
+    }
+
+    #[test]
+    fn scans_encrypted_folder_manifest_bytes_without_listing_the_marker() {
+        let dir = tempdir().unwrap();
+        let encrypted = dir.path().join("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        fs::create_dir(&encrypted).unwrap();
+        fs::write(encrypted.join(".hvy-folder"), b"encrypted manifest envelope").unwrap();
+        fs::write(encrypted.join("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.hvy"), b"ciphertext").unwrap();
+        let manifest = WorkspaceManifest {
+            schema_version: 1,
+            name: "Test".into(),
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+            root_files: Vec::new(),
+            expanded_paths: Vec::new(),
+            template_visibility: WorkspaceTemplateVisibility::default(),
+            archived_files: Vec::new(),
+            locked_files: Vec::new(),
+            hidden_from_ai: false,
+            hidden_from_ai_folders: Vec::new(),
+            hidden_from_ai_files: Vec::new(),
+        };
+
+        let nodes = scan_workspace_files(dir.path(), &manifest, false).unwrap();
+        assert!(matches!(&nodes[0], WorkspaceTreeNode::Folder {
+            encrypted_folder_manifest: Some(bytes),
+            children,
+            ..
+        } if bytes == b"encrypted manifest envelope" && children.len() == 1));
+    }
+
+    #[test]
+    fn creates_encrypted_folder_atomically_under_opaque_id() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let manifest_bytes = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"nonce","ciphertext":"ciphertext"}}"#).into_bytes();
+        let encrypted = EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes,
+        };
+
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).unwrap();
+
+        let folder = dir.path().join(encrypted_folder_physical_name(folder_id));
+        assert!(folder.is_dir());
+        assert_eq!(fs::read(folder.join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), encrypted.manifest_bytes);
+        assert!(!dir.path().join("Private Plans").exists());
+        assert!(!dir.path().join(format!(".{folder_id}.creating")).exists());
+    }
+
+    #[test]
+    fn rejects_invalid_encrypted_folder_identity_before_writing() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let encrypted = EncryptedWorkspaceFolderRequest {
+            folder_id: "../outside".into(),
+            manifest_bytes: b"encrypted manifest envelope".to_vec(),
+        };
+
+        assert!(create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).is_err());
+        assert!(!dir.path().join("outside").exists());
+    }
+
+    #[test]
+    fn rejects_encrypted_manifest_for_a_different_folder_identity() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let encrypted = EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: br#"{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","nonce":"nonce","ciphertext":"ciphertext"}"#.to_vec(),
+        };
+
+        assert!(create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted)).is_err());
+        assert!(!dir.path().join(folder_id).exists());
+    }
+
+    #[test]
+    fn creates_encrypted_document_before_committing_matching_manifest() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let previous = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"old","ciphertext":"old"}}"#).into_bytes();
+        let next = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"new","ciphertext":"new"}}"#).into_bytes();
+        let encrypted_folder = EncryptedWorkspaceFolderRequest { folder_id: folder_id.into(), manifest_bytes: previous.clone() };
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted_folder)).unwrap();
+        let request = CreateEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            document_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".into(),
+            extension: ".hvy".into(),
+            document_bytes: b"encrypted document".to_vec(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: next.clone(),
+        };
+
+        let document_path = create_encrypted_folder_document_at(dir.path(), &request).unwrap();
+
+        assert_eq!(fs::read(document_path).unwrap(), b"encrypted document");
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{}.thvy.creating", request.document_id)).exists());
+    }
+
+    #[test]
+    fn rejects_stale_encrypted_folder_document_mutation_without_writing_document() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let current = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"current","ciphertext":"current"}}"#).into_bytes();
+        let stale = format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","folderId":"{folder_id}","nonce":"stale","ciphertext":"stale"}}"#).into_bytes();
+        let encrypted_folder = EncryptedWorkspaceFolderRequest { folder_id: folder_id.into(), manifest_bytes: current };
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&encrypted_folder)).unwrap();
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let request = CreateEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            document_id: document_id.into(),
+            extension: ".hvy".into(),
+            document_bytes: b"encrypted document".to_vec(),
+            previous_manifest_bytes: stale.clone(),
+            manifest_bytes: stale,
+        };
+
+        assert!(create_encrypted_folder_document_at(dir.path(), &request).is_err());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!("{document_id}.hvy")).exists());
+    }
+
+    #[test]
+    fn creates_encrypted_child_folder_before_committing_parent_manifest() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let child_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |id: &str, nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let previous = envelope(folder_id, "old");
+        let next = envelope(folder_id, "new");
+        let child = envelope(child_id, "child");
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: previous.clone(),
+        })).unwrap();
+        let request = CreateEncryptedFolderChildRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            child_folder_id: child_id.into(),
+            child_manifest_bytes: child.clone(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: next.clone(),
+        };
+
+        create_encrypted_folder_child_at(dir.path(), &request).unwrap();
+
+        let child_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(encrypted_folder_physical_name(child_id));
+        assert_eq!(fs::read(child_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), child);
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{child_id}.creating")).exists());
+    }
+
+    #[test]
+    fn rejects_stale_encrypted_child_folder_mutation_without_leaving_a_directory() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let child_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |id: &str, nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let current = envelope(folder_id, "current");
+        let stale = envelope(folder_id, "stale");
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: current,
+        })).unwrap();
+        let request = CreateEncryptedFolderChildRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            child_folder_id: child_id.into(),
+            child_manifest_bytes: envelope(child_id, "child"),
+            previous_manifest_bytes: stale.clone(),
+            manifest_bytes: stale,
+        };
+
+        assert!(create_encrypted_folder_child_at(dir.path(), &request).is_err());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(encrypted_folder_physical_name(child_id)).exists());
+    }
+
+    #[test]
+    fn updates_encrypted_folder_manifest_only_when_expected_bytes_match() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{folder_id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let previous = envelope("old");
+        let next = envelope("new");
+        create_workspace_folder_at(dir.path(), "", "Private Plans", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(),
+            manifest_bytes: previous.clone(),
+        })).unwrap();
+
+        update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            previous_manifest_bytes: previous.clone(),
+            manifest_bytes: next.clone(),
+            key_id_change: None,
+        }).unwrap();
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+
+        let migrated_key_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        let migrated = format!(
+            r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{migrated_key_id}","folderId":"{folder_id}","nonce":"migrated","ciphertext":"ciphertext"}}"#
+        ).into_bytes();
+        update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            previous_manifest_bytes: next.clone(),
+            manifest_bytes: migrated.clone(),
+            key_id_change: Some(EncryptedFolderKeyIdChange {
+                previous_key_id: key_id.into(),
+                next_key_id: migrated_key_id.into(),
+            }),
+        }).unwrap();
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), migrated);
+
+        assert!(update_encrypted_folder_manifest_at(dir.path(), &UpdateEncryptedFolderManifestRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            previous_manifest_bytes: previous,
+            manifest_bytes: envelope("later"),
+            key_id_change: None,
+        }).is_err());
+    }
+
+    #[test]
+    fn deletes_encrypted_document_only_with_its_matching_manifest_update() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{folder_id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        let previous = envelope("old");
+        let next = envelope("new");
+        create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(), manifest_bytes: previous.clone(),
+        })).unwrap();
+        let document_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!("{document_id}.hvy"));
+        fs::write(&document_path, b"encrypted").unwrap();
+
+        delete_encrypted_folder_document_at(dir.path(), &DeleteEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            document_id: document_id.into(),
+            extension: ".hvy".into(),
+            previous_manifest_bytes: previous,
+            manifest_bytes: next.clone(),
+        }).unwrap();
+
+        assert!(!document_path.exists());
+        assert_eq!(fs::read(dir.path().join(encrypted_folder_physical_name(folder_id)).join(ENCRYPTED_FOLDER_MANIFEST_FILE)).unwrap(), next);
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{document_id}.hvy.deleting")).exists());
+    }
+
+    #[test]
+    fn restores_staged_encrypted_document_when_delete_manifest_is_stale() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{folder_id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(), manifest_bytes: envelope("current"),
+        })).unwrap();
+        let document_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!("{document_id}.hvy"));
+        fs::write(&document_path, b"encrypted").unwrap();
+
+        assert!(delete_encrypted_folder_document_at(dir.path(), &DeleteEncryptedFolderDocumentRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            document_id: document_id.into(),
+            extension: ".hvy".into(),
+            previous_manifest_bytes: envelope("stale"),
+            manifest_bytes: envelope("next"),
+        }).is_err());
+
+        assert_eq!(fs::read(document_path).unwrap(), b"encrypted");
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".{document_id}.hvy.deleting")).exists());
+    }
+
+    #[test]
+    fn restores_staged_encrypted_child_when_delete_manifest_is_stale() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let child_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let key_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+        let envelope = |id: &str, nonce: &str| format!(r#"{{"hvy_encrypted_folder":1,"algorithm":"AES-256-GCM","keyId":"{key_id}","folderId":"{id}","nonce":"{nonce}","ciphertext":"ciphertext"}}"#).into_bytes();
+        create_workspace_folder_at(dir.path(), "", "Private", Some(&EncryptedWorkspaceFolderRequest {
+            folder_id: folder_id.into(), manifest_bytes: envelope(folder_id, "current"),
+        })).unwrap();
+        let child_path = dir.path().join(encrypted_folder_physical_name(folder_id)).join(encrypted_folder_physical_name(child_id));
+        fs::create_dir(&child_path).unwrap();
+        fs::write(child_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE), envelope(child_id, "child")).unwrap();
+
+        assert!(delete_encrypted_folder_child_at(dir.path(), &DeleteEncryptedFolderChildRequest {
+            workspace_path: path_to_string(dir.path()),
+            folder_directory: encrypted_folder_physical_name(folder_id),
+            child_folder_id: child_id.into(),
+            previous_manifest_bytes: envelope(folder_id, "stale"),
+            manifest_bytes: envelope(folder_id, "next"),
+        }).is_err());
+
+        assert!(child_path.is_dir());
+        assert!(!dir.path().join(encrypted_folder_physical_name(folder_id)).join(format!(".hvy-encrypted-folder-{child_id}.deleting")).exists());
+    }
+
+    #[test]
+    fn workspace_scan_restores_interrupted_encrypted_delete_staging() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let folder_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let document_id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+        let folder = dir.path().join(folder_id);
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join(ENCRYPTED_FOLDER_MANIFEST_FILE), b"encrypted manifest").unwrap();
+        let staging = folder.join(format!(".{document_id}.hvy.deleting"));
+        fs::write(&staging, b"encrypted document").unwrap();
+
+        load_workspace_from_path(dir.path()).unwrap();
+
+        assert!(!staging.exists());
+        assert_eq!(fs::read(folder.join(format!("{document_id}.hvy"))).unwrap(), b"encrypted document");
     }
 
     #[test]
@@ -326,6 +833,38 @@
         assert_eq!(
             unique_copy_path(dir.path(), std::ffi::OsStr::new("draft.hvy")),
             dir.path().join("draft 3.hvy")
+        );
+    }
+
+    #[test]
+    fn incoming_workspace_file_keeps_name_and_renames_archived_collision() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        let archived = dir.path().join("draft.hvy");
+        fs::write(&archived, "archived").unwrap();
+        update_archived_document_file(dir.path(), &archived, true).unwrap();
+
+        let incoming = incoming_workspace_file(
+            dir.path(),
+            dir.path(),
+            std::ffi::OsStr::new("draft.hvy"),
+        )
+        .unwrap();
+        let destination = incoming.destination;
+
+        assert_eq!(destination, dir.path().join("draft.hvy"));
+        assert!(!destination.exists());
+        assert_eq!(fs::read_to_string(dir.path().join("draft 2.hvy")).unwrap(), "archived");
+        let manifest = read_manifest(&dir.path().join(WORKSPACE_MANIFEST)).unwrap();
+        assert_eq!(manifest.archived_files, vec!["draft 2.hvy"]);
+        assert_eq!(
+            incoming.relocated_archived_file,
+            Some(WorkspaceFileRelocation {
+                previous_path: path_to_string(&dir.path().join("draft.hvy")),
+                path: path_to_string(&dir.path().join("draft 2.hvy")),
+                name: "draft 2.hvy".into(),
+                extension: ".hvy".into(),
+            })
         );
     }
 
@@ -400,6 +939,29 @@
     }
 
     #[test]
+    fn legacy_workspace_order_initializes_separate_recency() {
+        let dir = tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        let recent_path = dir.path().join("recent.json");
+        fs::write(
+            &recent_path,
+            serde_json::json!({
+                "workspaces": [path_to_string(&first), path_to_string(&second)],
+                "files": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let recent = read_recent_state(&recent_path).unwrap();
+
+        assert_eq!(recent.recent_workspaces, recent.workspaces);
+    }
+
+    #[test]
     fn normalizes_ai_settings() {
         let settings = normalize_ai_settings(AiSettings {
             active_provider_id: " local ".into(),
@@ -438,15 +1000,41 @@
     #[test]
     fn normalizes_app_settings() {
         let settings = normalize_app_settings(AppSettings {
+            homepage: HomepageSetting::default(),
             image_attachment_max_dimensions: ImageAttachmentMaxDimensions { width: 0, height: 20_000 },
+            power_scripting_allowed_files: vec![" /tmp/trusted.hvy ".into(), "/tmp/trusted.hvy".into(), "".into()],
+            plugin_policies: std::collections::BTreeMap::new(),
+            plugin_acceptances: std::collections::BTreeMap::new(),
+            power_script_acceptances: std::collections::BTreeMap::new(),
+            power_script_acceptance_scripts: std::collections::BTreeMap::new(),
             debug_semantic_search: true,
             debug_log_max_bytes: 0,
+            web_capability_profile_bindings: std::collections::BTreeMap::new(),
+            web_capability_authorizations: std::collections::BTreeMap::new(),
+            integration_web_mcp_approvals: std::collections::BTreeMap::new(),
         });
 
         assert_eq!(settings.image_attachment_max_dimensions.width, DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION);
         assert_eq!(settings.image_attachment_max_dimensions.height, MAX_IMAGE_ATTACHMENT_DIMENSION);
+        assert_eq!(settings.power_scripting_allowed_files, vec!["/tmp/trusted.hvy"]);
         assert!(settings.debug_semantic_search);
         assert_eq!(settings.debug_log_max_bytes, default_debug_log_max_bytes());
+    }
+
+    #[test]
+    fn normalizes_homepage_settings() {
+        assert_eq!(
+            normalize_homepage_setting(HomepageSetting::Included { id: "hvy-guide".into() }),
+            HomepageSetting::Included { id: "hvy-guide".into() },
+        );
+        assert_eq!(
+            normalize_homepage_setting(HomepageSetting::File { path: " /tmp/home.hvy ".into() }),
+            HomepageSetting::File { path: "/tmp/home.hvy".into() },
+        );
+        assert_eq!(
+            normalize_homepage_setting(HomepageSetting::Included { id: "missing".into() }),
+            HomepageSetting::default(),
+        );
     }
 
     #[test]
@@ -455,6 +1043,7 @@
             start_automatically: true,
             port: Some(0),
             write_access: "all".into(),
+            integration_access: "unexpected".into(),
             bearer_token: "".into(),
         })
         .unwrap();
@@ -462,6 +1051,7 @@
         assert!(settings.start_automatically);
         assert_eq!(settings.port, None);
         assert_eq!(settings.write_access, "hvyCliEdits");
+        assert_eq!(settings.integration_access, "off");
         assert_eq!(settings.bearer_token, "");
 
         assert_eq!(McpSettings::default().port, Some(DEFAULT_MCP_PORT));
@@ -470,12 +1060,14 @@
             start_automatically: false,
             port: Some(8794),
             write_access: "createImportSave".into(),
+            integration_access: "actions".into(),
             bearer_token: "secret-token".into(),
         })
         .unwrap();
 
         assert_eq!(explicit.port, Some(8794));
         assert_eq!(explicit.write_access, "createImportSave");
+        assert_eq!(explicit.integration_access, "actions");
         assert_eq!(explicit.bearer_token, "secret-token");
     }
 
@@ -654,6 +1246,8 @@ model = "gpt-5.4"
                 "document_archive",
                 "hvy_guidance",
                 "document_cli_based_editor",
+                "search_hvy_document",
+                "apply_hvy_patch",
             ]
         );
         assert!(names
@@ -681,6 +1275,49 @@ model = "gpt-5.4"
             tools[8]["inputSchema"]["required"].as_array().unwrap()[0],
             serde_json::json!("path")
         );
+        assert_eq!(
+            tools[9]["inputSchema"]["required"],
+            serde_json::json!(["path", "query"])
+        );
+        assert_eq!(
+            tools[10]["inputSchema"]["required"],
+            serde_json::json!(["path", "patch"])
+        );
+    }
+
+    #[test]
+    fn webmcp_tools_follow_integration_access_policy() {
+        let off = mcp_tool_list_with_integration_access("off");
+        let read = mcp_tool_list_with_integration_access("read");
+        let actions = mcp_tool_list_with_integration_access("actions");
+        let names = |tools: &serde_json::Value| tools.as_array().unwrap().iter()
+            .filter_map(|tool| tool.get("name").and_then(|name| name.as_str()).map(str::to_string))
+            .collect::<Vec<_>>();
+        assert!(!names(&off).contains(&"webmcp_list_tools".to_string()));
+        assert!(names(&read).contains(&"webmcp_list_tools".to_string()));
+        assert!(names(&read).contains(&"webmcp_call_tool".to_string()));
+        assert_eq!(names(&read), names(&actions));
+    }
+
+    #[test]
+    fn webmcp_broker_reports_unavailable_app_and_normalizes_json_results() {
+        let missing = call_webmcp_broker(
+            Path::new("/path/that/does/not/exist/webmcp-broker.json"),
+            "list",
+            serde_json::json!({}),
+            "read",
+        ).unwrap_err().to_string();
+        assert!(missing.contains("Galaxy is not running"));
+
+        let result = webmcp_mcp_result(serde_json::json!({
+            "value": { "answer": 42 },
+            "resultIsJson": true,
+            "origin": "https://example.com",
+            "annotations": { "readOnlyHint": true, "untrustedContentHint": true, "consequentialHint": false }
+        }));
+        assert_eq!(result["structuredContent"]["answer"], 42);
+        assert_eq!(result["_meta"]["webmcp"]["origin"], "https://example.com");
+        assert_eq!(result["_meta"]["webmcp"]["annotations"]["untrustedContentHint"], true);
     }
 
     #[test]
@@ -688,8 +1325,8 @@ model = "gpt-5.4"
         let dir = tempdir().unwrap();
         fs::create_dir(dir.path().join("people")).unwrap();
         fs::write(
-            dir.path().join("people").join("james-resume.hvy"),
-            "Resume\nJames Hutchison\nExperience building HVY Galaxy.",
+            dir.path().join("people").join("ada-resume.hvy"),
+            "Resume\nAda Lovelace\nExperience building HVY Galaxy.",
         )
         .unwrap();
         fs::write(
@@ -697,7 +1334,7 @@ model = "gpt-5.4"
             "# Notes\nThis markdown file mentions HVY Galaxy but not the resume owner.",
         )
         .unwrap();
-        fs::write(dir.path().join("ignore.txt"), "James Hutchison outside supported documents").unwrap();
+        fs::write(dir.path().join("ignore.txt"), "Ada Lovelace outside supported documents").unwrap();
         let workspace = initialize_workspace_with_name(dir.path(), Some("Career Documents")).unwrap();
         let workspaces = vec![workspace.clone()];
 
@@ -709,25 +1346,25 @@ model = "gpt-5.4"
         assert_eq!(tree["workspaces"][0]["path"], workspace.path);
         assert!(tree["workspaces"][0]["files"]
             .to_string()
-            .contains("james-resume.hvy"));
+            .contains("ada-resume.hvy"));
         assert!(!tree["workspaces"][0]["files"].to_string().contains("ignore.txt"));
 
         let search = mcp_workspace_search_from(
             &workspaces,
             serde_json::json!({
-                "query": "James Hutchison",
+                "query": "Ada Lovelace",
                 "max": 10
             }),
         )
         .unwrap();
-        assert_eq!(search["query"], "James Hutchison");
+        assert_eq!(search["query"], "Ada Lovelace");
         assert_eq!(search["results"].as_array().unwrap().len(), 1);
-        assert_eq!(search["results"][0]["relativePath"], "people/james-resume.hvy");
+        assert_eq!(search["results"][0]["relativePath"], "people/ada-resume.hvy");
         assert_eq!(search["results"][0]["lineNumber"], 2);
         assert!(search["results"][0]["snippet"]
             .as_str()
             .unwrap()
-            .contains("James Hutchison"));
+            .contains("Ada Lovelace"));
     }
 
     #[test]
@@ -875,6 +1512,48 @@ model = "gpt-5.4"
     }
 
     #[test]
+    fn mcp_agent_tools_search_and_patch_a_document() {
+        let dir = tempdir().unwrap();
+        let document_path = dir.path().join("guide.hvy");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join("hvy-guide.hvy"),
+            &document_path,
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Agent Tools")).unwrap();
+        let workspaces = vec![load_workspace_from_path(dir.path()).unwrap()];
+        let path = path_to_string(&document_path);
+
+        let search = mcp_search_hvy_document_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path.clone(),
+                "query": "AI assisted editing",
+                "limit": 2
+            }),
+        )
+        .unwrap();
+        assert_eq!(search["query"], "AI assisted editing");
+        assert_eq!(search["results"].as_array().unwrap().len(), 2);
+
+        let patch = mcp_apply_hvy_patch_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path,
+                "patch": "*** Begin Patch\n*** Update File: /body/welcome/text-0/text.txt\n@@\n-# HVY File Format\n+# HVY File Format MCP Test\n*** End Patch"
+            }),
+        )
+        .unwrap();
+        assert_eq!(patch["appliedFileCount"], 1);
+        assert_eq!(patch["failedFileCount"], 0);
+        assert!(fs::read_to_string(document_path)
+            .unwrap()
+            .contains("# HVY File Format MCP Test"));
+    }
+
+    #[test]
     fn mcp_workspace_search_can_be_scoped_and_limited() {
         let first = tempdir().unwrap();
         let second = tempdir().unwrap();
@@ -1011,6 +1690,7 @@ model = "gpt-5.4"
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(config_workspace.path())],
                 write_access: "searchOnly".into(),
+                integration_access: "read".into(),
             },
         )
         .unwrap();
@@ -1020,6 +1700,7 @@ model = "gpt-5.4"
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(explicit_config_workspace.path())],
                 write_access: "createImportSave".into(),
+                integration_access: "actions".into(),
             },
         )
         .unwrap();
@@ -1046,6 +1727,7 @@ model = "gpt-5.4"
 
         assert_eq!(names, vec!["Args", "Config", "Explicit Config", "Env", "Cwd"]);
         assert_eq!(config.write_access, "createImportSave");
+        assert_eq!(config.integration_access, "actions");
     }
 
     #[test]
@@ -1058,6 +1740,7 @@ model = "gpt-5.4"
             &McpWorkspaceConfig {
                 workspaces: vec![path_to_string(workspace.path())],
                 write_access: "searchOnly".into(),
+                integration_access: "read".into(),
             },
         )
         .unwrap();
@@ -1065,6 +1748,7 @@ model = "gpt-5.4"
         let config = mcp_stdio_workspace_config(Vec::<String>::new(), None, cwd.path().to_path_buf()).unwrap();
 
         assert_eq!(config.write_access, "searchOnly");
+        assert_eq!(config.integration_access, "read");
         assert_eq!(config.workspaces, vec![path_to_string(workspace.path())]);
     }
 
@@ -1072,8 +1756,11 @@ model = "gpt-5.4"
     fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
         assert!(ensure_mcp_tool_allowed("workspace_search", "searchOnly").is_ok());
         assert!(ensure_mcp_tool_allowed("hvy_guidance", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("search_hvy_document", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("apply_hvy_patch", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "hvyCliEdits").is_ok());
+        assert!(ensure_mcp_tool_allowed("apply_hvy_patch", "hvyCliEdits").is_ok());
         assert!(ensure_mcp_tool_allowed("document_create", "hvyCliEdits").is_err());
         assert!(ensure_mcp_tool_allowed("document_archive", "createImportSave").is_ok());
         assert!(ensure_mcp_tool_allowed("workspace_create", "createImportSave").is_ok());
@@ -1104,7 +1791,7 @@ model = "gpt-5.4"
     #[test]
     fn mcp_stdio_serves_initialized_tool_calls() {
         let workspace = tempdir().unwrap();
-        fs::write(workspace.path().join("resume.hvy"), "Resume for James Hutchison").unwrap();
+        fs::write(workspace.path().join("resume.hvy"), "Resume for Ada Lovelace").unwrap();
         initialize_workspace_with_name(workspace.path(), Some("Career")).unwrap();
         let requests = [
             serde_json::json!({
@@ -1124,7 +1811,7 @@ model = "gpt-5.4"
                 "params": {
                     "name": "workspace_search",
                     "arguments": {
-                        "query": "James Hutchison"
+                        "query": "Ada Lovelace"
                     }
                 }
             }),

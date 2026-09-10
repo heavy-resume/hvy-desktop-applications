@@ -1,8 +1,10 @@
 pub fn run() {
     set_native_process_name();
+    enable_native_spellcheck();
 
     let app = tauri::Builder::default()
         .manage(mcp::McpRuntime::default())
+        .manage(mcp::WebMcpBrokerRuntime::default())
         .manage(NativeMenuState::default())
         .manage(LaunchDocumentState {
             pending_paths: Mutex::new(launch_document_paths_from_args()),
@@ -10,11 +12,22 @@ pub fn run() {
         })
         .setup(|app| {
             set_native_process_name();
+            recover_pending_document_key_migrations(app.handle())?;
             install_camera_permission_handler(app.handle());
+            mcp::start_webmcp_broker(app.handle().clone())?;
+            #[cfg(target_os = "macos")]
+            macos_three_finger_swipe::install(app.handle().clone());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             app.on_menu_event(|app, event| {
-                let _ = app.emit("menu-event", event.id().as_ref().to_string());
+                let id = event.id().as_ref();
+                if let Some(window_label) = id.strip_prefix("show-window:") {
+                    if let Some(window) = app.get_window(window_label) {
+                        let _ = raise_integration_window(&window);
+                    }
+                } else {
+                    let _ = app.emit("menu-event", id.to_string());
+                }
             });
             Ok(())
         })
@@ -27,6 +40,32 @@ pub fn run() {
             load_app_settings,
             save_ai_settings,
             save_app_settings,
+            load_installed_plugin_packages,
+            install_plugin_package,
+            open_plugin_builder_window,
+            list_plugin_projects,
+            create_plugin_project,
+            read_plugin_project_files,
+            write_plugin_project_file,
+            write_plugin_project_build,
+            integration_browser_command,
+            integration_browser_is_open,
+            probe_integration_cookie_storage,
+            load_integration_vault_status,
+            setup_integration_vault,
+            reset_integration_vault,
+            load_document_key_vault_status,
+            load_document_keys,
+            try_load_document_keys,
+            list_document_key_metadata,
+            store_document_keys,
+            delete_document_key,
+            begin_document_key_migration,
+            stage_document_key_migration_file,
+            commit_document_key_migration,
+            finalize_document_key_migration,
+            rollback_document_key_migration,
+            open_document_key_file_dialog,
             mcp::load_mcp_settings,
             mcp::save_mcp_settings,
             mcp::load_mcp_server_status,
@@ -39,8 +78,9 @@ pub fn run() {
             mcp::start_mcp_server,
             mcp::stop_mcp_server,
             mcp::update_mcp_workspaces,
-            load_default_guide,
-            load_hvy_guide,
+            mcp::complete_web_mcp_broker_request,
+            mcp::set_web_mcp_broker_renderer_ready,
+            load_included_document,
             open_workspace_dialog,
             reauthorize_workspace,
             choose_workspace_folder,
@@ -54,6 +94,7 @@ pub fn run() {
             create_workspace_folder,
             add_files_to_workspace,
             add_dropped_files_to_workspace,
+            select_workspace_document_files,
             open_file_dialog,
             open_import_source_dialog,
             load_launch_document_paths,
@@ -70,6 +111,8 @@ pub fn run() {
             save_document_as_dialog_raw,
             save_pdf_as_dialog,
             save_binary_as_dialog,
+            open_attachment_file,
+            open_attachment_file_raw,
             list_saved_templates,
             save_document_template,
             update_workspace_template_visibility,
@@ -80,10 +123,15 @@ pub fn run() {
             save_color_theme_as_dialog,
             update_file_menu_state,
             create_document_file,
+            create_encrypted_folder_document,
+            create_encrypted_folder_child,
+            update_encrypted_folder_manifest,
             reveal_document_file,
             open_document_file,
             rename_document_file,
             archive_document_file,
+            delete_encrypted_folder_document,
+            delete_encrypted_folder_child,
             restore_document_file,
             delete_document_file,
             delete_workspace_folder,
@@ -91,6 +139,7 @@ pub fn run() {
             save_document_to_workspace_raw,
             copy_document_to_workspace,
             move_document_to_workspace,
+            convert_workspace_document_kind,
             write_system_file_clipboard,
             read_system_clipboard_text,
             paste_system_files_to_workspace,
@@ -99,6 +148,7 @@ pub fn run() {
             restore_document_backup,
             discard_document_backup,
             clear_document_recovery_drafts,
+            relocate_document_recovery_drafts,
             open_external_url,
             close_app_window
         ])
@@ -106,6 +156,9 @@ pub fn run() {
         .expect("error while building HVY Galaxy");
 
     app.run(|app, event| {
+        if matches!(&event, tauri::RunEvent::Exit) {
+            mcp::stop_webmcp_broker(app);
+        }
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
         if let tauri::RunEvent::Opened { urls } = event {
             for url in urls {
@@ -134,6 +187,17 @@ fn set_native_process_name() {
 
 #[cfg(not(target_os = "macos"))]
 fn set_native_process_name() {}
+
+#[cfg(target_os = "macos")]
+fn enable_native_spellcheck() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+
+    let key = NSString::from_str("WebContinuousSpellCheckingEnabled");
+    NSUserDefaults::standardUserDefaults().setBool_forKey(true, &key);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enable_native_spellcheck() {}
 
 #[cfg(target_os = "windows")]
 fn install_camera_permission_handler(app: &AppHandle) {
@@ -191,6 +255,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .id("save-to-workspace")
         .enabled(false)
         .build(app)?;
+    let document_encryption_unsaved_changes = MenuItemBuilder::new("(unsaved changes)")
+        .id("document-encryption-unsaved-changes")
+        .enabled(false)
+        .build(app)?;
+    let show_document_encryption_unsaved_changes = app
+        .state::<NativeMenuState>()
+        .file_menu
+        .lock()
+        .unwrap()
+        .document_encryption_unsaved_changes;
     #[cfg(target_os = "macos")]
     let app_menu = SubmenuBuilder::new(app, "HVY Galaxy")
         .item(&MenuItemBuilder::new("About HVY Galaxy").id("about").build(app)?)
@@ -202,6 +276,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .build()?;
 
     let file_builder = SubmenuBuilder::with_id(app, "file-menu", "File")
+        .item(&MenuItemBuilder::new("Open Homepage").id("open-homepage").enabled(false).build(app)?)
+        .separator()
         .item(&app_shortcut_menu_item(app, "New Workspace", "new-workspace", "CmdOrCtrl+N")?)
         .item(&app_shortcut_menu_item(app, "Open Workspace", "open-workspace", "CmdOrCtrl+O")?)
         .item(&MenuItemBuilder::new("Manage Workspaces...").id("manage-workspaces").build(app)?)
@@ -218,6 +294,17 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Export PDF...").id("export-pdf").enabled(false).build(app)?)
         .item(&MenuItemBuilder::new("Import Into Current...").id("import-current").enabled(false).build(app)?)
         .separator()
+        .item(&MenuItemBuilder::new("Encrypt Document...").id("encrypt-document").enabled(false).build(app)?)
+        .item(&MenuItemBuilder::new("Remove Document Encryption...").id("decrypt-document").enabled(false).build(app)?);
+    let file_builder = if show_document_encryption_unsaved_changes {
+        file_builder.item(&document_encryption_unsaved_changes)
+    } else {
+        file_builder
+    };
+    let file_builder = file_builder
+        .separator()
+        .item(&MenuItemBuilder::new("Manage Encryption Keys...").id("manage-encryption-keys").build(app)?)
+        .separator()
         .item(&MenuItemBuilder::new("Recover Unsaved Edits...").id("recover-backup").build(app)?)
         .item(&MenuItemBuilder::new("Version History...").id("version-history").build(app)?);
     #[cfg(not(target_os = "macos"))]
@@ -228,6 +315,17 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let ai = SubmenuBuilder::with_id(app, "ai-menu", "AI")
         .item(&MenuItemBuilder::new("LLM Settings...").id("ai-settings").build(app)?)
         .item(&MenuItemBuilder::new("MCP Settings...").id("mcp-settings").build(app)?)
+        .build()?;
+    let plugins = SubmenuBuilder::with_id(app, "plugins-menu", "Plugins")
+        .item(
+            &MenuItemBuilder::new("Plugin Builder...")
+                .id("plugin-builder")
+                .enabled(false)
+                .build(app)?,
+        )
+        .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
+        .separator()
+        .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
         .item(&app_shortcut_menu_item(app, "Undo", "undo", "CmdOrCtrl+Z")?)
@@ -281,6 +379,27 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .separator()
         .item(&PredefinedMenuItem::fullscreen(app, Some("Toggle Full Screen"))?)
         .build()?;
+    let mut window_builder = SubmenuBuilder::with_id(app, "window-menu", "Window")
+        .minimize()
+        .maximize()
+        .separator()
+        .item(&MenuItemBuilder::new("HVY Galaxy").id("show-window:main").build(app)?);
+    if app.get_window("plugin-builder").is_some() {
+        window_builder = window_builder.item(
+            &MenuItemBuilder::new("Plugin Builder — HVY Galaxy")
+                .id("show-window:plugin-builder")
+                .build(app)?,
+        );
+    }
+    let mut integration_windows = app.windows().into_iter()
+        .filter(|(label, _window)| label.starts_with(INTEGRATION_BROWSER_LABEL))
+        .collect::<Vec<_>>();
+    integration_windows.sort_by(|left, right| left.0.cmp(&right.0));
+    for (label, window) in integration_windows {
+        let title = window.title().unwrap_or_else(|_| "HVY Galaxy Integrations".into());
+        window_builder = window_builder.item(&MenuItemBuilder::new(title).id(format!("show-window:{label}")).build(app)?);
+    }
+    let window_menu = window_builder.build()?;
     let help_builder = SubmenuBuilder::with_id(app, "help-menu", "Help")
         .item(
             &MenuItemBuilder::new("HVY Galaxy Guide")
@@ -300,7 +419,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let builder = MenuBuilder::new(app);
     #[cfg(target_os = "macos")]
     let builder = builder.item(&app_menu);
-    builder.item(&file).item(&edit).item(&view).item(&ai).item(&help).build()
+    builder.item(&file).item(&edit).item(&view).item(&ai).item(&plugins).item(&window_menu).item(&help).build()
 }
 
 fn app_shortcut_menu_item(
@@ -352,10 +471,10 @@ fn build_recent_workspaces_menu(
     recent: &RecentState,
 ) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
     let mut builder = SubmenuBuilder::with_id(app, "recent-workspaces", "Recent Workspaces");
-    if recent.workspaces.is_empty() {
+    if recent.recent_workspaces.is_empty() {
         builder = builder.item(&MenuItemBuilder::new("No Recent Workspaces").id("recent-workspaces-empty").build(app)?);
     } else {
-        for path in &recent.workspaces {
+        for path in &recent.recent_workspaces {
             builder = builder.item(
                 &MenuItemBuilder::new(menu_label(path))
                     .id(format!("recent-workspace:{path}"))

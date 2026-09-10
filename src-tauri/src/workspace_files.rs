@@ -163,6 +163,337 @@ fn normalized_folder_name(name: &str) -> AppResult<String> {
     Ok(trimmed.to_string())
 }
 
+fn create_workspace_folder_at(
+    workspace_path: &Path,
+    parent_directory: &str,
+    name: &str,
+    encrypted: Option<&EncryptedWorkspaceFolderRequest>,
+) -> AppResult<()> {
+    let parent = workspace_target_directory(workspace_path, parent_directory)?;
+    let folder_name = normalized_folder_name(name)?;
+    let encrypted_physical_name;
+    let physical_name = if let Some(encrypted) = encrypted {
+        if !is_encrypted_folder_id(&encrypted.folder_id) {
+            return Err(AppError::Message("Encrypted folder ID is invalid.".into()));
+        }
+        if encrypted.manifest_bytes.is_empty() {
+            return Err(AppError::Message("Encrypted folder manifest is required.".into()));
+        }
+        if !encrypted_folder_manifest_matches_id(&encrypted.manifest_bytes, &encrypted.folder_id) {
+            return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+        }
+        encrypted_physical_name = encrypted_folder_physical_name(&encrypted.folder_id);
+        encrypted_physical_name.as_str()
+    } else {
+        folder_name.as_str()
+    };
+    let folder_path = parent.join(physical_name);
+    if folder_path.exists() {
+        return Err(AppError::Message("A folder already exists at that path.".into()));
+    }
+    if let Some(encrypted) = encrypted {
+        let staging_path = parent.join(format!(".{}.creating", encrypted.folder_id));
+        if staging_path.exists() {
+            return Err(AppError::Message("Encrypted folder creation is already staged at that path.".into()));
+        }
+        fs::create_dir(&staging_path)?;
+        let result = (|| -> AppResult<()> {
+            fs::write(staging_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE), &encrypted.manifest_bytes)?;
+            fs::rename(&staging_path, &folder_path)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&staging_path);
+        }
+        result?;
+    } else {
+        fs::create_dir(&folder_path)?;
+    }
+    touch_workspace_manifest(workspace_path)
+}
+
+fn is_encrypted_folder_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 || bytes[8] != b'-' || bytes[13] != b'-' || bytes[18] != b'-' || bytes[23] != b'-' {
+        return false;
+    }
+    bytes.iter().enumerate().all(|(index, byte)| {
+        matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit()
+    }) && matches!(bytes[14], b'1'..=b'8')
+        && matches!(bytes[19].to_ascii_lowercase(), b'8' | b'9' | b'a' | b'b')
+}
+
+const ENCRYPTED_FOLDER_PHYSICAL_PREFIX: &str = "hvy-encrypted-folder-";
+
+fn encrypted_folder_physical_name(folder_id: &str) -> String {
+    format!("{ENCRYPTED_FOLDER_PHYSICAL_PREFIX}{folder_id}")
+}
+
+fn encrypted_folder_id_from_physical_name(value: &str) -> Option<&str> {
+    let folder_id = value.strip_prefix(ENCRYPTED_FOLDER_PHYSICAL_PREFIX).unwrap_or(value);
+    is_encrypted_folder_id(folder_id).then_some(folder_id)
+}
+
+fn encrypted_folder_child_path(parent: &Path, folder_id: &str) -> PathBuf {
+    let labeled = parent.join(encrypted_folder_physical_name(folder_id));
+    if labeled.exists() { labeled } else { parent.join(folder_id) }
+}
+
+fn encrypted_folder_manifest_matches_id(bytes: &[u8], folder_id: &str) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    value.get("hvy_encrypted_folder").and_then(serde_json::Value::as_u64) == Some(1)
+        && value.get("algorithm").and_then(serde_json::Value::as_str) == Some("AES-256-GCM")
+        && value.get("folderId").and_then(serde_json::Value::as_str) == Some(folder_id)
+        && value.get("keyId").and_then(serde_json::Value::as_str).is_some()
+        && value.get("nonce").and_then(serde_json::Value::as_str).is_some()
+        && value.get("ciphertext").and_then(serde_json::Value::as_str).is_some()
+}
+
+fn create_encrypted_folder_document_at(
+    workspace_path: &Path,
+    request: &CreateEncryptedFolderDocumentRequest,
+) -> AppResult<PathBuf> {
+    let relative = PathBuf::from(request.folder_directory.trim());
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
+    }
+    if !is_encrypted_folder_id(&request.document_id) || !matches!(request.extension.as_str(), ".hvy" | ".thvy" | ".phvy") {
+        return Err(AppError::Message("Encrypted document identity is invalid.".into()));
+    }
+    if request.document_bytes.is_empty() {
+        return Err(AppError::Message("Encrypted document bytes are required.".into()));
+    }
+    let folder_path = workspace_path.join(&relative);
+    if !folder_path.is_dir() {
+        return Err(AppError::Message("Encrypted folder was not found.".into()));
+    }
+    let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let Some(folder_id) = encrypted_folder_id_from_physical_name(folder_name) else {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    };
+    if !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
+        || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
+    {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    }
+    let manifest_path = folder_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE);
+    if fs::read(&manifest_path)? != request.previous_manifest_bytes {
+        return Err(AppError::Message("Encrypted folder changed before the document could be created. Refresh and try again.".into()));
+    }
+    let destination = folder_path.join(format!("{}{}", request.document_id, request.extension));
+    if destination.exists() {
+        return Err(AppError::Message("An encrypted document already exists with that identity.".into()));
+    }
+    let staging = folder_path.join(format!(".{}{}.creating", request.document_id, request.extension));
+    if staging.exists() {
+        return Err(AppError::Message("Encrypted document creation is already staged.".into()));
+    }
+    fs::write(&staging, &request.document_bytes)?;
+    fs::rename(&staging, &destination)?;
+    if fs::read(&manifest_path)? != request.previous_manifest_bytes {
+        fs::remove_file(&destination)?;
+        return Err(AppError::Message("Encrypted folder changed before the document could be created. Refresh and try again.".into()));
+    }
+    if let Err(error) = write_file_atomically(&manifest_path, &request.manifest_bytes) {
+        fs::remove_file(&destination)?;
+        return Err(error);
+    }
+    touch_workspace_manifest(workspace_path)?;
+    Ok(destination)
+}
+
+fn create_encrypted_folder_child_at(
+    workspace_path: &Path,
+    request: &CreateEncryptedFolderChildRequest,
+) -> AppResult<()> {
+    let relative = PathBuf::from(request.folder_directory.trim());
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
+    }
+    if !is_encrypted_folder_id(&request.child_folder_id) {
+        return Err(AppError::Message("Encrypted child folder identity is invalid.".into()));
+    }
+    let folder_path = workspace_path.join(&relative);
+    if !folder_path.is_dir() {
+        return Err(AppError::Message("Encrypted folder was not found.".into()));
+    }
+    let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let Some(folder_id) = encrypted_folder_id_from_physical_name(folder_name) else {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    };
+    if !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
+        || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
+        || !encrypted_folder_manifest_matches_id(&request.child_manifest_bytes, &request.child_folder_id)
+    {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    }
+    let parent_key_id = encrypted_folder_manifest_key_id(&request.previous_manifest_bytes);
+    if parent_key_id.is_none()
+        || parent_key_id != encrypted_folder_manifest_key_id(&request.manifest_bytes)
+        || parent_key_id != encrypted_folder_manifest_key_id(&request.child_manifest_bytes)
+    {
+        return Err(AppError::Message("Encrypted child folder must use its parent folder key.".into()));
+    }
+    let manifest_path = folder_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE);
+    if fs::read(&manifest_path)? != request.previous_manifest_bytes {
+        return Err(AppError::Message("Encrypted folder changed before the child folder could be created. Refresh and try again.".into()));
+    }
+    let destination = folder_path.join(encrypted_folder_physical_name(&request.child_folder_id));
+    let staging = folder_path.join(format!(".{}.creating", request.child_folder_id));
+    if destination.exists() || staging.exists() {
+        return Err(AppError::Message("An encrypted child folder already exists with that identity.".into()));
+    }
+    fs::create_dir(&staging)?;
+    let result = (|| -> AppResult<()> {
+        fs::write(staging.join(ENCRYPTED_FOLDER_MANIFEST_FILE), &request.child_manifest_bytes)?;
+        fs::rename(&staging, &destination)?;
+        if fs::read(&manifest_path)? != request.previous_manifest_bytes {
+            fs::remove_dir_all(&destination)?;
+            return Err(AppError::Message("Encrypted folder changed before the child folder could be created. Refresh and try again.".into()));
+        }
+        if let Err(error) = write_file_atomically(&manifest_path, &request.manifest_bytes) {
+            fs::remove_dir_all(&destination)?;
+            return Err(error);
+        }
+        Ok(())
+    })();
+    if result.is_err() && staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result?;
+    touch_workspace_manifest(workspace_path)
+}
+
+fn encrypted_folder_manifest_key_id(bytes: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<serde_json::Value>(bytes).ok()?;
+    value.get("keyId")?.as_str().map(str::to_owned)
+}
+
+fn update_encrypted_folder_manifest_at(
+    workspace_path: &Path,
+    request: &UpdateEncryptedFolderManifestRequest,
+) -> AppResult<()> {
+    let relative = PathBuf::from(request.folder_directory.trim());
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
+    }
+    let folder_path = workspace_path.join(relative);
+    let folder_name = folder_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let folder_id = encrypted_folder_id_from_physical_name(folder_name).unwrap_or_default();
+    let previous_key_id = encrypted_folder_manifest_key_id(&request.previous_manifest_bytes);
+    let next_key_id = encrypted_folder_manifest_key_id(&request.manifest_bytes);
+    let key_id_change_matches = request.key_id_change.as_ref().is_some_and(|change| {
+        previous_key_id.as_deref() == Some(change.previous_key_id.as_str())
+            && next_key_id.as_deref() == Some(change.next_key_id.as_str())
+    });
+    if !folder_path.is_dir()
+        || folder_id.is_empty()
+        || !encrypted_folder_manifest_matches_id(&request.previous_manifest_bytes, folder_id)
+        || !encrypted_folder_manifest_matches_id(&request.manifest_bytes, folder_id)
+        || (previous_key_id != next_key_id && !key_id_change_matches)
+    {
+        return Err(AppError::Message("Encrypted folder manifest does not match the folder identity.".into()));
+    }
+    let manifest_path = folder_path.join(ENCRYPTED_FOLDER_MANIFEST_FILE);
+    if fs::read(&manifest_path)? != request.previous_manifest_bytes {
+        return Err(AppError::Message("Encrypted folder changed before the update could be saved. Refresh and try again.".into()));
+    }
+    write_file_atomically(&manifest_path, &request.manifest_bytes)?;
+    touch_workspace_manifest(workspace_path)
+}
+
+fn delete_encrypted_folder_document_at(
+    workspace_path: &Path,
+    request: &DeleteEncryptedFolderDocumentRequest,
+) -> AppResult<PathBuf> {
+    let update = UpdateEncryptedFolderManifestRequest {
+        workspace_path: request.workspace_path.clone(),
+        folder_directory: request.folder_directory.clone(),
+        previous_manifest_bytes: request.previous_manifest_bytes.clone(),
+        manifest_bytes: request.manifest_bytes.clone(),
+        key_id_change: None,
+    };
+    let relative = PathBuf::from(request.folder_directory.trim());
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
+    }
+    if !is_encrypted_folder_id(&request.document_id)
+        || !matches!(request.extension.as_str(), ".hvy" | ".thvy" | ".phvy")
+    {
+        return Err(AppError::Message("Encrypted document identity is invalid.".into()));
+    }
+    let folder_path = workspace_path.join(&relative);
+    let document_path = folder_path.join(format!("{}{}", request.document_id, request.extension));
+    if !document_path.is_file() {
+        return Err(AppError::Message("Encrypted document was not found.".into()));
+    }
+    let staging = folder_path.join(format!(".{}{}.deleting", request.document_id, request.extension));
+    if staging.exists() {
+        return Err(AppError::Message("Encrypted document deletion is already staged.".into()));
+    }
+    fs::rename(&document_path, &staging)?;
+    if let Err(error) = update_encrypted_folder_manifest_at(workspace_path, &update) {
+        fs::rename(&staging, &document_path)?;
+        return Err(error);
+    }
+    fs::remove_file(&staging)?;
+    Ok(document_path)
+}
+
+fn delete_encrypted_folder_child_at(
+    workspace_path: &Path,
+    request: &DeleteEncryptedFolderChildRequest,
+) -> AppResult<()> {
+    if !is_encrypted_folder_id(&request.child_folder_id) {
+        return Err(AppError::Message("Encrypted child folder identity is invalid.".into()));
+    }
+    let relative = PathBuf::from(request.folder_directory.trim());
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(AppError::Message("Encrypted folder path must stay inside the workspace.".into()));
+    }
+    let parent_path = workspace_path.join(&relative);
+    let child_path = encrypted_folder_child_path(&parent_path, &request.child_folder_id);
+    if !child_path.is_dir() {
+        return Err(AppError::Message("Encrypted child folder was not found.".into()));
+    }
+    let child_physical_name = child_path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let staging = parent_path.join(format!(".{child_physical_name}.deleting"));
+    if staging.exists() {
+        return Err(AppError::Message("Encrypted child folder deletion is already staged.".into()));
+    }
+    let update = UpdateEncryptedFolderManifestRequest {
+        workspace_path: request.workspace_path.clone(),
+        folder_directory: request.folder_directory.clone(),
+        previous_manifest_bytes: request.previous_manifest_bytes.clone(),
+        manifest_bytes: request.manifest_bytes.clone(),
+        key_id_change: None,
+    };
+    fs::rename(&child_path, &staging)?;
+    if let Err(error) = update_encrypted_folder_manifest_at(workspace_path, &update) {
+        fs::rename(&staging, &child_path)?;
+        return Err(error);
+    }
+    fs::remove_dir_all(staging)?;
+    Ok(())
+}
+
 fn update_workspace_file_ai_access_at(
     workspace_path: &Path,
     document_path: &Path,
@@ -270,6 +601,7 @@ fn scan_directory(
     include_templates: bool,
     hidden_from_ai_inherited: bool,
 ) -> AppResult<Vec<WorkspaceTreeNode>> {
+    recover_staged_encrypted_deletions(directory)?;
     let mut folders = Vec::new();
     let mut files = Vec::new();
 
@@ -284,12 +616,19 @@ fn scan_directory(
             let relative_path = relative_path(root, &path);
             let hidden_from_ai = hidden_from_ai_inherited
                 || manifest.hidden_from_ai_folders.iter().any(|hidden| hidden == &relative_path);
+            let encrypted_folder_manifest_path = path.join(ENCRYPTED_FOLDER_MANIFEST_FILE);
+            let encrypted_folder_manifest = if encrypted_folder_manifest_path.is_file() {
+                Some(fs::read(encrypted_folder_manifest_path)?)
+            } else {
+                None
+            };
             let children = scan_directory(root, &path, manifest, include_templates, hidden_from_ai)?;
             folders.push(WorkspaceTreeNode::Folder {
                 name,
                 path: path_to_string(&path),
                 relative_path,
                 hidden_from_ai,
+                encrypted_folder_manifest,
                 children,
             });
         } else if let Some(extension) = document_extension(&path) {
@@ -299,6 +638,7 @@ fn scan_directory(
                 path: path_to_string(&path),
                 archived: manifest.archived_files.iter().any(|archived| archived == &relative_path),
                 locked: manifest.locked_files.iter().any(|locked| locked == &relative_path),
+                encrypted: document_file_is_encrypted(&path)?,
                 hidden_from_ai: hidden_from_ai_inherited
                     || manifest.hidden_from_ai_files.iter().any(|hidden| hidden == &relative_path),
                 relative_path,
@@ -311,6 +651,38 @@ fn scan_directory(
     files.sort_by_key(node_name);
     folders.extend(files);
     Ok(folders)
+}
+
+fn document_file_is_encrypted(path: &Path) -> AppResult<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut prefix = vec![0; DOCUMENT_ENCRYPTION_PREFIX.len()];
+    let bytes_read = file.read(&mut prefix)?;
+    Ok(bytes_read == prefix.len() && prefix == DOCUMENT_ENCRYPTION_PREFIX)
+}
+
+fn recover_staged_encrypted_deletions(directory: &Path) -> AppResult<()> {
+    if !directory.join(ENCRYPTED_FOLDER_MANIFEST_FILE).is_file() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(staged_name) = name.strip_prefix('.').and_then(|value| value.strip_suffix(".deleting")) else {
+            continue;
+        };
+        let identity = staged_name.strip_suffix(".hvy")
+            .or_else(|| staged_name.strip_suffix(".thvy"))
+            .or_else(|| staged_name.strip_suffix(".phvy"))
+            .unwrap_or(staged_name);
+        if encrypted_folder_id_from_physical_name(identity).is_none() {
+            continue;
+        }
+        let destination = directory.join(staged_name);
+        if !destination.exists() {
+            fs::rename(entry.path(), destination)?;
+        }
+    }
+    Ok(())
 }
 
 fn should_ignore(root: &Path, path: &Path, name: &str, include_templates: bool) -> bool {
@@ -511,6 +883,54 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
     path
 }
 
+struct IncomingWorkspaceFile {
+    destination: PathBuf,
+    relocated_archived_file: Option<WorkspaceFileRelocation>,
+}
+
+fn incoming_workspace_file(
+    workspace_path: &Path,
+    root: &Path,
+    file_name: &std::ffi::OsStr,
+) -> AppResult<IncomingWorkspaceFile> {
+    let destination = root.join(file_name);
+    if !destination.exists() {
+        return Ok(IncomingWorkspaceFile { destination, relocated_archived_file: None });
+    }
+    let Some(manifest_path) = workspace_manifest_path(workspace_path) else {
+        return Ok(IncomingWorkspaceFile {
+            destination: unique_copy_path(root, file_name),
+            relocated_archived_file: None,
+        });
+    };
+    let manifest = read_manifest(&manifest_path)?;
+    let relative = relative_path(workspace_path, &destination);
+    if !manifest.archived_files.iter().any(|entry| entry == &relative) {
+        return Ok(IncomingWorkspaceFile {
+            destination: unique_copy_path(root, file_name),
+            relocated_archived_file: None,
+        });
+    }
+    let archived_destination = unique_copy_path(root, file_name);
+    fs::rename(&destination, &archived_destination)?;
+    rename_workspace_file_manifest_entries(workspace_path, &destination, &archived_destination)?;
+    let archived_name = archived_destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::Message("Renamed archived document has no file name.".into()))?;
+    let extension = document_extension(&archived_destination)
+        .ok_or_else(|| AppError::Message("Renamed archived file is not a supported document.".into()))?;
+    Ok(IncomingWorkspaceFile {
+        destination,
+        relocated_archived_file: Some(WorkspaceFileRelocation {
+            previous_path: path_to_string(&root.join(file_name)),
+            path: path_to_string(&archived_destination),
+            name: archived_name.to_string(),
+            extension,
+        }),
+    })
+}
+
 fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
     let metadata = read_document_metadata_at(path)?;
     Ok(DocumentFile {
@@ -521,6 +941,7 @@ fn read_document_at(path: &Path) -> AppResult<DocumentFile> {
         locked: metadata.locked,
         hidden_from_ai: metadata.hidden_from_ai,
         recovery_state: metadata.recovery_state,
+        relocated_archived_files: Vec::new(),
     })
 }
 
@@ -652,8 +1073,14 @@ fn workspace_templates_dir_path(workspace_path: &Path) -> PathBuf {
 fn add_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
     let recent_path = recent_state_path(app)?;
     let mut state = read_recent_state(&recent_path)?;
-    push_recent(&mut state.workspaces, path);
+    push_recent(&mut state.recent_workspaces, path);
+    let normalized = path_to_string(path);
+    if !state.workspaces.contains(&normalized) {
+        state.workspaces.insert(0, normalized);
+        state.workspaces.truncate(RECENT_LIMIT);
+    }
     state.workspaces.retain(|entry| Path::new(entry).is_dir());
+    state.recent_workspaces.retain(|entry| Path::new(entry).is_dir());
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
 }
@@ -663,6 +1090,7 @@ fn remove_recent_workspace(app: &AppHandle, path: &Path) -> AppResult<()> {
     let mut state = read_recent_state(&recent_path)?;
     let normalized = path_to_string(path);
     state.workspaces.retain(|entry| entry != &normalized);
+    state.recent_workspaces.retain(|entry| entry != &normalized);
     write_json_atomically(&recent_path, &state)?;
     refresh_menu(app)
 }
