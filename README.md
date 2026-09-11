@@ -1,120 +1,73 @@
-# HVY Galaxy Desktop
+# HVY Galaxy
 
-Cross-platform desktop app for HVY files. The app is a Tauri v2 shell with
-a Vanilla TypeScript/Vite frontend and the HVY reference implementation mounted
-inside the document pane.
+This is the repository for the HVY Galaxy Mac and Windows client.
 
-## Current Features
+HVY Galaxy is a multipurpose productivity desktop application. It is currently in alpha.
 
-- Folder-backed workspaces using `.hvyworkspace.json`.
-- Workspaces can be created in app-managed storage or in any folder, including
-  folders synced by Google Drive, Microsoft OneDrive, iCloud Drive, or Dropbox.
-- Recursive `.hvy`, `.thvy`, and `.md` file tree.
-- HVY viewer/editor mounting through `../heavy-file-format`.
-- Atomic saves through the Tauri backend.
-- Recent workspaces and files persisted in app data.
-- Native File menu commands for New Workspace, Open Workspace, Open File, and Save.
-- Built-in HVY plugins only.
+![HVY Galaxy Screenshot](./hvy-galaxy-screenshot.png)
 
-## Sync Model
+## Disclaimer
+HVY Galaxy is an alpha product. The software is provided "as is", use at your own risk,
+and Heavy Resume, Inc. is not responsible for damages caused by the use of this product.
 
-The first sync path is folder based: put a workspace in any desktop sync folder and
-open the same folder on another device. A future provider-backed path can add
-Google Drive or Microsoft OneDrive sign-in for devices that do not already have
-a desktop sync client installed.
+## Core Features
+- Create and manipulate HVY documents with revision tracking
+- One click installation of MCP for Claude Desktop or ChatGPT (formally Codex)
+- Highly configurable AI settings with support for local LLMs
+- Workspaces and folders with ability to encrypt and manage keys at high granularity
+- Integrate with web pages by picking examples to pull data from, or using Atom feeds or WebMCP
 
-## Development
+## Download
+Get the latest released version at: [Heavy Resume](https://heavyresume.com/hvy-galaxy)
 
-Prerequisites:
+## Build Options
+HVY Galaxy has builds for both Windows and Mac, using Electron and Tauri. 
+Electron is much larger and slower but has higher compatibility. 
+Tauri is faster and is a much smaller file size. On older Mac OS systems you may have
+to use Electron.
 
-- Node.js and npm
-- Sibling `../heavy-file-format` checkout
-- Rust toolchain
-- Tauri platform prerequisites for macOS or Windows
+## Current State
+Everything related to the HVY file format is currently in alpha.
 
-On Windows PowerShell, if `npm` is blocked by script execution policy, use
-`npm.cmd` for the same commands.
+The repo itself is not yet set up for major contributions, with no CI configured and no
+usage of GitHub's Releases.
 
-Install dependencies:
+- Many features are immature, especially around web integrations, encryption, plugins, etc. Take heed.
+- If you have a really important file I would make a copy of it from time to time, just
+in case.
+- Web integrations currently have really rough edges. There is a risk of actions occuring on the wrong item. Treat web integrations like a toy.
+- MCP is lightly tested and likely needs work to ensure the AI agent using it fully understands what it is doing.
 
-```bash
-npm install
-```
+A lot of functionality is immature, not well tested, and its not uncommon for surprising bugs or regressions
+to be encountered. The good news is that alpha 5 has this happen a lot less than before for
+common use cases.
 
-Run the frontend build:
+# Development Information
+Development is typically done in VS Code with `heavy-file-format` living in `../heavy-file-format`. This is not ideal but it is currently how it is done for convenience.
 
-```bash
-npm run build
-```
+You will need to separately download and install the dependencies (this is a VS Code task so just use that).
 
-Build the host OS release artifacts for both the smaller Tauri app and the
-compatibility Electron app:
+## AI Contributions
+AI cannot be trusted to properly test things, especially if it's UX / UI related. This repo
+was written 99+% by AI (mostly GPT 5.5 and 5.6 Sol) so AI contributions are welcome, but only have it fix issues that you,
+as a human, can reproduce and verify. Automated tested crafted by the AI frequently misses things.
+It's better to start bug fixes with an isolated reproduction that can be confirmed. In some cases,
+AI will think it reproduced the issue when it did not (i.e. I see X which would explain you seeing Y. I removed X. Fixed.)
 
-```bash
-npm run build:host
-```
-
-On macOS this creates the universal Tauri DMG and the Electron DMG. On Windows
-this creates the Tauri installers and the Electron Windows app folder.
-
-Build only the host OS Tauri artifact:
-
-```bash
-npm run build:tauri:host
-```
-
-Build only the host OS Electron artifact:
-
-```bash
-npm run build:electron:host
-```
-
-Build Tauri Windows installers on Windows:
-
-```bash
-npm run build:windows
-```
-
-The Windows installers are written under `src-tauri/target/release/bundle/`.
-
-Build the Electron Windows app folder on Windows:
-
-```bash
-npm run build:electron:windows
-```
-
-The Electron output is written under `dist-electron/HVY Galaxy-win32-x64/`.
-
-Build the Electron macOS DMG:
-
-```bash
-npm run build:electron:dmg
-```
-
-The Electron DMG is written under `dist-electron/`.
-
-Build a universal macOS app for Apple Silicon and Intel Macs:
-
-```bash
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
-npm run build:universal
-```
-
-Build a universal macOS DMG:
-
-```bash
-npm run build:universal:dmg
-```
-
-Run the desktop app:
-
-```bash
-npm run tauri dev
-```
-
-Run Rust unit tests:
-
-```bash
-cd src-tauri
-cargo test
-```
+## Common Issues
+- The Tauri output file size is tiny. For some reason building Tauri takes up gigs 
+  and gigs of space and those files get left until you explicitly purge them. 
+  Just so you know...
+- If you see a visual issue in a HVY document, check that it reproduces in the 
+  reference implementation. If not, its either an issue with specifically how HVY 
+  Galaxy is using the embed, or its an issue that HVY Galaxy created. For 
+  example, setting a CSS rule that overrides whats in heavy-file-format.
+- If you ask AI to fix an issue and it needs updates from heavy-file-format, be weary
+  about it attempting to munge concerns between the two repos. The heavy-file-format
+  repo is only concerned about mounting HVY documents and editing / viewing HVY. It
+  should expose things necessary to accomplish things but not implement HVY Galaxy
+  features.
+- Some issues only show up in Tauri. If you're on a mac and see an issue that's not
+  reproducing in Electron or heavy-file-format's reference implementation, double
+  check against Safari.
+  
