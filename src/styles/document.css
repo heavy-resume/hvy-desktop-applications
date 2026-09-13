@@ -316,9 +316,9 @@
 }
 
 .mode-button.is-active {
-  border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
-  background: var(--hvy-button-bg, #ffffff);
-  color: var(--hvy-accent-1-text, #ffffff);
+  border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1));
+  background: var(--hvy-button-bg);
+  color: var(--hvy-accent-1-text);
   font-weight: 650;
 }
 
@@ -436,4 +436,3 @@
 .document-host .editor-sidebar-tab {
   color: var(--hvy-accent-1-text, #ffffff);
 }
-

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { effectiveColorThemeColors } from './colorTheme';
 import { findRichTextActionButton, hasOpenHvyModal, richTextActionForShortcutKey } from './uiShortcuts';
 
 describe('richTextActionForShortcutKey', () => {
@@ -19,6 +20,15 @@ describe('richTextActionForShortcutKey', () => {
 });
 
 describe('desktop HVY integration boundaries', () => {
+  it('uses the unified light HVY palette for the default color theme', () => {
+    const colors = effectiveColorThemeColors({});
+
+    expect(colors['--hvy-bg']).toBe('#f5f9ff');
+    expect(colors['--hvy-surface']).toBe('#ffffff');
+    expect(colors['--hvy-button-bg']).toBe('#4a8fab');
+    expect(colors['--hvy-border']).toBe('#ced9e2');
+  });
+
   it.each([
     '.caption-text-modal',
     '.text-editor-shell',
@@ -55,5 +65,12 @@ describe('desktop HVY integration boundaries', () => {
 
     expect(css).not.toContain('.hvy-document-host .remove-x');
     expect(css).not.toContain('.hvy-document-host .hvy-embed-layout .remove-x');
+  });
+
+  it('uses the document theme border for web capability blocks', () => {
+    const css = readFileSync(new URL('./plugins/webCapabilities.css', import.meta.url), 'utf8');
+
+    expect(css).toContain('border: 1px solid var(--hvy-border, #c9c3b8)');
+    expect(css).not.toContain('--hvy-border-color');
   });
 });

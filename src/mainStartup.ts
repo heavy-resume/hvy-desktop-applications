@@ -1,7 +1,7 @@
 import { installAiChatClient } from './aiClient';
 import { completeWebMcpBrokerRequest, includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
-import { applyColorTheme, loadColorThemeSettings } from './colorTheme';
+import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state, workspaceRelativeFilePath } from './state';
@@ -587,7 +587,7 @@ export function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
   const mounted = state.document?.mounted;
   if (!root || !mounted) return;
   mounted.mount.setThemeOverrides(
-    readDocumentColorPreference(state.document?.source.path ?? '') ? null : state.colorTheme.colors,
+    readDocumentColorPreference(state.document?.source.path ?? '') ? null : effectiveColorThemeColors(state.colorTheme.colors),
   );
 }
 
