@@ -1,7 +1,7 @@
 import { installAiChatClient } from './aiClient';
-import { completeWebMcpBrokerRequest, includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, startMcpServer, type DocumentFile } from './backend';
+import { completeWebMcpBrokerRequest, includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
-import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings } from './colorTheme';
+import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nativeWindowTheme } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { state, workspaceRelativeFilePath } from './state';
@@ -38,6 +38,7 @@ export async function boot(): Promise<void> {
     applyAppColorTheme(null);
     setMountRoot(render(state, handlers));
     applyZoomSettings();
+    await showMainWindow(nativeWindowTheme(state.colorTheme.colors));
     bindFindShortcut();
     bindDocumentNavigationInputs();
     bindNativeZoomGestureSuppression();
@@ -585,6 +586,7 @@ export function routeNativeEditCommand(command: 'undo' | 'redo'): boolean {
 
 export function applyAppColorTheme(root: HTMLElement | null = mountRoot): void {
   applyColorTheme(state.colorTheme);
+  void setNativeWindowTheme(nativeWindowTheme(state.colorTheme.colors));
   const mounted = state.document?.mounted;
   if (!root || !mounted) return;
   mounted.mount.setThemeOverrides(

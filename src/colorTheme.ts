@@ -423,6 +423,19 @@ export function effectiveColorThemeColors(colors: Record<string, string>): Recor
   return { ...DEFAULT_HVY_COLORS, ...sanitizeThemeColors(colors) };
 }
 
+export function nativeWindowTheme(colors: Record<string, string>): 'light' | 'dark' {
+  const background = effectiveColorThemeColors(colors)['--hvy-bg'];
+  const hex = background.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+  const rgb = hex
+    ? (hex.length === 3
+      ? hex.split('').map((part) => Number.parseInt(`${part}${part}`, 16))
+      : [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6)].map((part) => Number.parseInt(part, 16)))
+    : background.match(/^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i)?.slice(1).map(Number);
+  if (!rgb) return 'light';
+  const [red, green, blue] = rgb.map((channel) => channel / 255);
+  return (0.2126 * red + 0.7152 * green + 0.0722 * blue) < 0.5 ? 'dark' : 'light';
+}
+
 export function clearColorTheme(target: HTMLElement): void {
   const stale: string[] = [];
   for (let i = 0; i < target.style.length; i += 1) {

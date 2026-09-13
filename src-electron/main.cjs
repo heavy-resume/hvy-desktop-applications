@@ -179,6 +179,7 @@ function createWindow() {
     minWidth: 920,
     minHeight: 640,
     title: APP_NAME,
+    show: false,
     backgroundColor: '#f7f3ea',
     icon: iconPath(appIconFileName()),
     webPreferences: {
@@ -189,6 +190,7 @@ function createWindow() {
       spellcheck: true,
     },
   });
+  window.once('ready-to-show', () => window.show());
   installEditableContextMenu(window);
   window.webContents.setVisualZoomLevelLimits(1, 1);
   window.webContents.on('did-start-loading', () => {

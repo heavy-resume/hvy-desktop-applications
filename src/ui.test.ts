@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { effectiveColorThemeColors, getPaletteById } from './colorTheme';
+import { effectiveColorThemeColors, getPaletteById, nativeWindowTheme } from './colorTheme';
 import { findRichTextActionButton, hasOpenHvyModal, richTextActionForShortcutKey } from './uiShortcuts';
 
 describe('richTextActionForShortcutKey', () => {
@@ -27,6 +27,12 @@ describe('desktop HVY integration boundaries', () => {
     expect(colors['--hvy-surface']).toBe('#ffffff');
     expect(colors['--hvy-button-bg']).toBe('#4a8fab');
     expect(colors['--hvy-border']).toBe('#ced9e2');
+  });
+
+  it('matches native window chrome to the theme background', () => {
+    expect(nativeWindowTheme({ '--hvy-bg': '#0f1720' })).toBe('dark');
+    expect(nativeWindowTheme({ '--hvy-bg': 'rgb(40, 40, 45)' })).toBe('dark');
+    expect(nativeWindowTheme({ '--hvy-bg': '#f5f9ff' })).toBe('light');
   });
 
   it('offers the built-in HVY dark defaults as an explicit palette', () => {

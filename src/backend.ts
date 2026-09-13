@@ -565,6 +565,18 @@ export function isElectronRuntime(): boolean {
   return typeof window !== 'undefined' && Boolean(window.hvyElectron);
 }
 
+export async function setNativeWindowTheme(theme: 'light' | 'dark'): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await getCurrentWindow().setTheme(theme);
+}
+
+export async function showMainWindow(theme: 'light' | 'dark'): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const window = getCurrentWindow();
+  await window.setTheme(theme);
+  await window.show();
+}
+
 function invokeDesktop<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isElectronRuntime()) {
     return window.hvyElectron!.invoke<T>(command, args);

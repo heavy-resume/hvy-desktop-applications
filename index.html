@@ -4,10 +4,41 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HVY Galaxy</title>
+    <style>
+      :root {
+        --hvy-bg: #f5f9ff;
+        --hvy-text: #1a2530;
+      }
+
+      .startup-loading {
+        display: grid;
+        min-height: 100vh;
+        place-items: center;
+        margin: 0;
+        background: var(--hvy-bg);
+        color: var(--hvy-text);
+        font: 14px system-ui;
+      }
+    </style>
+    <script>
+      try {
+        const savedTheme = JSON.parse(localStorage.getItem('hvy-galaxy-color-theme-v1') || '{}');
+        const colors = savedTheme && typeof savedTheme.colors === 'object' && !Array.isArray(savedTheme.colors)
+          ? savedTheme.colors
+          : {};
+        for (const [name, value] of Object.entries(colors)) {
+          if (name.startsWith('--hvy-') && typeof value === 'string' && value.trim()) {
+            document.documentElement.style.setProperty(name, value.trim());
+          }
+        }
+      } catch {
+        // The normal startup path will restore defaults for unreadable settings.
+      }
+    </script>
   </head>
   <body>
     <div id="app">
-      <main style="display:grid;min-height:100vh;place-items:center;font:14px system-ui;color:#334;background:#f4f1eb">
+      <main class="startup-loading">
         Loading HVY Galaxy...
       </main>
     </div>
