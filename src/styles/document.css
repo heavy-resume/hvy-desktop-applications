@@ -13,6 +13,7 @@
 
 .document-tabs {
   display: flex;
+  align-items: flex-end;
   min-width: 0;
   overflow-x: auto;
   border-bottom: 1px solid var(--hvy-border-translucent, var(--hvy-border, #c2cbc6));
@@ -37,7 +38,15 @@
 
 .document-tab-new {
   flex: 0 0 auto;
-  margin: 1px 2px 6px;
+  width: 44px;
+  height: 34px;
+  margin: 0 6px 0 2px;
+  border: 1px solid color-mix(in srgb, var(--hvy-border-translucent, var(--hvy-border, #c2cbc6)) 58%, transparent);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 90%, transparent);
+  color: var(--hvy-text, #5f6a66);
+  padding: 0 0 2px;
 }
 
 .document-tab.is-active {
