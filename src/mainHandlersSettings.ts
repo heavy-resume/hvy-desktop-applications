@@ -2464,7 +2464,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (editingDocumentColorTheme()) {
       const current = currentDocumentColorTheme();
       if (id === 'default') {
-        updateDocumentColorTheme({ ...current, colors: {}, name: 'Default' });
+        updateDocumentColorTheme({ ...current, colors: {}, name: 'Default (Light)' });
         rerender({ preserveMountedDocument: true });
         return;
       }
@@ -2487,7 +2487,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.colorTheme = {
         ...state.colorTheme,
         colors: {},
-        themeName: 'Default',
+        themeName: 'Default (Light)',
         themeUses: { ...state.colorTheme.themeUses, default: now },
       };
     } else if (id.startsWith('palette:')) {

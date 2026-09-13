@@ -87,8 +87,8 @@ export function renderThemeCards(state: AppState, selectedPaletteId: string | nu
   const cards: ThemeCard[] = [
     {
       id: 'default',
-      name: 'Default',
-      description: 'Use the built-in HVY colors.',
+      name: 'Default (Light)',
+      description: 'The built-in HVY light colors.',
       colors: {},
       builtIn: true,
       selected: selectedCustomThemeId === null && selectedPaletteId === null && Object.keys(colors).length === 0,
@@ -144,7 +144,7 @@ export function renderThemeCard(theme: ThemeCard, enabled = true): string {
 export function selectedThemeName(paletteId: string | null, customThemeId: string | null, state: AppState, colors = state.colorTheme.colors): string | null {
   if (customThemeId) return state.colorTheme.savedThemes.find((theme) => theme.id === customThemeId)?.name ?? null;
   if (paletteId) return HVY_PALETTES.find((palette) => palette.id === paletteId)?.name ?? null;
-  return Object.keys(colors).length === 0 ? 'Default' : null;
+  return Object.keys(colors).length === 0 ? 'Default (Light)' : null;
 }
 
 export interface ThemePreviewItem {

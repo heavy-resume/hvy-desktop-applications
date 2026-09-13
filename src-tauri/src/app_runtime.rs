@@ -276,6 +276,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .build()?;
 
     let file_builder = SubmenuBuilder::with_id(app, "file-menu", "File")
+        .item(&MenuItemBuilder::new("New Document").id("new-document").build(app)?)
+        .separator()
         .item(&MenuItemBuilder::new("Open Homepage").id("open-homepage").enabled(false).build(app)?)
         .separator()
         .item(&app_shortcut_menu_item(app, "New Workspace", "new-workspace", "CmdOrCtrl+N")?)

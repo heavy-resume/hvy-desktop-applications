@@ -340,6 +340,7 @@ export async function boot(): Promise<void> {
         .catch((error) => completeWebMcpBrokerRequest(request.requestId, undefined, error instanceof Error ? error.message : String(error)));
     });
     await onMenuEvent((event) => {
+      if (event === 'new-document') handlers.createFile();
       if (event === 'new-workspace') handlers.newWorkspace();
       if (event === 'manage-workspaces') handlers.openWorkspaceManager();
       if (event === 'open-workspace') handlers.openWorkspace();

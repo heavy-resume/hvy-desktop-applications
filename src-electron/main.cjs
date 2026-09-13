@@ -320,6 +320,8 @@ function buildMenu() {
     {
       label: 'File',
       submenu: [
+        menuItem('New Document', 'new-document'),
+        { type: 'separator' },
         menuItem('Open Homepage', 'open-homepage'),
         { type: 'separator' },
         menuItem('New Workspace', 'new-workspace', 'CmdOrCtrl+N'),

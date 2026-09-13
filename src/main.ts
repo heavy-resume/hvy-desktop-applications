@@ -707,9 +707,9 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     });
     pendingMountRecoveryState = null;
   }
+  state.document.mounted = mounted;
   measureDebug('load', 'mountCurrentDocument:applyColorTheme', { path }, () => applyAppColorTheme());
   mountThemeReapplyCleanup = measureDebug('load', 'mountCurrentDocument:bindThemeReapply', { path }, () => bindMountThemeReapply(mountRoot!));
-  state.document.mounted = mounted;
   measureDebug('load', 'mountCurrentDocument:applyDocumentZoom', { path }, () => applyDocumentZoom());
   measureDebug('load', 'mountCurrentDocument:setDirtyState', { path }, () => {
     const dirtyBeforeBaseline = state.document!.dirty;

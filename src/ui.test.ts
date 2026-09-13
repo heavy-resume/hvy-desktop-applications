@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { effectiveColorThemeColors } from './colorTheme';
+import { effectiveColorThemeColors, getPaletteById } from './colorTheme';
 import { findRichTextActionButton, hasOpenHvyModal, richTextActionForShortcutKey } from './uiShortcuts';
 
 describe('richTextActionForShortcutKey', () => {
@@ -27,6 +27,15 @@ describe('desktop HVY integration boundaries', () => {
     expect(colors['--hvy-surface']).toBe('#ffffff');
     expect(colors['--hvy-button-bg']).toBe('#4a8fab');
     expect(colors['--hvy-border']).toBe('#ced9e2');
+  });
+
+  it('offers the built-in HVY dark defaults as an explicit palette', () => {
+    const palette = getPaletteById('default-dark');
+
+    expect(palette?.name).toBe('Default (Dark)');
+    expect(palette?.colors['--hvy-bg']).toBe('#0f1720');
+    expect(palette?.colors['--hvy-surface']).toBe('#17222d');
+    expect(palette?.colors['--hvy-button-bg']).toBe('#2d6a8a');
   });
 
   it.each([
@@ -72,5 +81,14 @@ describe('desktop HVY integration boundaries', () => {
 
     expect(css).toContain('border: 1px solid var(--hvy-border, #c9c3b8)');
     expect(css).not.toContain('--hvy-border-color');
+  });
+
+  it('activates a new document mount before applying its color theme', () => {
+    const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+    const activateMount = source.indexOf('state.document.mounted = mounted;');
+    const applyTheme = source.indexOf("measureDebug('load', 'mountCurrentDocument:applyColorTheme'");
+
+    expect(activateMount).toBeGreaterThan(-1);
+    expect(applyTheme).toBeGreaterThan(activateMount);
   });
 });
