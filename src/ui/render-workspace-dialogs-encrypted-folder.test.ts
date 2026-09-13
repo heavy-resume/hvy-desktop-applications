@@ -9,7 +9,7 @@ vi.mock('../templates', () => ({
   templatesForDocumentType: () => [{ id: 'blank.thvy', name: 'None', scope: 'bundled', extension: '.thvy' }],
 }));
 import type { AppState } from '../state';
-import { renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog } from './render-workspace-dialogs';
+import { renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderSaveAsDialog } from './render-workspace-dialogs';
 import { renderNewDocumentDialog } from './render-import';
 import { renderNode } from './render-workspaces';
 
@@ -64,7 +64,7 @@ describe('encrypted folder creation dialog', () => {
 });
 
 describe('new document dialog parity', () => {
-  it('uses the regular type, destination, name, and template controls for encrypted folders', () => {
+  it('creates an untitled document with type and template controls', () => {
     const html = renderNewDocumentDialog({
       newDocumentWorkspacePath: '/workspace',
       newDocumentDirectory: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -89,10 +89,46 @@ describe('new document dialog parity', () => {
     expect(html).toContain('data-document-type="hvy"');
     expect(html).toContain('data-document-type="thvy"');
     expect(html).toContain('data-document-type="phvy"');
-    expect(html).toContain('name="targetDirectory"');
-    expect(html).toContain('name="documentName"');
     expect(html).toContain('name="templateId"');
-    expect(html).toContain('encrypted automatically with the folder key');
+    expect(html).not.toContain('name="targetDirectory"');
+    expect(html).not.toContain('name="documentName"');
+  });
+});
+
+describe('save as destination', () => {
+  it('offers workspace roots and nested folders in one picker', () => {
+    const html = renderSaveAsDialog({
+      saveAsDialogOpen: true,
+      saveAsKind: 'document',
+      saveAsScope: 'workspace',
+      selectedWorkspacePath: '/workspace',
+      workspaces: [{
+        path: '/workspace',
+        manifest: { name: 'Plans' },
+        files: [{
+          kind: 'folder',
+          name: 'Drafts',
+          path: '/workspace/drafts',
+          relativePath: 'drafts',
+          children: [],
+        }],
+      }],
+      document: {
+        source: { name: 'Untitled.hvy', extension: '.hvy', path: '' },
+        virtual: null,
+        isNew: true,
+      },
+      busy: false,
+    } as unknown as AppState);
+
+    expect(html).toContain('name="workspaceDestination"');
+    expect(html).toContain('data-workspace-path="/workspace"');
+    expect(html).toContain('data-target-directory="drafts"');
+    expect(html).toContain('>Drafts</span>');
+    expect(html).not.toContain('name="workspacePath"');
+    expect(html).toContain('name="fileName" type="text" autocomplete="off" value="" required');
+    expect(html).not.toContain('placeholder=');
+    expect(html).toContain('type="submit" disabled>Save</button>');
   });
 });
 

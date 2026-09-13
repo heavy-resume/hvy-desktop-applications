@@ -32,7 +32,7 @@ export interface UiHandlers {
   cancelNewFolder(): void;
   newDocumentInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setNewDocumentType(type: DocumentCreationType): void;
-  createDocumentInWorkspace(name: string, templateId: string, targetDirectory?: string): void;
+  createDocumentInWorkspace(templateId: string): void;
   cancelNewDocument(): void;
   openImportInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setImportDocumentType(type: DocumentCreationType): void;

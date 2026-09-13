@@ -462,39 +462,22 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.newDocumentType = type;
     rerender({ preserveMountedDocument: true });
   },
-  createDocumentInWorkspace: (name, templateId, selectedTargetDirectory = state.newDocumentDirectory) => void runBusy('Creating document...', async () => {
+  createDocumentInWorkspace: (templateId) => void runBusy('Creating document...', async () => {
     const workspacePath = state.newDocumentWorkspacePath;
-    const targetDirectory = selectedTargetDirectory;
-    const fileName = documentFileName(name, state.newDocumentType);
     if (!workspacePath) return;
-    if (!fileName) {
-      state.status = 'Document name is required';
-      return;
-    }
-    const template = creationTemplate(workspacePath, state.newDocumentType, templateId, documentTitle(fileName));
+    const extension = state.newDocumentType === 'phvy' ? '.phvy' : state.newDocumentType === 'thvy' ? '.thvy' : '.hvy';
+    const fileName = `Untitled${extension}`;
+    const template = creationTemplate(workspacePath, state.newDocumentType, templateId, 'Untitled');
     state.newDocumentWorkspacePath = null;
     state.newDocumentDirectory = '';
-    const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
-    const encryptedFolder = findEncryptedFolder(workspace, targetDirectory);
-    const file = encryptedFolder
-      ? await createEncryptedDocumentInFolder(
-        workspacePath,
-        targetDirectory,
-        encryptedFolder,
-        fileName,
-        new TextEncoder().encode(template),
-      )
-      : await createDocumentFile({
-        workspacePath,
-        relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
-        template,
-      });
-    showWorkspaceDocumentsView(workspacePath);
-    upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { deferMount: true, ...(encryptedFolder ? { initialMode: 'editor' as const } : {}) });
-    state.status = `Created ${file.name}`;
-    await refreshRecents();
+    await openDocument({
+      path: '',
+      name: fileName,
+      extension,
+      bytes: Array.from(new TextEncoder().encode(template)),
+    }, { isNew: true, deferMount: true });
+    state.status = 'Created untitled document';
   }),
   cancelNewDocument: () => {
     state.newDocumentWorkspacePath = null;

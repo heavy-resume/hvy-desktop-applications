@@ -7,7 +7,6 @@ import { deserializeDocumentBytes } from '../../../heavy-file-format/src/seriali
 import appIconUrl from '../../src-tauri/icons/Square310x310Logo.png';
 import { type DocumentCreationType, type DocumentExtension, type WorkspaceFileNode, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
 import { currentDocumentWorkspacePath } from '../fileActions';
-import { findEncryptedFolder } from '../encryptedFolders';
 import type { VisualDocument } from '../hvy';
 import { type AppState } from '../state';
 import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from '../templates';
@@ -22,7 +21,6 @@ export function renderNewDocumentDialog(state: AppState): string {
     return '';
   }
   const workspace = state.workspaces.find((candidate) => candidate.path === state.newDocumentWorkspacePath) ?? null;
-  const encryptedFolder = findEncryptedFolder(workspace, state.newDocumentDirectory);
   const visibility = workspaceTemplateVisibility(workspace);
   const templates = templatesForDocumentType(mergeSavedTemplates(state.savedTemplates), state.newDocumentType, visibility);
   const showTemplatePicker = state.newDocumentType === 'hvy';
@@ -31,12 +29,6 @@ export function renderNewDocumentDialog(state: AppState): string {
       <form class="dialog" data-form="new-document">
         <h2>New Document</h2>
         ${renderDocumentTypeControl('new', state.newDocumentType, visibility)}
-        ${workspace ? renderWorkspaceFolderSelect(workspace, state.newDocumentDirectory) : ''}
-        ${encryptedFolder ? '<p class="dialog-note">This document will be encrypted automatically with the folder key.</p>' : ''}
-        <label>
-          <span>Name</span>
-          <input class="hvy-galaxy-input" name="documentName" type="text" autocomplete="off" autofocus required>
-        </label>
         ${showTemplatePicker ? `<label>
           <span>Template</span>
           <select class="hvy-galaxy-select" name="templateId">
@@ -45,7 +37,7 @@ export function renderNewDocumentDialog(state: AppState): string {
         </label>` : ''}
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-new-document">Cancel</button>
-          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Create</button>
+          <button class="hvy-galaxy-button" type="submit" autofocus ${state.busy ? 'disabled' : ''}>Create</button>
         </div>
       </form>
     </div>`;

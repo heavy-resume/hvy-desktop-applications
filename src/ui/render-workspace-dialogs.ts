@@ -472,8 +472,9 @@ export function renderSaveAsDialog(state: AppState): string {
   const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
     ? state.selectedWorkspacePath
     : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
-  const selectedWorkspace = workspaces.find((workspace) => workspace.path === selectedWorkspacePath) ?? null;
-  const name = state.document.virtual === 'versionHistory'
+  const name = state.document.isNew
+    ? ''
+    : state.document.virtual === 'versionHistory'
     ? displayDocumentName(savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name))
     : displayDocumentName(state.document.source.name);
   return `
@@ -481,30 +482,24 @@ export function renderSaveAsDialog(state: AppState): string {
       <form class="dialog" data-form="save-as-document">
         <h2>Save As...</h2>
         ${renderSaveAsKindControl('document', templateDisabled)}
+        ${workspaceActive ? `<label>
+          <span>Name</span>
+          <input class="hvy-galaxy-input" name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required autofocus>
+        </label>` : ''}
         <div class="segmented-control" role="tablist" aria-label="Save destination">
           <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
           <button type="button" class="hvy-galaxy-button ${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
         </div>
         <input class="hvy-galaxy-input" name="scope" type="hidden" value="${escapeAttr(anywhereActive ? 'anywhere' : 'workspace')}">
         ${workspaceActive ? `
-          <label>
-            <span>Workspace</span>
-            <select class="hvy-galaxy-select" name="workspacePath" required>
-              ${workspaces.map((workspace) => `<option value="${escapeAttr(workspace.path)}" ${workspace.path === selectedWorkspacePath ? 'selected' : ''}>${escapeHtml(workspace.manifest.name)}</option>`).join('')}
-            </select>
-          </label>
-          ${selectedWorkspace ? renderWorkspaceFolderSelect(selectedWorkspace, '') : ''}
-          <label>
-            <span>Name</span>
-            <input class="hvy-galaxy-input" name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required>
-          </label>
+          ${renderWorkspaceDestinationTree(workspaces, selectedWorkspacePath, '')}
         ` : `
           <p class="dialog-note">Choose a location outside HVY Galaxy.</p>
         `}
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-save-as">Cancel</button>
           ${workspaceActive
-      ? `<button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>`
+      ? `<button class="hvy-galaxy-button" type="submit" ${state.busy || !name.trim() ? 'disabled' : ''}>Save</button>`
       : `<button class="hvy-galaxy-button" type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
         </div>
       </form>
