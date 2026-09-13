@@ -20,13 +20,6 @@
   padding: 6px 8px 0;
 }
 
-.document-tabs.is-empty {
-  height: 0;
-  overflow: hidden;
-  border: 0;
-  padding: 0;
-}
-
 .document-tab {
   display: inline-flex;
   align-items: center;
@@ -40,6 +33,11 @@
   background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 90%, transparent);
   color: var(--hvy-text, #5f6a66);
   padding: 0 5px 0 0;
+}
+
+.document-tab-new {
+  flex: 0 0 auto;
+  margin: 1px 2px 6px;
 }
 
 .document-tab.is-active {
