@@ -36,6 +36,8 @@ describe('desktop HVY integration boundaries', () => {
     expect(palette?.colors['--hvy-bg']).toBe('#0f1720');
     expect(palette?.colors['--hvy-surface']).toBe('#17222d');
     expect(palette?.colors['--hvy-button-bg']).toBe('#2d6a8a');
+    expect(palette?.colors['--hvy-border']).toBe('#3a4655');
+    expect(palette?.colors['--hvy-border-input']).toBe('#46576a');
   });
 
   it.each([
