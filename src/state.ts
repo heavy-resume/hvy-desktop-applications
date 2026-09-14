@@ -260,6 +260,7 @@ export interface AppState {
   aboutDialogOpen: boolean;
   debugLogDialogOpen: boolean;
   debugLogEntries: DebugLogEntry[];
+  externalFileChangePath: string | null;
   recoveryDialogOpen: boolean;
   versionHistorySidebarOpen: boolean;
   versionHistorySourcePath: string | null;
@@ -611,6 +612,7 @@ export const state: AppState = {
   aboutDialogOpen: false,
   debugLogDialogOpen: false,
   debugLogEntries: [],
+  externalFileChangePath: null,
   recoveryDialogOpen: false,
   versionHistorySidebarOpen: false,
   versionHistorySourcePath: null,

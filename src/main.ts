@@ -1,3 +1,5 @@
+import { documentFileChanges } from './documentFileChanges';
+import { startDocumentFileMonitor } from './mainDocumentFileMonitor';
 import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
 import { readDocumentFile, saveAppSettings, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
@@ -290,7 +292,7 @@ export function activateWorkspaceChatDocument(): void {
   };
   state.selectedFilePath = null;
 }
-export async function openDocument(physicalFile: DocumentFile, options: { source?: RuntimeDocument; versionId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; includedDocumentId?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; initialMode?: HvyMode; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
+export async function openDocument(physicalFile: DocumentFile, options: { source?: RuntimeDocument; reloadFromDisk?: boolean; versionId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; includedDocumentId?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; initialMode?: HvyMode; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
   const file = documentFileWithWorkspaceName(physicalFile, state.workspaces);
   const source = options.source ?? runtimeDocumentForFile(file, { distinct: options.isNew || options.defaultDocument });
   if (source.path === file.path && (source.name !== file.name || source.extension !== file.extension)) {
@@ -306,6 +308,11 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     deferMount: options.deferMount === true,
   });
   preserveCurrentDocumentSession();
+  state.externalFileChangePath = null;
+  if (options.reloadFromDisk) {
+    documentSessions.delete(versionId);
+    workspaceFilterDocumentCache.delete(file.path);
+  }
   markDocumentTabOpened(versionId);
   measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, () => {
     state.document?.mounted?.mount.destroy();
@@ -317,6 +324,9 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
   const cachedFilterDocument = options.defaultDocument || options.recovered || options.isNew ? null : workspaceFilterDocumentCache.get(file.path) ?? null;
+  if (!options.defaultDocument && !options.isNew && !options.recovered && !options.historyPreview) {
+    await documentFileChanges.remember(file.path, file.bytes, options.reloadFromDisk === true || (!session && !cachedFilterDocument));
+  }
   const workspaceAccess = workspaceFileAiAccess(file.path);
   const access = options.defaultDocument
     ? { locked: true, archived: false, hiddenFromAI: false, readOnly: true }
@@ -1215,4 +1225,4 @@ export function showStartupError(error: unknown): void {
   state.status = 'Startup error';
   mountRoot = render(state, handlers);
 }
-void boot();
+void boot().then(() => startDocumentFileMonitor());

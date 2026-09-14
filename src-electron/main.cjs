@@ -703,6 +703,10 @@ async function handleCommand(command, args) {
     case 'load_launch_document_paths': return loadLaunchDocumentPaths();
     case 'read_document_file': return readDocumentFile(args.path);
     case 'read_document_file_metadata': return readDocumentFileMetadata(args.path);
+    case 'read_document_file_stamp': {
+      const stat = await fs.promises.stat(args.path, { bigint: true });
+      return `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}:${stat.ino}`;
+    }
     case 'read_document_file_bytes': return readDocumentBytesAt(args.path);
     case 'read_embedding_sidecar_file_bytes': return readEmbeddingSidecarFileBytes(args.path);
     case 'write_embedding_sidecar_file': return writeEmbeddingSidecarFile(args.path, args.bytes);

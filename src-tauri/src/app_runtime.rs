@@ -101,6 +101,7 @@ pub fn run() {
             read_document_file,
             read_document_file_metadata,
             read_document_file_bytes,
+            read_document_file_stamp,
             read_embedding_sidecar_file_bytes,
             write_embedding_sidecar_file,
             write_embedding_sidecar_file_raw,

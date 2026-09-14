@@ -1,3 +1,4 @@
+import { documentFileChanges } from './documentFileChanges';
 import { invoke } from '@tauri-apps/api/core';
 import { deferEncryptedWorkspace, resolveEncryptedWorkspace } from './encryptedFolders';
 import { listen } from '@tauri-apps/api/event';
@@ -1087,13 +1088,18 @@ export function readDocumentFileBytes(path: string): Promise<Uint8Array> {
   ));
 }
 
-export function saveDocumentFile(request: SaveDocumentRequest): Promise<DocumentWriteResult | void> {
-  if (isTauriRuntime()) {
-    return invoke<DocumentWriteResult>('save_document_file_raw', toUint8Array(request.bytes), {
-      headers: { 'x-hvy-document-path': encodeURIComponent(request.path) },
-    });
-  }
-  return invokeDesktop('save_document_file', { path: request.path, bytes: request.bytes });
+export function readDocumentFileStamp(path: string): Promise<string> {
+  return invokeDesktop('read_document_file_stamp', { path });
+}
+
+export async function saveDocumentFile(request: SaveDocumentRequest): Promise<DocumentWriteResult | void> {
+  const result = isTauriRuntime()
+    ? await invoke<DocumentWriteResult>('save_document_file_raw', toUint8Array(request.bytes), {
+        headers: { 'x-hvy-document-path': encodeURIComponent(request.path) },
+      })
+    : await invokeDesktop<DocumentWriteResult>('save_document_file', { path: request.path, bytes: request.bytes });
+  await documentFileChanges.remember(request.path, request.bytes);
+  return result;
 }
 
 export function readSidecarFileBytes(path: string): Promise<Uint8Array | null> {
@@ -1114,13 +1120,14 @@ export function deleteSidecarFile(path: string): Promise<void> {
   return invokeDesktop('delete_embedding_sidecar_file', { path });
 }
 
-export function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFileMetadata | null> {
-  if (isTauriRuntime()) {
-    return invoke<DocumentFileMetadata | null>('save_document_as_dialog_raw', toUint8Array(request.bytes), {
-      headers: { 'x-hvy-suggested-name': encodeURIComponent(request.suggestedName) },
-    });
-  }
-  return invokeDesktop('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+export async function saveDocumentAsDialog(request: SaveDocumentAsRequest): Promise<DocumentFileMetadata | null> {
+  const file = isTauriRuntime()
+    ? await invoke<DocumentFileMetadata | null>('save_document_as_dialog_raw', toUint8Array(request.bytes), {
+        headers: { 'x-hvy-suggested-name': encodeURIComponent(request.suggestedName) },
+      })
+    : await invokeDesktop<DocumentFileMetadata | null>('save_document_as_dialog', { suggestedName: request.suggestedName, bytes: request.bytes });
+  if (file) await documentFileChanges.remember(file.path, request.bytes);
+  return file;
 }
 
 export function savePdfAsDialog(request: SavePdfAsRequest): Promise<string | null> {
@@ -1270,22 +1277,23 @@ export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Pr
   return invokeDesktop('delete_workspace_folder', { request });
 }
 
-export function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFileMetadata> {
-  if (isTauriRuntime()) {
-    return invoke<DocumentFileMetadata>('save_document_to_workspace_raw', toUint8Array(request.bytes), {
-      headers: {
-        'x-hvy-workspace-path': encodeURIComponent(request.workspacePath),
-        'x-hvy-document-name': encodeURIComponent(request.name),
-        'x-hvy-target-directory': encodeURIComponent(request.targetDirectory ?? ''),
-      },
-    });
-  }
-  return invokeDesktop('save_document_to_workspace', {
-    workspacePath: request.workspacePath,
-    name: request.name,
-    targetDirectory: request.targetDirectory ?? '',
-    bytes: request.bytes,
-  });
+export async function saveDocumentToWorkspace(request: WorkspaceDocumentRequest): Promise<DocumentFileMetadata> {
+  const file = isTauriRuntime()
+    ? await invoke<DocumentFileMetadata>('save_document_to_workspace_raw', toUint8Array(request.bytes), {
+        headers: {
+          'x-hvy-workspace-path': encodeURIComponent(request.workspacePath),
+          'x-hvy-document-name': encodeURIComponent(request.name),
+          'x-hvy-target-directory': encodeURIComponent(request.targetDirectory ?? ''),
+        },
+      })
+    : await invokeDesktop<DocumentFileMetadata>('save_document_to_workspace', {
+        workspacePath: request.workspacePath,
+        name: request.name,
+        targetDirectory: request.targetDirectory ?? '',
+        bytes: request.bytes,
+      });
+  await documentFileChanges.remember(file.path, request.bytes);
+  return file;
 }
 
 export function saveBinaryAsDialog(request: SaveBinaryAsRequest): Promise<string | null> {

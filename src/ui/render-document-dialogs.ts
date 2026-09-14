@@ -181,3 +181,18 @@ export function renderAppCloseDialog(state: AppState): string {
       </section>
     </div>`;
 }
+
+export function renderExternalFileChangeDialog(state: AppState): string {
+  if (!state.externalFileChangePath || state.document?.source.path !== state.externalFileChangePath) return '';
+  return `<div class="modal-backdrop" role="presentation">
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="externalFileChangeTitle">
+      <h2 id="externalFileChangeTitle">File Changed Outside the App</h2>
+      <p class="dialog-note">${escapeHtml(state.document.source.name)} has changed on disk. Reload to see the latest version?</p>
+      ${state.document.dirty ? '<p class="dialog-note">Reloading will discard your unsaved edits in this tab.</p>' : ''}
+      <div class="dialog-actions">
+        <button class="hvy-galaxy-button" type="button" data-action="dismiss-external-file-change">Keep Current Version</button>
+        <button class="hvy-galaxy-button" type="button" data-action="reload-external-file-change" ${state.busy ? 'disabled' : ''}>Reload</button>
+      </div>
+    </section>
+  </div>`;
+}

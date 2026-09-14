@@ -265,6 +265,8 @@ export interface UiHandlers {
   selectSavedVersion(id: string): void;
   closeVersionHistory(): void;
   cancelCloseDocument(): void;
+  reloadExternalFileChange(): void;
+  dismissExternalFileChange(): void;
   confirmSaveConflict(): void;
   cancelSaveConflict(): void;
   saveBeforeWorkspaceFileOperation(): void;

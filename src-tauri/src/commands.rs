@@ -2511,6 +2511,12 @@ fn read_document_file_metadata(app: AppHandle, path: String) -> AppResult<Docume
 }
 
 #[tauri::command]
+fn read_document_file_stamp(path: String) -> AppResult<String> {
+    let metadata = fs::metadata(path)?;
+    Ok(format!("{:?}:{:?}:{}", metadata.modified()?, metadata.created().ok(), metadata.len()))
+}
+
+#[tauri::command]
 fn read_document_file_bytes(path: String) -> AppResult<tauri::ipc::Response> {
     let path = PathBuf::from(path);
     document_extension(&path)
