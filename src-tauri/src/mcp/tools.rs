@@ -1322,7 +1322,7 @@ fn known_workspaces(app: &AppHandle) -> AppResult<Vec<Workspace>> {
         .clone();
     let mut workspaces = Vec::new();
     for path in paths {
-        if let Ok(workspace) = load_workspace_from_path(Path::new(&path)) {
+        if let Ok(workspace) = load_workspace_from_path_with_options(Path::new(&path), true) {
             workspaces.push(workspace);
         }
     }

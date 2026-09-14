@@ -1415,6 +1415,39 @@ model = "gpt-5.4"
     }
 
     #[test]
+    fn mcp_workspace_tree_includes_editable_workspace_templates() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("templates")).unwrap();
+        fs::write(
+            dir.path().join("templates").join("resume.thvy"),
+            "---\nhvy_version: 0.1\n---\n",
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Templates")).unwrap();
+
+        let workspaces = load_mcp_stdio_workspaces(&[dir.path().to_path_buf()]).unwrap();
+        let tree = mcp_workspace_tree_from(&workspaces, serde_json::json!({})).unwrap();
+        let files = tree["workspaces"][0]["files"].as_array().unwrap();
+        let templates = files
+            .iter()
+            .find(|node| node["name"] == "templates")
+            .unwrap();
+        assert_eq!(templates["children"][0]["name"], "resume.thvy");
+        assert_eq!(templates["children"][0]["extension"], ".thvy");
+
+        let path = templates["children"][0]["path"].as_str().unwrap();
+        let edited = mcp_document_cli_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path,
+                "command": "hvy insert 0 text /body template-content"
+            }),
+        )
+        .unwrap();
+        assert_eq!(edited["mutated"], true);
+    }
+
+    #[test]
     fn mcp_respects_locked_and_hidden_file_access() {
         let dir = tempdir().unwrap();
         let locked_path = dir.path().join("locked.hvy");

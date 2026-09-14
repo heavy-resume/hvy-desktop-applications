@@ -261,7 +261,7 @@ fn discover_workspace_paths(root: &Path) -> AppResult<Vec<PathBuf>> {
 pub(crate) fn load_mcp_stdio_workspaces(paths: &[PathBuf]) -> AppResult<Vec<Workspace>> {
     let mut workspaces = Vec::new();
     for path in paths {
-        if let Ok(workspace) = load_workspace_from_path(path) {
+        if let Ok(workspace) = load_workspace_from_path_with_options(path, true) {
             workspaces.push(workspace);
         }
     }
