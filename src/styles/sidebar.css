@@ -272,7 +272,7 @@
 .workspace-root.is-drag-over {
   border-radius: 6px;
   outline: 2px solid var(--hvy-accent-1, #477d7c);
-  outline-offset: 3px;
+  outline-offset: -2px;
 }
 
 .tree summary.is-drag-over,

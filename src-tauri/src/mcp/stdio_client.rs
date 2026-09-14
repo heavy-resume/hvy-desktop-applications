@@ -230,6 +230,16 @@ fn mcp_archived_workspaces_path_from_config(config_path: &Path) -> PathBuf {
     directory.join(ARCHIVED_WORKSPACES)
 }
 
+fn mcp_ai_settings_path_from_config(config_path: &Path) -> PathBuf {
+    let directory = config_path.parent().unwrap_or_else(|| Path::new("."));
+    if directory.file_name().and_then(|name| name.to_str()) == Some("mcp") {
+        if let Some(app_data_directory) = directory.parent() {
+            return app_data_directory.join(AI_SETTINGS);
+        }
+    }
+    directory.join(AI_SETTINGS)
+}
+
 fn discover_workspace_paths(root: &Path) -> AppResult<Vec<PathBuf>> {
     if workspace_manifest_path(root).is_some() {
         return Ok(vec![root.to_path_buf()]);

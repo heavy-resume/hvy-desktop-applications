@@ -284,7 +284,7 @@ impl HttpRequest {
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> AppResult<HttpRequest> {
+pub(crate) fn read_http_request(stream: &mut TcpStream) -> AppResult<HttpRequest> {
     stream.set_read_timeout(Some(StdDuration::from_secs(2)))?;
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 1024];

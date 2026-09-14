@@ -84,6 +84,14 @@ describe('desktop HVY integration boundaries', () => {
     expect(css).not.toContain('.hvy-document-host .hvy-embed-layout .remove-x');
   });
 
+  it('keeps the workspace file-drop outline inside the clipped sidebar scroller', () => {
+    const css = readFileSync(new URL('./styles/sidebar.css', import.meta.url), 'utf8');
+    const dragOverRule = css.match(/\.workspace-root\.is-drag-over\s*\{([^}]*)\}/)?.[1] ?? '';
+
+    expect(dragOverRule).toContain('outline: 2px solid');
+    expect(dragOverRule).toContain('outline-offset: -2px');
+  });
+
   it('uses the document theme border for web capability blocks', () => {
     const css = readFileSync(new URL('./plugins/webCapabilities.css', import.meta.url), 'utf8');
 
