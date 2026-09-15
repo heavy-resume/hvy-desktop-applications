@@ -303,9 +303,9 @@ async function requestGeminiEmbeddings(
   }));
 }
 
-function createAiChatClient(settings: AiSettings, appSettings?: AppSettings): HvyHostChatClient | null {
+function createAiChatClient(settings: AiSettings, appSettings?: AppSettings): HvyHostChatClient | undefined {
   if (!settings.providers.some((provider) => provider.baseUrl.trim())) {
-    return null;
+    return undefined;
   }
   const complete = (request: HvyProxyRequest, options?: { signal?: AbortSignal; debugLabel?: string }) =>
     requestOpenAiCompatibleCompletion(settings, appSettings, request, taskForRequest(request, options?.debugLabel), options?.signal);
