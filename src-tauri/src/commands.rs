@@ -2860,6 +2860,7 @@ fn create_document_file(
     workspace_path: String,
     relative_path: String,
     template: String,
+    bytes: Option<Vec<u8>>,
 ) -> AppResult<DocumentFile> {
     let workspace_path = PathBuf::from(workspace_path);
     let relative = PathBuf::from(relative_path);
@@ -2873,7 +2874,7 @@ fn create_document_file(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    write_file_atomically(&path, template.as_bytes())?;
+    write_file_atomically(&path, bytes.as_deref().unwrap_or_else(|| template.as_bytes()))?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_file(&app, &path)?;
     Ok(read_document_at(&path)?)

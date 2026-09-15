@@ -807,3 +807,15 @@
   font-size: 0.82rem;
   overflow-wrap: anywhere;
 }
+
+.tree-template-with-examples {
+  border: 1px solid var(--hvy-border, #c5cec8);
+  background: var(--hvy-surface-tint, var(--hvy-surface, #ffffff));
+  font-weight: 700;
+}
+
+.tree-template-examples {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 1px solid var(--hvy-border, #c5cec8);
+}

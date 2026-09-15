@@ -30,6 +30,7 @@ export interface UiHandlers {
   openNewFolder(workspacePath: string, parentDirectory?: string, encrypted?: boolean): void;
   createWorkspaceFolder(workspacePath: string, parentDirectory: string, name: string, encrypted: boolean): void;
   cancelNewFolder(): void;
+  newTemplateExample(workspacePath: string, templateRelativePath: string): void;
   newDocumentInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setNewDocumentType(type: DocumentCreationType): void;
   createDocumentInWorkspace(templateId: string): void;

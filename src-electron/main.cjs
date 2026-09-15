@@ -725,7 +725,7 @@ async function handleCommand(command, args) {
     case 'open_color_theme_dialog': return openColorThemeDialog();
     case 'save_color_theme_as_dialog': return saveColorThemeAsDialog(args.suggestedName, args.bytes);
     case 'update_file_menu_state': return updateFileMenuState(args.state);
-    case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template);
+    case 'create_document_file': return createDocumentFile(args.workspacePath, args.relativePath, args.template, args.bytes);
     case 'create_encrypted_folder_document': return createEncryptedFolderDocument(args.request);
     case 'create_encrypted_folder_child': return createEncryptedFolderChild(args.request);
     case 'update_encrypted_folder_manifest': return updateEncryptedFolderManifest(args.request);
@@ -2233,14 +2233,14 @@ async function saveColorThemeAsDialog(suggestedName, bytes) {
   return readThemeAt(selected);
 }
 
-function createDocumentFile(workspacePath, relativePath, template) {
+function createDocumentFile(workspacePath, relativePath, template, bytes) {
   const destination = path.resolve(workspacePath, relativePath);
   if (!destination.startsWith(path.resolve(workspacePath) + path.sep)) {
     throw new Error('Document path must stay inside the workspace.');
   }
   if (fs.existsSync(destination)) throw new Error('A document already exists at that path.');
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, template);
+  writeBytes(destination, bytes ?? Buffer.from(template));
   touchWorkspaceManifest(workspacePath);
   addRecentFile(destination);
   return readDocumentAt(destination);

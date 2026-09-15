@@ -262,6 +262,7 @@ export interface CreateDocumentRequest {
   workspacePath: string;
   relativePath: string;
   template: string;
+  bytes?: number[];
 }
 
 export interface CreateEncryptedFolderDocumentRequest {
@@ -1099,6 +1100,10 @@ export async function saveDocumentFile(request: SaveDocumentRequest): Promise<Do
       })
     : await invokeDesktop<DocumentWriteResult>('save_document_file', { path: request.path, bytes: request.bytes });
   await documentFileChanges.remember(request.path, request.bytes);
+  if (/\.(thvy|phvy)$/i.test(request.path)) {
+    const { updateSavedTemplateExamples } = await import('./templateExamplePersistence');
+    await updateSavedTemplateExamples(request);
+  }
   return result;
 }
 
@@ -1141,8 +1146,11 @@ export function listSavedTemplates(workspacePath?: string | null): Promise<Saved
   return invokeDesktop('list_saved_templates', { workspacePath: workspacePath ?? null });
 }
 
-export function saveDocumentTemplate(request: SaveDocumentTemplateRequest): Promise<SavedTemplate> {
-  return invokeDesktop('save_document_template', { request });
+export async function saveDocumentTemplate(request: SaveDocumentTemplateRequest): Promise<SavedTemplate> {
+  const template = await invokeDesktop<SavedTemplate>('save_document_template', { request });
+  const { updateSavedTemplateExamples } = await import('./templateExamplePersistence');
+  await updateSavedTemplateExamples({ path: template.path, bytes: request.bytes });
+  return template;
 }
 
 export function updateWorkspaceTemplateVisibility(
@@ -1195,6 +1203,7 @@ export function createDocumentFile(request: CreateDocumentRequest): Promise<Docu
     workspacePath: request.workspacePath,
     relativePath: request.relativePath,
     template: request.template,
+    bytes: request.bytes ?? null,
   });
 }
 

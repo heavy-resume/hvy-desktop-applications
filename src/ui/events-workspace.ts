@@ -1,3 +1,4 @@
+import { workspaceTemplateForExample } from '../templateExamples';
 import { type WorkspaceFileNode, type WorkspaceTreeNode } from '../backend';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceClipboardState } from '../state';
 import { parentDirectoryForRelativePath, workspaceDropTargetFromElement } from '../workspaceDropTarget';
@@ -24,7 +25,7 @@ export function bindWorkspaceEvents(root: HTMLElement, handlers: UiHandlers, sta
       const encryptedFolderDocument = fileButton.dataset.encryptedFolderDocument === 'true';
       const locked = fileButton.dataset.locked === 'true';
       const hiddenFromAI = fileButton.getAttribute('data-hidden-from-ai') === 'true';
-      showFileContextMenu(event, path, name, relativePath, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0, encryptedFolderDocument);
+      showFileContextMenu(event, path, name, relativePath, workspacePath, archived, locked, hiddenFromAI, state.workspaceClipboard, handlers, state.workspaces.length > 0, encryptedFolderDocument, state);
       return;
     }
     const folderSummary = target?.closest<HTMLElement>('.tree [data-workspace-folder-action-target="true"]');
@@ -194,6 +195,7 @@ export function showFileContextMenu(
   handlers: UiHandlers,
   showWorkspaceActions: boolean,
   encryptedFolderDocument = false,
+  appState?: AppState,
 ): void {
   void clipboard;
   closeFileContextMenu();
@@ -202,12 +204,16 @@ export function showFileContextMenu(
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const parentDirectory = parentDirectoryForRelativePath(relativePath);
+  const workspace = appState?.workspaces.find((candidate) => candidate.path === workspacePath);
+  const exampleTemplate = workspace ? workspaceTemplateForExample(workspace, relativePath) : null;
+  const creationAction = exampleTemplate ? 'new-example' : 'new-document';
+  const creationLabel = exampleTemplate ? 'New Example' : 'New Document';
   const conversion = workspaceFileConversionAction(name, relativePath);
   menu.innerHTML = archived ? `
     <button class="hvy-galaxy-button" type="button" data-menu-action="restore">Restore</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="delete">Delete</button>
   ` : encryptedFolderDocument ? `
-    <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${creationAction}">${creationLabel}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'enable-encrypted-ai' : 'disable-encrypted-ai'}">${hiddenFromAI ? 'Enable AI Access' : 'Disable AI Access'}</button>
@@ -219,7 +225,7 @@ export function showFileContextMenu(
     <button class="hvy-galaxy-button" type="button" data-menu-action="paste">Paste</button>
     ${showWorkspaceActions ? '<button class="hvy-galaxy-button" type="button" data-menu-action="copy-to-workspace">Copy to...</button><button class="hvy-galaxy-button" type="button" data-menu-action="move-to-workspace">Move to...</button>' : ''}
   ` : `
-    <button class="hvy-galaxy-button" type="button" data-menu-action="new-document">New Document</button>
+    <button class="hvy-galaxy-button" type="button" data-menu-action="${creationAction}">${creationLabel}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="reveal">${escapeHtml(revealMenuLabel())}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="${locked ? 'unlock' : 'lock'}">${locked ? 'Unlock File' : 'Lock File'}</button>
     <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
@@ -247,6 +253,7 @@ export function showFileContextMenu(
     const button = (clickEvent.target as HTMLElement).closest<HTMLButtonElement>('button[data-menu-action]');
     if (!button) return;
     cleanup();
+    if (button.dataset.menuAction === 'new-example' && exampleTemplate) handlers.newTemplateExample(workspacePath, exampleTemplate.relativePath);
     if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, parentDirectory);
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
