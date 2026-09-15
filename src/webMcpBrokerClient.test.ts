@@ -8,6 +8,13 @@ vi.mock('./integrationWebMcpRuntime', () => ({
   assertLiveWebMcpDescriptor: (_approval: unknown, result: { value: unknown }) => result.value,
 }));
 
+const browser = vi.hoisted(() => ({
+  controlIntegrationBrowser: vi.fn(),
+  openIntegrationPage: vi.fn(),
+  isIntegrationBrowserOpen: vi.fn(async () => true),
+}));
+vi.mock('./integrationBrowser', () => browser);
+import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 
 const savedSettings = state.appSettings;
@@ -43,6 +50,8 @@ function approval(descriptor: IntegrationWebMcpToolDescriptor, mcpExposed = true
 describe('WebMCP MCP broker renderer policy', () => {
   beforeEach(() => {
     invoke.mockReset();
+    browser.controlIntegrationBrowser.mockReset();
+    browser.openIntegrationPage.mockReset();
     const read = approval(readDescriptor);
     const action = approval(actionDescriptor);
     const hidden = approval({ ...readDescriptor, name: 'hidden.read' }, false);
@@ -86,6 +95,33 @@ describe('WebMCP MCP broker renderer policy', () => {
     invoke.mockResolvedValue({ value: { updated: true }, isJson: true, descriptor: action.descriptor });
     await expect(handleWebMcpBrokerRequest({ requestId: '3', operation: 'call', integrationAccess: 'actions', capabilityId: action.capabilityId, arguments: { id: '42' }, profileId: 'attacker-selected' } as never)).resolves.toMatchObject({ value: { updated: true }, resultIsJson: true });
     expect(invoke.mock.calls[0][2].id).toBe('profile');
+  });
+
+  it('discovers and fetches configured page records without an HVY document or website WebMCP tools', async () => {
+    const integration = state.integrationRegistry.integrations[0];
+    integration.actions = [{
+      id: 'messages', integrationId: integration.id, name: 'Messages', description: 'Inbox records',
+      pageIds: ['page'], script: 'structural-pattern-v1', resultSchema: {}, permissions: ['dom:read'], version: 1,
+      pattern: { recordLabel: 'Message', minimumConfidence: 0.8, parents: [], fields: [] },
+    }];
+    const discovery = await handleWebMcpBrokerRequest({ requestId: 'records-list', operation: 'list-records', integrationAccess: 'read' });
+    expect(discovery).toMatchObject({
+      definitions: [{ integrationId: 'integration', actionId: 'messages', pageId: 'page', name: 'Messages' }],
+      profiles: [{ id: 'profile', name: 'Signed-in work' }],
+    });
+    browser.controlIntegrationBrowser.mockImplementation(async (command, _profile, payload) => {
+      handleWebCapabilityIntegrationResult(command === 'check-page-ready'
+        ? { kind: 'integration-page-readiness', context: payload.context, ready: true }
+        : { kind: 'integration-extraction', context: payload.context, records: [{ subject: 'Live message' }], page: { origin: 'https://example.com', pathname: '/inbox' } });
+    });
+    const request = { requestId: 'records-fetch', operation: 'fetch-records' as const, integrationAccess: 'read' as const, integrationId: 'integration', actionId: 'messages', profileId: 'profile' };
+    await expect(handleWebMcpBrokerRequest(request)).resolves.toMatchObject({ records: [{ subject: 'Live message' }], page: { pathname: '/inbox' } });
+    expect(browser.controlIntegrationBrowser.mock.calls.map((call) => call[0])).toEqual(['check-page-ready', 'extract-pattern']);
+    expect(browser.openIntegrationPage).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    await expect(handleWebMcpBrokerRequest({ ...request, integrationAccess: 'off' })).rejects.toThrow('disabled');
+    await expect(handleWebMcpBrokerRequest({ ...request, pageId: 'wrong-page' })).rejects.toThrow('unavailable');
+    await expect(handleWebMcpBrokerRequest({ ...request, profileId: 'missing' })).rejects.toThrow('browser profile');
   });
 
   it('rejects disabled access, unexposed tools, and non-object arguments', async () => {

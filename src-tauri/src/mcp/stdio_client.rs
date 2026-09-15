@@ -71,7 +71,7 @@ fn handle_mcp_stdio_message<W: Write>(
         .get("params")
         .and_then(|params| params.get("name"))
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|name| name == "webmcp_list_tools" || name == "webmcp_call_tool");
+        .is_some_and(|name| matches!(name, "webmcp_list_tools" | "webmcp_call_tool" | "integration_list_records" | "integration_fetch_records"));
     let response = if is_webmcp_call {
         let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);

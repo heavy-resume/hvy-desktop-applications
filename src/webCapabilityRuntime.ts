@@ -1,7 +1,7 @@
 import type { IntegrationProfileDefinition } from './integrationRegistry';
 import { integrationPageExpectedOrigins } from './integrationRegistry';
 import type { IntegrationPageReadyChecks } from './integrationRegistry';
-import { controlIntegrationBrowser, openIntegrationPage } from './integrationBrowser';
+import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationPage } from './integrationBrowser';
 import {
   isWebCapabilityAuthorized,
   type WebCapabilityAuthorizations,
@@ -39,7 +39,7 @@ export interface WebRecordChange {
 }
 
 type PendingOperation = {
-  kind: 'records' | 'command';
+  kind: 'records' | 'command' | 'readiness';
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: ReturnType<typeof setTimeout>;
@@ -99,10 +99,29 @@ function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], tim
 }
 
 async function openForOperation(
-  config: WebCapabilityConfig,
-  context: WebCapabilityExecutionContext,
-  extraction: unknown,
+  config: Pick<WebCapabilityConfig, 'page' | 'source'>,
+  context: Omit<WebCapabilityExecutionContext, 'documentPath' | 'authorizations'>,
+  extraction: { kind: string; pattern?: unknown; context: Record<string, unknown>; payload?: Record<string, unknown> },
 ): Promise<void> {
+  if (await isIntegrationBrowserOpen(context.profile.id)) {
+    const requestId = crypto.randomUUID();
+    const readiness = waitForResult<{ ready: boolean }>(requestId, 'readiness', BACKGROUND_OPERATION_TIMEOUT_MS, context.profile.id, context.signal);
+    try {
+      await controlIntegrationBrowser('check-page-ready', context.profile.id, {
+        readyChecks: context.readyChecks ?? config.page.readyChecks,
+        context: { webCapabilityRequestId: requestId },
+      });
+    } catch (error) {
+      rejectPendingOperation(requestId, error);
+    }
+    if ((await readiness).ready) {
+      context.signal?.throwIfAborted();
+      await controlIntegrationBrowser(extraction.kind === 'command-execution' ? 'execute-command' : 'extract-pattern', context.profile.id,
+        extraction.kind === 'command-execution' ? extraction.payload : { ...extraction, foreground: context.foreground ?? true });
+      return;
+    }
+  }
+  context.signal?.throwIfAborted();
   await openIntegrationPage(
     config.page.url,
     config.page.allowedOrigins,
@@ -122,6 +141,14 @@ export async function executeWebRecordsCapability(
   context: WebCapabilityExecutionContext,
 ): Promise<WebRecordsExecutionResult> {
   assertAuthorized(config, context);
+  return fetchWebRecords(config, context);
+}
+
+// Both saved integration definitions and document capabilities use this browser execution path.
+export async function fetchWebRecords(
+  config: Pick<WebRecordsCapabilityConfig, 'page' | 'record' | 'source' | 'capabilityId'>,
+  context: Omit<WebCapabilityExecutionContext, 'documentPath' | 'authorizations'>,
+): Promise<WebRecordsExecutionResult> {
   return enqueueWebCapabilityForProfile(context.profile.id, async () => {
     context.signal?.throwIfAborted();
     const requestId = crypto.randomUUID();
@@ -142,6 +169,7 @@ export async function executeWebRecordsCapability(
         },
         context: {
           mode: 'hvy-capability',
+          foreground: context.foreground ?? true,
           webCapabilityRequestId: requestId,
           capabilityId: config.capabilityId,
           expectedOrigin: new URL(config.page.url).origin,
@@ -261,7 +289,8 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
   if (typeof requestId !== 'string') return false;
   const pending = pendingOperations.get(requestId);
   if (!pending) return false;
-  if ((pending.kind === 'records' && result.kind !== 'integration-extraction')
+  if ((pending.kind === 'readiness' && result.kind !== 'integration-page-readiness')
+    || (pending.kind === 'records' && result.kind !== 'integration-extraction')
     || (pending.kind === 'command' && result.kind !== 'integration-command-result')) return false;
   clearTimeout(pending.timeout);
   pending.cleanupAbort?.();
@@ -271,7 +300,9 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
     if (watch) clearTimeout(watch.timeout);
     pendingRecordWatches.delete(requestId);
   }
-  if (pending.kind === 'records') {
+  if (pending.kind === 'readiness') {
+    pending.resolve(result);
+  } else if (pending.kind === 'records') {
     if (result.status === 'not-ready') {
       pending.reject(new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.'));
       return true;

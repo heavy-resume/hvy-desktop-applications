@@ -23,6 +23,20 @@ open the same folder on another device. A future provider-backed path can add
 Google Drive or Microsoft OneDrive sign-in for devices that do not already have
 a desktop sync client installed.
 
+## Fetching web records through MCP
+
+With Galaxy running, set **MCP Settings → Web capability access → Read configured
+records**. The regular MCP server exposes these tools in both Electron and Tauri:
+
+- `integration_list_records` lists saved web page record definitions and browser profiles.
+- `integration_fetch_records` takes `integrationId`, `actionId`, and `profileId`
+  from that list, plus an optional `pageId`, and returns records as JSON.
+
+No HVY document is required. Fetching uses the profile's live browser page when
+it passes the configured URL and landmark checks; otherwise it opens the saved
+page. It waits for readiness and reports an error if the page changes during
+extraction. Sign in through Galaxy if the website requires a login.
+
 ## Development
 
 Prerequisites:

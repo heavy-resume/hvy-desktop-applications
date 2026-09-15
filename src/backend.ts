@@ -543,7 +543,7 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
-export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'check-page-ready' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export interface IntegrationStorageProbeResult {
   cookieName: string;
@@ -1600,7 +1600,11 @@ export function onIntegrationInspectionResult(handler: (result: unknown) => void
 
 export interface WebMcpBrokerRequest {
   requestId: string;
-  operation: 'list' | 'call';
+  operation: 'list' | 'call' | 'list-records' | 'fetch-records';
+  integrationId?: string;
+  actionId?: string;
+  pageId?: string;
+  profileId?: string;
   integrationAccess: McpIntegrationAccess;
   capabilityId?: string;
   arguments?: Record<string, unknown>;

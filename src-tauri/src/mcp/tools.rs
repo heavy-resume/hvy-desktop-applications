@@ -274,6 +274,26 @@ pub(crate) fn mcp_tool_list_with_integration_access(integration_access: &str) ->
     let mut tools = mcp_tool_list().as_array().cloned().unwrap_or_default();
     if normalize_mcp_integration_access(integration_access) != "off" {
         tools.push(serde_json::json!({
+            "name": "integration_list_records",
+            "description": "List configured web page record definitions and browser profiles in the running Galaxy app. No HVY document is required.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        }));
+        tools.push(serde_json::json!({
+            "name": "integration_fetch_records",
+            "description": "Fetch records from a configured web page using a Galaxy browser profile. Checks the live page, opens the configured page if needed, waits for readiness, and returns extracted records. Galaxy must be running and the profile signed in. Discover IDs with integration_list_records.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "integrationId": { "type": "string" },
+                    "actionId": { "type": "string", "description": "Saved record definition ID." },
+                    "pageId": { "type": "string", "description": "Optional configured page ID; defaults to the definition's first page." },
+                    "profileId": { "type": "string", "description": "Browser profile ID returned by integration_list_records." }
+                },
+                "required": ["integrationId", "actionId", "profileId"],
+                "additionalProperties": false
+            }
+        }));
+        tools.push(serde_json::json!({
             "name": "webmcp_list_tools",
             "description": "List site-provided WebMCP tools that the user explicitly exposed through Galaxy MCP.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }

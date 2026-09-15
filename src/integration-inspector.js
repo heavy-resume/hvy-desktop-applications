@@ -1909,7 +1909,8 @@
 
   let extractionRun = 0;
 
-  const extractAcrossPage = async (pattern = {}, runId = extractionRun) => {
+  const extractAcrossPage = async (pattern = {}, runId = extractionRun, checkPage = () => ({ ready: true })) => {
+    let pageFailure = null;
     window.__hvyGalaxyInspector.stop();
     const effectivePattern = { ...pattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) };
     const recordLimit = Number.isFinite(pattern.recordLimit)
@@ -1963,6 +1964,8 @@
       }
     };
     const collect = () => {
+      const readiness = checkPage();
+      if (!readiness.ready) { pageFailure = readiness; return; }
       const matches = findPatternMatches(effectivePattern);
       const serialized = serializeMatches(matches, true).records;
       for (let index = 0; index < serialized.length; index += 1) {
@@ -2004,7 +2007,7 @@
         await settle();
         if (runId !== extractionRun) break;
         collect();
-        if (records.size >= recordLimit) break;
+        if (pageFailure || records.size >= recordLimit) break;
       }
       if (scroller.scrollTop !== originalTop) {
         scroller.scrollTop = originalTop;
@@ -2013,6 +2016,7 @@
     } else {
       collect();
     }
+    if (pageFailure) return { status: 'not-ready', message: pageFailure.message, readiness: pageFailure, matches: 0, records: [] };
     const selected = [...records.values()]
       .sort((left, right) => left.pageTop - right.pageTop || left.pageLeft - right.pageLeft || right.record.score - left.record.score)
       .slice(0, recordLimit)
@@ -2773,9 +2777,16 @@
       publish(result);
       return result;
     },
+    checkPageReadyAndPublish(checks = {}, context = {}) {
+      const result = { kind: 'integration-page-readiness', context, page: { origin: location.origin, pathname: location.pathname }, ...pageReadiness(checks) };
+      publish(result);
+      return result;
+    },
     async extractAndPublish(pattern = {}, context = {}) {
       const runId = ++extractionRun;
-      const readiness = pageReadiness(context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] });
+      const checks = context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] };
+      const readiness = await waitForPageReadiness(checks);
+      if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
       if (!readiness.ready) {
         const result = {
           kind: 'integration-extraction',
@@ -2790,9 +2801,15 @@
         publish(result);
         return result;
       }
-      const extraction = context.mode === 'examples'
+      const pageUrl = location.href;
+      const checkPage = () => location.href === pageUrl
+        ? pageReadiness(checks)
+        : { ready: false, message: 'The browser page changed while fetching records.' };
+      let extraction = context.mode === 'examples'
         ? await extractLiveExamples(pattern, runId)
-        : await extractAcrossPage(pattern, runId);
+        : await extractAcrossPage(pattern, runId, checkPage);
+      const finalReadiness = checkPage();
+      if (!finalReadiness.ready) extraction = { status: 'not-ready', message: finalReadiness.message, readiness: finalReadiness, matches: 0, records: [] };
       if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
       publish({
         kind: 'integration-extraction',

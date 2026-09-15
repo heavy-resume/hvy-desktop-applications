@@ -1343,6 +1343,10 @@ model = "gpt-5.4"
         assert!(!names(&off).contains(&"webmcp_list_tools".to_string()));
         assert!(names(&read).contains(&"webmcp_list_tools".to_string()));
         assert!(names(&read).contains(&"webmcp_call_tool".to_string()));
+        assert!(!names(&off).contains(&"integration_list_records".to_string()));
+        assert!(!names(&off).contains(&"integration_fetch_records".to_string()));
+        assert!(names(&read).contains(&"integration_list_records".to_string()));
+        assert!(names(&read).contains(&"integration_fetch_records".to_string()));
         assert_eq!(names(&read), names(&actions));
     }
 

@@ -829,6 +829,7 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'inspect-parent') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(integrationInspectorOptions(payload))})`);
   if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
   if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
+  if (command === 'check-page-ready') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(${JSON.stringify(payload?.readyChecks || {})}, ${JSON.stringify(payload?.context || {})})`);
   if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
   if (command === 'cancel-extraction') return browserContents.executeJavaScript('window.__hvyGalaxyInspector?.cancelExtraction()');
   if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
@@ -1492,9 +1493,10 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         browser.actionModePending = false;
         setIntegrationToolbarInspectionState(browser);
         mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        const isBackgroundResult = result?.kind === 'integration-ready-check-validation'
+        const isBackgroundResult = result?.kind === 'integration-page-readiness'
+          || result?.kind === 'integration-ready-check-validation'
           || result?.kind === 'integration-record-watch-result'
-          || (result?.kind === 'integration-extraction' && result?.context?.mode === 'examples')
+          || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
           || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
           || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
         if (!isBackgroundResult) raiseWindow(mainWindow);

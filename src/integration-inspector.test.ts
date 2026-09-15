@@ -1942,6 +1942,47 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('waits for live page landmarks before fetching records', async () => {
+    await page.setContent('<main><h1>Inbox</h1><article><span>Message</span></article></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const inspector = window.__hvyGalaxyInspector;
+      const heading = document.querySelector('h1')!;
+      const parent = document.querySelector('article')!;
+      const snapshot = inspector.snapshotElement(heading, null, 'target');
+      const pattern = { scrollPage: false, parents: [inspector.snapshotElement(parent, null, 'parent')], targets: [{ label: 'Subject', snapshot: inspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }] };
+      heading.textContent = 'Loading';
+      window.__hvyGalaxyPublish = () => undefined;
+      setTimeout(() => { heading.textContent = 'Inbox'; }, 150);
+      return inspector.extractAndPublish(pattern, { readyChecks: { urlMode: 'strict-url', urlValue: location.href, elements: [{ id: 'inbox', name: 'Inbox', snapshot, expectedValue: 'Inbox' }] } });
+    });
+    expect(result.matches).toBe(1);
+    expect(result.status).not.toBe('not-ready');
+  });
+
+  it('discards records when the live page changes during scrolling', async () => {
+    await page.route('**/__record-navigation-test.html', (route) => route.fulfill({ contentType: 'text/html', body: '<html><body></body></html>' }));
+    await page.goto(`${viteUrl}/__record-navigation-test.html`);
+    await page.evaluate(() => {
+      window.__readyCheckResult = [];
+      window.__hvyGalaxyPublish = (value) => { (window.__readyCheckResult as unknown[]).push(value); };
+    });
+    await page.setContent(`<main style="height:160px;overflow:auto">${Array.from({ length: 60 }, (_, index) => `<article style="height:42px"><span>Message ${index}</span></article>`).join('')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const inspector = window.__hvyGalaxyInspector;
+      const parent = document.querySelector('article')!;
+      const operation = inspector.extractAndPublish({ parents: [inspector.snapshotElement(parent, null, 'parent')], targets: [{ label: 'Subject', snapshot: inspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }] }, {
+        readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] },
+      });
+      setTimeout(() => history.pushState({}, '', '/another-page'), 50);
+      const extraction = await operation;
+      return { extraction, published: window.__readyCheckResult };
+    });
+    expect(result.extraction).toMatchObject({ status: 'not-ready', records: [] });
+    expect(result.published).toEqual([expect.objectContaining({ status: 'not-ready', records: [], message: 'The browser page changed while fetching records.' })]);
+  });
+
   it('stops an in-progress page extraction without publishing partial records', async () => {
     await page.setContent(`<main class="events" style="height:120px;overflow:auto">${Array.from({ length: 60 }, (_, index) => `<article class="event" style="height:42px"><span>Event ${index + 1}</span></article>`).join('')}</main>`);
     await page.addScriptTag({ content: inspectorSource });

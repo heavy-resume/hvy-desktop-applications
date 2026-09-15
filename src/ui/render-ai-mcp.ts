@@ -170,8 +170,8 @@ export function renderMcpSettingsDialog(state: AppState): string {
             <span>Web capability access</span>
             <select class="hvy-galaxy-select" name="integrationAccess">
               <option value="off" ${settings.integrationAccess === 'off' ? 'selected' : ''}>Off</option>
-              <option value="read" ${settings.integrationAccess === 'read' ? 'selected' : ''}>Read exposed records</option>
-              <option value="actions" ${settings.integrationAccess === 'actions' ? 'selected' : ''}>Read and run exposed actions</option>
+              <option value="read" ${settings.integrationAccess === 'read' ? 'selected' : ''}>Read configured records</option>
+              <option value="actions" ${settings.integrationAccess === 'actions' ? 'selected' : ''}>Read configured records and run exposed actions</option>
             </select>
           </label>
         </div>
