@@ -1,6 +1,6 @@
-import { updateExampleContent } from './templateExampleContent';
+import { diffTemplateContent, updateExampleContent } from './templateExampleContent';
 import { loadWorkspace, readDocumentFile, saveDocumentFile, type SaveDocumentRequest, type WorkspaceTreeNode } from './backend';
-import { deserializeHvy, serializeHvy } from './hvy';
+import { deserializeHvy, serializeHvy, type VisualDocument } from './hvy';
 import { state } from './state';
 import { templateExampleDirectory, workspaceTemplateForExample } from './templateExamples';
 import { updateExampleDefinitions } from './templateExampleUpdates';
@@ -12,13 +12,13 @@ async function loadExampleTemplateContext(path: string) {
   // The navigator's cached workspace can omit templates in Documents view.
   const refreshed = await loadWorkspace(workspace.path, { includeTemplates: true });
   const owner = workspaceTemplateForExample(refreshed, relativePath);
-  if (!owner || owner.relativePath !== relativePath) return null;
+  if (!owner) return null;
   return { refreshed, relativePath, owner };
 }
 
 export async function updateSavedTemplateExamples(request: SaveDocumentRequest, previousBytes?: number[] | Uint8Array): Promise<void> {
   const context = await loadExampleTemplateContext(request.path);
-  if (!context) return;
+  if (!context || context.owner.relativePath !== context.relativePath) return;
   const { refreshed, relativePath, owner } = context;
   const directory = templateExampleDirectory(relativePath);
   const files: Extract<WorkspaceTreeNode, { kind: 'file' }>[] = [];
@@ -62,6 +62,18 @@ export async function updateSavedTemplateExamples(request: SaveDocumentRequest, 
 
 export async function readPreviousExampleTemplate(path: string): Promise<number[] | Uint8Array | undefined> {
   const context = await loadExampleTemplateContext(path);
-  if (!context) return undefined;
+  if (!context || context.owner.relativePath !== context.relativePath) return undefined;
   return (await readDocumentFile(path)).bytes;
+}
+
+/** Catch up an example before mounting it, including after external/MCP edits. */
+export async function updateOpenedTemplateExample(path: string, example: VisualDocument): Promise<boolean> {
+  const context = await loadExampleTemplateContext(path);
+  if (!context || context.owner.relativePath === context.relativePath) return false;
+  const file = await readDocumentFile(context.owner.path);
+  const template = await deserializeHvy(new Uint8Array(file.bytes), context.owner.extension);
+  const before = structuredClone(example);
+  updateExampleContent(example, null, template);
+  updateExampleDefinitions(example, template);
+  return diffTemplateContent(before, example) !== null;
 }

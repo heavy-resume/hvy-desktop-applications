@@ -11,7 +11,7 @@ vi.mock('./backend', () => mocks);
 vi.mock('./hvy', () => mocks);
 vi.mock('./state', () => ({ state: mocks.state }));
 vi.mock('./main', () => mocks);
-import { readPreviousExampleTemplate, updateSavedTemplateExamples } from './templateExamplePersistence';
+import { readPreviousExampleTemplate, updateOpenedTemplateExample, updateSavedTemplateExamples } from './templateExamplePersistence';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,4 +129,44 @@ it.each([true, false])('propagates fixed link labels with templates visible in t
 
   expect(sample.sections[0].blocks[0].text).toBe('[Updated label](https://example.com/profile)');
   expect(mocks.saveDocumentFile).toHaveBeenCalledExactlyOnceWith({ path: file.path, bytes: new Uint8Array([3]) });
+});
+
+
+it('catches up an opened example from its parent on disk and detects subsequent parent edits on tab return', async () => {
+  const parent = createBlankDocument('.thvy');
+  const section = createEmptySection(1);
+  const block = createEmptyBlock('text');
+  block.text = '[Original label]({% url %})';
+  section.blocks = [block];
+  parent.sections = [section];
+  const sample = structuredClone(parent);
+  const { rememberExampleTemplate } = await import('./templateExampleContent');
+  rememberExampleTemplate(sample, parent);
+  sample.sections[0].blocks[0].text = '[Original label](https://example.com)';
+  sample.meta.title = 'Unsaved sample title';
+  const template = { kind: 'file', name: 'Profile.thvy', path: '/work/templates/Profile.thvy', relativePath: 'templates/Profile.thvy', extension: '.thvy' };
+  mocks.state.workspaces = [{ path: '/work', files: [] }];
+  mocks.loadWorkspace.mockResolvedValue({ path: '/work', files: [template] });
+  mocks.readDocumentFile.mockResolvedValue({ bytes: [1] });
+  mocks.deserializeHvy.mockImplementation(async () => structuredClone(parent));
+  const path = '/work/templates/Profile/Example.hvy';
+  parent.sections[0].blocks[0].text = '[New label]({% url %})';
+  expect(await updateOpenedTemplateExample(path, sample)).toBe(true);
+  expect(sample.sections[0].blocks[0].text).toBe('[New label](https://example.com)');
+  expect(sample.meta.title).toBe('Unsaved sample title');
+  expect(await updateOpenedTemplateExample(path, sample)).toBe(false);
+  parent.sections[0].blocks[0].schema.css = 'font-weight: bold;';
+  expect(await updateOpenedTemplateExample(path, sample)).toBe(true);
+  expect(sample.sections[0].blocks[0].schema.css).toBe('font-weight: bold;');
+  expect(mocks.readDocumentFile).toHaveBeenCalledWith(template.path);
+  expect(mocks.saveDocumentFile).not.toHaveBeenCalled();
+});
+
+it('does not migrate a parent template or an ordinary document on open', async () => {
+  const template = { kind: 'file', name: 'Profile.thvy', path: '/work/templates/Profile.thvy', relativePath: 'templates/Profile.thvy', extension: '.thvy' };
+  mocks.state.workspaces = [{ path: '/work', files: [template] }];
+  mocks.loadWorkspace.mockResolvedValue(mocks.state.workspaces[0]);
+  expect(await updateOpenedTemplateExample('/work/Document.hvy', createBlankDocument('.hvy'))).toBe(false);
+  expect(await updateOpenedTemplateExample(template.path, createBlankDocument('.thvy'))).toBe(false);
+  expect(mocks.readDocumentFile).not.toHaveBeenCalled();
 });

@@ -344,6 +344,10 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
     () => deserializeHvy(bytes, file.extension),
   );
+  const exampleUpdated = !readOnly && !options.defaultDocument && !options.isNew && !options.recovered
+    && !options.historyPreview && !session?.virtual
+    ? await (await import('./templateExamplePersistence')).updateOpenedTemplateExample(file.path, document)
+    : false;
   const hiddenFromAI = configuredHiddenFromAI || (isWholeDocumentEncrypted(document) && !workspaceAccess.encryptedAIAllowed);
   if (!hiddenFromAI && file.extension === '.hvy' && state.aiSettings.embeddings.enabled) {
     const attached = await measureDebugAsync(
@@ -357,7 +361,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
       attached,
     });
   }
-  const recoveryState = options.recovered ? file.recoveryState ?? null : viewSession?.recoveryState ?? null;
+  const recoveryState = exampleUpdated ? null : options.recovered ? file.recoveryState ?? null : viewSession?.recoveryState ?? null;
   const restoredMode = viewSession?.mode
     ?? readDocumentModePreference(file.path)
     ?? options.initialMode
@@ -368,7 +372,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     source,
     displayName: options.historyPreview ? file.name : session?.displayName,
     mode: normalizeDocumentMode(restoredMode, { readOnly, hiddenFromAI, extension: file.extension }),
-    dirty: session?.dirty ?? (options.isNew === true || options.recovered === true),
+    dirty: exampleUpdated || (session?.dirty ?? (options.isNew === true || options.recovered === true)),
     readOnly,
     hiddenFromAI,
     isNew: session?.isNew ?? options.isNew === true,
