@@ -350,3 +350,24 @@ it('updates a link label in a serialized concrete instance created through the r
   updateExampleDefinitions(reopened, savedParent);
   expect(reopened.sections[0].blocks[0].text).toBe('[Updated label](https://example.com/profile)');
 });
+
+it('updates schema-only reusable list records using their own document definitions', () => {
+  const parent = createBlankDocument('.thvy');
+  parent.meta.component_defs = [{ name: 'award-record', baseType: 'expandable', schema: {
+    expandableContentBlocks: { children: [{ text: '^section-heading^ ### {% award %}', schema: { component: 'text', css: 'margin: 0;' } }] },
+  } }];
+  const sample = structuredClone(parent);
+  const section = createEmptySection(1);
+  const list = createEmptyBlock('component-list');
+  const record = createEmptyBlock('award-record', false, sample.meta);
+  record.schema.expandableContentBlocks!.children[0].text = '^section-heading^ ### Research award';
+  list.schema.componentListBlocks = [record];
+  section.blocks = [list];
+  sample.sections = [section];
+  const next = (parent.meta.component_defs as any[])[0].schema.expandableContentBlocks.children[0];
+  next.text = '{% award %}';
+  next.schema.css = 'margin: 0; font-weight: 700;';
+  updateExampleDefinitions(sample, parent);
+  expect(record.schema.expandableContentBlocks!.children[0].text).toBe('Research award');
+  expect(record.schema.expandableContentBlocks!.children[0].schema.css).toBe('margin: 0; font-weight: 700;');
+});

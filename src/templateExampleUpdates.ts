@@ -1,7 +1,7 @@
 import { applyTemplateContentPatch, diffTemplateContent } from './templateExampleContent';
 import { setAttachment } from '../../heavy-file-format/src/attachments';
 import { getComponentDefsFromMeta, getSectionDefsFromMeta, getSectionTemplateKey } from '../../heavy-file-format/src/component-defs';
-import { getReusableTemplate } from '../../heavy-file-format/src/document-factory';
+import { createEmptyBlock } from '../../heavy-file-format/src/document-factory';
 import { visitBlocks } from '../../heavy-file-format/src/section-ops';
 import type { VisualDocument } from './hvy';
 
@@ -13,7 +13,7 @@ export function updateExampleDefinitions(example: VisualDocument, template: Visu
   const sections = structuredClone(getSectionDefsFromMeta(template.meta));
   const componentPatches = new Map(components.map((definition) => {
     const previous = oldComponents.find((old) => old.name === definition.name);
-    return [definition.name, { componentName: definition.name, patch: diffTemplateContent(previous ? getReusableTemplate(previous) : undefined, getReusableTemplate(definition)) }];
+    return [definition.name, { componentName: definition.name, patch: diffTemplateContent(previous ? createEmptyBlock(previous.name, false, example.meta) : undefined, createEmptyBlock(definition.name, false, template.meta)) }];
   }));
   for (const previous of oldComponents) {
     if (componentPatches.has(previous.name)) continue;
