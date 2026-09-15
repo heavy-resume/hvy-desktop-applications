@@ -1,3 +1,4 @@
+import { rememberExampleTemplate } from './templateExampleContent';
 import { templateExampleDirectory } from './templateExamples';
 import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openDocumentFile, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { measureDebugAsync } from './debugLog';
@@ -474,6 +475,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     collect(workspace.files);
     while (paths.has(relativePath)) relativePath = `${directory}/Example ${++index}${extension}`;
     const example = await deserializeHvy(new Uint8Array(source.bytes), source.extension);
+    rememberExampleTemplate(example, example);
     example.extension = extension;
     example.meta.title = `Example ${index}`;
     const bytes = await serializeHvy(example);

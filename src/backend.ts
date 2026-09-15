@@ -1094,16 +1094,15 @@ export function readDocumentFileStamp(path: string): Promise<string> {
 }
 
 export async function saveDocumentFile(request: SaveDocumentRequest): Promise<DocumentWriteResult | void> {
+  const examples = /\.(thvy|phvy)$/i.test(request.path) ? await import('./templateExamplePersistence') : null;
+  const previous = await examples?.readPreviousExampleTemplate(request.path);
   const result = isTauriRuntime()
     ? await invoke<DocumentWriteResult>('save_document_file_raw', toUint8Array(request.bytes), {
         headers: { 'x-hvy-document-path': encodeURIComponent(request.path) },
       })
     : await invokeDesktop<DocumentWriteResult>('save_document_file', { path: request.path, bytes: request.bytes });
   await documentFileChanges.remember(request.path, request.bytes);
-  if (/\.(thvy|phvy)$/i.test(request.path)) {
-    const { updateSavedTemplateExamples } = await import('./templateExamplePersistence');
-    await updateSavedTemplateExamples(request);
-  }
+  await examples?.updateSavedTemplateExamples(request, previous);
   return result;
 }
 
@@ -1147,9 +1146,10 @@ export function listSavedTemplates(workspacePath?: string | null): Promise<Saved
 }
 
 export async function saveDocumentTemplate(request: SaveDocumentTemplateRequest): Promise<SavedTemplate> {
+  const previousTemplates = request.scope === 'workspace' ? await listSavedTemplates(request.workspacePath) : [];
   const template = await invokeDesktop<SavedTemplate>('save_document_template', { request });
   const { updateSavedTemplateExamples } = await import('./templateExamplePersistence');
-  await updateSavedTemplateExamples({ path: template.path, bytes: request.bytes });
+  await updateSavedTemplateExamples({ path: template.path, bytes: request.bytes }, previousTemplates.find((previous) => previous.path === template.path)?.bytes);
   return template;
 }
 
