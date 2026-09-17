@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppState } from './state';
-import { getFileActionAvailability, isHomepageOpen } from './fileActions';
+import { currentDocumentWorkspacePath, getFileActionAvailability, isHomepageOpen } from './fileActions';
 
 function encryptedDocumentState(encryptedFolderDocument: boolean, dirty = false): AppState {
   const path = encryptedFolderDocument
@@ -99,5 +99,17 @@ describe('open homepage identity', () => {
     state.document!.virtual = 'versionHistory';
 
     expect(isHomepageOpen(state)).toBe(false);
+  });
+});
+
+describe('history document workspace', () => {
+  it('resolves the original workspace for a saved template version', () => {
+    const state = encryptedDocumentState(false);
+    state.document!.virtual = 'versionHistory';
+    state.document!.historySourcePath = '/workspace/templates/Resume.thvy';
+    state.document!.source.path = 'version-history:template:older';
+    state.workspaces[0].files[0].path = state.document!.historySourcePath;
+
+    expect(currentDocumentWorkspacePath(state)).toBe('/workspace');
   });
 });

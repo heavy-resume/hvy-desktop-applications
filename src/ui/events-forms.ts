@@ -109,10 +109,13 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
       const data = new FormData(form);
       const scope = String(data.get('scope') ?? 'app');
       const extension = data.get('format');
+      const destination = form.querySelector<HTMLInputElement>('input[name="workspaceDestination"]:checked');
       handlers.saveAsTemplate(
         String(data.get('templateName') ?? ''),
-        isTemplateScope(scope) ? scope : 'app',
-        isTemplateExtension(extension) ? extension : '.thvy'
+        scope === 'anywhere' ? scope : isTemplateScope(scope) ? scope : 'app',
+        isTemplateExtension(extension) ? extension : '.thvy',
+        destination?.dataset.workspacePath,
+        destination?.dataset.targetDirectory,
       );
     }
     if (form.dataset.form === 'app-settings') {

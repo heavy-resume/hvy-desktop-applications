@@ -318,7 +318,7 @@ export interface UiHandlers {
   save(): void;
   saveAs(): void;
   setSaveAsKind(kind: AppState['saveAsKind']): void;
-  setSaveAsScope(scope: 'workspace' | 'anywhere'): void;
+  setSaveAsScope(scope: AppState['saveAsScope']): void;
   saveAsToWorkspace(workspacePath: string, name: string, targetDirectory?: string): void;
   saveAsAnywhere(): void;
   cancelSaveAs(): void;
@@ -332,7 +332,7 @@ export interface UiHandlers {
   saveBeforeExportPdf(): void;
   cancelExportPdfSavePrompt(): void;
   setSaveTemplateScope(scope: TemplateScope): void;
-  saveAsTemplate(name: string, scope: TemplateScope, extension: TemplateExtension): void;
+  saveAsTemplate(name: string, scope: TemplateScope | 'anywhere', extension: TemplateExtension, workspacePath?: string, targetDirectory?: string): void;
   cancelSaveTemplate(): void;
   saveWorkspaceTemplateVisibility(workspacePath: string, visibility: WorkspaceTemplateVisibility): void;
   createFile(): void;

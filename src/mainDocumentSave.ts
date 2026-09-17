@@ -1,3 +1,4 @@
+import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, relocateDocumentRecoveryDrafts, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup, type DocumentFileMetadata } from './backend';
 import { logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { attachMatchingSidecarEmbeddingIndex, deleteDocumentEmbeddingSidecar, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
@@ -198,8 +199,12 @@ export async function openSavedVersionPreview(versionId: string): Promise<void> 
 export function openSaveAsDialog(): void {
   if (!state.document?.mounted || (state.document.readOnly && state.document.virtual !== 'versionHistory')) return;
   state.saveAsDialogOpen = true;
-  state.saveAsKind = 'document';
-  state.saveAsScope = state.workspaces.length > 0 ? 'workspace' : 'anywhere';
+  const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+  const savedTemplate = state.savedTemplates.find((template) => template.path === sourcePath);
+  state.saveAsKind = state.document.source.extension === '.thvy' || savedTemplate || isWorkspaceTemplatePath(state, sourcePath)
+    ? 'template' : 'document';
+  state.saveAsScope = currentDocumentWorkspacePath(state) || (state.document.isNew && state.workspaces.length > 0)
+    ? 'workspace' : savedTemplate?.scope === 'app' ? 'app' : 'anywhere';
   state.error = null;
   state.status = 'Ready';
   rerender({ preserveMountedDocument: true });
@@ -274,7 +279,9 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
   const suggestedName = state.document.virtual === 'versionHistory'
     ? savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name)
     : state.document.source.name;
-  const file = await saveDocumentAsDialog({ suggestedName, bytes });
+  const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+  const directory = state.document.isNew ? '' : sourcePath.replace(/\\/g, '/').slice(0, sourcePath.replace(/\\/g, '/').lastIndexOf('/') + 1);
+  const file = await saveDocumentAsDialog({ suggestedName: `${directory}${suggestedName}`, bytes });
   if (!file) return;
   adoptSavedAsDocument(file, state.document.mounted, document, previousMode, previousPath, previousUseDocumentColors);
   recordSuccessfulDocumentSave(file.path, file.name, document);

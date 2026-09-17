@@ -2582,13 +2582,18 @@ fn save_document_as_dialog(
     suggested_name: String,
     bytes: Vec<u8>,
 ) -> AppResult<Option<DocumentFileMetadata>> {
-    let Some(path) = rfd::FileDialog::new()
+    let suggested_path = PathBuf::from(&suggested_name);
+    let mut dialog = rfd::FileDialog::new()
         .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
         .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
-        .add_filter("Markdown", &["md"])
-        .set_file_name(suggested_name)
-        .save_file()
-    else {
+        .add_filter("Markdown", &["md"]);
+    if let Some(parent) = suggested_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        dialog = dialog.set_directory(parent);
+    }
+    if let Some(name) = suggested_path.file_name() {
+        dialog = dialog.set_file_name(name.to_string_lossy());
+    }
+    let Some(path) = dialog.save_file() else {
         return Ok(None);
     };
     if document_extension(&path).is_none() {
@@ -2607,19 +2612,7 @@ fn save_document_as_dialog_raw(
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(AppError::Message("Expected raw document bytes.".into()));
     };
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
-        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
-        .add_filter("Markdown", &["md"])
-        .set_file_name(suggested_name)
-        .save_file()
-    else {
-        return Ok(None);
-    };
-    document_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
-    persist_document_file(&app, path.clone(), bytes)?;
-    Ok(Some(read_document_metadata_at(&path)?))
+    save_document_as_dialog(app, suggested_name, bytes.clone())
 }
 
 fn decode_ipc_header(headers: &tauri::http::HeaderMap, name: &str) -> AppResult<String> {

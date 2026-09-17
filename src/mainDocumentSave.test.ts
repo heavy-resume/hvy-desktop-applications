@@ -76,7 +76,7 @@ vi.mock('./documentHistory', () => ({
   ...historyMocks,
 }));
 
-import { openSavedVersionPreview, openVersionHistory, saveCurrentDocument, selectDocumentTab } from './mainDocumentSave';
+import { openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveCurrentDocument, selectDocumentTab } from './mainDocumentSave';
 import { state } from './state';
 
 describe('saveCurrentDocument', () => {
@@ -404,6 +404,34 @@ describe('openSavedVersionPreview', () => {
     expect(historyMocks.listSavedDocumentVersions).toHaveBeenCalledWith(workingDocument.source.path);
     expect(state.savedDocumentVersions).toEqual([newVersion, previousVersion]);
     expect(state.selectedSavedVersionId).toBe(newVersion.id);
+  });
+
+  it('defaults a historical template to Template and its source workspace', () => {
+    state.document!.virtual = 'versionHistory';
+    state.document!.historySourcePath = '/workspace/drafts/Resume.thvy';
+    state.document!.source.extension = '.thvy';
+    state.document!.mounted = { document: {}, mount: {} } as never;
+    state.workspaces = [{ path: '/workspace', files: [{ kind: 'file', path: '/workspace/drafts/Resume.thvy' }] }] as never;
+
+    openSaveAsDialog();
+
+    expect(state.saveAsKind).toBe('template');
+    expect(state.saveAsScope).toBe('workspace');
+    state.workspaces = [];
+  });
+
+  it.each(['app', 'anywhere'] as const)('defaults a template outside workspaces to its %s scope', (scope) => {
+    state.document!.source.extension = '.thvy';
+    state.document!.source.path = '/outside/Resume.thvy';
+    state.document!.mounted = { document: {}, mount: {} } as never;
+    state.workspaces = [];
+    state.savedTemplates = scope === 'app' ? [{ path: '/outside/Resume.thvy', scope: 'app' }] as never : [];
+
+    openSaveAsDialog();
+
+    expect(state.saveAsKind).toBe('template');
+    expect(state.saveAsScope).toBe(scope);
+    state.savedTemplates = [];
   });
 
   it('opens a saved version with the source AI policy and preserves history scroll position', async () => {

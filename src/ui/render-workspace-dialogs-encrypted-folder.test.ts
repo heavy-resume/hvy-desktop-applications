@@ -1,5 +1,6 @@
+import { currentDocumentWorkspacePath } from '../fileActions';
 import { describe, expect, it, vi } from 'vitest';
-vi.mock('../fileActions', () => ({ currentDocumentWorkspacePath: () => null }));
+vi.mock('../fileActions', () => ({ currentDocumentWorkspacePath: vi.fn(() => null) }));
 vi.mock('../mainUtilities', () => ({ savedVersionDocumentName: () => '' }));
 vi.mock('../state', () => ({ workspacePathForFileInWorkspaces: () => null }));
 vi.mock('./core', () => ({ MIN_PASTED_IMPORT_CHARS: 250 }));
@@ -225,5 +226,73 @@ describe('encrypted folder workspace actions', () => {
     expect(html).toContain('aria-label="Encrypted document">🔒</span>');
     expect(html).toContain('data-encrypted-folder-document="false"');
     expect(html).toContain('draggable="true"');
+  });
+});
+
+describe('saving a historical template', () => {
+  it.each(['.thvy', '.phvy'])('offers Template for an older %s version with its original name and format', (extension) => {
+    const state = {
+      saveAsDialogOpen: true,
+      saveAsKind: 'document',
+      saveAsScope: 'anywhere',
+      saveTemplateScope: 'app',
+      workspaces: [],
+      document: {
+        virtual: 'versionHistory',
+        historySourceName: `Resume${extension}`,
+        source: { name: `Resume${extension} — September 2, 2026`, extension },
+      },
+    } as unknown as AppState;
+
+    const documentDialog = renderSaveAsDialog(state);
+    expect(documentDialog).toMatch(/data-kind="template"[^>]*(?<!disabled)>Template/);
+    expect(documentDialog).not.toMatch(/data-kind="template"[^>]*disabled/);
+
+    state.saveAsKind = 'template';
+    const templateDialog = renderSaveAsDialog(state);
+    expect(templateDialog).toContain('data-form="save-as-template"');
+    expect(templateDialog).toContain('value="Resume"');
+    expect(templateDialog).toContain(`value="${extension}" selected`);
+  });
+});
+
+describe('shared Save As location defaults', () => {
+  it.each(['document', 'template'] as const)('selects the original workspace folder for a %s', (kind) => {
+    vi.mocked(currentDocumentWorkspacePath).mockReturnValueOnce('/workspace');
+    const html = renderSaveAsDialog({
+      saveAsDialogOpen: true, saveAsKind: kind, saveAsScope: 'workspace', selectedWorkspacePath: '/other',
+      document: {
+        virtual: 'versionHistory', historySourcePath: '/workspace/drafts/Resume.thvy', historySourceName: 'Resume.thvy',
+        source: { path: 'version-history:older', name: 'Resume — yesterday', extension: '.thvy' },
+      },
+      workspaces: [{ path: '/workspace', manifest: { name: 'Work' }, files: [{
+        kind: 'folder', path: '/workspace/drafts', relativePath: 'drafts', name: 'Drafts', children: [],
+      }] }],
+    } as unknown as AppState);
+    expect(html).toMatch(/data-target-directory="drafts"\s+checked/);
+    expect(html).toContain(kind === 'template' ? 'data-action="select-save-as-scope"' : 'data-scope="anywhere"');
+    if (kind === 'template') {
+      expect(html).toContain('Choose another location…');
+      expect(html).not.toContain('aria-label="Save destination"');
+    }
+  });
+});
+
+describe('workspace template destination', () => {
+  it.each(['templates', 'templates/resumes'])('selects the workspace while hiding the internal %s directory', (directory) => {
+    vi.mocked(currentDocumentWorkspacePath).mockReturnValueOnce('/workspace');
+    const html = renderSaveAsDialog({
+      saveAsDialogOpen: true, saveAsKind: 'template', saveAsScope: 'workspace',
+      document: { source: { path: `/workspace/${directory}/Resume.thvy`, name: 'Resume.thvy', extension: '.thvy' } },
+      workspaces: [{ path: '/workspace', manifest: { name: 'Work' }, files: [{
+        kind: 'folder', path: '/workspace/templates', relativePath: 'templates', name: 'Templates', children: [{
+          kind: 'folder', path: '/workspace/templates/resumes', relativePath: 'templates/resumes', name: 'Resumes', children: [],
+        }],
+      }] }],
+    } as unknown as AppState);
+    expect(html).toMatch(/data-target-directory=""\s+checked/);
+    expect(html).not.toContain('data-target-directory="templates');
+    expect(html).not.toContain('<span>Templates</span>');
+    expect(html.match(/\schecked\s/g)).toHaveLength(1);
   });
 });

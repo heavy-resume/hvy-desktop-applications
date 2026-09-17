@@ -1,5 +1,5 @@
 import { reloadExternalFileChange, dismissExternalFileChange } from './mainDocumentFileMonitor';
-import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
+import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentAsDialog, saveDocumentToWorkspace, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, encryptMountedDocumentWithKey, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, removeMountedDocumentEncryption, serializeHvy } from './hvy';
@@ -707,6 +707,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   setSaveAsKind: (kind) => {
     if (kind === 'template' && state.document?.source.extension === '.md') return;
     state.saveAsKind = kind;
+    if (kind === 'document' && state.saveAsScope === 'app') state.saveAsScope = currentDocumentWorkspacePath(state) ? 'workspace' : 'anywhere';
     state.error = null;
     rerender({ preserveMountedDocument: true });
   },
@@ -740,9 +741,9 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
-    state.saveAsDialogOpen = true;
+    openSaveAsDialog();
     state.saveAsKind = 'template';
-    state.saveTemplateScope = workspacePathForFile(state.document.source.path) ? 'workspace' : 'app';
+    state.saveTemplateScope = currentDocumentWorkspacePath(state) ? 'workspace' : 'app';
     state.error = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -775,16 +776,16 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     rerender({ preserveMountedDocument: true });
   },
   setSaveTemplateScope: (scope) => {
-    if (scope === 'workspace' && !workspacePathForFile(state.document?.source.path ?? '')) return;
+    if (scope === 'workspace' && !currentDocumentWorkspacePath(state)) return;
     state.saveTemplateScope = scope;
     state.error = null;
     rerender({ preserveMountedDocument: true });
   },
-  saveAsTemplate: (name, scope, extension: TemplateExtension) => void runBusy('Saving template...', async () => {
+  saveAsTemplate: (name, scope, extension: TemplateExtension, selectedWorkspacePath, targetDirectory) => void runBusy('Saving template...', async () => {
     if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
-    const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.source.path) : null;
+    const workspacePath = scope === 'workspace' ? selectedWorkspacePath ?? currentDocumentWorkspacePath(state) : null;
     if (scope === 'workspace' && !workspacePath) {
       throw new Error('Workspace template requires a document in an open workspace.');
     }
@@ -795,7 +796,18 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       }
     }
     const bytes = Array.from(await serializeHvy({ ...state.document.mounted.document, extension }));
-    await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
+    if (scope === 'anywhere') {
+      const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+      const directory = sourcePath.replace(/\\/g, '/').slice(0, sourcePath.replace(/\\/g, '/').lastIndexOf('/') + 1);
+      const file = await saveDocumentAsDialog({ suggestedName: `${directory}${templateFileName(name, extension)}`, bytes });
+      if (!file) return;
+      await refreshOpenWorkspaceForFile(file.path);
+    } else if (scope === 'workspace' && selectedWorkspacePath && targetDirectory) {
+      const file = await saveDocumentToWorkspace({ workspacePath: selectedWorkspacePath, name: templateFileName(name, extension), targetDirectory: targetDirectory ?? '', bytes });
+      await refreshOpenWorkspaceForFile(file.path);
+    } else {
+      await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
+    }
     state.saveAsDialogOpen = false;
     await refreshSavedTemplates(workspacePath);
     state.status = `Saved template ${templateFileName(name, extension)}`;
