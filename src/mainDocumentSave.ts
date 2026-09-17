@@ -161,22 +161,26 @@ export async function openSavedVersionPreview(versionId: string): Promise<void> 
   const replacedVersionId = document.virtual === 'versionHistory' && !document.dirty ? document.versionId : null;
   await runBusy('Opening saved version...', async () => {
     const version = state.savedDocumentVersions.find((candidate) => candidate.id === versionId);
-    const bytes = await materializeSavedDocumentVersion(sourcePath, versionId);
     state.versionHistorySidebarOpen = true;
     state.versionHistorySourcePath = sourcePath;
     state.versionHistorySourceName = sourceName;
     state.selectedSavedVersionId = versionId;
-    await openDocument({
-      path: `version-history:${encodeURIComponent(sourcePath)}:${versionId}`,
-      name: `${sourceName} — ${version ? new Date(version.createdAt).toLocaleString() : 'Saved version'}`,
-      extension: document.source.extension,
-      bytes,
-      hiddenFromAI: document.hiddenFromAI,
-    }, {
-      hiddenFromAI: document.hiddenFromAI,
-      initialMode: document.mode,
-      historyPreview: { sourcePath, sourceName, versionId },
-    });
+    if (versionId === state.savedDocumentVersions[0]?.id) {
+      await openDocument(await readDocumentFile(sourcePath), { initialMode: document.mode });
+    } else {
+      const bytes = await materializeSavedDocumentVersion(sourcePath, versionId);
+      await openDocument({
+        path: `version-history:${encodeURIComponent(sourcePath)}:${versionId}`,
+        name: `${sourceName} — ${version ? new Date(version.createdAt).toLocaleString() : 'Saved version'}`,
+        extension: document.source.extension,
+        bytes,
+        hiddenFromAI: document.hiddenFromAI,
+      }, {
+        hiddenFromAI: document.hiddenFromAI,
+        initialMode: document.mode,
+        historyPreview: { sourcePath, sourceName, versionId },
+      });
+    }
     if (replacedVersionId && replacedVersionId !== state.document?.versionId) {
       documentSessions.delete(replacedVersionId);
       removeDocumentTabPath(replacedVersionId);

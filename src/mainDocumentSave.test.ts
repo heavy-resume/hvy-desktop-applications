@@ -309,6 +309,8 @@ describe('saveCurrentDocument', () => {
 describe('openSavedVersionPreview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mainMocks.documentSessions.clear();
+    state.saveAsDialogOpen = false;
     state.busy = false;
     state.error = null;
     state.versionHistorySidebarOpen = false;
@@ -357,11 +359,50 @@ describe('openSavedVersionPreview', () => {
     expect(state.selectedSavedVersionId).toBeNull();
   });
 
+  it.each(['.hvy', '.md', '.phvy'] as const)('opens the latest %s version as the original document and saves in place', async (extension) => {
+    const workingDocument = state.document!;
+    workingDocument.source.extension = extension;
+    workingDocument.source.path = `/workspace/Example${extension}`;
+    workingDocument.source.name = `Example${extension}`;
+    state.versionHistorySourcePath = workingDocument.source.path;
+    state.versionHistorySourceName = workingDocument.source.name;
+    state.document = {
+      ...workingDocument,
+      versionId: 'older-preview',
+      virtual: 'versionHistory',
+      historyVersionId: 'older-version',
+    };
+    const file = { ...workingDocument.source, bytes: [1, 2, 3] };
+    backendMocks.readDocumentFile.mockResolvedValueOnce(file);
+    mainMocks.openDocument.mockImplementationOnce(async () => {
+      state.document = {
+        ...workingDocument,
+        mounted: { document: { sections: [] }, mount: {} } as never,
+      };
+    });
+
+    await openSavedVersionPreview('saved-version');
+
+    expect(backendMocks.readDocumentFile).toHaveBeenCalledWith(workingDocument.source.path);
+    expect(mainMocks.openDocument).toHaveBeenCalledWith(file, { initialMode: 'ai' });
+    expect(historyMocks.materializeSavedDocumentVersion).not.toHaveBeenCalled();
+    expect(mainMocks.removeDocumentTabPath).toHaveBeenCalledWith('older-preview');
+    expect(state.selectedSavedVersionId).toBe('saved-version');
+    state.document!.dirty = true;
+
+    await saveCurrentDocument();
+
+    expect(state.error).toBeNull();
+    expect(state.saveAsDialogOpen).toBe(false);
+    expect(backendMocks.saveDocumentFile).toHaveBeenCalledWith({ path: workingDocument.source.path, bytes: expect.any(Uint8Array) });
+  });
+
   it('opens a saved version with the source AI policy and preserves history scroll position', async () => {
     state.versionHistorySourcePath = '/workspace/Example.hvy';
     state.versionHistorySourceName = 'Example.hvy';
     state.document!.virtual = 'versionHistory';
     state.document!.historyVersionId = 'older-version';
+    state.savedDocumentVersions.unshift({ ...state.savedDocumentVersions[0], id: 'latest-version' });
     const previousDocument = state.document!;
     mainMocks.openDocument.mockImplementationOnce(async () => {
       state.document = {
