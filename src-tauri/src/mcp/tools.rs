@@ -24,6 +24,33 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
             }
         },
         {
+            "name": "workspace_file_search",
+            "description": "Find HVY documents by filename or workspace-relative path glob across workspaces currently added to HVY Galaxy without reading document contents. Prefer this when the user gives a filename or glob before calling a path-based document editing tool.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "File glob. Patterns without / match filenames at any folder depth; patterns with / match workspace-relative paths. Supports *, ?, **, and character classes."
+                    },
+                    "workspacePattern": {
+                        "type": "string",
+                        "description": "Optional workspace glob. Patterns without / match workspace names; patterns with / match normalized absolute workspace paths. Defaults to *."
+                    },
+                    "caseSensitive": {
+                        "type": "boolean",
+                        "description": "Whether file and workspace glob matching is case-sensitive. Defaults to false."
+                    },
+                    "max": {
+                        "type": "number",
+                        "description": "Maximum number of matching files to return, from 1 through 100. Defaults to 25."
+                    }
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "workspace_search",
             "description": "Search HVY files in workspaces currently added to HVY Galaxy and return matching file paths, snippets, and line numbers. Use this to answer questions like which HVY file contains a resume, a person's name, a topic, or other document content.",
             "inputSchema": {
@@ -152,7 +179,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
         },
         {
             "name": "search_hvy_document",
-            "description": "Find ranked candidate sections or components related to a concept in one existing HVY document. Use for searchable batch work, not as proof that the whole document was reviewed.",
+            "description": "Find ranked candidate sections or components related to a concept in one existing HVY document. Set semantic to true to use a prepared embedding index or false to use lexical search. This tool does not build document embeddings; use build_hvy_embeddings first when needed. Results are candidates, not proof that the whole document was reviewed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -171,9 +198,53 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
                     "cursor": {
                         "type": "string",
                         "description": "Optional opaque continuation cursor returned by a previous search with the same query."
+                    },
+                    "semantic": {
+                        "type": "boolean",
+                        "description": "True uses Galaxy's configured embedding provider and a prepared document embedding index; false uses lexical search."
                     }
                 },
                 "required": ["path", "query"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "build_hvy_embeddings",
+            "description": "Build or refresh the embedding index for one existing HVY document using Galaxy's configured embedding provider. Use this before semantic search when search reports that document embeddings are not prepared.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path of the writable .hvy document whose embedding index should be built."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "walk_hvy_document",
+            "description": "Read one existing HVY document exhaustively in document order. Continue with each returned nextCursor until it is absent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute path of the .hvy, .thvy, .phvy, or .md document to read."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Optional maximum number of document-order items to return."
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "Optional continuation cursor returned by the previous walk."
+                    }
+                },
+                "required": ["path"],
                 "additionalProperties": false
             }
         },
@@ -203,6 +274,26 @@ pub(crate) fn mcp_tool_list_with_integration_access(integration_access: &str) ->
     let mut tools = mcp_tool_list().as_array().cloned().unwrap_or_default();
     if normalize_mcp_integration_access(integration_access) != "off" {
         tools.push(serde_json::json!({
+            "name": "integration_list_records",
+            "description": "List configured web page record definitions and browser profiles in the running Galaxy app. No HVY document is required.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        }));
+        tools.push(serde_json::json!({
+            "name": "integration_fetch_records",
+            "description": "Fetch records from a configured web page using a Galaxy browser profile. Checks the live page, opens the configured page if needed, waits for readiness, and returns extracted records. Galaxy must be running and the profile signed in. Discover IDs with integration_list_records.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "integrationId": { "type": "string" },
+                    "actionId": { "type": "string", "description": "Saved record definition ID." },
+                    "pageId": { "type": "string", "description": "Optional configured page ID; defaults to the definition's first page." },
+                    "profileId": { "type": "string", "description": "Browser profile ID returned by integration_list_records." }
+                },
+                "required": ["integrationId", "actionId", "profileId"],
+                "additionalProperties": false
+            }
+        }));
+        tools.push(serde_json::json!({
             "name": "webmcp_list_tools",
             "description": "List site-provided WebMCP tools that the user explicitly exposed through Galaxy MCP.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
@@ -224,14 +315,19 @@ pub(crate) fn mcp_tool_list_with_integration_access(integration_access: &str) ->
     serde_json::Value::Array(tools)
 }
 
-fn handle_mcp_tool_call(app: &AppHandle, params: serde_json::Value) -> AppResult<serde_json::Value> {
+fn handle_mcp_tool_call(
+    app: &AppHandle,
+    params: serde_json::Value,
+) -> AppResult<serde_json::Value> {
     let archived_workspaces_path = archived_workspaces_path(app)?;
+    let ai_settings_path = ai_settings_path(app)?;
     handle_mcp_tool_call_from_with_access_config_and_archive_path(
         &known_workspaces(app)?,
         params,
         &default_mcp_write_access(),
         None,
         Some(&archived_workspaces_path),
+        Some(&ai_settings_path),
     )
 }
 
@@ -254,7 +350,12 @@ fn handle_mcp_tool_call_from_with_access_and_config(
         params,
         write_access,
         workspace_config_path,
-        workspace_config_path.map(mcp_archived_workspaces_path_from_config).as_deref(),
+        workspace_config_path
+            .map(mcp_archived_workspaces_path_from_config)
+            .as_deref(),
+        workspace_config_path
+            .map(mcp_ai_settings_path_from_config)
+            .as_deref(),
     )
 }
 
@@ -264,6 +365,7 @@ fn handle_mcp_tool_call_from_with_access_config_and_archive_path(
     write_access: &str,
     workspace_config_path: Option<&Path>,
     archived_workspaces_path: Option<&Path>,
+    ai_settings_path: Option<&Path>,
 ) -> AppResult<serde_json::Value> {
     let name = params
         .get("name")
@@ -277,6 +379,7 @@ fn handle_mcp_tool_call_from_with_access_config_and_archive_path(
     let result = match name {
         "workspace_list" => mcp_workspace_list_from(workspaces)?,
         "workspace_tree" => mcp_workspace_tree_from(workspaces, arguments)?,
+        "workspace_file_search" => mcp_workspace_file_search_from(workspaces, arguments)?,
         "workspace_search" => mcp_workspace_search_from(workspaces, arguments)?,
         "workspace_create" => mcp_workspace_create_from(arguments, workspace_config_path)?,
         "workspace_archive" => {
@@ -286,7 +389,13 @@ fn handle_mcp_tool_call_from_with_access_config_and_archive_path(
         "document_archive" => mcp_document_archive_from(workspaces, arguments)?,
         "hvy_guidance" => mcp_hvy_guidance()?,
         "document_cli_based_editor" => mcp_document_cli_from(workspaces, arguments)?,
-        "search_hvy_document" => mcp_search_hvy_document_from(workspaces, arguments)?,
+        "search_hvy_document" => {
+            mcp_search_hvy_document_from(workspaces, arguments, ai_settings_path)?
+        }
+        "build_hvy_embeddings" => {
+            mcp_build_hvy_embeddings_from(workspaces, arguments, ai_settings_path)?
+        }
+        "walk_hvy_document" => mcp_walk_hvy_document_from(workspaces, arguments)?,
         "apply_hvy_patch" => mcp_apply_hvy_patch_from(workspaces, arguments)?,
         _ => return Err(AppError::Message(format!("Unknown tool: {name}"))),
     };
@@ -306,10 +415,12 @@ fn mcp_tool_required_access(name: &str) -> u8 {
     match name {
         "workspace_list"
         | "workspace_tree"
+        | "workspace_file_search"
         | "workspace_search"
         | "hvy_guidance"
-        | "search_hvy_document" => 0,
-        "document_cli_based_editor" | "apply_hvy_patch" => 1,
+        | "search_hvy_document"
+        | "walk_hvy_document" => 0,
+        "document_cli_based_editor" | "build_hvy_embeddings" | "apply_hvy_patch" => 1,
         "workspace_create" | "workspace_archive" | "document_create" | "document_archive" => 2,
         _ => 2,
     }
@@ -352,6 +463,123 @@ pub(crate) fn mcp_workspace_tree_from(workspaces: &[Workspace], arguments: serde
         }))
         .collect::<Vec<_>>();
     Ok(serde_json::json!({ "workspaces": workspaces }))
+}
+
+pub(crate) fn mcp_workspace_file_search_from(
+    workspaces: &[Workspace],
+    arguments: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let pattern = arguments
+        .get("pattern")
+        .and_then(|pattern| pattern.as_str())
+        .unwrap_or("")
+        .trim();
+    if pattern.is_empty() {
+        return Err(AppError::Message(
+            "workspace_file_search requires a non-empty pattern.".into(),
+        ));
+    }
+    let workspace_pattern = arguments
+        .get("workspacePattern")
+        .and_then(|pattern| pattern.as_str())
+        .unwrap_or("*")
+        .trim();
+    if workspace_pattern.is_empty() {
+        return Err(AppError::Message(
+            "workspace_file_search requires a non-empty workspacePattern when provided.".into(),
+        ));
+    }
+    let case_sensitive = arguments
+        .get("caseSensitive")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let max = arguments
+        .get("max")
+        .and_then(|max| max.as_u64())
+        .map(|max| max.clamp(1, 100) as usize)
+        .unwrap_or(25);
+    let file_glob = glob::Pattern::new(pattern).map_err(|error| {
+        AppError::Message(format!(
+            "workspace_file_search received an invalid pattern: {error}"
+        ))
+    })?;
+    let workspace_glob = glob::Pattern::new(workspace_pattern).map_err(|error| {
+        AppError::Message(format!(
+            "workspace_file_search received an invalid workspacePattern: {error}"
+        ))
+    })?;
+    let match_options = glob::MatchOptions {
+        case_sensitive,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let file_matches_relative_path = pattern.contains('/');
+    let workspace_matches_absolute_path = workspace_pattern.contains('/');
+    let mut results = Vec::new();
+
+    for workspace in workspaces {
+        if workspace.manifest.hidden_from_ai {
+            continue;
+        }
+        let workspace_target = if workspace_matches_absolute_path {
+            workspace.path.replace('\\', "/")
+        } else {
+            workspace.manifest.name.clone()
+        };
+        if !workspace_glob.matches_with(&workspace_target, match_options) {
+            continue;
+        }
+        for file in flatten_workspace_file_nodes(&workspace.files) {
+            if file_hidden_from_ai(&file) {
+                continue;
+            }
+            let file_target = if file_matches_relative_path {
+                file.relative_path.as_str()
+            } else {
+                file.name.as_str()
+            };
+            if !file_glob.matches_with(file_target, match_options) {
+                continue;
+            }
+            results.push(serde_json::json!({
+                "workspaceName": workspace.manifest.name,
+                "workspacePath": workspace.path,
+                "path": file.path,
+                "relativePath": file.relative_path,
+                "name": file.name,
+                "extension": file.extension,
+                "archived": file.archived,
+                "locked": file.locked,
+                "encrypted": file.encrypted,
+            }));
+        }
+    }
+
+    results.sort_by(|left, right| {
+        let key = |value: &serde_json::Value| {
+            (
+                value["workspaceName"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+                value["relativePath"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+                value["workspaceName"].as_str().unwrap_or("").to_string(),
+                value["relativePath"].as_str().unwrap_or("").to_string(),
+            )
+        };
+        key(left).cmp(&key(right))
+    });
+    results.truncate(max);
+
+    Ok(serde_json::json!({
+        "pattern": pattern,
+        "workspacePattern": workspace_pattern,
+        "caseSensitive": case_sensitive,
+        "results": results,
+    }))
 }
 
 pub(crate) fn mcp_workspace_search_from(workspaces: &[Workspace], arguments: serde_json::Value) -> AppResult<serde_json::Value> {
@@ -633,6 +861,7 @@ pub(crate) fn mcp_document_cli_from(
 pub(crate) fn mcp_search_hvy_document_from(
     workspaces: &[Workspace],
     arguments: serde_json::Value,
+    ai_settings_path: Option<&Path>,
 ) -> AppResult<serde_json::Value> {
     let path = arguments
         .get("path")
@@ -658,7 +887,110 @@ pub(crate) fn mcp_search_hvy_document_from(
     if let Some(cursor) = arguments.get("cursor") {
         request["cursor"] = cursor.clone();
     }
+    if arguments
+        .get("semantic")
+        .and_then(|semantic| semantic.as_bool())
+        == Some(true)
+    {
+        let settings_path = ai_settings_path.ok_or_else(|| {
+            AppError::Message(
+                "Galaxy AI settings are unavailable for semantic document search.".into(),
+            )
+        })?;
+        let settings = mcp_embedding_settings(settings_path)?;
+        request["semantic"] = serde_json::json!(true);
+        request["embeddingProvider"] = serde_json::json!(settings.0);
+        request["embeddingModel"] = serde_json::json!(settings.1.model);
+        request["embeddingDimensions"] = serde_json::json!(settings.1.dimensions);
+        request["embeddingBatchSize"] = serde_json::json!(settings.1.batch_size);
+    }
     mcp_run_agent_tool("searchHvyFile", request)
+}
+
+pub(crate) fn mcp_walk_hvy_document_from(
+    workspaces: &[Workspace],
+    arguments: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    let path = arguments
+        .get("path")
+        .and_then(|path| path.as_str())
+        .ok_or_else(|| AppError::Message("walk_hvy_document requires a document path.".into()))?;
+    let document_path = PathBuf::from(path);
+    mcp_visible_document_file(workspaces, &document_path, "walk_hvy_document")?;
+    let mut request = serde_json::json!({ "filePath": path });
+    if let Some(limit) = arguments.get("limit") {
+        request["limit"] = limit.clone();
+    }
+    if let Some(cursor) = arguments.get("cursor") {
+        request["cursor"] = cursor.clone();
+    }
+    mcp_run_agent_tool("walkHvyFile", request)
+}
+
+pub(crate) fn mcp_build_hvy_embeddings_from(
+    workspaces: &[Workspace],
+    arguments: serde_json::Value,
+    ai_settings_path: Option<&Path>,
+) -> AppResult<serde_json::Value> {
+    let path = arguments
+        .get("path")
+        .and_then(|path| path.as_str())
+        .ok_or_else(|| {
+            AppError::Message("build_hvy_embeddings requires a document path.".into())
+        })?;
+    let document_path = PathBuf::from(path);
+    let (workspace, document_file) =
+        mcp_visible_document_file(workspaces, &document_path, "build_hvy_embeddings")?;
+    if !document_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("hvy"))
+    {
+        return Err(AppError::Message(
+            "build_hvy_embeddings supports .hvy documents.".into(),
+        ));
+    }
+    if file_locked(&document_file) || file_archived(&document_file) {
+        return Err(AppError::Message(
+            "build_hvy_embeddings cannot update locked or archived files.".into(),
+        ));
+    }
+    let settings_path = ai_settings_path.ok_or_else(|| {
+        AppError::Message("Galaxy AI settings are unavailable to build embeddings.".into())
+    })?;
+    let (provider, embeddings) = mcp_embedding_settings(settings_path)?;
+    let result = mcp_run_agent_tool(
+        "buildHvyEmbeddingsOnFile",
+        serde_json::json!({
+            "filePath": path,
+            "embeddingProvider": provider,
+            "embeddingModel": embeddings.model,
+            "embeddingDimensions": embeddings.dimensions,
+            "embeddingBatchSize": embeddings.batch_size,
+        }),
+    )?;
+    touch_workspace_manifest(Path::new(&workspace.path))?;
+    Ok(result)
+}
+
+fn mcp_embedding_settings(
+    ai_settings_path: &Path,
+) -> AppResult<(AiProviderConfig, AiEmbeddingSettings)> {
+    let settings = read_ai_settings(ai_settings_path)?;
+    if !settings.embeddings.enabled {
+        return Err(AppError::Message(
+            "Enable embeddings and choose an embedding provider before building or searching document embeddings.".into(),
+        ));
+    }
+    let provider = settings
+        .providers
+        .iter()
+        .find(|provider| provider.provider == settings.embeddings.provider_id)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::Message("The configured embedding provider was not found.".into())
+        })?;
+    Ok((provider, settings.embeddings))
 }
 
 pub(crate) fn mcp_apply_hvy_patch_from(
@@ -957,11 +1289,13 @@ fn mcp_cli_runner_error(output: &std::process::Output) -> String {
 
 #[derive(Clone)]
 struct FlatWorkspaceFile {
+    name: String,
     path: String,
     relative_path: String,
     extension: String,
     archived: bool,
     locked: bool,
+    encrypted: bool,
     hidden_from_ai: bool,
 }
 
@@ -975,19 +1309,23 @@ fn append_workspace_file_nodes(nodes: &[WorkspaceTreeNode], files: &mut Vec<Flat
     for node in nodes {
         match node {
             WorkspaceTreeNode::File {
+                name,
                 path,
                 relative_path,
                 extension,
                 archived,
                 locked,
+                encrypted,
                 hidden_from_ai,
                 ..
             } => files.push(FlatWorkspaceFile {
+                name: name.clone(),
                 path: path.clone(),
                 relative_path: relative_path.clone(),
                 extension: extension.clone(),
                 archived: *archived,
                 locked: *locked,
+                encrypted: *encrypted,
                 hidden_from_ai: *hidden_from_ai,
             }),
             WorkspaceTreeNode::Folder { children, .. } => append_workspace_file_nodes(children, files),
@@ -1004,7 +1342,7 @@ fn known_workspaces(app: &AppHandle) -> AppResult<Vec<Workspace>> {
         .clone();
     let mut workspaces = Vec::new();
     for path in paths {
-        if let Ok(workspace) = load_workspace_from_path(Path::new(&path)) {
+        if let Ok(workspace) = load_workspace_from_path_with_options(Path::new(&path), true) {
             workspaces.push(workspace);
         }
     }

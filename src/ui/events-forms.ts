@@ -53,9 +53,7 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
     if (form.dataset.form === 'new-document') {
       const data = new FormData(form);
       handlers.createDocumentInWorkspace(
-        String(data.get('documentName') ?? ''),
-        String(data.get('templateId') ?? ''),
-        String(data.get('targetDirectory') ?? '')
+        String(data.get('templateId') ?? '')
       );
     }
     if (form.dataset.form === 'new-folder') {
@@ -214,16 +212,23 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
       if (String(data.get('scope') ?? 'workspace') === 'anywhere') {
         handlers.saveAsAnywhere();
       } else {
+        const destination = form.querySelector<HTMLInputElement>('input[name="workspaceDestination"]:checked');
         handlers.saveAsToWorkspace(
-          String(data.get('workspacePath') ?? ''),
+          destination?.dataset.workspacePath ?? '',
           String(data.get('fileName') ?? ''),
-          String(data.get('targetDirectory') ?? '')
+          destination?.dataset.targetDirectory ?? ''
         );
       }
     }
   }, { signal });
   root.addEventListener('input', (event) => {
     const target = event.target;
+    if (target instanceof HTMLInputElement && target.name === 'fileName') {
+      const form = target.closest<HTMLFormElement>('form[data-form="save-as-document"]');
+      const submit = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (submit) submit.disabled = target.value.trim().length === 0 || state.busy;
+      return;
+    }
     if (!(target instanceof HTMLTextAreaElement)) return;
     if (target.dataset.field === 'workspace-chat-draft') {
       handlers.updateWorkspaceChatDraft(target.value);

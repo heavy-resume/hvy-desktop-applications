@@ -1,3 +1,4 @@
+import { workspaceTemplateForExample } from './templateExamples';
 import { findFileInWorkspaces, workspacePathForFileInWorkspaces, type AppState } from './state';
 
 export interface FileActionAvailability {
@@ -56,7 +57,10 @@ export function isWorkspaceTemplatePath(state: AppState, path: string): boolean 
   const normalizedPath = path.replace(/\\/g, '/');
   return state.workspaces.some((workspace) => {
     const workspacePath = workspace.path.replace(/\\/g, '/').replace(/\/+$/, '');
-    return normalizedPath.startsWith(`${workspacePath}/templates/`);
+    if (!normalizedPath.startsWith(`${workspacePath}/templates/`)) return false;
+    const relativePath = normalizedPath.slice(workspacePath.length + 1);
+    const template = workspaceTemplateForExample(workspace, relativePath);
+    return /\.(thvy|phvy)$/i.test(relativePath) && (!template || template.relativePath === relativePath);
   });
 }
 

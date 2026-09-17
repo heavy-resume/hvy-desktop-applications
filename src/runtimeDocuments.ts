@@ -1,3 +1,4 @@
+import { documentFileChanges } from './documentFileChanges';
 import type { DocumentExtension, DocumentFileMetadata } from './backend';
 
 export interface RuntimeDocument {
@@ -37,6 +38,7 @@ export function runtimeDocumentAtPath(path: string): RuntimeDocument | null {
 
 export function updateRuntimeDocumentFile(document: RuntimeDocument, file: DocumentFileMetadata): void {
   if (document.path) documentIdsByPath.delete(document.path);
+  documentFileChanges.relocate(document.path, file.path);
   document.path = file.path;
   document.name = file.name;
   document.extension = file.extension;

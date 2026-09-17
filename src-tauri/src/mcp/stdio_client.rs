@@ -71,7 +71,7 @@ fn handle_mcp_stdio_message<W: Write>(
         .get("params")
         .and_then(|params| params.get("name"))
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|name| name == "webmcp_list_tools" || name == "webmcp_call_tool");
+        .is_some_and(|name| matches!(name, "webmcp_list_tools" | "webmcp_call_tool" | "integration_list_records" | "integration_fetch_records"));
     let response = if is_webmcp_call {
         let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
@@ -230,6 +230,16 @@ fn mcp_archived_workspaces_path_from_config(config_path: &Path) -> PathBuf {
     directory.join(ARCHIVED_WORKSPACES)
 }
 
+fn mcp_ai_settings_path_from_config(config_path: &Path) -> PathBuf {
+    let directory = config_path.parent().unwrap_or_else(|| Path::new("."));
+    if directory.file_name().and_then(|name| name.to_str()) == Some("mcp") {
+        if let Some(app_data_directory) = directory.parent() {
+            return app_data_directory.join(AI_SETTINGS);
+        }
+    }
+    directory.join(AI_SETTINGS)
+}
+
 fn discover_workspace_paths(root: &Path) -> AppResult<Vec<PathBuf>> {
     if workspace_manifest_path(root).is_some() {
         return Ok(vec![root.to_path_buf()]);
@@ -251,7 +261,7 @@ fn discover_workspace_paths(root: &Path) -> AppResult<Vec<PathBuf>> {
 pub(crate) fn load_mcp_stdio_workspaces(paths: &[PathBuf]) -> AppResult<Vec<Workspace>> {
     let mut workspaces = Vec::new();
     for path in paths {
-        if let Ok(workspace) = load_workspace_from_path(path) {
+        if let Ok(workspace) = load_workspace_from_path_with_options(path, true) {
             workspaces.push(workspace);
         }
     }

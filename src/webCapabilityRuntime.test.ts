@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IntegrationProfileDefinition } from './integrationRegistry';
 import type { WebRecordsCapabilityConfig } from './webCapabilities';
 
-const { controlIntegrationBrowser, openIntegrationPage } = vi.hoisted(() => ({
+const { controlIntegrationBrowser, openIntegrationPage, isIntegrationBrowserOpen } = vi.hoisted(() => ({
+  isIntegrationBrowserOpen: vi.fn(async () => false),
   controlIntegrationBrowser: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
   openIntegrationPage: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
 }));
 
-vi.mock('./integrationBrowser', () => ({ controlIntegrationBrowser, openIntegrationPage }));
+vi.mock('./integrationBrowser', () => ({ controlIntegrationBrowser, openIntegrationPage, isIntegrationBrowserOpen }));
 vi.mock('./webCapabilities', async (importOriginal) => ({
   ...await importOriginal<typeof import('./webCapabilities')>(),
   isWebCapabilityAuthorized: () => true,
@@ -57,7 +58,8 @@ function executionContext(foreground: boolean) {
 afterEach(() => {
   vi.useRealTimers();
   openIntegrationPage.mockClear();
-  controlIntegrationBrowser.mockClear();
+  controlIntegrationBrowser.mockReset();
+  isIntegrationBrowserOpen.mockReset().mockResolvedValue(false);
 });
 
 describe('web capability operation timeouts', () => {
@@ -163,4 +165,32 @@ it('delivers a watched record change after the command itself completes', async 
     recordChange,
   })).toBe(true);
   expect(onRecordChange).toHaveBeenCalledWith(recordChange);
+});
+
+
+describe('live integration page reuse', () => {
+  it.each([true, false])('checks the running page before fetching (ready=%s)', async (ready) => {
+    isIntegrationBrowserOpen.mockResolvedValue(true);
+    controlIntegrationBrowser.mockImplementation(async (command, _profileId, payload) => {
+      const data = payload as { context: { webCapabilityRequestId: string } };
+      if (command === 'check-page-ready') {
+        handleWebCapabilityIntegrationResult({ kind: 'integration-page-readiness', context: data.context, ready });
+      } else if (command === 'extract-pattern') {
+        handleWebCapabilityIntegrationResult({ kind: 'integration-extraction', context: data.context, records: [{ value: 'current page' }] });
+      }
+    });
+    const operation = executeWebRecordsCapability(config, executionContext(false));
+    if (ready) {
+      await expect(operation).resolves.toEqual({ records: [{ value: 'current page' }] });
+      expect(openIntegrationPage).not.toHaveBeenCalled();
+      expect(controlIntegrationBrowser).toHaveBeenCalledWith('extract-pattern', profile.id, expect.objectContaining({ foreground: false }));
+    } else {
+      await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+      const extraction = openIntegrationPage.mock.calls[0][5] as { context: { webCapabilityRequestId: string } };
+      handleWebCapabilityIntegrationResult({ kind: 'integration-extraction', context: extraction.context, records: [] });
+      await expect(operation).resolves.toEqual({ records: [] });
+      expect(controlIntegrationBrowser).not.toHaveBeenCalledWith('extract-pattern', expect.anything(), expect.anything());
+    }
+    expect(controlIntegrationBrowser.mock.calls[0]).toEqual(['check-page-ready', profile.id, expect.objectContaining({ readyChecks: config.page.readyChecks })]);
+  });
 });

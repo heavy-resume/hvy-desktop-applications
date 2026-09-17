@@ -36,6 +36,124 @@ export interface HvyPalette {
 export const COLOR_THEME_STORAGE_KEY = 'hvy-galaxy-color-theme-v1';
 export const COLOR_THEME_FILE_EXTENSION = '.hvytheme';
 
+export const DEFAULT_HVY_COLORS: Readonly<Record<string, string>> = {
+  '--hvy-bg': '#f5f9ff',
+  '--hvy-bg-alt': '#eef3fa',
+  '--hvy-surface': '#ffffff',
+  '--hvy-surface-alt': '#f9fcff',
+  '--hvy-surface-tint': '#d9eaf4',
+  '--hvy-text': '#1a2530',
+  '--hvy-text-alt': '#4b5c67',
+  '--hvy-text-muted': '#6b8fa0',
+  '--hvy-link-color': '#162f3d',
+  '--hvy-link-hover-color': '#2c5e78',
+  '--hvy-accent-1': '#2c5e78',
+  '--hvy-accent-1-alt': '#1f4f63',
+  '--hvy-accent-1-text': '#fcfcfc',
+  '--hvy-accent-2': '#325f6e',
+  '--hvy-accent-2-alt': '#244355',
+  '--hvy-button-bg': '#4a8fab',
+  '--hvy-button-hover-bg': 'rgba(74, 143, 171, 0.22)',
+  '--hvy-button-text': '#ffffff',
+  '--hvy-button-hover-text': '#2c5e78',
+  '--hvy-highlight-1': 'rgba(31, 122, 140, 0.15)',
+  '--hvy-highlight-2': 'rgba(255, 214, 102, 0.35)',
+  '--hvy-ai-view-hint-bg': '#fff4c7',
+  '--hvy-border': '#ced9e2',
+  '--hvy-border-alt': '#b8c8d3',
+  '--hvy-border-input': '#c8d4dd',
+  '--hvy-border-translucent': 'rgba(206, 217, 226, 0.92)',
+  '--hvy-ghost-border': 'rgba(107, 143, 160, 0.38)',
+  '--hvy-xref-card-bg': '#f3f5f8',
+  '--hvy-xref-card-hover-bg': '#eef8fb',
+  '--hvy-table-header': '#e5e7eb',
+  '--hvy-table-row-bg-1': '#ffffff',
+  '--hvy-table-row-bg-2': '#f9fafb',
+  '--hvy-icon-muted': 'rgba(26, 37, 48, 0.33)',
+  '--hvy-focus': '#8cb0c4',
+  '--hvy-focus-ring': 'rgba(157, 182, 199, 0.9)',
+  '--hvy-focus-glow': 'rgba(135, 167, 188, 0.35)',
+  '--hvy-shadow': 'rgba(39, 70, 91, 0.08)',
+  '--hvy-shadow-md': 'rgba(39, 70, 91, 0.12)',
+  '--hvy-shadow-lg': 'rgba(39, 70, 91, 0.14)',
+  '--hvy-overlay': 'rgba(15, 23, 32, 0.4)',
+  '--hvy-danger': '#c86464',
+  '--hvy-warning': '#c79200',
+  '--hvy-warning-bg': '#fff3de',
+  '--hvy-warning-border': '#ebca8d',
+  '--hvy-warning-text': '#e2b100',
+  '--hvy-success': '#1c6231',
+  '--hvy-success-bg': '#e7f9ee',
+  '--hvy-success-border': '#95d8a9',
+  '--hvy-code-bg': '#f6f8fa',
+  '--hvy-code-text': '#1f2328',
+  '--hvy-code-muted': '#5f6b76',
+  '--hvy-code-string': '#1f4f63',
+  '--hvy-code-builtin': '#b8621b',
+  '--hvy-code-keyword': '#a23a48',
+  '--hvy-code-function': '#6f42c1',
+  '--hvy-code-number': '#325f6e',
+};
+
+export const DEFAULT_DARK_HVY_COLORS: Readonly<Record<string, string>> = {
+  '--hvy-bg': '#0f1720',
+  '--hvy-bg-alt': '#161b22',
+  '--hvy-surface': '#17222d',
+  '--hvy-surface-alt': '#1c2733',
+  '--hvy-surface-tint': '#1f3448',
+  '--hvy-text': '#e7eef5',
+  '--hvy-text-alt': '#a3adbf',
+  '--hvy-text-muted': '#6b8fa0',
+  '--hvy-link-color': '#7bc0e8',
+  '--hvy-link-hover-color': '#a8dcf4',
+  '--hvy-accent-1': '#7db3d0',
+  '--hvy-accent-1-alt': '#5a8da8',
+  '--hvy-accent-1-text': '#fcfcfc',
+  '--hvy-accent-2': '#6fb3c1',
+  '--hvy-accent-2-alt': '#2d5d68',
+  '--hvy-button-bg': '#2d6a8a',
+  '--hvy-button-hover-bg': 'rgba(123, 192, 232, 0.14)',
+  '--hvy-button-text': '#ffffff',
+  '--hvy-button-hover-text': '#a8dcf4',
+  '--hvy-highlight-1': 'rgba(125, 179, 208, 0.20)',
+  '--hvy-highlight-2': 'rgba(255, 214, 102, 0.25)',
+  '--hvy-ai-view-hint-bg': '#332a12',
+  '--hvy-border': '#4f6075',
+  '--hvy-border-alt': '#5f7287',
+  '--hvy-border-input': '#556a82',
+  '--hvy-border-translucent': 'rgba(74, 90, 110, 0.92)',
+  '--hvy-ghost-border': 'rgba(231, 238, 245, 0.28)',
+  '--hvy-xref-card-bg': 'rgba(255, 255, 255, 0.04)',
+  '--hvy-xref-card-hover-bg': 'rgba(255, 255, 255, 0.08)',
+  '--hvy-table-header': '#1f2a37',
+  '--hvy-table-row-bg-1': '#17222d',
+  '--hvy-table-row-bg-2': '#1b2632',
+  '--hvy-icon-muted': 'rgba(231, 238, 245, 0.33)',
+  '--hvy-focus': '#5a8da8',
+  '--hvy-focus-ring': 'rgba(90, 141, 168, 0.9)',
+  '--hvy-focus-glow': 'rgba(90, 141, 168, 0.35)',
+  '--hvy-shadow': 'rgba(0, 0, 0, 0.20)',
+  '--hvy-shadow-md': 'rgba(0, 0, 0, 0.30)',
+  '--hvy-shadow-lg': 'rgba(0, 0, 0, 0.40)',
+  '--hvy-overlay': 'rgba(0, 0, 0, 0.60)',
+  '--hvy-danger': '#c05050',
+  '--hvy-warning': '#d4a017',
+  '--hvy-warning-bg': '#2a2310',
+  '--hvy-warning-border': '#6b5200',
+  '--hvy-warning-text': '#c79200',
+  '--hvy-success': '#4cae68',
+  '--hvy-success-bg': '#152b1e',
+  '--hvy-success-border': '#2e7a46',
+  '--hvy-code-bg': '#161b22',
+  '--hvy-code-text': '#c9d1d9',
+  '--hvy-code-muted': '#8b949e',
+  '--hvy-code-string': '#8ecae6',
+  '--hvy-code-builtin': '#ffb86b',
+  '--hvy-code-keyword': '#ff7b72',
+  '--hvy-code-function': '#d2a8ff',
+  '--hvy-code-number': '#79c0ff',
+};
+
 export const THEME_COLOR_NAMES: readonly string[] = [
   '--hvy-bg',
   '--hvy-bg-alt',
@@ -169,6 +287,12 @@ const THEME_COLOR_LABELS: Record<string, string> = {
 
 export const HVY_PALETTES: readonly HvyPalette[] = [
   {
+    id: 'default-dark',
+    name: 'Default (Dark)',
+    description: 'The built-in HVY dark colors.',
+    colors: { ...DEFAULT_DARK_HVY_COLORS },
+  },
+  {
     id: 'black-widow',
     name: 'Black Widow',
     description: 'High contrast black, crimson, and signal green.',
@@ -287,12 +411,29 @@ export function applyColorTheme(settings: ColorThemeSettings, root: HTMLElement 
   const targets = [document.documentElement, root].filter((target): target is HTMLElement => target !== null);
   for (const target of targets) {
     clearColorTheme(target);
-    for (const [name, value] of Object.entries(sanitizeThemeColors(settings.colors))) {
+    for (const [name, value] of Object.entries(effectiveColorThemeColors(settings.colors))) {
       if (isCssVariableName(name) && value.trim()) {
         target.style.setProperty(name, value);
       }
     }
   }
+}
+
+export function effectiveColorThemeColors(colors: Record<string, string>): Record<string, string> {
+  return { ...DEFAULT_HVY_COLORS, ...sanitizeThemeColors(colors) };
+}
+
+export function nativeWindowTheme(colors: Record<string, string>): 'light' | 'dark' {
+  const background = effectiveColorThemeColors(colors)['--hvy-bg'];
+  const hex = background.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+  const rgb = hex
+    ? (hex.length === 3
+      ? hex.split('').map((part) => Number.parseInt(`${part}${part}`, 16))
+      : [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6)].map((part) => Number.parseInt(part, 16)))
+    : background.match(/^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i)?.slice(1).map(Number);
+  if (!rgb) return 'light';
+  const [red, green, blue] = rgb.map((channel) => channel / 255);
+  return (0.2126 * red + 0.7152 * green + 0.0722 * blue) < 0.5 ? 'dark' : 'light';
 }
 
 export function clearColorTheme(target: HTMLElement): void {

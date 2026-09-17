@@ -192,6 +192,8 @@ fn webmcp_tool_call(connection_path: &Path, params: &serde_json::Value, integrat
     let name = params.get("name").and_then(serde_json::Value::as_str)?;
     let arguments = params.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({}));
     match name {
+        "integration_list_records" => Some(call_webmcp_broker(connection_path, "list-records", serde_json::json!({}), integration_access).map(mcp_tool_result)),
+        "integration_fetch_records" => Some(call_webmcp_broker(connection_path, "fetch-records", arguments, integration_access).map(mcp_tool_result)),
         "webmcp_list_tools" => Some(call_webmcp_broker(connection_path, "list", serde_json::json!({}), integration_access).map(mcp_tool_result)),
         "webmcp_call_tool" => Some(call_webmcp_broker(connection_path, "call", arguments, integration_access).map(webmcp_mcp_result)),
         _ => None,
@@ -217,4 +219,24 @@ pub(crate) fn webmcp_mcp_result(result: serde_json::Value) -> serde_json::Value 
         response["structuredContent"] = if value.is_object() { value } else { serde_json::json!({ "result": value }) };
     }
     response
+}
+
+#[cfg(test)]
+mod integration_record_tests {
+    use super::*;
+
+    #[test]
+    fn integration_record_tools_route_through_the_running_app_broker() {
+        for name in ["integration_list_records", "integration_fetch_records"] {
+            let params = serde_json::json!({ "name": name, "arguments": {
+                "integrationId": "integration", "actionId": "records", "profileId": "profile"
+            }});
+            let path = Path::new("/path/that/does/not/exist/webmcp-broker.json");
+            let disabled = webmcp_tool_call(path, &params, "off").unwrap().unwrap_err().to_string();
+            assert!(disabled.contains("Integration access is off"));
+            let unavailable = webmcp_tool_call(path, &params, "read").unwrap().unwrap_err().to_string();
+            assert!(unavailable.contains("Galaxy is not running"));
+        }
+    }
+
 }

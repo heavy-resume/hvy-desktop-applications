@@ -1,3 +1,4 @@
+import { fetchIntegrationRecords } from './integrationRecords';
 import { installAiChatClient } from './aiClient';
 import { beginDocumentKeyMigration, commitDocumentKeyMigration, finalizeDocumentKeyMigration, installMcpClient, installPluginPackage, loadWorkspace as loadWorkspaceBackend, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, rollbackDocumentKeyMigration, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget, type Workspace } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
@@ -1780,13 +1781,16 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (!pattern || !profile) throw new Error('The saved action is incomplete.');
     const domProfile = profile;
     void (async () => {
-      const extraction = { pattern: { ...pattern, scrollPage: action.scrollPage !== false }, context: { mode: 'saved-action', actionId: action.id, actionName: action.name, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) } };
       try {
-        if (page.id === 'gmail' || page.id === 'google-calendar') {
-          await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name);
-        } else {
-          await openIntegrationPage(page.url, page.allowedOrigins, domProfile.id, domProfile.browserStoreId, false, extraction, false, domProfile.name, integration.id, page.id);
-        }
+        const result = await fetchIntegrationRecords(integration.id, page, action, domProfile);
+        state.integrationActionFetchPendingId = null;
+        state.integrationActionResultName = action.name;
+        state.integrationActionResultRecords = result.records;
+        state.integrationActionResultActionId = action.id;
+        state.integrationActionResultOpen = true;
+        state.status = `Extracted ${result.records.length} matching items`;
+        rerender({ preserveMountedDocument: true });
+        await controlIntegrationBrowser('focus-main', domProfile.id);
       } catch (error) {
         state.integrationActionFetchPendingId = null;
         state.integrationActionFetchError = error instanceof Error ? error.message : String(error);
@@ -2464,7 +2468,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (editingDocumentColorTheme()) {
       const current = currentDocumentColorTheme();
       if (id === 'default') {
-        updateDocumentColorTheme({ ...current, colors: {}, name: 'Default' });
+        updateDocumentColorTheme({ ...current, colors: {}, name: 'Default (Light)' });
         rerender({ preserveMountedDocument: true });
         return;
       }
@@ -2487,7 +2491,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.colorTheme = {
         ...state.colorTheme,
         colors: {},
-        themeName: 'Default',
+        themeName: 'Default (Light)',
         themeUses: { ...state.colorTheme.themeUses, default: now },
       };
     } else if (id.startsWith('palette:')) {

@@ -38,8 +38,3 @@ declare module 'virtual:hvy-brython-plugin-vfs' {
 
 declare module 'pdfmake/build/pdfmake.js';
 declare module 'pdfmake/build/vfs_fonts.js';
-
-interface Window {
-  HVY?: any;
-  HVY_CHAT_CLIENT?: any;
-}

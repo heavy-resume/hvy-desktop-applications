@@ -272,7 +272,7 @@
 .workspace-root.is-drag-over {
   border-radius: 6px;
   outline: 2px solid var(--hvy-accent-1, #477d7c);
-  outline-offset: 3px;
+  outline-offset: -2px;
 }
 
 .tree summary.is-drag-over,
@@ -806,4 +806,16 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 0.82rem;
   overflow-wrap: anywhere;
+}
+
+.tree-template-with-examples {
+  border: 1px solid var(--hvy-border, #c5cec8);
+  background: var(--hvy-surface-tint, var(--hvy-surface, #ffffff));
+  font-weight: 700;
+}
+
+.tree-template-examples {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 1px solid var(--hvy-border, #c5cec8);
 }

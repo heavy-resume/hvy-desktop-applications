@@ -13,18 +13,12 @@
 
 .document-tabs {
   display: flex;
+  align-items: flex-end;
   min-width: 0;
   overflow-x: auto;
   border-bottom: 1px solid var(--hvy-border-translucent, var(--hvy-border, #c2cbc6));
   background: var(--hvy-surface-alt, #e8ece7);
   padding: 6px 8px 0;
-}
-
-.document-tabs.is-empty {
-  height: 0;
-  overflow: hidden;
-  border: 0;
-  padding: 0;
 }
 
 .document-tab {
@@ -40,6 +34,19 @@
   background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 90%, transparent);
   color: var(--hvy-text, #5f6a66);
   padding: 0 5px 0 0;
+}
+
+.document-tab-new {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 34px;
+  margin: 0 6px 0 2px;
+  border: 1px solid color-mix(in srgb, var(--hvy-border-translucent, var(--hvy-border, #c2cbc6)) 58%, transparent);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--hvy-surface-alt, #e8ece7) 90%, transparent);
+  color: var(--hvy-text, #5f6a66);
+  padding: 0 0 2px;
 }
 
 .document-tab.is-active {
@@ -316,9 +323,9 @@
 }
 
 .mode-button.is-active {
-  border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1, #477d7c));
-  background: var(--hvy-button-bg, #ffffff);
-  color: var(--hvy-accent-1-text, #ffffff);
+  border-color: var(--hvy-accent-1-alt, var(--hvy-accent-1));
+  background: var(--hvy-button-bg);
+  color: var(--hvy-accent-1-text);
   font-weight: 650;
 }
 
@@ -436,4 +443,3 @@
 .document-host .editor-sidebar-tab {
   color: var(--hvy-accent-1-text, #ffffff);
 }
-

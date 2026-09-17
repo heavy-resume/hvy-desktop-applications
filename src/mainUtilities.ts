@@ -312,7 +312,7 @@ export function currentThemeDisplayName(): string | null {
   if (paletteId) {
     return getPaletteById(paletteId)?.name ?? null;
   }
-  return Object.keys(state.colorTheme.colors).length === 0 ? 'Default' : null;
+  return Object.keys(state.colorTheme.colors).length === 0 ? 'Default (Light)' : null;
 }
 
 export function themeSuggestedFileName(name: string): string {

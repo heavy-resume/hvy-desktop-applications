@@ -6,7 +6,8 @@ import { escapeAttr, escapeHtml } from './shared';
 
 export function renderDocumentTabs(state: AppState): string {
   return `
-    <nav class="document-tabs${state.documentTabs.length === 0 ? ' is-empty' : ''}" aria-label="Open documents">
+    <nav class="document-tabs" aria-label="Open documents">
+      <button type="button" class="hvy-galaxy-button icon-button document-tab-new" data-action="create-file" title="New HVY document" aria-label="New HVY document">+</button>
       ${state.documentTabs.map((tab) => `
         <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}">
           <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">

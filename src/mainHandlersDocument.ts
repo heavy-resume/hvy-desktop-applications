@@ -1,3 +1,4 @@
+import { reloadExternalFileChange, dismissExternalFileChange } from './mainDocumentFileMonitor';
 import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
@@ -242,6 +243,8 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  reloadExternalFileChange: () => void reloadExternalFileChange(),
+  dismissExternalFileChange,
   confirmSaveConflict: () => void confirmSaveConflict().then(() => resumeWorkspaceFileOperationAfterSave()),
   cancelSaveConflict: () => {
     cancelSaveConflict();

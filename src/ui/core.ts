@@ -1,4 +1,3 @@
-import ufoLogoUrl from '../assets/ufo-no-bg.svg';
 import { type AppState } from '../state';
 import { bindClickEvents } from './events-click';
 import { bindControlEvents } from './events-controls';
@@ -7,7 +6,7 @@ import { applyWorkspaceSidebarWidth, bindEscapeEvents, bindWorkspaceSidebarResiz
 import { bindWorkspaceEvents } from './events-workspace';
 import { renderAiSettingsDialog, renderAiSettingsDiscardDialog, renderMcpSettingsDialog, renderMcpSettingsDiscardDialog, syncAiRangeFields } from './render-ai-mcp';
 import { renderAppSettingsDialog, renderAppSettingsDiscardDialog, renderDebugLogDialog, renderHomepageErrorDialog, renderHomepagePickerDialog, renderScriptingReviewDialog } from './render-app-settings';
-import { renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
+import { renderExternalFileChangeDialog, renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
 import { renderAboutDialog, renderExportedPdfDialog, renderExportPdfSavePrompt, renderImportDialog, renderImportProgressDialog, renderNewDocumentDialog, updateImportSubmit } from './render-import';
 import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageDeleteDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
@@ -70,16 +69,6 @@ export function renderLeftPanel(state: AppState): void {
   const expandedIntegrationPages = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-quick-view-launcher[open]')).map((details) => details.dataset.quickViewId ?? ''));
   const expandedIntegrationFilters = new Set(Array.from(leftPanel.querySelectorAll<HTMLDetailsElement>('.integration-profile-filter[open]')).map((details) => details.dataset.quickViewId ?? ''));
   leftPanel.innerHTML = `
-    <div class="sidebar-header">
-      <div class="brand-lockup">
-        <img class="brand-logo" src="${ufoLogoUrl}" alt="" aria-hidden="true" />
-        <h1>HVY Galaxy</h1>
-      </div>
-      <button type="button" class="hvy-galaxy-button icon-button" data-action="create-file" title="New HVY document">+</button>
-    </div>
-    <div class="sidebar-actions">
-      <button class="hvy-galaxy-button" type="button" data-action="open-file">Open File</button>
-    </div>
     ${state.versionHistorySidebarOpen ? renderVersionHistorySidebar(state) : `
     <section class="integrations-section${state.integrationsSectionExpanded ? '' : ' is-collapsed'}">
       <div class="sidebar-section-heading">
@@ -317,6 +306,7 @@ export function renderModals(state: AppState): void {
       ${renderDocumentKeyDeleteDialog(state)}
       ${renderDocumentEncryptionDialog(state)}
     ${renderRecoveryDialog(state)}
+    ${renderExternalFileChangeDialog(state)}
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
     ${renderCloseDocumentDraftDialog(state)}

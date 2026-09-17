@@ -30,9 +30,10 @@ export interface UiHandlers {
   openNewFolder(workspacePath: string, parentDirectory?: string, encrypted?: boolean): void;
   createWorkspaceFolder(workspacePath: string, parentDirectory: string, name: string, encrypted: boolean): void;
   cancelNewFolder(): void;
+  newTemplateExample(workspacePath: string, templateRelativePath: string): void;
   newDocumentInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setNewDocumentType(type: DocumentCreationType): void;
-  createDocumentInWorkspace(name: string, templateId: string, targetDirectory?: string): void;
+  createDocumentInWorkspace(templateId: string): void;
   cancelNewDocument(): void;
   openImportInWorkspace(workspacePath: string, targetDirectory?: string): void;
   setImportDocumentType(type: DocumentCreationType): void;
@@ -265,6 +266,8 @@ export interface UiHandlers {
   selectSavedVersion(id: string): void;
   closeVersionHistory(): void;
   cancelCloseDocument(): void;
+  reloadExternalFileChange(): void;
+  dismissExternalFileChange(): void;
   confirmSaveConflict(): void;
   cancelSaveConflict(): void;
   saveBeforeWorkspaceFileOperation(): void;

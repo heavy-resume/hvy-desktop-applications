@@ -1,3 +1,4 @@
+import { groupTemplateExamples, type ExampleTreeNode } from '../templateExamples';
 import { type ArchivedWorkspace, type DocumentCreationType, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
 import { type AppState, type WorkspaceClipboardState } from '../state';
 import { workspaceTemplateVisibility } from '../templates';
@@ -204,7 +205,7 @@ export function renderWorkspace(
           <button type="button" class="hvy-galaxy-button ${documentsActive ? '' : 'is-active'}" data-action="set-workspace-file-view" data-workspace-path="${escapeAttr(workspace.path)}" data-view="templates" aria-pressed="${documentsActive ? 'false' : 'true'}">Templates</button>
         </div>
         ${embeddingPreview?.enabled && !embeddingPreview.loading ? `<div class="workspace-embedding-preview-note">${escapeHtml(embeddingPreview.error ?? 'Showing embeddings')}</div>` : ''}
-        <ul class="tree">${sortNodesForFilter(visibleFiles, matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, folderExpanded, filter ?? null, embeddingPreview)).join('')}</ul>
+        <ul class="tree">${sortNodesForFilter(documentsActive ? visibleFiles : groupTemplateExamples(visibleFiles), matchedDocumentIds, filter ?? null).map((node) => renderNode(node, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspace.path, folderExpanded, filter ?? null, embeddingPreview)).join('')}</ul>
       ` : ''}
     </section>`;
 }
@@ -302,7 +303,7 @@ export function filterNodesByTemplateVisibility(nodes: WorkspaceTreeNode[], visi
 }
 
 export function renderNode(
-  node: WorkspaceTreeNode,
+  node: ExampleTreeNode,
   selectedFilePath: string | null,
   matchedDocumentIds: Set<string> | null,
   workspaceClipboard: WorkspaceClipboardState | null,
@@ -386,12 +387,13 @@ export function renderNode(
     : '';
   return `
     <li>
-      <button type="button" class="hvy-galaxy-button tree-file${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" data-encrypted-folder-document="${encryptedFolderDocument ? 'true' : 'false'}" draggable="${encryptedFolderDocument ? 'false' : 'true'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
+      <button type="button" class="hvy-galaxy-button tree-file${node.examples ? ' tree-template-with-examples' : ''}${selected}${noFilterMatch ? ' is-filter-empty' : ''}${cutPending ? ' is-cut-pending' : ''}${archived ? ' is-archived' : ''}${locked ? ' is-locked' : ''}${hiddenFromAI ? ' is-hidden-from-ai' : ''}" data-action="select-file" data-path="${escapeAttr(node.path)}" data-name="${escapeAttr(node.name)}" data-relative-path="${escapeAttr(workspaceNodeRelativePath(node))}" data-archived="${archived ? 'true' : 'false'}" data-locked="${locked ? 'true' : 'false'}" data-hidden-from-ai="${hiddenFromAI ? 'true' : 'false'}" data-encrypted-folder-document="${encryptedFolderDocument ? 'true' : 'false'}" draggable="${encryptedFolderDocument ? 'false' : 'true'}" ${cutPending ? 'aria-label="' + escapeAttr(`${displayDocumentName(node.name)} cut`) + '"' : ''}>
         <span class="tree-file-name">${escapeHtml(displayDocumentName(node.name))}</span>
         ${fileStatuses ? `<span class="tree-file-statuses">${fileStatuses}</span>` : ''}
         ${extensionBadge}
       </button>
       ${embeddingFile}
+      ${node.examples ? `<ul class="tree tree-template-examples">${node.examples.map((child) => renderNode(child, selectedFilePath, matchedDocumentIds, workspaceClipboard, workspacePath, folderExpanded, activeFilter, embeddingPreview)).join('')}</ul>` : ''}
     </li>`;
 }
 

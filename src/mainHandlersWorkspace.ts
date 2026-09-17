@@ -1,8 +1,10 @@
+import { rememberExampleTemplate } from './templateExampleContent';
+import { templateExampleDirectory } from './templateExamples';
 import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openDocumentFile, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
-import { buildMountedImportPlan, getMountedDocument, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
+import { buildMountedImportPlan, getMountedDocument, deserializeHvy, serializeHvy, markMountedDocumentSaved, importTextIntoMountedDocument, serializeMountedDocumentAsync } from './hvy';
 import { documentEncryptionKeyring, generateStoredDocumentKey } from './documentKeys';
 import { encryptedFolderIdFromPhysicalName, encryptFolderManifest, findEncryptedFolder, prepareEncryptedFolderChildMutation, prepareEncryptedFolderDocumentMutation, prepareEncryptedFolderEntryAIAccessMutation, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename, prepareEncryptedFolderImportedDocumentMutation, prepareEncryptedFolderSelfAIAccessMutation, prepareEncryptedFolderSelfRename, workspaceHasLogicalName } from './encryptedFolders';
 import { findFileInWorkspace, state } from './state';
@@ -458,43 +460,52 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   newDocumentInWorkspace,
+  newTemplateExample: (workspacePath, templateRelativePath) => void runBusy('Creating example...', async () => {
+    const workspace = await loadWorkspace(workspacePath);
+    const templatePath = `${workspacePath}/${templateRelativePath}`;
+    const source = await readDocumentFile(templatePath);
+    const directory = templateExampleDirectory(templateRelativePath);
+    const extension = source.extension === '.phvy' ? '.phvy' : '.hvy';
+    let index = 1;
+    let relativePath = `${directory}/Example ${index}${extension}`;
+    const paths = new Set<string>();
+    const collect = (nodes: WorkspaceTreeNode[]): void => {
+      for (const node of nodes) node.kind === 'folder' ? collect(node.children) : paths.add(node.relativePath);
+    };
+    collect(workspace.files);
+    while (paths.has(relativePath)) relativePath = `${directory}/Example ${++index}${extension}`;
+    const example = await deserializeHvy(new Uint8Array(source.bytes), source.extension);
+    rememberExampleTemplate(example, example);
+    example.extension = extension;
+    example.meta.title = `Example ${index}`;
+    const bytes = await serializeHvy(example);
+    const file = await createDocumentFile({ workspacePath, relativePath, template: '', bytes: Array.from(bytes) });
+    upsertWorkspace(await loadWorkspace(workspacePath));
+    state.workspaceFileViews[workspacePath] = 'templates';
+    state.selectedWorkspacePath = workspacePath;
+    await openDocument(file);
+    state.status = `Created ${file.name}`;
+  }),
   setNewDocumentType: (type) => {
     state.newDocumentType = type;
     rerender({ preserveMountedDocument: true });
   },
-  createDocumentInWorkspace: (name, templateId, selectedTargetDirectory = state.newDocumentDirectory) => void runBusy('Creating document...', async () => {
+  createDocumentInWorkspace: (templateId) => void runBusy('Creating document...', async () => {
     const workspacePath = state.newDocumentWorkspacePath;
-    const targetDirectory = selectedTargetDirectory;
-    const fileName = documentFileName(name, state.newDocumentType);
     if (!workspacePath) return;
-    if (!fileName) {
-      state.status = 'Document name is required';
-      return;
-    }
-    const template = creationTemplate(workspacePath, state.newDocumentType, templateId, documentTitle(fileName));
+    const extension = state.newDocumentType === 'phvy' ? '.phvy' : state.newDocumentType === 'thvy' ? '.thvy' : '.hvy';
+    const fileName = `Untitled${extension}`;
+    const template = creationTemplate(workspacePath, state.newDocumentType, templateId, 'Untitled');
     state.newDocumentWorkspacePath = null;
     state.newDocumentDirectory = '';
-    const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
-    const encryptedFolder = findEncryptedFolder(workspace, targetDirectory);
-    const file = encryptedFolder
-      ? await createEncryptedDocumentInFolder(
-        workspacePath,
-        targetDirectory,
-        encryptedFolder,
-        fileName,
-        new TextEncoder().encode(template),
-      )
-      : await createDocumentFile({
-        workspacePath,
-        relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
-        template,
-      });
-    showWorkspaceDocumentsView(workspacePath);
-    upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { deferMount: true, ...(encryptedFolder ? { initialMode: 'editor' as const } : {}) });
-    state.status = `Created ${file.name}`;
-    await refreshRecents();
+    await openDocument({
+      path: '',
+      name: fileName,
+      extension,
+      bytes: Array.from(new TextEncoder().encode(template)),
+    }, { isNew: true, deferMount: true });
+    state.status = 'Created untitled document';
   }),
   cancelNewDocument: () => {
     state.newDocumentWorkspacePath = null;

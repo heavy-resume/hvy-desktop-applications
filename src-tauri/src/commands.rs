@@ -455,10 +455,11 @@ static DOCUMENT_KEY_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock
 const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
-    result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-ready-check-validation")
+    result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind == "integration-ready-check-validation" || kind == "integration-page-readiness")
         || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-record-watch-result")
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
-        && result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples"))
+        && (result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples")
+            || result.pointer("/context/foreground").and_then(serde_json::Value::as_bool) == Some(false)))
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-source-discovery")
             && result.pointer("/context/automatic").and_then(serde_json::Value::as_bool) == Some(true))
         || (result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind.starts_with("integration-webmcp-"))
@@ -1664,37 +1665,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         if let Some(object) = result.as_object_mut() {
                             object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
                         }
-                        let is_background_result = result
-                            .get("kind")
-                            .and_then(serde_json::Value::as_str)
-                            == Some("integration-ready-check-validation");
-                        let is_background_result = is_background_result || result
-                            .get("kind")
-                            .and_then(serde_json::Value::as_str)
-                            == Some("integration-record-watch-result");
-                        let is_background_result = is_background_result || (result
-                            .get("kind")
-                            .and_then(serde_json::Value::as_str)
-                            == Some("integration-extraction")
-                            && result
-                                .get("context")
-                                .and_then(|context| context.get("mode"))
-                                .and_then(serde_json::Value::as_str)
-                                == Some("examples"));
-                        let is_background_result = is_background_result
-                            || (result
-                                .get("kind")
-                                .and_then(serde_json::Value::as_str)
-                                == Some("integration-source-discovery")
-                                && result
-                                    .get("context")
-                                    .and_then(|context| context.get("automatic"))
-                                    .and_then(serde_json::Value::as_bool)
-                                    == Some(true));
-                        let is_background_result = is_background_result
-                            || (result.get("kind").and_then(serde_json::Value::as_str)
-                                .is_some_and(|kind| kind.starts_with("integration-webmcp-"))
-                                && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true));
+                        let is_background_result = integration_result_is_background(&result);
                         navigation_action_mode.store(false, Ordering::SeqCst);
                         if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
                             let _ = toolbar.eval("window.hvySetInspectionState?.({})");
@@ -1956,6 +1927,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
         "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
+        "check-page-ready" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "cancel-extraction" => window.eval("window.__hvyGalaxyInspector?.cancelExtraction()"),
         "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
@@ -2511,6 +2483,12 @@ fn read_document_file_metadata(app: AppHandle, path: String) -> AppResult<Docume
 }
 
 #[tauri::command]
+fn read_document_file_stamp(path: String) -> AppResult<String> {
+    let metadata = fs::metadata(path)?;
+    Ok(format!("{:?}:{:?}:{}", metadata.modified()?, metadata.created().ok(), metadata.len()))
+}
+
+#[tauri::command]
 fn read_document_file_bytes(path: String) -> AppResult<tauri::ipc::Response> {
     let path = PathBuf::from(path);
     document_extension(&path)
@@ -2854,6 +2832,7 @@ fn create_document_file(
     workspace_path: String,
     relative_path: String,
     template: String,
+    bytes: Option<Vec<u8>>,
 ) -> AppResult<DocumentFile> {
     let workspace_path = PathBuf::from(workspace_path);
     let relative = PathBuf::from(relative_path);
@@ -2867,7 +2846,7 @@ fn create_document_file(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    write_file_atomically(&path, template.as_bytes())?;
+    write_file_atomically(&path, bytes.as_deref().unwrap_or_else(|| template.as_bytes()))?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_file(&app, &path)?;
     Ok(read_document_at(&path)?)

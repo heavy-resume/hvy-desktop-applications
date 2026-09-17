@@ -1239,6 +1239,7 @@ model = "gpt-5.4"
             vec![
                 "workspace_list",
                 "workspace_tree",
+                "workspace_file_search",
                 "workspace_search",
                 "workspace_create",
                 "workspace_archive",
@@ -1247,6 +1248,8 @@ model = "gpt-5.4"
                 "hvy_guidance",
                 "document_cli_based_editor",
                 "search_hvy_document",
+                "build_hvy_embeddings",
+                "walk_hvy_document",
                 "apply_hvy_patch",
             ]
         );
@@ -1257,30 +1260,74 @@ model = "gpt-5.4"
                 && name
                     .chars()
                     .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')));
-        assert!(tools[2]
+        let file_search = tools
+            .iter()
+            .find(|tool| tool["name"] == "workspace_file_search")
+            .unwrap();
+        assert!(file_search
+            .get("description")
+            .and_then(|description| description.as_str())
+            .unwrap()
+            .contains("filename or workspace-relative path glob"));
+        assert_eq!(
+            file_search["inputSchema"]["required"],
+            serde_json::json!(["pattern"])
+        );
+        assert!(file_search["inputSchema"]["properties"].get("workspacePattern").is_some());
+        assert!(file_search["inputSchema"]["properties"].get("caseSensitive").is_some());
+        assert!(file_search["inputSchema"]["properties"].get("max").is_some());
+        let workspace_search = tools
+            .iter()
+            .find(|tool| tool["name"] == "workspace_search")
+            .unwrap();
+        assert!(workspace_search
             .get("description")
             .and_then(|description| description.as_str())
             .unwrap()
             .contains("which HVY file contains a resume"));
-        assert_eq!(
-            tools[2]["inputSchema"]["required"].as_array().unwrap()[0],
-            serde_json::json!("query")
-        );
-        assert!(tools[8]
+        let document_cli = tools
+            .iter()
+            .find(|tool| tool["name"] == "document_cli_based_editor")
+            .unwrap();
+        assert!(document_cli
             .get("description")
             .and_then(|description| description.as_str())
             .unwrap()
             .contains("existing HVY document"));
         assert_eq!(
-            tools[8]["inputSchema"]["required"].as_array().unwrap()[0],
+            document_cli["inputSchema"]["required"].as_array().unwrap()[0],
             serde_json::json!("path")
         );
+        let document_search = tools
+            .iter()
+            .find(|tool| tool["name"] == "search_hvy_document")
+            .unwrap();
         assert_eq!(
-            tools[9]["inputSchema"]["required"],
+            document_search["inputSchema"]["required"],
             serde_json::json!(["path", "query"])
         );
+        let build_embeddings = tools
+            .iter()
+            .find(|tool| tool["name"] == "build_hvy_embeddings")
+            .unwrap();
         assert_eq!(
-            tools[10]["inputSchema"]["required"],
+            build_embeddings["inputSchema"]["required"],
+            serde_json::json!(["path"])
+        );
+        let document_walk = tools
+            .iter()
+            .find(|tool| tool["name"] == "walk_hvy_document")
+            .unwrap();
+        assert_eq!(
+            document_walk["inputSchema"]["required"],
+            serde_json::json!(["path"])
+        );
+        let apply_patch = tools
+            .iter()
+            .find(|tool| tool["name"] == "apply_hvy_patch")
+            .unwrap();
+        assert_eq!(
+            apply_patch["inputSchema"]["required"],
             serde_json::json!(["path", "patch"])
         );
     }
@@ -1296,6 +1343,10 @@ model = "gpt-5.4"
         assert!(!names(&off).contains(&"webmcp_list_tools".to_string()));
         assert!(names(&read).contains(&"webmcp_list_tools".to_string()));
         assert!(names(&read).contains(&"webmcp_call_tool".to_string()));
+        assert!(!names(&off).contains(&"integration_list_records".to_string()));
+        assert!(!names(&off).contains(&"integration_fetch_records".to_string()));
+        assert!(names(&read).contains(&"integration_list_records".to_string()));
+        assert!(names(&read).contains(&"integration_fetch_records".to_string()));
         assert_eq!(names(&read), names(&actions));
     }
 
@@ -1365,6 +1416,39 @@ model = "gpt-5.4"
             .as_str()
             .unwrap()
             .contains("Ada Lovelace"));
+    }
+
+    #[test]
+    fn mcp_workspace_tree_includes_editable_workspace_templates() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("templates")).unwrap();
+        fs::write(
+            dir.path().join("templates").join("resume.thvy"),
+            "---\nhvy_version: 0.1\n---\n",
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Templates")).unwrap();
+
+        let workspaces = load_mcp_stdio_workspaces(&[dir.path().to_path_buf()]).unwrap();
+        let tree = mcp_workspace_tree_from(&workspaces, serde_json::json!({})).unwrap();
+        let files = tree["workspaces"][0]["files"].as_array().unwrap();
+        let templates = files
+            .iter()
+            .find(|node| node["name"] == "templates")
+            .unwrap();
+        assert_eq!(templates["children"][0]["name"], "resume.thvy");
+        assert_eq!(templates["children"][0]["extension"], ".thvy");
+
+        let path = templates["children"][0]["path"].as_str().unwrap();
+        let edited = mcp_document_cli_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path,
+                "command": "hvy insert 0 text /body template-content"
+            }),
+        )
+        .unwrap();
+        assert_eq!(edited["mutated"], true);
     }
 
     #[test]
@@ -1533,10 +1617,21 @@ model = "gpt-5.4"
                 "query": "AI assisted editing",
                 "limit": 2
             }),
+            None,
         )
         .unwrap();
         assert_eq!(search["query"], "AI assisted editing");
         assert_eq!(search["results"].as_array().unwrap().len(), 2);
+
+        let walk = mcp_walk_hvy_document_from(
+            &workspaces,
+            serde_json::json!({ "path": path.clone(), "limit": 1 }),
+        )
+        .unwrap();
+        assert_eq!(walk["items"].as_array().unwrap().len(), 1);
+        assert_eq!(walk["reviewedThrough"], 1);
+        assert!(walk["totalItems"].as_u64().unwrap() > 1);
+        assert!(walk["nextCursor"].as_str().unwrap().starts_with("hvy-walk:"));
 
         let patch = mcp_apply_hvy_patch_from(
             &workspaces,
@@ -1551,6 +1646,76 @@ model = "gpt-5.4"
         assert!(fs::read_to_string(document_path)
             .unwrap()
             .contains("# HVY File Format MCP Test"));
+    }
+
+    #[test]
+    fn mcp_builds_and_searches_document_embeddings_with_galaxy_ai_settings() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream).unwrap();
+                assert_eq!(request.path, "/embeddings");
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+                let input_count = payload["input"].as_array().unwrap().len();
+                let body = serde_json::json!({
+                    "data": (0..input_count)
+                        .map(|_| serde_json::json!({ "embedding": [1.0, 0.0, 0.0] }))
+                        .collect::<Vec<_>>()
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        let dir = tempdir().unwrap();
+        let document_path = dir.path().join("embedded.hvy");
+        fs::write(
+            &document_path,
+            "---\nhvy_version: 0.1\n---\n\n<!--hvy: {\"id\":\"embedding-test\"}-->\n#! Embedding Test\n\n<!--hvy:text {}-->\n Searchable content\n",
+        )
+        .unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Embeddings")).unwrap();
+        let workspaces = vec![load_workspace_from_path(dir.path()).unwrap()];
+        let ai_settings_path = dir.path().join(AI_SETTINGS);
+        let mut settings = AiSettings::default();
+        settings.embeddings.enabled = true;
+        settings.embeddings.model = "test-embedding-model".into();
+        settings.embeddings.batch_size = 256;
+        settings.providers[0].base_url = format!("http://{address}");
+        write_json_atomically(&ai_settings_path, &settings).unwrap();
+        let path = path_to_string(&document_path);
+
+        let built = mcp_build_hvy_embeddings_from(
+            &workspaces,
+            serde_json::json!({ "path": path.clone() }),
+            Some(&ai_settings_path),
+        )
+        .unwrap();
+        assert_eq!(built["model"], "test-embedding-model");
+        assert!(built["rebuiltChunks"].as_u64().unwrap() > 0);
+        assert!(String::from_utf8_lossy(&fs::read(&document_path).unwrap())
+            .contains("application/vnd.hvy.embedding-index"));
+
+        let search = mcp_search_hvy_document_from(
+            &workspaces,
+            serde_json::json!({
+                "path": path,
+                "query": "embedding test",
+                "semantic": true
+            }),
+            Some(&ai_settings_path),
+        )
+        .unwrap();
+        assert_eq!(search["mode"], "embeddings", "{search:#}");
+        assert!(!search["results"].as_array().unwrap().is_empty());
+        server.join().unwrap();
     }
 
     #[test]
@@ -1576,6 +1741,207 @@ model = "gpt-5.4"
         assert_eq!(scoped["results"].as_array().unwrap().len(), 1);
         assert_eq!(scoped["results"][0]["workspaceName"], "Second");
         assert_eq!(scoped["results"][0]["relativePath"], "two.hvy");
+    }
+
+    #[test]
+    fn mcp_workspace_file_search_matches_file_and_workspace_globs() {
+        let first = tempdir().unwrap();
+        let second = tempdir().unwrap();
+        fs::create_dir_all(first.path().join("docs").join("archive")).unwrap();
+        fs::create_dir_all(second.path().join("resumes")).unwrap();
+        fs::write(
+            first.path().join("docs").join("archive").join("Resume-A.hvy"),
+            "first",
+        )
+        .unwrap();
+        fs::write(second.path().join("resumes").join("Resume-B.hvy"), "second").unwrap();
+        fs::write(second.path().join("resumes").join("Resume-C.md"), "third").unwrap();
+        let first_workspace = initialize_workspace_with_name(first.path(), Some("Zulu Careers")).unwrap();
+        let second_workspace = initialize_workspace_with_name(second.path(), Some("Alpha Careers")).unwrap();
+        let workspaces = vec![first_workspace, second_workspace];
+
+        let basenames = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({ "pattern": "resume-?.hvy" }),
+        )
+        .unwrap();
+        assert_eq!(basenames["caseSensitive"], false);
+        assert_eq!(basenames["workspacePattern"], "*");
+        assert_eq!(basenames["results"].as_array().unwrap().len(), 2);
+        assert_eq!(basenames["results"][0]["workspaceName"], "Alpha Careers");
+        assert_eq!(basenames["results"][0]["name"], "Resume-B.hvy");
+        assert_eq!(basenames["results"][1]["workspaceName"], "Zulu Careers");
+
+        let relative_path = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({
+                "pattern": "docs/**/Resume-[A].hvy",
+                "workspacePattern": "zULU*"
+            }),
+        )
+        .unwrap();
+        assert_eq!(relative_path["results"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            relative_path["results"][0]["relativePath"],
+            "docs/archive/Resume-A.hvy"
+        );
+
+        let workspace_path_pattern = format!("{}/*", path_to_string(first.path().parent().unwrap()));
+        let workspace_path_match = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({
+                "pattern": "Resume-A.hvy",
+                "workspacePattern": workspace_path_pattern
+            }),
+        )
+        .unwrap();
+        assert_eq!(workspace_path_match["results"].as_array().unwrap().len(), 1);
+
+        let case_sensitive = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({
+                "pattern": "resume-?.hvy",
+                "caseSensitive": true
+            }),
+        )
+        .unwrap();
+        assert!(case_sensitive["results"].as_array().unwrap().is_empty());
+
+        let workspace_case_sensitive = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({
+                "pattern": "Resume-B.hvy",
+                "workspacePattern": "alpha*",
+                "caseSensitive": true
+            }),
+        )
+        .unwrap();
+        assert!(workspace_case_sensitive["results"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+
+        let limited = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({ "pattern": "Resume-*", "max": 1 }),
+        )
+        .unwrap();
+        assert_eq!(limited["results"].as_array().unwrap().len(), 1);
+        assert_eq!(limited["results"][0]["workspaceName"], "Alpha Careers");
+    }
+
+    #[test]
+    fn mcp_workspace_file_search_respects_ai_visibility_and_returns_file_status() {
+        let visible = tempdir().unwrap();
+        let hidden_workspace = tempdir().unwrap();
+        let archived_path = visible.path().join("archived.hvy");
+        let hidden_path = visible.path().join("hidden.hvy");
+        let hidden_folder_path = visible.path().join("private");
+        let encrypted_path = visible.path().join("encrypted.hvy");
+        fs::create_dir(&hidden_folder_path).unwrap();
+        fs::write(&archived_path, "archived").unwrap();
+        fs::write(&hidden_path, "hidden").unwrap();
+        fs::write(hidden_folder_path.join("folder-hidden.hvy"), "hidden").unwrap();
+        fs::write(&encrypted_path, b"---HVY-ENCRYPTED---\nenvelope").unwrap();
+        initialize_workspace_with_name(visible.path(), Some("Visible")).unwrap();
+        update_archived_document_file(visible.path(), &archived_path, true).unwrap();
+        update_workspace_file_ai_access_at(
+            visible.path(),
+            &archived_path,
+            WorkspaceFileAiAccessUpdate {
+                locked: Some(true),
+                hidden_from_ai: None,
+            },
+        )
+        .unwrap();
+        update_workspace_folder_ai_access_at(
+            visible.path(),
+            &hidden_folder_path,
+            WorkspaceFolderAiAccessUpdate {
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        update_workspace_file_ai_access_at(
+            visible.path(),
+            &hidden_path,
+            WorkspaceFileAiAccessUpdate {
+                locked: None,
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        fs::write(hidden_workspace.path().join("workspace-hidden.hvy"), "hidden").unwrap();
+        initialize_workspace_with_name(hidden_workspace.path(), Some("Hidden Workspace")).unwrap();
+        update_workspace_ai_access_at(
+            hidden_workspace.path(),
+            WorkspaceAiAccessUpdate {
+                hidden_from_ai: Some(true),
+            },
+        )
+        .unwrap();
+        let workspaces = vec![
+            load_workspace_from_path(visible.path()).unwrap(),
+            load_workspace_from_path(hidden_workspace.path()).unwrap(),
+        ];
+
+        let result = mcp_workspace_file_search_from(
+            &workspaces,
+            serde_json::json!({ "pattern": "*.hvy" }),
+        )
+        .unwrap();
+        let matches = result["results"].as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+        assert!(!matches.iter().any(|result| result["name"] == "hidden.hvy"));
+        assert!(!matches
+            .iter()
+            .any(|result| result["name"] == "folder-hidden.hvy"));
+        assert!(!matches
+            .iter()
+            .any(|result| result["name"] == "workspace-hidden.hvy"));
+        let archived = matches
+            .iter()
+            .find(|result| result["name"] == "archived.hvy")
+            .unwrap();
+        assert_eq!(archived["archived"], true);
+        assert_eq!(archived["locked"], true);
+        let encrypted = matches
+            .iter()
+            .find(|result| result["name"] == "encrypted.hvy")
+            .unwrap();
+        assert_eq!(encrypted["encrypted"], true);
+    }
+
+    #[test]
+    fn mcp_workspace_file_search_rejects_blank_and_invalid_patterns() {
+        let blank = mcp_workspace_file_search_from(&[], serde_json::json!({ "pattern": "   " }))
+            .unwrap_err();
+        assert!(blank.to_string().contains("requires a non-empty pattern"));
+
+        let blank_workspace = mcp_workspace_file_search_from(
+            &[],
+            serde_json::json!({ "pattern": "*.hvy", "workspacePattern": "  " }),
+        )
+        .unwrap_err();
+        assert!(blank_workspace
+            .to_string()
+            .contains("requires a non-empty workspacePattern"));
+
+        let invalid = mcp_workspace_file_search_from(
+            &[],
+            serde_json::json!({ "pattern": "[broken" }),
+        )
+        .unwrap_err();
+        assert!(invalid.to_string().contains("invalid pattern"));
+
+        let invalid_workspace = mcp_workspace_file_search_from(
+            &[],
+            serde_json::json!({ "pattern": "*.hvy", "workspacePattern": "[broken" }),
+        )
+        .unwrap_err();
+        assert!(invalid_workspace
+            .to_string()
+            .contains("invalid workspacePattern"));
     }
 
     #[test]
@@ -1754,12 +2120,16 @@ model = "gpt-5.4"
 
     #[test]
     fn mcp_access_levels_allow_search_tools_but_block_higher_access_tools() {
+        assert!(ensure_mcp_tool_allowed("workspace_file_search", "searchOnly").is_ok());
         assert!(ensure_mcp_tool_allowed("workspace_search", "searchOnly").is_ok());
         assert!(ensure_mcp_tool_allowed("hvy_guidance", "searchOnly").is_ok());
         assert!(ensure_mcp_tool_allowed("search_hvy_document", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("walk_hvy_document", "searchOnly").is_ok());
+        assert!(ensure_mcp_tool_allowed("build_hvy_embeddings", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("apply_hvy_patch", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "searchOnly").is_err());
         assert!(ensure_mcp_tool_allowed("document_cli_based_editor", "hvyCliEdits").is_ok());
+        assert!(ensure_mcp_tool_allowed("build_hvy_embeddings", "hvyCliEdits").is_ok());
         assert!(ensure_mcp_tool_allowed("apply_hvy_patch", "hvyCliEdits").is_ok());
         assert!(ensure_mcp_tool_allowed("document_create", "hvyCliEdits").is_err());
         assert!(ensure_mcp_tool_allowed("document_archive", "createImportSave").is_ok());
@@ -1815,6 +2185,17 @@ model = "gpt-5.4"
                     }
                 }
             }),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "workspace_file_search",
+                    "arguments": {
+                        "pattern": "RESUME.HVY"
+                    }
+                }
+            }),
         ];
         let input = requests
             .iter()
@@ -1834,12 +2215,18 @@ model = "gpt-5.4"
         let mut reader = BufReader::new(output.as_slice());
         let initialize = read_mcp_stdio_message(&mut reader).unwrap().unwrap();
         let search = read_mcp_stdio_message(&mut reader).unwrap().unwrap();
+        let file_search = read_mcp_stdio_message(&mut reader).unwrap().unwrap();
         let initialize: serde_json::Value = serde_json::from_slice(&initialize.body).unwrap();
         let search: serde_json::Value = serde_json::from_slice(&search.body).unwrap();
+        let file_search: serde_json::Value = serde_json::from_slice(&file_search.body).unwrap();
 
         assert_eq!(initialize["result"]["serverInfo"]["name"], "hvy-galaxy");
         assert_eq!(
             search["result"]["structuredContent"]["results"][0]["relativePath"],
+            "resume.hvy"
+        );
+        assert_eq!(
+            file_search["result"]["structuredContent"]["results"][0]["relativePath"],
             "resume.hvy"
         );
     }
