@@ -11,6 +11,7 @@ import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/s
 import { renderCollapsedSearchBar } from '../../heavy-file-format/src/search/render';
 import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapshot';
 import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
+import { deserializeDocumentWithDiagnostics } from '../../heavy-file-format/src/serialization';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
 import { enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
@@ -608,7 +609,7 @@ async function mountRawHvyDocument(
   document: VisualDocument,
   options: MountHvyDocumentOptions,
 ): Promise<MountedDocument> {
-  const { deserializeDocumentBytes, serializeDocument, serializeDocumentBytes } = await loadHvyEmbed();
+  const { serializeDocument, serializeDocumentBytes } = await loadHvyEmbed();
   let currentDocument = document;
   let lastSavedText = serializeDocument(document);
   let dirty = false;
@@ -912,8 +913,14 @@ async function mountRawHvyDocument(
     return parseRawDraft();
   };
   const parseRawDraft = () => {
+    const parsed = deserializeDocumentWithDiagnostics(textarea.value, currentDocument.extension);
+    // Like the reference raw editor, consume diagnostics before applying a draft.
+    // The parser returns a partial document on errors; it does not throw.
+    if (parsed.diagnostics.length > 0) {
+      throw new Error(parsed.diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
+    }
     const previousAttachments = currentDocument.attachments;
-    currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    currentDocument = parsed.document;
     restoreRawHvyAttachmentBytes(currentDocument, previousAttachments);
     return currentDocument;
   };

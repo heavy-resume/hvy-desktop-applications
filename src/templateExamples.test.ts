@@ -23,6 +23,14 @@ describe('template examples', () => {
     expect(groupTemplateExamples([template])).toEqual([template]);
     expect(groupTemplateExamples([folder])).toEqual([folder]);
   });
+  it.each([true, false])('resolves PDF examples to their parent with folders first: %s', (foldersFirst) => {
+    const parent = { ...template, name: 'Resume.phvy', path: '/work/templates/Resume.phvy', relativePath: 'templates/Resume.phvy', extension: '.phvy' } as WorkspaceTreeNode;
+    const pdfExample = { ...example, name: 'Example 1.phvy', path: '/work/templates/Resume/Example 1.phvy', relativePath: 'templates/Resume/Example 1.phvy', extension: '.phvy' } as WorkspaceTreeNode;
+    const examples = { ...folder, children: [pdfExample] } as WorkspaceTreeNode;
+    const pdfWorkspace = { ...workspace, files: foldersFirst ? [examples, parent] : [parent, examples] };
+    expect(workspaceTemplateForExample(pdfWorkspace, pdfExample.relativePath)).toBe(parent);
+    expect(workspaceTemplateForExample(pdfWorkspace, parent.relativePath)).toBe(parent);
+  });
   it('updates nested reusable instances and keeps ordinary sample content and title', () => {
     const source = createBlankDocument('.thvy');
     const sample = createBlankDocument('.hvy');
