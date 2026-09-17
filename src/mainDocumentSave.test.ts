@@ -389,12 +389,21 @@ describe('openSavedVersionPreview', () => {
     expect(mainMocks.removeDocumentTabPath).toHaveBeenCalledWith('older-preview');
     expect(state.selectedSavedVersionId).toBe('saved-version');
     state.document!.dirty = true;
+    const previousVersion = state.savedDocumentVersions[0];
+    const newVersion = { ...previousVersion, id: 'new-saved-version', createdAt: '2026-09-03T12:00:00.000Z' };
+    historyMocks.listSavedDocumentVersions.mockResolvedValueOnce([newVersion, previousVersion]);
 
     await saveCurrentDocument();
 
     expect(state.error).toBeNull();
     expect(state.saveAsDialogOpen).toBe(false);
     expect(backendMocks.saveDocumentFile).toHaveBeenCalledWith({ path: workingDocument.source.path, bytes: expect.any(Uint8Array) });
+    expect(historyMocks.recordSuccessfulDocumentSave).toHaveBeenCalledWith(
+      workingDocument.source.path, workingDocument.source.name, state.document!.mounted!.document,
+    );
+    expect(historyMocks.listSavedDocumentVersions).toHaveBeenCalledWith(workingDocument.source.path);
+    expect(state.savedDocumentVersions).toEqual([newVersion, previousVersion]);
+    expect(state.selectedSavedVersionId).toBe(newVersion.id);
   });
 
   it('opens a saved version with the source AI policy and preserves history scroll position', async () => {

@@ -112,6 +112,10 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
     await refreshOpenWorkspaceForFile(openDocument.source.path);
     await refreshRecents();
     await clearRecoveryDraftsForDocument(openDocument.source.path, openDocument.source.name);
+    if (state.versionHistorySidebarOpen && state.versionHistorySourcePath === openDocument.source.path) {
+      state.savedDocumentVersions = await listSavedDocumentVersions(openDocument.source.path);
+      state.selectedSavedVersionId = state.savedDocumentVersions[0]?.id ?? null;
+    }
     logDebugEvent('perf', 'save:complete', {
       path: openDocument.source.path,
       byteCount: bytes.length,
