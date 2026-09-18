@@ -1067,7 +1067,6 @@ export function profileDocumentBlocks(document: Record<string, unknown>): {
     if (!isRecord(section)) return;
     sectionCount += 1;
     visitBlocks(section.blocks);
-    if (Array.isArray(section.children)) section.children.forEach(visitSection);
   };
   if (Array.isArray(document.sections)) document.sections.forEach(visitSection);
   return { sectionCount, blockCount, componentCounts };

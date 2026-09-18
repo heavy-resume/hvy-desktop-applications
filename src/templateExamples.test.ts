@@ -38,7 +38,7 @@ describe('template examples', () => {
     const definition = createEmptyBlock('text');
     definition.text = 'Updated definition';
     source.meta.component_defs = [{ name: 'Greeting', baseType: 'text', template: definition }];
-    const section = createEmptySection(1);
+    const section = createEmptySection();
     const ordinary = createEmptyBlock('text');
     ordinary.text = 'Sample-specific notes';
     const container = createEmptyBlock('container');
@@ -61,10 +61,10 @@ describe('template examples', () => {
   it('updates section-template instances using their template key', () => {
     const source = createBlankDocument('.thvy');
     const sample = createBlankDocument('.hvy');
-    const definition = createEmptySection(1);
+    const definition = createEmptySection();
     definition.title = 'Updated section';
     source.meta.section_defs = [{ name: 'Profile', key: 'profile', template: definition }];
-    const instance = createEmptySection(2);
+    const instance = createEmptySection();
     instance.templateKey = 'profile';
     instance.title = 'Old section';
     const key = instance.key;
@@ -72,7 +72,6 @@ describe('template examples', () => {
     updateExampleDefinitions(sample, source);
     expect(instance.title).toBe('Updated section');
     expect(instance.key).toBe(key);
-    expect(instance.level).toBe(2);
     expect(instance.templateKey).toBe('profile');
   });
 });
@@ -84,7 +83,7 @@ it('does not reset filled reusable instances when their definition did not chang
   definition.text = 'Template text';
   source.meta.component_defs = [{ name: 'Greeting', baseType: 'text', template: definition }];
   sample.meta.component_defs = structuredClone(source.meta.component_defs);
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const instance = createEmptyBlock('text');
   instance.schema.component = 'Greeting';
   instance.text = 'Filled example text';

@@ -22,7 +22,7 @@ describe('document key ID migration', () => {
     const document = {
       meta: {},
       extension: '.hvy',
-      sections: [{ blocks: [encryptedBlock], children: [] }],
+      sections: [{ blocks: [encryptedBlock] }],
       attachments: [{
         id: `encrypted:${PREVIOUS_KEY_ID}`,
         meta: { mediaType: 'application/vnd.hvy.encrypted-component+fernet' },

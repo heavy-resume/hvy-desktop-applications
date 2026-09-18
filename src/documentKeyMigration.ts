@@ -46,13 +46,9 @@ export function migrateVisualDocumentKeyId(document: VisualDocument, previousKey
       if (block.schema.kind === 'encrypted' && block.schema.encryptedBlock) visitBlocks([block.schema.encryptedBlock]);
     }
   };
-  const visitSections = (sections: VisualDocument['sections']): void => {
-    for (const section of sections) {
-      visitBlocks(section.blocks);
-      visitSections(section.children);
-    }
-  };
-  visitSections(document.sections);
+  for (const section of document.sections) {
+    visitBlocks(section.blocks);
+  }
   for (const [previousAttachmentId, nextAttachmentId] of attachmentMoves) {
     const attachment = getAttachment(document, previousAttachmentId);
     if (attachment) setAttachment(document, nextAttachmentId, attachment.meta, attachment.bytes);

@@ -1,5 +1,5 @@
 import { openAttachmentFile, openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
-import { createDesktopEmbeddingProvider } from './aiClient';
+import { createDesktopEmbeddingProvider, desktopTextProcessingSettings } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { recallUserFileAttachmentBytes } from '../../heavy-file-format/src/document-attachment-actions';
@@ -97,13 +97,9 @@ export function powerScriptDescriptors(document: VisualDocument): Array<{ id: st
       visitBlocks(block.schema.expandableContentBlocks?.children ?? []);
     }
   };
-  const visitSections = (sections: VisualDocument['sections']): void => {
-    for (const section of sections) {
-      visitBlocks(section.blocks);
-      visitSections(section.children);
-    }
-  };
-  visitSections(document.sections);
+  for (const section of document.sections) {
+    visitBlocks(section.blocks);
+  }
   return scripts;
 }
 
@@ -233,7 +229,6 @@ export async function profileHvySerializationCosts(document: VisualDocument): Pr
       textLength: text.length,
     });
     visitNestedBlocks(section.blocks);
-    if (Array.isArray(section.children)) section.children.forEach(visitSection);
   };
   document.sections.forEach(visitSection);
   return {
@@ -328,7 +323,10 @@ export async function mountHvyDocument(
         state.appSettings = saved;
       });
     },
-    chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
+    chatSettings: {
+      ...desktopTextProcessingSettings(state.aiSettings),
+      ...(options.maxContextChars ? { maxContextChars: options.maxContextChars } : {}),
+    },
     initialChatState: options.initialChatState ?? null,
     themeOverrides: options.themeOverrides ?? null,
     chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),

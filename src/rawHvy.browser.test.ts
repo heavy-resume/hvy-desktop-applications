@@ -63,7 +63,6 @@ section_defs:
         - text: Section content
           schema:
             component: text
-      children: []
 ---
 # Body
 `;

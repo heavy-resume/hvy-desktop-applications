@@ -425,7 +425,6 @@ function section(key: string, title: string, blocks: VisualDocument['sections'][
     idEditorOpen: false,
     isGhost: false,
     title,
-    level: 1,
     expanded: true,
     highlight: false,
     css: '',
@@ -433,7 +432,6 @@ function section(key: string, title: string, blocks: VisualDocument['sections'][
     description: '',
     location: 'main',
     blocks,
-    children: [],
   };
 }
 

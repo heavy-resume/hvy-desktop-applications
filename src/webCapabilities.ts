@@ -564,24 +564,20 @@ export function readWebCapabilityConfig(pluginId: string, value: unknown): WebCa
 
 export function findWebCapabilities(document: VisualDocument): WebCapabilityDescriptor[] {
   const descriptors: WebCapabilityDescriptor[] = [];
-  const visit = (sections: VisualDocument['sections']): void => {
-    for (const section of sections) {
-      visitBlocksInList(section.blocks, (block) => {
-        const pluginId = block.schema.plugin;
-        if (block.schema.component !== 'plugin' || (pluginId !== WEB_RECORDS_PLUGIN_ID && pluginId !== WEB_COMMAND_PLUGIN_ID)) return;
-        const config = readWebCapabilityConfig(pluginId, block.schema.pluginConfig);
-        if (!config) return;
-        descriptors.push({
-          pluginId,
-          blockId: block.id,
-          kind: pluginId === WEB_RECORDS_PLUGIN_ID ? 'records' : 'command',
-          config,
-        });
+  for (const section of document.sections) {
+    visitBlocksInList(section.blocks, (block) => {
+      const pluginId = block.schema.plugin;
+      if (block.schema.component !== 'plugin' || (pluginId !== WEB_RECORDS_PLUGIN_ID && pluginId !== WEB_COMMAND_PLUGIN_ID)) return;
+      const config = readWebCapabilityConfig(pluginId, block.schema.pluginConfig);
+      if (!config) return;
+      descriptors.push({
+        pluginId,
+        blockId: block.id,
+        kind: pluginId === WEB_RECORDS_PLUGIN_ID ? 'records' : 'command',
+        config,
       });
-      visit(section.children);
-    }
-  };
-  visit(document.sections);
+    });
+  }
   return descriptors;
 }
 

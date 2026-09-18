@@ -6,7 +6,7 @@ import { updateExampleDefinitions } from './templateExampleUpdates';
 
 function fixture() {
   const before = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   section.customId = 'profile';
   section.title = 'Profile';
   const label = createEmptyBlock('text');
@@ -91,7 +91,7 @@ describe('ordinary template content', () => {
 
 it.each(['text', 'block'] as const)('propagates an explicit %s variable type within partially filled ordinary text', (type) => {
   const before = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const block = createEmptyBlock('text');
   block.text = 'Name: {% name %}\nBiography: {% biography %}';
   section.blocks = [block];
@@ -110,7 +110,7 @@ it.each(['block', 'url'] as const)('keeps %s variable metadata through updating 
   const block = createEmptyBlock('text');
   block.text = 'Name: {% name %}; Biography: {% biography %}';
   before.meta.component_defs = [{ name: 'Profile', baseType: 'text', schema: block.schema, template: block }];
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const instance = structuredClone(block);
   instance.schema.component = 'Profile';
   instance.text = 'Name: Ada Lovelace; Biography: {% biography %}';
@@ -131,7 +131,7 @@ it.each(['block', 'url'] as const)('keeps %s variable metadata through updating 
 
 it('leaves instance text alone when the source has not changed', () => {
   const before = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const block = createEmptyBlock('text');
   block.text = 'Name: {% name %}; {% biography | block %}';
   section.blocks = [block];
@@ -148,7 +148,7 @@ it('does not rewrite instances when the stored definition matches the source', (
   definition.text = 'Name: {% name %}; {% biography | block %}';
   parent.meta.component_defs = [{ name: 'Profile', baseType: 'text', schema: definition.schema, template: definition, templateVariables: { biography: { type: 'block' } } }];
   const sample = structuredClone(parent);
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const instance = structuredClone(definition);
   instance.schema.component = 'Profile';
   instance.text = 'Name: Ada; {% biography %}';
@@ -201,7 +201,7 @@ it('refreshes styling on every repeated reusable instance while retaining each i
   definition.schema.align = 'center';
   parent.meta.component_defs = [{ name: 'Name', baseType: 'text', schema: definition.schema, template: definition }];
   const sample = structuredClone(parent);
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   section.blocks = ['Ada', 'Grace'].map((text) => {
     const instance = createEmptyBlock('text');
     instance.schema.component = 'Name';
@@ -247,7 +247,7 @@ it('gives new nested components distinct editor identities in each concrete inst
   definition.schema.containerBlocks = [];
   parent.meta.component_defs = [{ name: 'profile', baseType: 'container', schema: definition.schema, template: definition }];
   const sample = structuredClone(parent);
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   section.blocks = [1, 2].map(() => {
     const block = structuredClone(definition);
     block.schema.component = 'profile';
@@ -274,7 +274,7 @@ it('applies overlapping ordinary-body and reusable-definition additions only onc
   first.text = 'Fill me';
   definition.schema.containerBlocks = [first];
   before.meta.component_defs = [{ name: 'profile', baseType: 'container', schema: definition.schema, template: definition }];
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const instance = structuredClone(definition);
   instance.schema.component = 'profile';
   section.blocks = [instance];
@@ -298,7 +298,7 @@ it('detaches concrete instances when their reusable definitions are removed', ()
   const definition = createEmptyBlock('text');
   definition.text = 'Template placeholder';
   sample.meta.component_defs = [{ name: 'profile', baseType: 'text', schema: definition.schema, template: definition }];
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   sample.meta.section_defs = [{ name: 'Person', key: 'person', template: structuredClone(section) }];
   section.templateKey = 'person';
   const instance = createEmptyBlock('text');
@@ -317,7 +317,7 @@ it('detaches concrete instances when their reusable definitions are removed', ()
 it('ignores regenerated editor identities in nested grid slots', async () => {
   const { diffTemplateContent } = await import('./templateExampleContent');
   const before = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const grid = createEmptyBlock('grid');
   grid.schema.gridItems = [{ id: 'runtime-grid-old', idGenerated: true, block: createEmptyBlock('text') }];
   section.blocks = [grid];
@@ -338,7 +338,7 @@ it('updates a link label in a serialized concrete instance created through the r
   parent.meta.component_defs = [{ name: 'profile-link', baseType: 'text', schema: definition.schema, template: definition, templateVariables: { url: { type: 'url' } } }];
   const sample = structuredClone(parent);
   sample.extension = '.hvy';
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const instance = cloneReusableBlockFromMeta(definition, parent.meta);
   instance.schema.component = 'profile-link';
   applyReusableTemplateValues(instance, { url: 'https://example.com/profile' }, extractReusableTemplateVariablesFromDefinition((parent.meta.component_defs as any[])[0]));
@@ -357,7 +357,7 @@ it('updates schema-only reusable list records using their own document definitio
     expandableContentBlocks: { children: [{ text: '^section-heading^ ### {% award %}', schema: { component: 'text', css: 'margin: 0;' } }] },
   } }];
   const sample = structuredClone(parent);
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const list = createEmptyBlock('component-list');
   const record = createEmptyBlock('award-record', false, sample.meta);
   record.schema.expandableContentBlocks!.children[0].text = '^section-heading^ ### Research award';

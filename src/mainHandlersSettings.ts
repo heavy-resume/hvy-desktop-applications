@@ -2276,7 +2276,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   saveAiSettings: (settings) => {
     void runBusy('Saving AI settings...', async () => {
       await persistAiSettings(settings);
-    });
+    }, { preserveMountedDocument: false });
   },
   cancelAiSettings: (settings) => {
     if (aiSettingsChanged(settings)) {

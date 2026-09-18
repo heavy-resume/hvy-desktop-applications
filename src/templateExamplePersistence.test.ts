@@ -24,7 +24,7 @@ beforeEach(() => {
 
 it.each(['.thvy', '.phvy'] as const)('leaves the original %s template header and mounted document untouched when updating examples', async (extension) => {
   const before = createBlankDocument(extension);
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   section.title = 'Original heading';
   const definition = createEmptyBlock('text');
   definition.text = 'Original component';
@@ -77,7 +77,7 @@ it('writes updated examples and refreshes clean and dirty sessions without savin
   const definition = createEmptyBlock('text');
   definition.text = 'New definition';
   source.meta.component_defs = [{ name: 'Greeting', baseType: 'text', template: definition }];
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const block = createEmptyBlock('text');
   block.schema.component = 'Greeting';
   block.text = 'Old';
@@ -120,7 +120,7 @@ it('does not treat a PDF example as another template when saving it', async () =
 
 it('applies ordinary template changes from the previous saved version to disk and dirty tabs', async () => {
   const before = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   section.customId = 'profile';
   section.title = 'Profile';
   const block = createEmptyBlock('text');
@@ -156,7 +156,7 @@ it('applies ordinary template changes from the previous saved version to disk an
 
 it.each([true, false])('propagates fixed link labels with templates visible in the navigator: %s', async (templatesVisible) => {
   const before = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const block = createEmptyBlock('text');
   block.text = '[Fixed label]({% url %})';
   section.blocks = [block];
@@ -186,7 +186,7 @@ it.each([true, false])('propagates fixed link labels with templates visible in t
 
 it('catches up an opened example from its parent on disk and detects subsequent parent edits on tab return', async () => {
   const parent = createBlankDocument('.thvy');
-  const section = createEmptySection(1);
+  const section = createEmptySection();
   const block = createEmptyBlock('text');
   block.text = '[Original label]({% url %})';
   section.blocks = [block];

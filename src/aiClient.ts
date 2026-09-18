@@ -1,7 +1,7 @@
 import type { AiActionKey, AiProviderConfig, AiSettings, AppSettings } from './backend';
 import { aiProviderPreset } from './aiProviders';
 import { logDebugEvent } from './debugLog';
-import type { HvyEmbeddingProvider, HvyEmbeddingProviderRequest, HvyEmbeddingVector } from '../../heavy-file-format/src/types';
+import type { ChatSettings, HvyEmbeddingProvider, HvyEmbeddingProviderRequest, HvyEmbeddingVector } from '../../heavy-file-format/src/types';
 
 type HvyChatProvider = 'openai' | 'anthropic' | 'qwen';
 type HvyRequestMode = 'qa' | 'component-edit' | 'document-edit' | 'pdf-template-import';
@@ -64,6 +64,17 @@ export function installAiChatClient(settings: AiSettings, appSettings?: AppSetti
 
 export function activeAiProvider(settings: AiSettings): AiProviderConfig {
   return aiProviderConfig(settings, settings.activeProviderId);
+}
+
+export function desktopTextProcessingSettings(settings: AiSettings): Pick<ChatSettings, 'textProcessingProvider' | 'textProcessingModel'> {
+  const action = settings.actions.edit;
+  const provider = aiProviderConfig(settings, resolveProviderId(settings, action.providerId));
+  return {
+    // Desktop providers use the OpenAI-compatible host client; component-edit
+    // requests are routed to the Edit action's actual provider and model below.
+    textProcessingProvider: provider.baseUrl.trim() ? 'openai' : null,
+    textProcessingModel: action.model.trim() || settings.actions.chat.model.trim() || null,
+  };
 }
 
 export function createDesktopEmbeddingProvider(settings: AiSettings): HvyEmbeddingProvider | null {
