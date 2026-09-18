@@ -600,6 +600,8 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
   mountThemeReapplyCleanup = null;
   const currentDocument = state.document;
   const mountStartedDirty = currentDocument.dirty;
+  // The editor's initial baseline may already contain unsaved session edits.
+  let baselineMount: MountedDocument | null = null;
   const mountShouldStartSaved = !currentDocument.dirty && !currentDocument.isNew;
   logDebugEvent('load', 'mountCurrentDocument:baselineBeforeMount', {
     path,
@@ -696,7 +698,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
         });
         return;
       }
-      const dirty = documentDirtyAfterMountedChange(event.dirty, state.document?.virtual, state.document?.isNew ?? false);
+      const dirty = documentDirtyAfterMountedChange(event.dirty, state.document?.virtual, state.document?.isNew ?? false, baselineMount?.unsavedBaseline ?? mountStartedDirty);
       setDocumentDirty(dirty);
       const durationMs = Math.round((performance.now() - changeStartedAt) * 10) / 10;
       documentChangeEventCount += 1;
@@ -715,6 +717,8 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
       }
     },
   }));
+  mounted.unsavedBaseline = mountStartedDirty;
+  baselineMount = mounted;
   if (pendingMountRecoveryState) {
     measureDebug('load', 'mountCurrentDocument:applyPendingRecoveryState', { path }, () => {
       applyMountedRecoveryState(mounted, pendingMountRecoveryState);

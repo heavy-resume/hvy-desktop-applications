@@ -29,8 +29,9 @@ export function documentDirtyAfterMountedChange(
   mountedDirty: boolean,
   virtual: 'recoveryDraft' | 'defaultDocument' | 'versionHistory' | 'workspaceChat' | undefined,
   isNew: boolean,
+  mountBaselineDirty = false,
 ): boolean {
-  return mountedDirty || virtual === 'recoveryDraft' || isNew;
+  return mountBaselineDirty || mountedDirty || virtual === 'recoveryDraft' || isNew;
 }
 
 export function recoverySaveConflictKind(

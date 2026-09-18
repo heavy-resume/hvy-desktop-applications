@@ -78,6 +78,7 @@ type DocumentAttachment = VisualDocument['attachments'][number];
 export interface MountedDocument {
   mount: HvyMount;
   document: VisualDocument;
+  unsavedBaseline?: boolean;
 }
 
 export function powerScriptDescriptors(document: VisualDocument): Array<{ id: string; hash: string }> {
@@ -1620,11 +1621,12 @@ export function buildMountedImportPlan(mounted: MountedDocument, options: BuildI
 }
 
 export function markMountedDocumentSaved(mounted: MountedDocument): void {
+  mounted.unsavedBaseline = false;
   mounted.mount.markSaved();
 }
 
 export function isMountedDocumentDirty(mounted: MountedDocument): boolean {
-  return mounted.mount.isDirty();
+  return mounted.unsavedBaseline === true || mounted.mount.isDirty();
 }
 
 export function openMountedDocumentMeta(mounted: MountedDocument): boolean {
