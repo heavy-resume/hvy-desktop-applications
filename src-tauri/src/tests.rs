@@ -2082,6 +2082,7 @@ model = "gpt-5.4"
             ],
             Some(env_value),
             cwd_root.path().to_path_buf(),
+            None,
         )
         .unwrap();
         let paths = config.workspaces.iter().map(PathBuf::from).collect::<Vec<_>>();
@@ -2094,6 +2095,49 @@ model = "gpt-5.4"
         assert_eq!(names, vec!["Args", "Config", "Explicit Config", "Env", "Cwd"]);
         assert_eq!(config.write_access, "createImportSave");
         assert_eq!(config.integration_access, "actions");
+    }
+
+    #[test]
+    fn mcp_stdio_finds_app_data_config_when_cwd_is_unrelated() {
+        // Claude Desktop ignores the `cwd` field in its MCP server config, so
+        // the stdio server must locate its workspace config on its own.
+        let workspace = tempdir().unwrap();
+        initialize_workspace_with_name(workspace.path(), Some("App Data")).unwrap();
+        let app_data = tempdir().unwrap();
+        let mcp_directory = app_data.path().join("mcp");
+        fs::create_dir_all(&mcp_directory).unwrap();
+        write_json_atomically(
+            &mcp_directory.join(MCP_STDIO_WORKSPACE_CONFIG),
+            &McpWorkspaceConfig {
+                workspaces: vec![path_to_string(workspace.path())],
+                write_access: "searchOnly".into(),
+                integration_access: "read".into(),
+            },
+        )
+        .unwrap();
+        let unrelated_cwd = tempdir().unwrap();
+
+        let config = mcp_stdio_workspace_config(
+            Vec::<String>::new(),
+            None,
+            unrelated_cwd.path().to_path_buf(),
+            Some(app_data.path().to_path_buf()),
+        )
+        .unwrap();
+
+        assert_eq!(config.workspaces, vec![path_to_string(workspace.path())]);
+        assert_eq!(config.write_access, "searchOnly");
+        assert_eq!(config.integration_access, "read");
+
+        // The primary path drives writes and the WebMCP broker lookup, so it
+        // must follow the config we actually read rather than the cwd.
+        let primary = mcp_stdio_primary_config_path(
+            Vec::<String>::new(),
+            unrelated_cwd.path().to_path_buf(),
+            Some(app_data.path().to_path_buf()),
+        )
+        .unwrap();
+        assert_eq!(primary, mcp_directory.join(MCP_STDIO_WORKSPACE_CONFIG));
     }
 
     #[test]
@@ -2111,7 +2155,7 @@ model = "gpt-5.4"
         )
         .unwrap();
 
-        let config = mcp_stdio_workspace_config(Vec::<String>::new(), None, cwd.path().to_path_buf()).unwrap();
+        let config = mcp_stdio_workspace_config(Vec::<String>::new(), None, cwd.path().to_path_buf(), None).unwrap();
 
         assert_eq!(config.write_access, "searchOnly");
         assert_eq!(config.integration_access, "read");
@@ -2208,6 +2252,7 @@ model = "gpt-5.4"
             vec!["--workspace".to_string(), path_to_string(workspace.path())],
             None,
             tempdir().unwrap().path().to_path_buf(),
+            None,
             input.as_bytes(),
             &mut output,
         )
@@ -2253,6 +2298,7 @@ model = "gpt-5.4"
             vec!["--workspace".to_string(), path_to_string(workspace.path())],
             None,
             workspace.path().to_path_buf(),
+            None,
             input.as_bytes(),
             &mut output,
         )
@@ -2283,6 +2329,7 @@ model = "gpt-5.4"
             Vec::<String>::new(),
             None,
             tempdir().unwrap().path().to_path_buf(),
+            None,
             format!("{request}\n").as_bytes(),
             &mut output,
         )

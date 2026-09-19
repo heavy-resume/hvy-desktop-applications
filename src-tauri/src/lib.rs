@@ -33,6 +33,8 @@ const AI_SETTINGS: &str = "ai-settings.json";
 const APP_SETTINGS: &str = "app-settings.json";
 const MCP_SETTINGS: &str = "mcp-settings.json";
 const MCP_STDIO_WORKSPACE_CONFIG: &str = "hvy-galaxy-mcp-workspaces.json";
+// Must match "identifier" in tauri.conf.json; app data paths are derived from it.
+const APP_IDENTIFIER: &str = "com.heavyresume.hvy-galaxy";
 const DEFAULT_MCP_PORT: u16 = 8794;
 const RECENT_LIMIT: usize = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS: u32 = 40_000;

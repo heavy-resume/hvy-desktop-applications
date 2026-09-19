@@ -3,6 +3,7 @@ pub(crate) fn run_mcp_stdio_main() -> Result<(), String> {
         std::env::args().skip(1).filter(|arg| arg != "--mcp-stdio"),
         std::env::var_os("HVY_GALAXY_WORKSPACES"),
         std::env::current_dir().map_err(|error| error.to_string())?,
+        mcp_stdio_app_data_dir(),
         std::io::stdin().lock(),
         std::io::stdout().lock(),
     )
