@@ -11,10 +11,7 @@ reader_max_width: 64rem
   # HVY Galaxy AI Guide
 
  <!--hvy:text {}-->
-  This is a placeholder guide for AI agents working with HVY Galaxy documents and workspaces.
-
- <!--hvy:text {}-->
-  The final guide should explain how to create workspaces, create documents, inspect existing documents, edit documents with the CLI based editor, work with attachments, use scripting and database-backed components, and archive documents or workspaces without deleting them.
+  This guide describes the HVY Galaxy features available to AI agents working with documents and workspaces.
 
 <!--hvy: {"id":"ai-guide-principles","lock":false,"expanded":true,"highlight":false}-->
 #! Agent Principles
@@ -27,3 +24,34 @@ reader_max_width: 64rem
 
  <!--hvy:text {}-->
   Do not read or rewrite attachment tail bytes directly. Treat attachments as opaque unless a dedicated HVY Galaxy tool exposes them.
+
+<!--hvy: {"id":"ai-guide-built-in-plugins","lock":false,"expanded":true,"highlight":false}-->
+#! Built-in Plugins
+
+ <!--hvy:text {}-->
+  # Built-in Plugins
+
+ <!--hvy:text {}-->
+  HVY Galaxy currently includes these built-in plugin component IDs:
+
+ <!--hvy:text {}-->
+  1. `hvy.db-table` — dynamic database-backed tables and SQL views.
+  2. `hvy.form` — input fields, buttons, scripts, and AI generation actions.
+  3. `hvy.progress-bar` — numeric progress meters with configurable minimum, maximum, and value.
+  4. `hvy.scripting` — sandboxed Python scripts that render or update document content.
+  5. `hvy.canvas` — drawable vector canvases whose drawing data is stored as an attachment.
+  6. `hvy.power-scripting` — explicitly authorized JavaScript with asynchronous plugin APIs.
+  7. `hvy.graph` — charts and graphs configured with chart options and CSV data.
+  8. `hvy.diagram` — Mermaid diagrams whose source is stored in the plugin body.
+  9. `hvy.qr-code` — styled QR codes with encoded text and an optional caption.
+  10. `hvy.video` — embedded HTTPS YouTube, Vimeo, or Wistia videos.
+  11. `hvy.editable-text` — rich Markdown that remains editable in viewer mode.
+  12. `hvy.web-records` — portable record extraction through a locally configured browser profile.
+  13. `hvy.web-command` — portable web-page commands through a locally configured browser profile.
+  14. `hvy.webmcp-tool` — calls to an explicitly approved site-provided WebMCP tool.
+
+ <!--hvy:text {}-->
+  The list printed by `man hvy plugin` is only the subset with dedicated plugin-specific CLI commands. It is not the complete built-in plugin catalog. Any built-in can be inserted with `hvy insert INDEX plugin SECTION_PATH ID PLUGIN_ID`, then configured through its `plugin.json` and `plugin.txt` virtual files. Use `man hvy insert` for the generic insertion command.
+
+ <!--hvy:text {}-->
+  Browser-backed plugins depend on integrations, browser profiles, and approvals stored locally in Galaxy. Do not invent capability IDs, browser profiles, or authorization. Canvas and other attachment-backed plugins may be inserted and configured, but do not fabricate or rewrite opaque attachment bytes. Power scripting also requires explicit user authorization.

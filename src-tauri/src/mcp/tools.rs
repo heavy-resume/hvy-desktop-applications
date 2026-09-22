@@ -147,7 +147,7 @@ pub(crate) fn mcp_tool_list() -> serde_json::Value {
         },
         {
             "name": "hvy_guidance",
-            "description": "Return the HVY Galaxy AI guide file. Use this before creating or substantially editing HVY Galaxy workspaces and documents.",
+            "description": "Return the HVY Galaxy AI guide file, including the complete built-in plugin catalog. Use this before creating or substantially editing HVY Galaxy workspaces and documents.",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
