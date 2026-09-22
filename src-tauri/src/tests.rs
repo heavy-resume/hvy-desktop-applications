@@ -33,6 +33,25 @@
     }
 
     #[test]
+    fn integration_browser_tracks_the_latest_loaded_url_without_querying_the_webview() {
+        let profile_id = "current-url-regression";
+        let shared = integration_current_url(profile_id).unwrap();
+        *shared.lock().unwrap() = Some("https://integration-a.example/items".parse().unwrap());
+
+        let callback_url = integration_current_url(profile_id).unwrap();
+        assert_eq!(
+            callback_url.lock().unwrap().as_ref().map(tauri::Url::as_str),
+            Some("https://integration-a.example/items")
+        );
+
+        *shared.lock().unwrap() = Some("https://integration-b.example/next".parse().unwrap());
+        assert_eq!(
+            callback_url.lock().unwrap().as_ref().map(tauri::Url::as_str),
+            Some("https://integration-b.example/next")
+        );
+    }
+
+    #[test]
     fn workspace_tree_serializes_renderer_field_names() {
         let node = WorkspaceTreeNode::Folder {
             name: "folder-id".into(),
