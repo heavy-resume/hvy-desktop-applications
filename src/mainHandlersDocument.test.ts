@@ -33,9 +33,9 @@ const hvyMocks = vi.hoisted(() => ({
 const backendMocks = vi.hoisted(() => ({
   listDocumentKeyMetadata: vi.fn(async (): Promise<DocumentKeyMetadata[]> => []),
   renameDocumentFile: vi.fn(),
-  saveDocumentTemplate: vi.fn(async () => undefined),
-  saveDocumentToWorkspace: vi.fn(async () => ({ path: '/other/drafts/Resume.thvy' })),
-  saveDocumentAsDialog: vi.fn(async () => ({ path: '/outside/Resume.thvy' })),
+  saveDocumentTemplate: vi.fn(async () => ({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
+  saveDocumentToWorkspace: vi.fn(async () => ({ path: '/other/drafts/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
+  saveDocumentAsDialog: vi.fn(async () => ({ path: '/outside/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
 }));
 
 const documentKeyMocks = vi.hoisted(() => ({
@@ -59,6 +59,12 @@ const embeddingMocks = vi.hoisted(() => ({
 }));
 
 const mainMocks = vi.hoisted(() => ({
+  adoptSavedAsDocument: vi.fn((file: { path: string; name: string; extension: '.thvy' | '.phvy' }) => {
+    if (!state.document) return;
+    state.document.source = { ...state.document.source, ...file };
+    state.document.dirty = false;
+    state.document.isNew = false;
+  }),
   captureMountScrollRatio: vi.fn(() => ({ top: 0, left: 0, topPosition: 0, leftPosition: 0 })),
   applyArchivedFileRelocations: vi.fn(),
   copyOpenWorkspaceFileToWorkspace: vi.fn(),
@@ -77,6 +83,7 @@ const mainMocks = vi.hoisted(() => ({
   removeOpenDocumentFile: vi.fn(),
   refreshOpenWorkspaceForFile: vi.fn(),
   refreshRecents: vi.fn(),
+  readDocumentColorPreference: vi.fn(() => false),
   relocateRecoveryDraftsForDocument: vi.fn(),
   rerender: vi.fn(),
   restoreMountScrollRatio: vi.fn(),
@@ -212,6 +219,16 @@ describe('document handlers', () => {
       scope: 'workspace', workspacePath: '/other', name: 'Resume', extension: '.thvy', bytes: [4, 5, 6],
     }));
     expect(backendMocks.saveDocumentToWorkspace).not.toHaveBeenCalled();
+    expect(mainMocks.adoptSavedAsDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' }),
+      state.document?.mounted,
+      expect.objectContaining({ extension: '.thvy' }),
+      'editor',
+      '/workspace/example.hvy',
+      false,
+    );
+    expect(state.document?.source).toMatchObject({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' });
+    expect(state.document?.dirty).toBe(false);
   });
 
   it('saves a template to the workspace and folder selected in the shared picker', async () => {
@@ -222,6 +239,14 @@ describe('document handlers', () => {
       workspacePath: '/other', targetDirectory: 'drafts', name: 'Resume.thvy', bytes: [4, 5, 6],
     }));
     expect(backendMocks.saveDocumentTemplate).not.toHaveBeenCalled();
+    expect(mainMocks.adoptSavedAsDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/other/drafts/Resume.thvy' }),
+      state.document?.mounted,
+      expect.objectContaining({ extension: '.thvy' }),
+      'editor',
+      '/workspace/example.hvy',
+      false,
+    );
   });
 
   it('opens Anywhere at the historical template source folder', async () => {
@@ -234,6 +259,14 @@ describe('document handlers', () => {
     await vi.waitFor(() => expect(backendMocks.saveDocumentAsDialog).toHaveBeenCalledWith({
       suggestedName: '/outside/drafts/Resume.thvy', bytes: [4, 5, 6],
     }));
+    expect(mainMocks.adoptSavedAsDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/outside/Resume.thvy' }),
+      state.document?.mounted,
+      expect.objectContaining({ extension: '.thvy' }),
+      'editor',
+      '/workspace/example.hvy',
+      false,
+    );
   });
 
   it('restores the active editor session across regular and advanced mode remounts', async () => {
