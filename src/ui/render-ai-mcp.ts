@@ -194,7 +194,9 @@ export function renderMcpSettingsDialog(state: AppState): string {
     const installDisabled = state.busy || !client.configExists || !client.executableExists;
     const removeDisabled = state.busy || !client.configExists || !client.installed;
     const restoreDisabled = state.busy || !client.latestBackupPath;
-    const actionLabel = client.installed ? `Refresh ${client.label}` : `Install for ${client.label}`;
+    const actionLabel = client.installed
+      ? client.target === 'codex' ? 'Refresh ChatGPT' : `Refresh ${client.label}`
+      : `Install for ${client.label}`;
     return `
                   <article class="mcp-install-card${client.installed ? ' is-installed' : ''}">
                     <div>

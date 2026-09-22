@@ -1234,7 +1234,7 @@ fn mcp_cli_package_root() -> AppResult<PathBuf> {
         return Ok(path);
     }
     Err(AppError::Message(
-        "heavy-file-format-ref-impl was not found for the HVY MCP CLI based editor. Set HVY_GALAXY_MCP_PACKAGE_ROOT to the package root.".into(),
+        "heavy-file-format-ref-impl was not found for the HVY Galaxy MCP CLI based editor. Set HVY_GALAXY_MCP_PACKAGE_ROOT to the package root.".into(),
     ))
 }
 

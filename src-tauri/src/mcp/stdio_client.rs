@@ -515,7 +515,7 @@ fn mcp_client_install_statuses(launch: &McpStdioLaunchConfig) -> AppResult<Vec<M
     Ok(vec![
         mcp_client_install_status(
             "codex",
-            "Codex",
+            "ChatGPT Desktop (formerly Codex)",
             codex_config_path()?,
             launch,
             codex_config_has_hvy_mcp,
@@ -537,6 +537,7 @@ fn mcp_client_install_status(
     launch: &McpStdioLaunchConfig,
     is_installed: fn(&Path, &McpStdioLaunchConfig) -> bool,
 ) -> McpClientInstallStatus {
+    let message_label = if target == "codex" { "ChatGPT Desktop" } else { label };
     let config_exists = path.exists() || (target == "claude" && claude_config_can_be_created(&path));
     let executable_exists = Path::new(&launch.command).exists();
     let installed = config_exists && is_installed(&path, launch);
@@ -549,20 +550,20 @@ fn mcp_client_install_status(
     });
     let message = if !config_exists {
         if backups.is_empty() {
-            format!("{label} config file was not found.")
+            format!("{message_label} config file was not found.")
         } else {
-            format!("{label} config file was not found. A backup can be restored.")
+            format!("{message_label} config file was not found. A backup can be restored.")
         }
     } else if installed {
         if executable_exists {
-            format!("HVY MCP is installed for {label}. Refresh or remove it anytime.")
+            format!("MCP is installed for {message_label}. Refresh or remove it anytime.")
         } else {
-            "HVY MCP is installed, but the HVY Galaxy executable was not found.".into()
+            "MCP is installed, but the HVY Galaxy executable was not found.".into()
         }
     } else if !executable_exists {
         "HVY Galaxy executable was not found.".into()
     } else {
-        format!("Ready to install HVY MCP for {label}. A backup will be saved first.")
+        format!("Ready to install MCP for {message_label}. A backup will be saved first.")
     };
     McpClientInstallStatus {
         target: target.into(),
@@ -717,7 +718,7 @@ fn remove_mcp_from_claude(path: &Path) -> AppResult<()> {
 
 pub(crate) fn restore_mcp_client_backup_file(path: &Path) -> AppResult<()> {
     let backup_path = latest_mcp_client_backup_path(path)
-        .ok_or_else(|| AppError::Message(format!("No HVY MCP backup was found for {}.", path_to_string(path))))?;
+        .ok_or_else(|| AppError::Message(format!("No MCP backup was found for {}.", path_to_string(path))))?;
     if path.exists() {
         backup_file_before_overwrite(path)?;
     } else if let Some(parent) = path.parent() {
@@ -789,11 +790,18 @@ fn mcp_client_backup_paths(path: &Path) -> Vec<PathBuf> {
 }
 
 fn mcp_client_backup_label(file_name: &str) -> String {
-    file_name
+    let timestamp = file_name
         .split(".hvy-galaxy-backup-")
         .nth(1)
-        .unwrap_or(file_name)
-        .to_string()
+        .unwrap_or(file_name);
+    chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%dT%H%M%SZ")
+        .map(|date| {
+            date.and_utc()
+                .with_timezone(&chrono::Local)
+                .format("%b %-d, %Y, %-I:%M %p")
+                .to_string()
+        })
+        .unwrap_or_else(|_| timestamp.to_string())
 }
 
 fn codex_config_has_hvy_mcp(path: &Path, launch: &McpStdioLaunchConfig) -> bool {

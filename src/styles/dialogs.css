@@ -725,7 +725,7 @@
 
 .mcp-install-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 10rem;
   align-items: center;
   gap: 12px;
   border: 1px solid var(--hvy-border, #c5cec8);
@@ -763,10 +763,14 @@
 }
 
 .mcp-install-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
   gap: 6px;
+}
+
+.mcp-install-actions .hvy-galaxy-button {
+  min-width: 0;
+  width: 100%;
+  white-space: nowrap;
 }
 
 .checkbox-row {

@@ -899,7 +899,7 @@ export function defaultMcpClientInstallStatus(): McpClientInstallStatus[] {
   return [
     {
       target: 'codex',
-      label: 'Codex',
+      label: 'ChatGPT Desktop (formerly Codex)',
       configPath: '~/.codex/config.toml',
       configExists: false,
       executableExists: false,
@@ -907,7 +907,7 @@ export function defaultMcpClientInstallStatus(): McpClientInstallStatus[] {
       backupCount: 0,
       latestBackupPath: null,
       latestBackupLabel: null,
-      message: 'Codex config file was not found.',
+      message: 'ChatGPT Desktop config file was not found.',
     },
     {
       target: 'claude',
