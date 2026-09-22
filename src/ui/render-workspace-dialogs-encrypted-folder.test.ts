@@ -122,6 +122,7 @@ describe('save as destination', () => {
       busy: false,
     } as unknown as AppState);
 
+    expect(html).toContain('class="dialog save-as-dialog"');
     expect(html).toContain('name="workspaceDestination"');
     expect(html).toContain('data-workspace-path="/workspace"');
     expect(html).toContain('data-target-directory="drafts"');

@@ -481,7 +481,7 @@ export function renderSaveAsDialog(state: AppState): string {
     : displayDocumentName(state.document.virtual === 'versionHistory' ? savedVersionDocumentName(sourceName) : sourceName);
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="${template ? 'save-as-template' : 'save-as-document'}">
+      <form class="dialog save-as-dialog" data-form="${template ? 'save-as-template' : 'save-as-document'}">
         <h2>Save As...</h2>
         ${renderSaveAsKindControl(template ? 'template' : 'document', templateDisabled)}
         ${template ? `<label>
