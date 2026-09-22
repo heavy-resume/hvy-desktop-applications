@@ -1462,7 +1462,7 @@ function installEmbeddedSearchCollapsedSurface(root: HTMLElement, mount: SearchS
       surface = documentOwner().createElement('div');
       surface.dataset.searchSurface = 'collapsed';
     }
-    const anchor = pane.querySelector<HTMLElement>('.editor-shell, .viewer-shell, .document-meta-view');
+    const anchor = pane.querySelector<HTMLElement>(':scope > .editor-shell, :scope > .viewer-shell, :scope > .document-meta-scroll');
     if (surface.parentElement !== pane || surface.nextElementSibling !== anchor) {
       pane.insertBefore(surface, anchor ?? pane.firstChild);
     }
