@@ -360,7 +360,7 @@ fn handle_mcp_http_request(app: &AppHandle, request: HttpRequest) -> String {
         return http_json_response(
             404,
             &serde_json::json!({
-                "error": "HVY MCP server listens for POST requests at /mcp."
+                "error": "MCP server listens for POST requests at /mcp."
             }),
         );
     }
