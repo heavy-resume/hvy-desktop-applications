@@ -13,7 +13,7 @@ export const templateContentDiffOptions: DefinitionDiffOptions = {
       if (Array.isArray(value)) { value.forEach(assignEditorIdentities); return; }
       if (!record(value)) return;
       if (record(value.schema) && 'text' in value) value.id = makeId('block');
-      else if (Array.isArray(value.blocks) && Array.isArray(value.children)) value.key = makeId('section');
+      else if (Array.isArray(value.blocks)) value.key = makeId('section');
       else if (value.idGenerated === true && 'id' in value) value.id = makeId('griditem');
       Object.values(value).forEach(assignEditorIdentities);
     };
@@ -29,7 +29,7 @@ export const templateContentDiffOptions: DefinitionDiffOptions = {
   },
   ignoreProperty(value, key) {
     if (record(value.schema) && 'text' in value) return ['id', 'idGenerated', 'schemaMode'].includes(key);
-    if (Array.isArray(value.blocks) && Array.isArray(value.children)) return ['key', 'customIdGenerated', 'idEditorOpen'].includes(key) || (key === 'customId' && value.customIdGenerated === true);
+    if (Array.isArray(value.blocks)) return ['key', 'customIdGenerated', 'idEditorOpen'].includes(key) || (key === 'customId' && value.customIdGenerated === true);
     return 'id' in value && (key === 'idGenerated' || (key === 'id' && value.idGenerated === true));
   },
 };

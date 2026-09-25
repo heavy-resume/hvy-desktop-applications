@@ -461,84 +461,60 @@ export function workspaceNodeName(node: WorkspaceTreeNode): string {
 
 export function renderSaveAsDialog(state: AppState): string {
   if (!state.saveAsDialogOpen || !state.document) return '';
-  const templateDisabled = state.document.source.extension === '.md' || state.document.virtual === 'versionHistory';
-  if (state.saveAsKind === 'template' && !templateDisabled) {
-    return renderSaveAsTemplateDialog(state);
-  }
+  const templateDisabled = state.document.source.extension === '.md';
+  const template = state.saveAsKind === 'template' && !templateDisabled;
   const workspaces = state.workspaces;
   const workspaceDisabled = workspaces.length === 0;
   const workspaceActive = state.saveAsScope === 'workspace' && !workspaceDisabled;
-  const anywhereActive = state.saveAsScope === 'anywhere' || workspaceDisabled;
-  const selectedWorkspacePath = workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath)
-    ? state.selectedWorkspacePath
-    : currentDocumentWorkspacePath(state) ?? workspaces[0]?.path ?? null;
-  const name = state.document.isNew
-    ? ''
-    : state.document.virtual === 'versionHistory'
-    ? displayDocumentName(savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name))
-    : displayDocumentName(state.document.source.name);
+  const appActive = template && state.saveAsScope === 'app';
+  const anywhereActive = !workspaceActive && !appActive;
+  const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+  const sourceWorkspacePath = currentDocumentWorkspacePath(state);
+  const selectedWorkspacePath = sourceWorkspacePath
+    ?? (workspaces.some((workspace) => workspace.path === state.selectedWorkspacePath) ? state.selectedWorkspacePath : workspaces[0]?.path ?? null);
+  const relativePath = sourceWorkspacePath ? sourcePath.replace(/\\/g, '/').slice(sourceWorkspacePath.replace(/\\/g, '/').replace(/\/$/, '').length + 1) : '';
+  const sourceDirectory = relativePath.includes('/') ? relativePath.slice(0, relativePath.lastIndexOf('/')) : '';
+  const targetDirectory = sourceDirectory === 'templates' || sourceDirectory.startsWith('templates/') ? '' : sourceDirectory;
+  const sourceName = state.document.historySourceName ?? state.document.source.name;
+  const name = state.document.isNew ? '' : template
+    ? sourceName.replace(/\.(t?hvy|phvy|md)$/i, '')
+    : displayDocumentName(state.document.virtual === 'versionHistory' ? savedVersionDocumentName(sourceName) : sourceName);
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="save-as-document">
+      <form class="dialog save-as-dialog" data-form="${template ? 'save-as-template' : 'save-as-document'}">
         <h2>Save As...</h2>
-        ${renderSaveAsKindControl('document', templateDisabled)}
-        ${workspaceActive ? `<label>
-          <span>Name</span>
-          <input class="hvy-galaxy-input" name="fileName" type="text" autocomplete="off" value="${escapeAttr(name)}" required autofocus>
-        </label>` : ''}
-        <div class="segmented-control" role="tablist" aria-label="Save destination">
-          <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
-          <button type="button" class="hvy-galaxy-button ${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive ? 'true' : 'false'}">Anywhere</button>
-        </div>
-        <input class="hvy-galaxy-input" name="scope" type="hidden" value="${escapeAttr(anywhereActive ? 'anywhere' : 'workspace')}">
-        ${workspaceActive ? `
-          ${renderWorkspaceDestinationTree(workspaces, selectedWorkspacePath, '')}
-        ` : `
-          <p class="dialog-note">Choose a location outside HVY Galaxy.</p>
-        `}
-        <div class="dialog-actions">
-          <button class="hvy-galaxy-button" type="button" data-action="cancel-save-as">Cancel</button>
-          ${workspaceActive
-      ? `<button class="hvy-galaxy-button" type="submit" ${state.busy || !name.trim() ? 'disabled' : ''}>Save</button>`
-      : `<button class="hvy-galaxy-button" type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
-        </div>
-      </form>
-    </div>`;
-}
-
-export function renderSaveAsTemplateDialog(state: AppState): string {
-  const workspaceDisabled = !currentDocumentWorkspacePath(state);
-  const appActive = state.saveTemplateScope === 'app';
-  const workspaceActive = state.saveTemplateScope === 'workspace' && !workspaceDisabled;
-  return `
-    <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="save-as-template">
-        <h2>Save As...</h2>
-        ${renderSaveAsKindControl('template', false)}
-        <label>
+        ${renderSaveAsKindControl(template ? 'template' : 'document', templateDisabled)}
+        ${template ? `<label>
           <span>Format</span>
           <select class="hvy-galaxy-select" name="format">
-            <option value=".thvy" ${state.document?.source.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
-            <option value=".phvy" ${state.document?.source.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
+            <option value=".thvy" ${state.document.source.extension === '.phvy' ? '' : 'selected'}>THVY template (.thvy)</option>
+            <option value=".phvy" ${state.document.source.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
           </select>
-        </label>
-        <label>
+        </label>` : ''}
+        ${template || workspaceActive ? `<label>
           <span>Name</span>
-          <input class="hvy-galaxy-input" name="templateName" type="text" autocomplete="off" value="${escapeAttr(state.document?.source.name.replace(/\.(t?hvy|phvy|md)$/i, '') ?? '')}" autofocus required>
-        </label>
-        <div class="field-group">
-          <span>Scope</span>
-          <div class="segmented-control">
-            <button type="button" class="hvy-galaxy-button ${appActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="app" aria-pressed="${appActive ? 'true' : 'false'}">App</button>
-            <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-save-template-scope" data-scope="workspace" aria-pressed="${workspaceActive ? 'true' : 'false'}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
-          </div>
+          <input class="hvy-galaxy-input" name="${template ? 'templateName' : 'fileName'}" type="text" autocomplete="off" value="${escapeAttr(name)}" required autofocus>
+        </label>` : ''}
+        ${template ? `<label>
+          <span>Save location</span>
+          <select class="hvy-galaxy-select" name="scope" data-action="select-save-as-scope">
+            <option value="workspace" ${workspaceActive ? 'selected' : ''} ${workspaceDisabled ? 'disabled' : ''}>Workspace</option>
+            <option value="app" ${appActive ? 'selected' : ''}>App Templates</option>
+            <option value="anywhere" ${anywhereActive ? 'selected' : ''}>Choose another location…</option>
+          </select>
+        </label>` : `<div class="segmented-control" role="tablist" aria-label="Save destination">
+          <button type="button" class="hvy-galaxy-button ${workspaceActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="workspace" aria-pressed="${workspaceActive}" ${workspaceDisabled ? 'disabled' : ''}>Workspace</button>
+          <button type="button" class="hvy-galaxy-button ${anywhereActive ? 'is-active' : ''}" data-action="set-save-as-scope" data-scope="anywhere" aria-pressed="${anywhereActive}">Anywhere</button>
         </div>
-        <input class="hvy-galaxy-input" name="scope" type="hidden" value="${escapeAttr(workspaceActive ? 'workspace' : 'app')}">
-        <p class="dialog-note">${workspaceDisabled ? 'Templates can be saved to app templates. Workspace templates are available when the document belongs to an open workspace.' : 'App templates are available everywhere; workspace templates stay with this workspace.'}</p>
+        <input class="hvy-galaxy-input" name="scope" type="hidden" value="${workspaceActive ? 'workspace' : 'anywhere'}">`}
+        ${workspaceActive ? renderWorkspaceDestinationTree(workspaces, selectedWorkspacePath, targetDirectory)
+          : `<p class="dialog-note">${appActive ? 'Save to app templates, available everywhere.' : 'Choose a location on your computer.'}</p>`}
         ${state.error ? `<p class="dialog-note" data-state="error" role="alert">${escapeHtml(state.error)}</p>` : ''}
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-save-as">Cancel</button>
-          <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Save</button>
+          ${template || workspaceActive
+            ? `<button class="hvy-galaxy-button" type="submit" ${state.busy || (!template && !name.trim()) ? 'disabled' : ''}>${anywhereActive ? 'Choose Location' : 'Save'}</button>`
+            : `<button class="hvy-galaxy-button" type="button" data-action="save-as-anywhere" ${state.busy ? 'disabled' : ''}>Choose Location</button>`}
         </div>
       </form>
     </div>`;

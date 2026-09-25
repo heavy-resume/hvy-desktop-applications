@@ -65,7 +65,9 @@ export function isWorkspaceTemplatePath(state: AppState, path: string): boolean 
 }
 
 export function currentDocumentWorkspacePath(state: AppState): string | null {
-  const path = state.document?.source.path;
+  const path = state.document?.virtual === 'versionHistory'
+    ? state.document.historySourcePath
+    : state.document?.source.path;
   if (!path) return null;
   return workspacePathForFileInWorkspaces(state.workspaces, path);
 }

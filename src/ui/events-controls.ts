@@ -14,7 +14,7 @@ import { readAiSettingsForm, readAppSettingsForm, readDebugLogSettingsControls, 
 import { updateImportSubmit } from './render-import';
 import { applyThemeFilter, syncThemeAlphaControl, syncThemeOverrideAction } from './render-theme';
 import { readWorkspaceTemplateVisibilityForm } from './render-workspace-dialogs';
-import { updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
+import { isSaveAsScope, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { UiHandlers } from './types';
 
 export const importExcludeTagHelpers = {
@@ -385,6 +385,14 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
   root.addEventListener('change', (event) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
     if (!target || target.closest('#hvyMount')) return;
+    if (target instanceof HTMLSelectElement && target.dataset.action === 'select-save-as-scope' && isSaveAsScope(target.value)) {
+      if (target.value === 'anywhere') {
+        target.form?.requestSubmit();
+      } else {
+        handlers.setSaveAsScope(target.value);
+      }
+      return;
+    }
     if (target instanceof HTMLSelectElement && target.dataset.action === 'select-integration-profile') {
       handlers.selectIntegrationProfile(target.value);
       return;

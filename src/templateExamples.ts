@@ -7,12 +7,17 @@ export function templateExampleDirectory(relativePath: string): string {
 export function workspaceTemplateForExample(workspace: Workspace, relativePath: string): Extract<WorkspaceTreeNode, { kind: 'file' }> | null {
   const normalized = relativePath.replaceAll('\\', '/');
   const visit = (nodes: WorkspaceTreeNode[]): Extract<WorkspaceTreeNode, { kind: 'file' }> | null => {
+    // A PDF example also has a template extension. Resolve its owner at this
+    // level before descending into the example directory, regardless of sort order.
+    for (const node of nodes) {
+      if (node.kind === 'file' && /\.(thvy|phvy)$/i.test(node.name) && node.relativePath.startsWith('templates/')) {
+        if (node.relativePath === normalized || normalized.startsWith(`${templateExampleDirectory(node.relativePath)}/`)) return node;
+      }
+    }
     for (const node of nodes) {
       if (node.kind === 'folder') {
         const found = visit(node.children);
         if (found) return found;
-      } else if (/\.(thvy|phvy)$/i.test(node.name) && node.relativePath.startsWith('templates/')) {
-        if (node.relativePath === normalized || normalized.startsWith(`${templateExampleDirectory(node.relativePath)}/`)) return node;
       }
     }
     return null;

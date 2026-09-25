@@ -1,3 +1,4 @@
+import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { clearDocumentRecoveryDrafts, createDocumentBackup, discardDocumentBackup, listDocumentBackups, readDocumentFile, relocateDocumentRecoveryDrafts, requestAppClose, saveDocumentAsDialog, saveDocumentFile, savePdfAsDialog, type DocumentBackup, type DocumentFileMetadata } from './backend';
 import { logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
 import { attachMatchingSidecarEmbeddingIndex, deleteDocumentEmbeddingSidecar, deleteSidecarIfSavedDocumentContainsMatchingIndex } from './embeddingIndex';
@@ -112,6 +113,10 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
     await refreshOpenWorkspaceForFile(openDocument.source.path);
     await refreshRecents();
     await clearRecoveryDraftsForDocument(openDocument.source.path, openDocument.source.name);
+    if (state.versionHistorySidebarOpen && state.versionHistorySourcePath === openDocument.source.path) {
+      state.savedDocumentVersions = await listSavedDocumentVersions(openDocument.source.path);
+      state.selectedSavedVersionId = state.savedDocumentVersions[0]?.id ?? null;
+    }
     logDebugEvent('perf', 'save:complete', {
       path: openDocument.source.path,
       byteCount: bytes.length,
@@ -161,22 +166,26 @@ export async function openSavedVersionPreview(versionId: string): Promise<void> 
   const replacedVersionId = document.virtual === 'versionHistory' && !document.dirty ? document.versionId : null;
   await runBusy('Opening saved version...', async () => {
     const version = state.savedDocumentVersions.find((candidate) => candidate.id === versionId);
-    const bytes = await materializeSavedDocumentVersion(sourcePath, versionId);
     state.versionHistorySidebarOpen = true;
     state.versionHistorySourcePath = sourcePath;
     state.versionHistorySourceName = sourceName;
     state.selectedSavedVersionId = versionId;
-    await openDocument({
-      path: `version-history:${encodeURIComponent(sourcePath)}:${versionId}`,
-      name: `${sourceName} — ${version ? new Date(version.createdAt).toLocaleString() : 'Saved version'}`,
-      extension: document.source.extension,
-      bytes,
-      hiddenFromAI: document.hiddenFromAI,
-    }, {
-      hiddenFromAI: document.hiddenFromAI,
-      initialMode: document.mode,
-      historyPreview: { sourcePath, sourceName, versionId },
-    });
+    if (versionId === state.savedDocumentVersions[0]?.id) {
+      await openDocument(await readDocumentFile(sourcePath), { initialMode: document.mode });
+    } else {
+      const bytes = await materializeSavedDocumentVersion(sourcePath, versionId);
+      await openDocument({
+        path: `version-history:${encodeURIComponent(sourcePath)}:${versionId}`,
+        name: `${sourceName} — ${version ? new Date(version.createdAt).toLocaleString() : 'Saved version'}`,
+        extension: document.source.extension,
+        bytes,
+        hiddenFromAI: document.hiddenFromAI,
+      }, {
+        hiddenFromAI: document.hiddenFromAI,
+        initialMode: document.mode,
+        historyPreview: { sourcePath, sourceName, versionId },
+      });
+    }
     if (replacedVersionId && replacedVersionId !== state.document?.versionId) {
       documentSessions.delete(replacedVersionId);
       removeDocumentTabPath(replacedVersionId);
@@ -190,8 +199,12 @@ export async function openSavedVersionPreview(versionId: string): Promise<void> 
 export function openSaveAsDialog(): void {
   if (!state.document?.mounted || (state.document.readOnly && state.document.virtual !== 'versionHistory')) return;
   state.saveAsDialogOpen = true;
-  state.saveAsKind = 'document';
-  state.saveAsScope = state.workspaces.length > 0 ? 'workspace' : 'anywhere';
+  const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+  const savedTemplate = state.savedTemplates.find((template) => template.path === sourcePath);
+  state.saveAsKind = state.document.source.extension === '.thvy' || savedTemplate || isWorkspaceTemplatePath(state, sourcePath)
+    ? 'template' : 'document';
+  state.saveAsScope = currentDocumentWorkspacePath(state) || (state.document.isNew && state.workspaces.length > 0)
+    ? 'workspace' : savedTemplate?.scope === 'app' ? 'app' : 'anywhere';
   state.error = null;
   state.status = 'Ready';
   rerender({ preserveMountedDocument: true });
@@ -266,7 +279,9 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
   const suggestedName = state.document.virtual === 'versionHistory'
     ? savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name)
     : state.document.source.name;
-  const file = await saveDocumentAsDialog({ suggestedName, bytes });
+  const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+  const directory = state.document.isNew ? '' : sourcePath.replace(/\\/g, '/').slice(0, sourcePath.replace(/\\/g, '/').lastIndexOf('/') + 1);
+  const file = await saveDocumentAsDialog({ suggestedName: `${directory}${suggestedName}`, bytes });
   if (!file) return;
   adoptSavedAsDocument(file, state.document.mounted, document, previousMode, previousPath, previousUseDocumentColors);
   recordSuccessfulDocumentSave(file.path, file.name, document);
@@ -1052,7 +1067,6 @@ export function profileDocumentBlocks(document: Record<string, unknown>): {
     if (!isRecord(section)) return;
     sectionCount += 1;
     visitBlocks(section.blocks);
-    if (Array.isArray(section.children)) section.children.forEach(visitSection);
   };
   if (Array.isArray(document.sections)) document.sections.forEach(visitSection);
   return { sectionCount, blockCount, componentCounts };

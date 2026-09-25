@@ -98,7 +98,7 @@ export interface AppState {
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
   saveAsKind: 'document' | 'template';
-  saveAsScope: 'workspace' | 'anywhere';
+  saveAsScope: 'workspace' | 'anywhere' | 'app';
   exportPdfSavePromptOpen: boolean;
   exportPdfPlaintextConfirmed: boolean;
   exportedPdfPath: string | null;

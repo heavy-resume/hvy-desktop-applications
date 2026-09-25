@@ -11,6 +11,8 @@ vi.hoisted(() => {
 });
 
 const hvyMocks = vi.hoisted(() => ({
+  serializeHvy: vi.fn(async () => new Uint8Array([4, 5, 6])),
+  getPhvyCompatibilityErrors: vi.fn(async () => []),
   applyMountedRecoveryState: vi.fn(),
   encryptMountedDocumentAsync: vi.fn(async (mounted: { document: { encryption?: unknown } }) => {
     mounted.document.encryption = {
@@ -31,6 +33,9 @@ const hvyMocks = vi.hoisted(() => ({
 const backendMocks = vi.hoisted(() => ({
   listDocumentKeyMetadata: vi.fn(async (): Promise<DocumentKeyMetadata[]> => []),
   renameDocumentFile: vi.fn(),
+  saveDocumentTemplate: vi.fn(async () => ({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
+  saveDocumentToWorkspace: vi.fn(async () => ({ path: '/other/drafts/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
+  saveDocumentAsDialog: vi.fn(async () => ({ path: '/outside/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
 }));
 
 const documentKeyMocks = vi.hoisted(() => ({
@@ -54,6 +59,12 @@ const embeddingMocks = vi.hoisted(() => ({
 }));
 
 const mainMocks = vi.hoisted(() => ({
+  adoptSavedAsDocument: vi.fn((file: { path: string; name: string; extension: '.thvy' | '.phvy' }) => {
+    if (!state.document) return;
+    state.document.source = { ...state.document.source, ...file };
+    state.document.dirty = false;
+    state.document.isNew = false;
+  }),
   captureMountScrollRatio: vi.fn(() => ({ top: 0, left: 0, topPosition: 0, leftPosition: 0 })),
   applyArchivedFileRelocations: vi.fn(),
   copyOpenWorkspaceFileToWorkspace: vi.fn(),
@@ -61,6 +72,9 @@ const mainMocks = vi.hoisted(() => ({
   clearRecoveryDraftsForDocument: vi.fn(async () => undefined),
   documentTitle: vi.fn((name: string) => name.replace(/\.[^.]+$/, '')),
   documentSessions: new Map(),
+  ensureCurrentDocumentMounted: vi.fn(async () => undefined),
+  refreshSavedTemplates: vi.fn(async () => undefined),
+  templateFileName: vi.fn((name, extension) => name + extension),
   loadWorkspace: vi.fn(),
   mountCurrentDocument: vi.fn(),
   mountRoot: {},
@@ -69,6 +83,7 @@ const mainMocks = vi.hoisted(() => ({
   removeOpenDocumentFile: vi.fn(),
   refreshOpenWorkspaceForFile: vi.fn(),
   refreshRecents: vi.fn(),
+  readDocumentColorPreference: vi.fn(() => false),
   relocateRecoveryDraftsForDocument: vi.fn(),
   rerender: vi.fn(),
   restoreMountScrollRatio: vi.fn(),
@@ -102,6 +117,8 @@ const mainMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./hvy', () => ({
+  serializeHvy: hvyMocks.serializeHvy,
+  getPhvyCompatibilityErrors: hvyMocks.getPhvyCompatibilityErrors,
   applyMountedRecoveryState: hvyMocks.applyMountedRecoveryState,
   encryptMountedDocumentAsync: hvyMocks.encryptMountedDocumentAsync,
   encryptMountedDocumentWithKey: hvyMocks.encryptMountedDocumentWithKey,
@@ -119,6 +136,9 @@ vi.mock('./backend', async (importOriginal) => ({
   ...await importOriginal<typeof import('./backend')>(),
   listDocumentKeyMetadata: backendMocks.listDocumentKeyMetadata,
   renameDocumentFile: backendMocks.renameDocumentFile,
+  saveDocumentTemplate: backendMocks.saveDocumentTemplate,
+  saveDocumentToWorkspace: backendMocks.saveDocumentToWorkspace,
+  saveDocumentAsDialog: backendMocks.saveDocumentAsDialog,
 }));
 
 vi.mock('./main', () => mainMocks);
@@ -165,6 +185,88 @@ describe('document handlers', () => {
     state.documentEncryptionKeyUsage = {};
     state.documentKeyDataLoading = false;
     backendMocks.renameDocumentFile.mockReset();
+  });
+
+  it.each(['.thvy', '.phvy'] as const)('saves an older %s version to its original workspace as a template', async (extension) => {
+    const sourcePath = `/workspace/templates/Resume${extension}`;
+    state.workspaces = [{ path: '/workspace', files: [{ kind: 'file', path: sourcePath }] }] as never;
+    state.document = testOpenDocument({
+      virtual: 'versionHistory',
+      historySourcePath: sourcePath,
+      historySourceName: `Resume${extension}`,
+      mounted: { document: { sections: [] }, mount: {} } as never,
+    });
+    state.document.source = { ...state.document.source, path: 'version-history:resume:older', extension };
+    const handlers = createDocumentHandlers(vi.fn());
+    handlers.setSaveTemplateScope?.('workspace');
+    expect(state.saveTemplateScope).toBe('workspace');
+
+    handlers.saveAsTemplate?.('Resume', 'workspace', extension);
+
+    await vi.waitFor(() => {
+      expect(backendMocks.saveDocumentTemplate).toHaveBeenCalledWith({
+        scope: 'workspace', workspacePath: '/workspace', name: 'Resume', extension, bytes: [4, 5, 6],
+      });
+      expect(mainMocks.refreshSavedTemplates).toHaveBeenCalledWith('/workspace');
+    });
+  });
+
+  it('saves a template selected at workspace level through workspace template storage', async () => {
+    state.document = testOpenDocument({ mounted: { document: { sections: [] }, mount: {} } as never });
+    const handlers = createDocumentHandlers(vi.fn());
+    handlers.saveAsTemplate?.('Resume', 'workspace', '.thvy', '/other', '');
+    await vi.waitFor(() => expect(backendMocks.saveDocumentTemplate).toHaveBeenCalledWith({
+      scope: 'workspace', workspacePath: '/other', name: 'Resume', extension: '.thvy', bytes: [4, 5, 6],
+    }));
+    expect(backendMocks.saveDocumentToWorkspace).not.toHaveBeenCalled();
+    expect(mainMocks.adoptSavedAsDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' }),
+      state.document?.mounted,
+      expect.objectContaining({ extension: '.thvy' }),
+      'editor',
+      '/workspace/example.hvy',
+      false,
+    );
+    expect(state.document?.source).toMatchObject({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' });
+    expect(state.document?.dirty).toBe(false);
+  });
+
+  it('saves a template to the workspace and folder selected in the shared picker', async () => {
+    state.document = testOpenDocument({ mounted: { document: { sections: [] }, mount: {} } as never });
+    const handlers = createDocumentHandlers(vi.fn());
+    handlers.saveAsTemplate?.('Resume', 'workspace', '.thvy', '/other', 'drafts');
+    await vi.waitFor(() => expect(backendMocks.saveDocumentToWorkspace).toHaveBeenCalledWith({
+      workspacePath: '/other', targetDirectory: 'drafts', name: 'Resume.thvy', bytes: [4, 5, 6],
+    }));
+    expect(backendMocks.saveDocumentTemplate).not.toHaveBeenCalled();
+    expect(mainMocks.adoptSavedAsDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/other/drafts/Resume.thvy' }),
+      state.document?.mounted,
+      expect.objectContaining({ extension: '.thvy' }),
+      'editor',
+      '/workspace/example.hvy',
+      false,
+    );
+  });
+
+  it('opens Anywhere at the historical template source folder', async () => {
+    state.document = testOpenDocument({
+      virtual: 'versionHistory', historySourcePath: '/outside/drafts/Resume.thvy',
+      mounted: { document: { sections: [] }, mount: {} } as never,
+    });
+    const handlers = createDocumentHandlers(vi.fn());
+    handlers.saveAsTemplate?.('Resume', 'anywhere', '.thvy');
+    await vi.waitFor(() => expect(backendMocks.saveDocumentAsDialog).toHaveBeenCalledWith({
+      suggestedName: '/outside/drafts/Resume.thvy', bytes: [4, 5, 6],
+    }));
+    expect(mainMocks.adoptSavedAsDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/outside/Resume.thvy' }),
+      state.document?.mounted,
+      expect.objectContaining({ extension: '.thvy' }),
+      'editor',
+      '/workspace/example.hvy',
+      false,
+    );
   });
 
   it('restores the active editor session across regular and advanced mode remounts', async () => {

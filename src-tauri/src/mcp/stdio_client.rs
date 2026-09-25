@@ -2,6 +2,7 @@ pub(crate) fn run_mcp_stdio<I, R, W>(
     args: I,
     env_workspaces: Option<std::ffi::OsString>,
     cwd: PathBuf,
+    app_data_dir: Option<PathBuf>,
     input: R,
     mut output: W,
 ) -> AppResult<()>
@@ -11,8 +12,9 @@ where
     W: Write,
 {
     let args = args.into_iter().collect::<Vec<_>>();
-    let workspace_config_path = cwd.join(MCP_STDIO_WORKSPACE_CONFIG);
-    let mut workspace_config = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone())?;
+    let workspace_config_path =
+        mcp_stdio_primary_config_path(args.clone(), cwd.clone(), app_data_dir.clone())?;
+    let mut workspace_config = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone(), app_data_dir.clone())?;
     let mut workspace_paths = workspace_config
         .workspaces
         .iter()
@@ -20,7 +22,7 @@ where
         .collect::<Vec<_>>();
     let mut reader = BufReader::new(input);
     while let Some(message) = read_mcp_stdio_message(&mut reader)? {
-        if let Ok(next_config) = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone()) {
+        if let Ok(next_config) = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone(), app_data_dir.clone()) {
             workspace_config = next_config;
             workspace_paths = workspace_config
                 .workspaces
@@ -35,7 +37,7 @@ where
             &workspace_paths,
             &workspace_config_path,
         )? {
-            if let Ok(next_config) = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone()) {
+            if let Ok(next_config) = mcp_stdio_workspace_config(args.clone(), env_workspaces.clone(), cwd.clone(), app_data_dir.clone()) {
                 workspace_config = next_config;
                 workspace_paths = workspace_config
                     .workspaces
@@ -116,11 +118,12 @@ fn mcp_request_method(request: &serde_json::Value) -> Option<&str> {
     request.get("method").and_then(|method| method.as_str())
 }
 
-pub(crate) fn mcp_stdio_workspace_config<I>(
-    args: I,
-    env_workspaces: Option<std::ffi::OsString>,
-    cwd: PathBuf,
-) -> AppResult<McpWorkspaceConfig>
+struct McpStdioArgs {
+    roots: Vec<PathBuf>,
+    config_paths: Vec<PathBuf>,
+}
+
+fn parse_mcp_stdio_args<I>(args: I) -> AppResult<McpStdioArgs>
 where
     I: IntoIterator<Item = String>,
 {
@@ -153,10 +156,111 @@ where
             return Err(AppError::Message(format!("Unknown MCP stdio argument: {arg}")));
         }
     }
-    let default_config = cwd.join(MCP_STDIO_WORKSPACE_CONFIG);
-    if default_config.is_file() {
-        config_paths.insert(0, default_config);
+    Ok(McpStdioArgs { roots, config_paths })
+}
+
+/// Resolves the app data directory the way Tauri's `app_data_dir()` does. The
+/// `--mcp-stdio` process has no Tauri app, so it cannot ask Tauri for this.
+pub(crate) fn mcp_stdio_app_data_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME")?;
+        Some(
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join(APP_IDENTIFIER),
+        )
     }
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = std::env::var_os("APPDATA")?;
+        Some(PathBuf::from(appdata).join(APP_IDENTIFIER))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+            if !data_home.is_empty() {
+                return Some(PathBuf::from(data_home).join(APP_IDENTIFIER));
+            }
+        }
+        let home = std::env::var_os("HOME")?;
+        Some(
+            PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join(APP_IDENTIFIER),
+        )
+    }
+}
+
+/// The workspace config the desktop app writes, found independently of how the
+/// MCP client launched us. Claude Desktop ignores the `cwd` field in its server
+/// config, so nothing here may depend on `cwd`.
+pub(crate) fn mcp_stdio_default_config_path(app_data_dir: Option<&Path>) -> Option<PathBuf> {
+    app_data_dir
+        .map(Path::to_path_buf)
+        .map(|directory| directory.join("mcp").join(MCP_STDIO_WORKSPACE_CONFIG))
+}
+
+/// Every config file to read, in precedence order, plus the one to treat as
+/// primary for writes and for sibling lookups such as the WebMCP broker.
+pub(crate) fn mcp_stdio_config_paths(
+    explicit: Vec<PathBuf>,
+    cwd: &Path,
+    app_data_dir: Option<&Path>,
+) -> (Vec<PathBuf>, PathBuf) {
+    let cwd_config = cwd.join(MCP_STDIO_WORKSPACE_CONFIG);
+    let default_config = mcp_stdio_default_config_path(app_data_dir);
+    let mut candidates = Vec::new();
+    if cwd_config.is_file() {
+        candidates.push(cwd_config.clone());
+    }
+    if let Some(default_config) = default_config.clone() {
+        if default_config.is_file() {
+            candidates.push(default_config);
+        }
+    }
+    candidates.extend(explicit.iter().cloned());
+
+    let mut seen = HashSet::new();
+    candidates.retain(|path| {
+        let key = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        seen.insert(path_to_string(&key))
+    });
+
+    let primary = explicit
+        .last()
+        .cloned()
+        .or_else(|| candidates.first().cloned())
+        .or(default_config)
+        .unwrap_or(cwd_config);
+    (candidates, primary)
+}
+
+pub(crate) fn mcp_stdio_primary_config_path<I>(
+    args: I,
+    cwd: PathBuf,
+    app_data_dir: Option<PathBuf>,
+) -> AppResult<PathBuf>
+where
+    I: IntoIterator<Item = String>,
+{
+    let McpStdioArgs { config_paths, .. } = parse_mcp_stdio_args(args)?;
+    Ok(mcp_stdio_config_paths(config_paths, &cwd, app_data_dir.as_deref()).1)
+}
+
+pub(crate) fn mcp_stdio_workspace_config<I>(
+    args: I,
+    env_workspaces: Option<std::ffi::OsString>,
+    cwd: PathBuf,
+    app_data_dir: Option<PathBuf>,
+) -> AppResult<McpWorkspaceConfig>
+where
+    I: IntoIterator<Item = String>,
+{
+    let McpStdioArgs { mut roots, config_paths } = parse_mcp_stdio_args(args)?;
+    let (config_paths, _) = mcp_stdio_config_paths(config_paths, &cwd, app_data_dir.as_deref());
     let workspace_config = read_mcp_workspace_config_paths(&config_paths)?;
     roots.extend(workspace_config.workspaces.iter().map(PathBuf::from));
     if let Some(value) = env_workspaces {
@@ -411,7 +515,7 @@ fn mcp_client_install_statuses(launch: &McpStdioLaunchConfig) -> AppResult<Vec<M
     Ok(vec![
         mcp_client_install_status(
             "codex",
-            "Codex",
+            "ChatGPT Desktop (formerly Codex)",
             codex_config_path()?,
             launch,
             codex_config_has_hvy_mcp,
@@ -433,6 +537,7 @@ fn mcp_client_install_status(
     launch: &McpStdioLaunchConfig,
     is_installed: fn(&Path, &McpStdioLaunchConfig) -> bool,
 ) -> McpClientInstallStatus {
+    let message_label = if target == "codex" { "ChatGPT Desktop" } else { label };
     let config_exists = path.exists() || (target == "claude" && claude_config_can_be_created(&path));
     let executable_exists = Path::new(&launch.command).exists();
     let installed = config_exists && is_installed(&path, launch);
@@ -445,20 +550,20 @@ fn mcp_client_install_status(
     });
     let message = if !config_exists {
         if backups.is_empty() {
-            format!("{label} config file was not found.")
+            format!("{message_label} config file was not found.")
         } else {
-            format!("{label} config file was not found. A backup can be restored.")
+            format!("{message_label} config file was not found. A backup can be restored.")
         }
     } else if installed {
         if executable_exists {
-            format!("HVY MCP is installed for {label}. Refresh or remove it anytime.")
+            format!("MCP is installed for {message_label}. Refresh or remove it anytime.")
         } else {
-            "HVY MCP is installed, but the HVY Galaxy executable was not found.".into()
+            "MCP is installed, but the HVY Galaxy executable was not found.".into()
         }
     } else if !executable_exists {
         "HVY Galaxy executable was not found.".into()
     } else {
-        format!("Ready to install HVY MCP for {label}. A backup will be saved first.")
+        format!("Ready to install MCP for {message_label}. A backup will be saved first.")
     };
     McpClientInstallStatus {
         target: target.into(),
@@ -613,7 +718,7 @@ fn remove_mcp_from_claude(path: &Path) -> AppResult<()> {
 
 pub(crate) fn restore_mcp_client_backup_file(path: &Path) -> AppResult<()> {
     let backup_path = latest_mcp_client_backup_path(path)
-        .ok_or_else(|| AppError::Message(format!("No HVY MCP backup was found for {}.", path_to_string(path))))?;
+        .ok_or_else(|| AppError::Message(format!("No MCP backup was found for {}.", path_to_string(path))))?;
     if path.exists() {
         backup_file_before_overwrite(path)?;
     } else if let Some(parent) = path.parent() {
@@ -685,11 +790,18 @@ fn mcp_client_backup_paths(path: &Path) -> Vec<PathBuf> {
 }
 
 fn mcp_client_backup_label(file_name: &str) -> String {
-    file_name
+    let timestamp = file_name
         .split(".hvy-galaxy-backup-")
         .nth(1)
-        .unwrap_or(file_name)
-        .to_string()
+        .unwrap_or(file_name);
+    chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%dT%H%M%SZ")
+        .map(|date| {
+            date.and_utc()
+                .with_timezone(&chrono::Local)
+                .format("%b %-d, %Y, %-I:%M %p")
+                .to_string()
+        })
+        .unwrap_or_else(|_| timestamp.to_string())
 }
 
 fn codex_config_has_hvy_mcp(path: &Path, launch: &McpStdioLaunchConfig) -> bool {

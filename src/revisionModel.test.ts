@@ -157,7 +157,6 @@ function sampleDocument(): VisualDocument {
       idEditorOpen: false,
       isGhost: false,
       title: 'Section',
-      level: 1,
       expanded: true,
       highlight: false,
       css: '',
@@ -170,7 +169,6 @@ function sampleDocument(): VisualDocument {
         schema: { ...defaultBlockSchema('text'), id: 'block-1' },
         schemaMode: false,
       }],
-      children: [],
     }],
   };
 }

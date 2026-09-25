@@ -37,6 +37,13 @@ describe('recovery document identity', () => {
     expect(documentDirtyAfterMountedChange(false, undefined, false)).toBe(false);
     expect(documentDirtyAfterMountedChange(true, undefined, false)).toBe(true);
   });
+
+  it('keeps restored template edits unsaved through clean editor events until saved', () => {
+    expect(documentDirtyAfterMountedChange(false, undefined, false, true)).toBe(true);
+    expect(documentDirtyAfterMountedChange(true, undefined, false, true)).toBe(true);
+    expect(documentDirtyAfterMountedChange(false, undefined, false, false)).toBe(false);
+    expect(documentDirtyAfterMountedChange(true, undefined, false, false)).toBe(true);
+  });
 });
 
 describe('recovery save conflicts', () => {

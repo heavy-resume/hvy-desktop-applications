@@ -520,6 +520,7 @@ static INTEGRATION_VAULT_KEY_CACHE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock:
 static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
 static INTEGRATION_ALLOWED_ORIGINS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>> = OnceLock::new();
+static INTEGRATION_CURRENT_URLS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<tauri::Url>>>>>> = OnceLock::new();
 #[derive(Clone, Default)]
 struct IntegrationPageContext {
     integration_id: Option<String>,
@@ -537,6 +538,12 @@ fn integration_page_context(profile_id: &str) -> AppResult<Arc<Mutex<Integration
     let mut contexts = INTEGRATION_PAGE_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new())).lock()
         .map_err(|error| AppError::Message(error.to_string()))?;
     Ok(contexts.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(IntegrationPageContext::default()))).clone())
+}
+
+fn integration_current_url(profile_id: &str) -> AppResult<Arc<Mutex<Option<tauri::Url>>>> {
+    let mut urls = INTEGRATION_CURRENT_URLS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(urls.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(None))).clone())
 }
 
 fn integration_browser_label(profile_id: &str) -> String {
@@ -1460,6 +1467,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
     };
     let profile_allowed_origins = integration_allowed_origins(&profile_id)?;
     let profile_page_context = integration_page_context(&profile_id)?;
+    let profile_current_url = integration_current_url(&profile_id)?;
     if command == "open" {
         let foreground = foreground.unwrap_or(true);
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
@@ -1486,7 +1494,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
             window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
                 .map_err(|error| AppError::Message(error.to_string()))?;
-            if content.url().map(|current| current == url).unwrap_or(false) {
+            if profile_current_url.lock().map(|current| current.as_ref() == Some(&url)).unwrap_or(false) {
                 if action_mode_pending.load(Ordering::SeqCst) {
                     content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
                         .map_err(|error| AppError::Message(error.to_string()))?;
@@ -1510,12 +1518,14 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             window.remove_menu().map_err(|error| AppError::Message(error.to_string()))?;
             return Ok(());
         }
+        *profile_current_url.lock().map_err(|error| AppError::Message(error.to_string()))? = None;
         let integration_app = app.clone();
         let integration_window_label = window_label.clone();
         let result_profile_id = profile_id.clone();
         let page_load_profile_id = result_profile_id.clone();
         let page_load_action_mode = action_mode_pending.clone();
         let page_load_extraction = pending_extraction.clone();
+        let page_load_current_url = profile_current_url.clone();
         let navigation_action_mode = action_mode_pending.clone();
         let page_load_allowed_origins = profile_allowed_origins.clone();
         let toolbar_allowed_origins = profile_allowed_origins.clone();
@@ -1523,6 +1533,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let navigation_allowed_origins = profile_allowed_origins.clone();
         let new_window_page_context = profile_page_context.clone();
         let navigation_page_context = profile_page_context.clone();
+        let new_window_current_url = profile_current_url.clone();
+        let navigation_current_url = profile_current_url.clone();
         let toolbar_page_context = profile_page_context.clone();
         let new_window_app = app.clone();
         let new_window_profile_id = profile_id.clone();
@@ -1554,6 +1566,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             }
         })
         .on_page_load(move |window, payload| {
+            if let Ok(mut current_url) = page_load_current_url.lock() {
+                *current_url = Some(payload.url().clone());
+            }
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
                 if let Some(toolbar) = window.app_handle().get_webview(&integration_toolbar_label(&page_load_profile_id)) {
                     let allowed = page_load_allowed_origins.lock().map(|origins| origins.clone()).unwrap_or_default();
@@ -1593,9 +1608,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             } else if requested_url.scheme() == "https" || is_local_integration_http(&requested_url) {
                 let context = new_window_page_context.lock().map(|value| value.clone()).unwrap_or_default();
                 if context.page_id.is_some() {
-                    let current_url = new_window_app.get_webview(&integration_content_label(&new_window_profile_id))
-                        .and_then(|content| content.url().ok())
-                        .map(|url| url.to_string())
+                    let current_url = new_window_current_url.lock().ok()
+                        .and_then(|url| url.as_ref().map(ToString::to_string))
                         .unwrap_or_default();
                     let _ = new_window_app.emit("integration-inspection-result", serde_json::json!({
                         "kind": "integration-navigation-request",
@@ -1704,9 +1718,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             if !allowed && (requested_url.scheme() == "https" || is_local_integration_http(requested_url)) {
                 let context = navigation_page_context.lock().map(|value| value.clone()).unwrap_or_default();
                 if context.page_id.is_some() {
-                    let current_url = integration_app.get_webview(&integration_content_label(&result_profile_id))
-                        .and_then(|content| content.url().ok())
-                        .map(|url| url.to_string())
+                    let current_url = navigation_current_url.lock().ok()
+                        .and_then(|url| url.as_ref().map(ToString::to_string))
                         .unwrap_or_default();
                     let _ = integration_app.emit("integration-inspection-result", serde_json::json!({
                         "kind": "integration-navigation-request",
@@ -1752,6 +1765,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let toolbar_app = app.clone();
         let toolbar_profile_id = profile_id.clone();
         let toolbar_origins = toolbar_allowed_origins;
+        let toolbar_current_url = profile_current_url;
         let toolbar_action_mode = action_mode_pending.clone();
         let toolbar = tauri::webview::WebviewBuilder::new(
             toolbar_label,
@@ -1795,7 +1809,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                             } else if url.scheme() == "https" || is_local_integration_http(&url) {
                                 let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
                                 if context.page_id.is_some() {
-                                    let current_url = toolbar_remote.url().map(|current| current.to_string()).unwrap_or_default();
+                                    let current_url = toolbar_current_url.lock().ok()
+                                        .and_then(|url| url.as_ref().map(ToString::to_string))
+                                        .unwrap_or_default();
                                     let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
                                         "kind": "integration-navigation-request",
                                         "profileId": toolbar_profile_id,
@@ -2582,13 +2598,18 @@ fn save_document_as_dialog(
     suggested_name: String,
     bytes: Vec<u8>,
 ) -> AppResult<Option<DocumentFileMetadata>> {
-    let Some(path) = rfd::FileDialog::new()
+    let suggested_path = PathBuf::from(&suggested_name);
+    let mut dialog = rfd::FileDialog::new()
         .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
         .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
-        .add_filter("Markdown", &["md"])
-        .set_file_name(suggested_name)
-        .save_file()
-    else {
+        .add_filter("Markdown", &["md"]);
+    if let Some(parent) = suggested_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        dialog = dialog.set_directory(parent);
+    }
+    if let Some(name) = suggested_path.file_name() {
+        dialog = dialog.set_file_name(name.to_string_lossy());
+    }
+    let Some(path) = dialog.save_file() else {
         return Ok(None);
     };
     if document_extension(&path).is_none() {
@@ -2607,19 +2628,7 @@ fn save_document_as_dialog_raw(
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(AppError::Message("Expected raw document bytes.".into()));
     };
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Supported documents", &["hvy", "thvy", "phvy", "md"])
-        .add_filter("HVY documents", &["hvy", "thvy", "phvy"])
-        .add_filter("Markdown", &["md"])
-        .set_file_name(suggested_name)
-        .save_file()
-    else {
-        return Ok(None);
-    };
-    document_extension(&path)
-        .ok_or_else(|| AppError::Message("Only .hvy, .thvy, .phvy, and .md documents are supported.".into()))?;
-    persist_document_file(&app, path.clone(), bytes)?;
-    Ok(Some(read_document_metadata_at(&path)?))
+    save_document_as_dialog(app, suggested_name, bytes.clone())
 }
 
 fn decode_ipc_header(headers: &tauri::http::HeaderMap, name: &str) -> AppResult<String> {

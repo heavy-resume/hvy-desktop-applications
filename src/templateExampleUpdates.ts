@@ -26,22 +26,18 @@ export function updateExampleDefinitions(example: VisualDocument, template: Visu
   const sectionPatches = new Map(sections.map((definition) => [getSectionTemplateKey(definition),
     diffTemplateContent(oldSections.find((old) => getSectionTemplateKey(old) === getSectionTemplateKey(definition))?.template, definition.template),
   ]));
-  const updateSections = (instances: VisualDocument['sections']): void => {
-    for (const section of instances) {
-      const patch = sectionPatches.get(section.templateKey ?? '');
-      if (patch) {
-        const updated = applyTemplateContentPatch(section, patch);
-        for (const key of Object.keys(section)) {
-          if (!(key in updated)) delete (section as unknown as Record<string, unknown>)[key];
-        }
-        Object.assign(section, updated, { key: section.key, customId: section.customId, templateKey: section.templateKey, level: section.level });
+  for (const section of example.sections) {
+    const patch = sectionPatches.get(section.templateKey ?? '');
+    if (patch) {
+      const updated = applyTemplateContentPatch(section, patch);
+      for (const key of Object.keys(section)) {
+        if (!(key in updated)) delete (section as unknown as Record<string, unknown>)[key];
       }
-      if (section.templateKey && !sectionPatches.has(section.templateKey)
-        && oldSections.some((old) => getSectionTemplateKey(old) === section.templateKey)) delete section.templateKey;
-      updateSections(section.children);
+      Object.assign(section, updated, { key: section.key, customId: section.customId, templateKey: section.templateKey });
     }
-  };
-  updateSections(example.sections);
+    if (section.templateKey && !sectionPatches.has(section.templateKey)
+      && oldSections.some((old) => getSectionTemplateKey(old) === section.templateKey)) delete section.templateKey;
+  }
   visitBlocks(example.sections, (block) => {
     const name = block.schema.component;
     const change = componentPatches.get(name);

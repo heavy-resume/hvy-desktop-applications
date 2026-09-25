@@ -1,10 +1,10 @@
 import { reloadExternalFileChange, dismissExternalFileChange } from './mainDocumentFileMonitor';
-import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
+import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentAsDialog, saveDocumentToWorkspace, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, encryptMountedDocumentWithKey, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, removeMountedDocumentEncryption, serializeHvy } from './hvy';
 import { findFileInWorkspace, state, type PendingWorkspaceFileOperation } from './state';
-import { mountRoot, pendingMountDocument, documentSessions, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, updateOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, relocateRecoveryDraftsForDocument, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath } from './main';
+import { mountRoot, pendingMountDocument, documentSessions, adoptSavedAsDocument, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, updateOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, relocateRecoveryDraftsForDocument, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, readDocumentColorPreference, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, updateHomepageDocumentPath, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath } from './main';
 import type { UiHandlers } from './ui';
 import { clearDocumentHistory } from './documentHistory';
 import { deleteDocumentEmbeddingSidecar, removeDocumentEmbeddingAttachments } from './embeddingIndex';
@@ -707,6 +707,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   setSaveAsKind: (kind) => {
     if (kind === 'template' && state.document?.source.extension === '.md') return;
     state.saveAsKind = kind;
+    if (kind === 'document' && state.saveAsScope === 'app') state.saveAsScope = currentDocumentWorkspacePath(state) ? 'workspace' : 'anywhere';
     state.error = null;
     rerender({ preserveMountedDocument: true });
   },
@@ -740,9 +741,9 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
-    state.saveAsDialogOpen = true;
+    openSaveAsDialog();
     state.saveAsKind = 'template';
-    state.saveTemplateScope = workspacePathForFile(state.document.source.path) ? 'workspace' : 'app';
+    state.saveTemplateScope = currentDocumentWorkspacePath(state) ? 'workspace' : 'app';
     state.error = null;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -775,16 +776,16 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     rerender({ preserveMountedDocument: true });
   },
   setSaveTemplateScope: (scope) => {
-    if (scope === 'workspace' && !workspacePathForFile(state.document?.source.path ?? '')) return;
+    if (scope === 'workspace' && !currentDocumentWorkspacePath(state)) return;
     state.saveTemplateScope = scope;
     state.error = null;
     rerender({ preserveMountedDocument: true });
   },
-  saveAsTemplate: (name, scope, extension: TemplateExtension) => void runBusy('Saving template...', async () => {
+  saveAsTemplate: (name, scope, extension: TemplateExtension, selectedWorkspacePath, targetDirectory) => void runBusy('Saving template...', async () => {
     if (!state.document || state.document.readOnly || state.document.source.extension === '.md') return;
     await ensureCurrentDocumentMounted();
     if (!state.document?.mounted) return;
-    const workspacePath = scope === 'workspace' ? workspacePathForFile(state.document.source.path) : null;
+    const workspacePath = scope === 'workspace' ? selectedWorkspacePath ?? currentDocumentWorkspacePath(state) : null;
     if (scope === 'workspace' && !workspacePath) {
       throw new Error('Workspace template requires a document in an open workspace.');
     }
@@ -794,11 +795,32 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
         throw new Error(`Cannot save as PHVY until the document is PDF-safe. ${errors.slice(0, 3).join(' ')}`);
       }
     }
-    const bytes = Array.from(await serializeHvy({ ...state.document.mounted.document, extension }));
-    await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
+    const mounted = state.document.mounted;
+    const document = mounted.document;
+    const previousPath = state.document.source.path;
+    const previousMode = state.document.mode;
+    const previousUseDocumentColors = readDocumentColorPreference(previousPath);
+    const bytes = Array.from(await serializeHvy({ ...document, extension }));
+    let file;
+    if (scope === 'anywhere') {
+      const sourcePath = state.document.historySourcePath ?? state.document.source.path;
+      const directory = sourcePath.replace(/\\/g, '/').slice(0, sourcePath.replace(/\\/g, '/').lastIndexOf('/') + 1);
+      file = await saveDocumentAsDialog({ suggestedName: `${directory}${templateFileName(name, extension)}`, bytes });
+      if (!file) return;
+      await refreshOpenWorkspaceForFile(file.path);
+    } else if (scope === 'workspace' && selectedWorkspacePath && targetDirectory) {
+      file = await saveDocumentToWorkspace({ workspacePath: selectedWorkspacePath, name: templateFileName(name, extension), targetDirectory: targetDirectory ?? '', bytes });
+      await refreshOpenWorkspaceForFile(file.path);
+    } else {
+      file = await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });
+    }
+    document.extension = extension;
+    adoptSavedAsDocument(file, mounted, document, previousMode, previousPath, previousUseDocumentColors);
+    state.selectedFilePath = file.path;
     state.saveAsDialogOpen = false;
     await refreshSavedTemplates(workspacePath);
-    state.status = `Saved template ${templateFileName(name, extension)}`;
+    await refreshRecents();
+    state.status = `Saved template ${file.name}`;
   }),
   cancelSaveTemplate: () => {
     state.saveAsDialogOpen = false;

@@ -36,7 +36,6 @@ export interface RevisionSection {
   title: string;
   metadata: JsonObject;
   components: RevisionComponent[];
-  children: RevisionSection[];
 }
 
 export interface RevisionDocument {
@@ -198,7 +197,7 @@ function projectSection(section: VisualDocument['sections'][number]): RevisionSe
     id: section.customId,
     title: section.title,
     metadata: cloneJsonObject(Object.fromEntries(
-      Object.entries(section).filter(([key]) => !['blocks', 'children', 'title', 'customId'].includes(key)),
+      Object.entries(section).filter(([key]) => !['blocks', 'title', 'customId'].includes(key)),
     )),
     components: section.blocks.map((block) => ({
       id: block.id,
@@ -206,7 +205,6 @@ function projectSection(section: VisualDocument['sections'][number]): RevisionSe
       schema: projectComponentSchema(block.schema as unknown as JsonObject),
       annotations: {},
     })),
-    children: section.children.map(projectSection),
   };
 }
 
@@ -240,8 +238,6 @@ function findComponentOrNull(
       const component = section.components.find((candidate) => candidate.id === componentId);
       if (component) return component;
     }
-    const nested = findComponentOrNull(section.children, sectionId, componentId);
-    if (nested) return nested;
   }
   return null;
 }

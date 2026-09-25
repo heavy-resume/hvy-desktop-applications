@@ -51,7 +51,7 @@ export function renderVersionHistorySidebar(state: AppState): string {
         </div>
         <button type="button" class="hvy-galaxy-button icon-button history-sidebar-close" data-action="close-version-history" title="Close version history" aria-label="Close version history">&times;</button>
       </div>
-      <p class="history-sidebar-note">Select a saved version to review or edit it. Saving creates a new document.</p>
+      <p class="history-sidebar-note">Select a saved version to review or edit it. The latest version saves to the original file; older versions save as a new document.</p>
       <nav class="history-sidebar-list" aria-label="Saved versions">
         ${versions.length === 0
       ? '<div class="empty-panel compact">No saved versions are available yet.</div>'

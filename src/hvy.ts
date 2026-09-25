@@ -1,5 +1,5 @@
 import { openAttachmentFile, openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
-import { createDesktopEmbeddingProvider } from './aiClient';
+import { createDesktopEmbeddingProvider, desktopTextProcessingSettings } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { recallUserFileAttachmentBytes } from '../../heavy-file-format/src/document-attachment-actions';
@@ -11,6 +11,7 @@ import { chatSemanticFilterProvider } from '../../heavy-file-format/src/search/s
 import { renderCollapsedSearchBar } from '../../heavy-file-format/src/search/render';
 import { searchSnapshotToState } from '../../heavy-file-format/src/search/snapshot';
 import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
+import { deserializeDocumentWithDiagnostics } from '../../heavy-file-format/src/serialization';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
 import { enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
@@ -77,6 +78,7 @@ type DocumentAttachment = VisualDocument['attachments'][number];
 export interface MountedDocument {
   mount: HvyMount;
   document: VisualDocument;
+  unsavedBaseline?: boolean;
 }
 
 export function powerScriptDescriptors(document: VisualDocument): Array<{ id: string; hash: string }> {
@@ -96,13 +98,9 @@ export function powerScriptDescriptors(document: VisualDocument): Array<{ id: st
       visitBlocks(block.schema.expandableContentBlocks?.children ?? []);
     }
   };
-  const visitSections = (sections: VisualDocument['sections']): void => {
-    for (const section of sections) {
-      visitBlocks(section.blocks);
-      visitSections(section.children);
-    }
-  };
-  visitSections(document.sections);
+  for (const section of document.sections) {
+    visitBlocks(section.blocks);
+  }
   return scripts;
 }
 
@@ -232,7 +230,6 @@ export async function profileHvySerializationCosts(document: VisualDocument): Pr
       textLength: text.length,
     });
     visitNestedBlocks(section.blocks);
-    if (Array.isArray(section.children)) section.children.forEach(visitSection);
   };
   document.sections.forEach(visitSection);
   return {
@@ -327,7 +324,10 @@ export async function mountHvyDocument(
         state.appSettings = saved;
       });
     },
-    chatSettings: options.maxContextChars ? { maxContextChars: options.maxContextChars } : null,
+    chatSettings: {
+      ...desktopTextProcessingSettings(state.aiSettings),
+      ...(options.maxContextChars ? { maxContextChars: options.maxContextChars } : {}),
+    },
     initialChatState: options.initialChatState ?? null,
     themeOverrides: options.themeOverrides ?? null,
     chatContext: embeddingChatContextOptions(options.onEmbeddingIndexPrepared),
@@ -608,7 +608,7 @@ async function mountRawHvyDocument(
   document: VisualDocument,
   options: MountHvyDocumentOptions,
 ): Promise<MountedDocument> {
-  const { deserializeDocumentBytes, serializeDocument, serializeDocumentBytes } = await loadHvyEmbed();
+  const { serializeDocument, serializeDocumentBytes } = await loadHvyEmbed();
   let currentDocument = document;
   let lastSavedText = serializeDocument(document);
   let dirty = false;
@@ -912,8 +912,14 @@ async function mountRawHvyDocument(
     return parseRawDraft();
   };
   const parseRawDraft = () => {
+    const parsed = deserializeDocumentWithDiagnostics(textarea.value, currentDocument.extension);
+    // Like the reference raw editor, consume diagnostics before applying a draft.
+    // The parser returns a partial document on errors; it does not throw.
+    if (parsed.diagnostics.length > 0) {
+      throw new Error(parsed.diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
+    }
     const previousAttachments = currentDocument.attachments;
-    currentDocument = deserializeDocumentBytes(new TextEncoder().encode(textarea.value), currentDocument.extension);
+    currentDocument = parsed.document;
     restoreRawHvyAttachmentBytes(currentDocument, previousAttachments);
     return currentDocument;
   };
@@ -1456,7 +1462,7 @@ function installEmbeddedSearchCollapsedSurface(root: HTMLElement, mount: SearchS
       surface = documentOwner().createElement('div');
       surface.dataset.searchSurface = 'collapsed';
     }
-    const anchor = pane.querySelector<HTMLElement>('.editor-shell, .viewer-shell, .document-meta-view');
+    const anchor = pane.querySelector<HTMLElement>(':scope > .editor-shell, :scope > .viewer-shell, :scope > .document-meta-scroll');
     if (surface.parentElement !== pane || surface.nextElementSibling !== anchor) {
       pane.insertBefore(surface, anchor ?? pane.firstChild);
     }
@@ -1615,11 +1621,12 @@ export function buildMountedImportPlan(mounted: MountedDocument, options: BuildI
 }
 
 export function markMountedDocumentSaved(mounted: MountedDocument): void {
+  mounted.unsavedBaseline = false;
   mounted.mount.markSaved();
 }
 
 export function isMountedDocumentDirty(mounted: MountedDocument): boolean {
-  return mounted.mount.isDirty();
+  return mounted.unsavedBaseline === true || mounted.mount.isDirty();
 }
 
 export function openMountedDocumentMeta(mounted: MountedDocument): boolean {

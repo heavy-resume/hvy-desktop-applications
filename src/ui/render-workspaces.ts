@@ -571,7 +571,7 @@ export function isImportOutputMode(value: unknown): value is AppState['importOut
 }
 
 export function isSaveAsScope(value: unknown): value is AppState['saveAsScope'] {
-  return value === 'workspace' || value === 'anywhere';
+  return value === 'workspace' || value === 'anywhere' || value === 'app';
 }
 
 export function isSaveAsKind(value: unknown): value is AppState['saveAsKind'] {

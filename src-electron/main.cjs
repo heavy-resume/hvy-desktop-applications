@@ -929,7 +929,8 @@ async function saveElectronIntegrationCookies(browserSession, profileId, allowed
   });
   const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
   const profiles = vault.profiles ?? {};
-  profiles[profileId] = { cookies: cookies.map((cookie) => ({
+  profiles[profileId] = {
+    cookies: cookies.map((cookie) => ({
       name: cookie.name,
       value: cookie.value,
       domain: cookie.domain,
@@ -940,7 +941,8 @@ async function saveElectronIntegrationCookies(browserSession, profileId, allowed
       hostOnly: cookie.hostOnly,
       session: cookie.session,
       expirationDate: cookie.expirationDate,
-    })) };
+    }))
+  };
   delete vault.cookies;
   vault.profiles = profiles;
   writeElectronIntegrationVault(readElectronIntegrationVaultKey(), Buffer.from(JSON.stringify(vault)));
@@ -1321,7 +1323,7 @@ function openIntegrationBrowser(url, profileId, allowedOrigins, actionMode, pend
   const previous = integrationBrowserOpenQueues.get(profileId);
   const requestKey = JSON.stringify({ url, actionMode, pendingExtraction: pendingExtraction || null, integrationId, pageId });
   if (previous?.requestKey === requestKey) return previous.promise;
-  const queued = (previous?.promise || Promise.resolve()).catch(() => {}).then(() => openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId));
+  const queued = (previous?.promise || Promise.resolve()).catch(() => { }).then(() => openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId));
   const entry = { requestKey, promise: queued };
   integrationBrowserOpenQueues.set(profileId, entry);
   return queued.finally(() => {
@@ -1750,7 +1752,7 @@ async function startWebMcpBroker() {
   const connectionPath = webMcpBrokerConnectionPath();
   fs.mkdirSync(path.dirname(connectionPath), { recursive: true });
   writeJson(connectionPath, { schemaVersion: 1, url: `http://127.0.0.1:${address.port}/webmcp`, bearerToken: webMcpBrokerToken, pid: process.pid });
-  try { fs.chmodSync(connectionPath, 0o600); } catch (_) {}
+  try { fs.chmodSync(connectionPath, 0o600); } catch (_) { }
 }
 
 function stopWebMcpBroker() {
@@ -1762,7 +1764,7 @@ function stopWebMcpBroker() {
     pending.resolve({ ok: false, error: 'Galaxy is closing.' });
   }
   webMcpBrokerPending.clear();
-  try { fs.unlinkSync(webMcpBrokerConnectionPath()); } catch (_) {}
+  try { fs.unlinkSync(webMcpBrokerConnectionPath()); } catch (_) { }
 }
 
 function electronProfileDir() {
@@ -3628,12 +3630,12 @@ function normalizeIntegrationWebMcpApprovals(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).filter(([capabilityId, approval]) => (
     capabilityId && approval && typeof approval === 'object' && !Array.isArray(approval)
-      && approval.capabilityId === capabilityId
-      && typeof approval.integrationId === 'string'
-      && typeof approval.pageId === 'string'
-      && typeof approval.profileId === 'string'
-      && typeof approval.descriptorHash === 'string'
-      && approval.descriptor && typeof approval.descriptor === 'object'
+    && approval.capabilityId === capabilityId
+    && typeof approval.integrationId === 'string'
+    && typeof approval.pageId === 'string'
+    && typeof approval.profileId === 'string'
+    && typeof approval.descriptorHash === 'string'
+    && approval.descriptor && typeof approval.descriptor === 'object'
   )));
 }
 
@@ -3856,7 +3858,7 @@ function readPluginProjectFiles(workspacePath, directoryName) {
         let content = null;
         try {
           content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-        } catch {}
+        } catch { }
         files.push({
           path: relativePath,
           content,
@@ -4124,7 +4126,7 @@ function mcpCommandPath() {
 function mcpClientInstallStatuses() {
   const launch = defaultMcpStdioLaunchConfig();
   return [
-    mcpClientInstallStatus('codex', 'Codex', codexConfigPath(), launch, codexConfigHasHvyMcp),
+    mcpClientInstallStatus('codex', 'ChatGPT Desktop (formerly Codex)', codexConfigPath(), launch, codexConfigHasHvyMcp),
     mcpClientInstallStatus('claude', 'Claude', claudeConfigPath(), launch, claudeConfigHasHvyMcp),
   ];
 }
@@ -4174,7 +4176,7 @@ function restoreMcpClientBackup(target) {
   const configPath = mcpTargetConfigPath(target);
   const backupPath = latestMcpClientBackupPath(configPath);
   if (!backupPath) {
-    throw new Error(`No HVY MCP backup was found for ${configPath}.`);
+    throw new Error(`No MCP backup was found for ${configPath}.`);
   }
   if (fs.existsSync(configPath)) {
     backupFileBeforeOverwrite(configPath);
@@ -4186,6 +4188,7 @@ function restoreMcpClientBackup(target) {
 }
 
 function mcpClientInstallStatus(target, label, configPath, launch, isInstalled) {
+  const messageLabel = target === 'codex' ? 'ChatGPT Desktop' : label;
   const configExists = fs.existsSync(configPath) || (target === 'claude' && claudeConfigCanBeCreated(configPath));
   const executableExists = fs.existsSync(launch.command);
   const installed = configExists && isInstalled(configPath, launch);
@@ -4195,16 +4198,16 @@ function mcpClientInstallStatus(target, label, configPath, launch, isInstalled) 
   let message;
   if (!configExists) {
     message = backups.length
-      ? `${label} config file was not found. A backup can be restored.`
-      : `${label} config file was not found.`;
+      ? `${messageLabel} config file was not found. A backup can be restored.`
+      : `${messageLabel} config file was not found.`;
   } else if (installed) {
     message = executableExists
-      ? `HVY MCP is installed for ${label}. Refresh or remove it anytime.`
-      : 'HVY MCP is installed, but the HVY Galaxy executable was not found.';
+      ? `MCP is installed for ${messageLabel}. Refresh or remove it anytime.`
+      : 'MCP is installed, but the HVY Galaxy executable was not found.';
   } else if (!executableExists) {
     message = 'HVY Galaxy executable was not found.';
   } else {
-    message = `Ready to install HVY MCP for ${label}. A backup will be saved first.`;
+    message = `Ready to install MCP for ${messageLabel}. A backup will be saved first.`;
   }
   return {
     target,
@@ -4391,7 +4394,18 @@ function mcpClientBackupPaths(filePath) {
 }
 
 function mcpClientBackupLabel(fileName) {
-  return fileName.split('.hvy-galaxy-backup-')[1] || fileName;
+  const timestamp = fileName.split('.hvy-galaxy-backup-')[1];
+  const match = timestamp?.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if (!match) return timestamp || fileName;
+  const [, year, month, day, hour, minute, second] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)));
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
 }
 
 function tomlStringArray(values) {
