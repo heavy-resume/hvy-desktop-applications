@@ -1,0 +1,93 @@
+import type { PlatformSignal } from './sitePatterns';
+
+/**
+ * What the background automation needs from a browser host. The real
+ * implementation lives in the Tauri and Electron hosts (worker webviews,
+ * inspector injection, result routing by worker ID); the faux host
+ * implements the same contract over simulated sites.
+ */
+export interface BrowserHost {
+  createWorker(profileId: string): Promise<string>;
+  /** Clears navigation history so one job cannot go "back" into another job's pages. */
+  resetWorker(workerId: string): Promise<void>;
+  closeWorker(workerId: string): Promise<void>;
+  showWorker(workerId: string): Promise<void>;
+  hideWorker(workerId: string): Promise<void>;
+
+  navigate(workerId: string, url: string): Promise<PageLocation>;
+  back(workerId: string): Promise<PageLocation>;
+  inspect(workerId: string, request: InspectionRequest): Promise<PageInspection>;
+  runCommand(workerId: string, request: CommandRequest): Promise<CommandResult>;
+  /** Same-origin, credentialed request made from inside the page the worker is on. */
+  request(workerId: string, request: HostRequest): Promise<HostResponse>;
+  /** Invokes a WebMCP tool the page the worker is on provides (the existing integration WebMCP bridge). */
+  invokeWebMcpTool(workerId: string, request: { name: string; arguments: Record<string, unknown> }): Promise<unknown>;
+
+  openUserWindow(profileId: string, url: string): Promise<void>;
+  hideUserWindow(profileId: string): Promise<void>;
+  onNavigation(listener: (event: NavigationEvent) => void): () => void;
+}
+
+export interface PageLocation {
+  url: string;
+}
+
+export interface InspectionRequest {
+  /** Pattern IDs whose structural matchers should run on the page. */
+  patternIds: string[];
+  /** Fingerprints to evaluate, keyed by pattern ID. */
+  fingerprints: Record<string, PlatformSignal[]>;
+}
+
+export interface ExtractedRecord {
+  /** Opaque, short-lived reference used to run item commands. */
+  ref: string;
+  values: Record<string, unknown>;
+}
+
+export interface PatternMatch {
+  confidence: number;
+  records: ExtractedRecord[];
+}
+
+export interface PageInspection {
+  url: string;
+  /** False when an interstitial blocks the expected page. */
+  ready: boolean;
+  attention?: 'challenge' | 'sign-in-wall';
+  matches: Record<string, PatternMatch>;
+  /** Number of matched signals per requested fingerprint; absent when it did not match. */
+  fingerprintMatches: Record<string, number>;
+  jsonLd: unknown[];
+  frames: Array<{ src: string }>;
+}
+
+export interface CommandRequest {
+  patternId: string;
+  commandId: string;
+  recordRef?: string;
+}
+
+export interface CommandResult {
+  status: 'executed' | 'no_match' | 'ambiguous';
+}
+
+export interface HostRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+export interface HostResponse {
+  status: number;
+  contentType: string;
+  body: unknown;
+}
+
+export interface NavigationEvent {
+  profileId: string;
+  window: 'user' | 'worker';
+  workerId?: string;
+  url: string;
+}

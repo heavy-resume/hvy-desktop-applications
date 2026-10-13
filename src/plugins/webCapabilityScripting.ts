@@ -13,10 +13,14 @@ export function queueWebCapabilityScriptOperation(
   void operation().then((result) => {
     callbacks.onComplete({ jobId, status: 'completed', result });
   }).catch((caught: unknown) => {
+    const code = caught && typeof caught === 'object' && typeof (caught as { code?: unknown }).code === 'string'
+      ? (caught as { code: string }).code
+      : null;
     const payload = {
       jobId,
       status: 'failed',
       error: caught instanceof Error ? caught.message : String(caught),
+      ...(code ? { code } : {}),
     };
     (callbacks.onError ?? callbacks.onComplete)(payload);
   });

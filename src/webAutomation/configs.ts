@@ -1,0 +1,360 @@
+import type { CliItemStoreConfig, ItemFieldBinding } from './cliItemStore';
+import type { CollectionDefinition } from './collection';
+import { MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
+import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueState } from './queue';
+import type { RecordSinkConfig } from './recordSink';
+import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
+import type { SessionDefinition, WebApiCapability } from './webApi';
+
+export const WEB_API_PLUGIN_ID = 'galaxy.web-api';
+export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
+export const QUEUE_PLUGIN_ID = 'galaxy.queue';
+export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
+
+export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+/** MCP exposure is stored beside the snapshot and is not part of what the user approves for the document. */
+export interface WebApiBlockConfig {
+  capability: WebApiCapability;
+  mcp: { endpointIds: string[] };
+}
+
+export interface CollectionBlockConfig {
+  collection: CollectionDefinition;
+  mcp: { collect: boolean };
+  /** Where the collection's records go: a component-list in this document, and the record sink's policy. */
+  output?: { store: CliItemStoreConfig; policy: RecordSinkConfig };
+}
+
+function readFieldBinding(name: string, value: unknown, errors: string[]): ItemFieldBinding | null {
+  if (!isRecord(value) || !text(value.path)) {
+    errors.push(`Output field "${name}" needs a path.`);
+    return null;
+  }
+  if (value.kind === 'text') return { kind: 'text', path: text(value.path) };
+  if (value.kind !== 'cell') {
+    errors.push(`Output field "${name}" must be a text or cell binding.`);
+    return null;
+  }
+  const annotationKind: 'sort' | 'group' | null = isRecord(value.annotation) && (value.annotation.kind === 'sort' || value.annotation.kind === 'group') ? value.annotation.kind : null;
+  const annotation: { kind: 'sort' | 'group'; key: string } | undefined = annotationKind && isRecord(value.annotation) && text(value.annotation.key)
+    ? { kind: annotationKind, key: text(value.annotation.key) }
+    : undefined;
+  return {
+    kind: 'cell',
+    path: text(value.path),
+    row: Math.round(number(value.row, 0, 0, 1_000)),
+    column: Math.round(number(value.column, 0, 0, 1_000)),
+    ...(annotation ? { annotation } : {}),
+    ...(text(value.linkTo) ? { linkTo: text(value.linkTo) } : {}),
+  };
+}
+
+function readOutput(value: unknown, errors: string[]): CollectionBlockConfig['output'] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !isRecord(value.store)) {
+    errors.push('The output needs a store.');
+    return undefined;
+  }
+  const store = value.store;
+  const listPath = text(store.listPath);
+  const componentName = text(store.componentName);
+  const recordPath = text(store.recordPath);
+  if (!listPath.startsWith('/body/')) errors.push('The output list must be a path under /body.');
+  if (!componentName) errors.push('The output needs a reusable component name.');
+  if (!recordPath) errors.push('The output needs a record path.');
+  const fields = Object.fromEntries(Object.entries(isRecord(store.fields) ? store.fields : {})
+    .flatMap(([name, binding]) => {
+      const read = readFieldBinding(name, binding, errors);
+      return read ? [[name, read]] : [];
+    }));
+  const policy = isRecord(value.policy) ? value.policy : {};
+  const ownedFields = Array.isArray(policy.ownedFields) ? strings(policy.ownedFields) : undefined;
+  if (ownedFields?.some((field) => !(field in fields))) errors.push('The output owns fields that have no place in the template.');
+  return {
+    store: { listPath, componentName, recordPath, fields },
+    policy: {
+      onExisting: policy.onExisting === 'refresh' ? 'refresh' : 'keep',
+      keepGoodOnFailure: policy.keepGoodOnFailure !== false,
+      ...(ownedFields ? { ownedFields } : {}),
+    },
+  };
+}
+
+export interface QueueBlockConfig {
+  queueId: string;
+  target: { pluginId: string; method: string; args: Record<string, unknown> };
+  config: QueueConfig;
+  state: QueueState | null;
+}
+
+const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function number(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+/** HTTPS, or HTTP on a loopback host for local development. */
+function trustworthyUrl(value: unknown): URL | null {
+  try {
+    const url = new URL(text(value));
+    const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || url.hostname.startsWith('127.');
+    if (url.username || url.password) return null;
+    return url.protocol === 'https:' || (url.protocol === 'http:' && loopback) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition | null {
+  if (!isRecord(value)) {
+    errors.push('An endpoint must be an object.');
+    return null;
+  }
+  const id = text(value.id);
+  const method = text(value.method).toUpperCase();
+  const path = text(value.path);
+  const label = id || '(unnamed)';
+  if (!id) errors.push('An endpoint needs an id.');
+  if (!METHODS.has(method)) errors.push(`Endpoint "${label}" has an unsupported method.`);
+  if (!path.startsWith('/') || path.startsWith('//')) errors.push(`Endpoint "${label}" must use a same-origin path.`);
+  const inputSchema = isRecord(value.inputSchema) ? value.inputSchema : { type: 'object', properties: {} };
+  const properties = isRecord(inputSchema.properties) ? Object.keys(inputSchema.properties) : [];
+  for (const parameter of path.matchAll(/\{([A-Za-z0-9_]+)\}/g)) {
+    if (!properties.includes(parameter[1])) errors.push(`Endpoint "${label}" uses {${parameter[1]}} but does not declare it as an input.`);
+  }
+  let idempotency: ApiEndpointDefinition['idempotency'];
+  if (isRecord(value.idempotency)) {
+    const header = text(value.idempotency.header);
+    const fromInputs = strings(value.idempotency.fromInputs);
+    if (!/^[A-Za-z0-9-]+$/.test(header)) errors.push(`Endpoint "${label}" has an invalid idempotency header.`);
+    if (fromInputs.some((name) => !properties.includes(name))) errors.push(`Endpoint "${label}" derives its idempotency key from undeclared inputs.`);
+    idempotency = { header, fromInputs };
+  }
+  if (!id || !METHODS.has(method)) return null;
+  return {
+    id,
+    name: text(value.name) || id,
+    description: text(value.description),
+    method: method as ApiEndpointDefinition['method'],
+    path,
+    inputSchema,
+    ...(idempotency ? { idempotency } : {}),
+    ...(text(value.errorMessagePointer) ? { errorMessagePointer: text(value.errorMessagePointer) } : {}),
+    ...(value.timeoutMs !== undefined ? { timeoutMs: number(value.timeoutMs, 15_000, 1_000, MAX_ENDPOINT_TIMEOUT_MS) } : {}),
+  };
+}
+
+function readSession(value: unknown, origin: string, endpoints: ApiEndpointDefinition[], errors: string[]): SessionDefinition | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value) || !isRecord(value.probe)) {
+    errors.push('The sign-in definition needs a probe.');
+    return undefined;
+  }
+  const loginUrl = trustworthyUrl(value.loginUrl);
+  const completeUrl = trustworthyUrl(value.completeUrl);
+  if (!loginUrl || loginUrl.origin !== origin) errors.push('The login URL must be on the page origin.');
+  if (!completeUrl || completeUrl.origin !== origin) errors.push('The completion URL must be on the page origin.');
+  const probeId = text(value.probe.endpointId);
+  const probe = endpoints.find((endpoint) => endpoint.id === probeId);
+  if (!probe || probe.method !== 'GET') errors.push('The session probe must be a GET endpoint of this block.');
+  const logoutEndpointId = text(value.logoutEndpointId);
+  if (logoutEndpointId && !endpoints.some((endpoint) => endpoint.id === logoutEndpointId)) errors.push('The logout endpoint is not defined.');
+  const loginAllowedOrigins = strings(value.loginAllowedOrigins).flatMap((candidate) => {
+    const url = trustworthyUrl(candidate);
+    if (!url) errors.push(`"${candidate}" is not an allowed login origin.`);
+    return url ? [url.origin] : [];
+  });
+  const signedOutStatuses = Array.isArray(value.probe.signedOutStatuses)
+    ? value.probe.signedOutStatuses.filter((status): status is number => Number.isInteger(status) && status >= 400 && status < 600)
+    : undefined;
+  return {
+    loginUrl: loginUrl?.href ?? '',
+    completeUrl: completeUrl?.href ?? '',
+    probe: {
+      endpointId: probeId,
+      ...(signedOutStatuses?.length ? { signedOutStatuses } : {}),
+      ...(text(value.probe.accountNamePointer) ? { accountNamePointer: text(value.probe.accountNamePointer) } : {}),
+      ...(text(value.probe.accountIdPointer) ? { accountIdPointer: text(value.probe.accountIdPointer) } : {}),
+    },
+    ...(logoutEndpointId ? { logoutEndpointId } : {}),
+    ...(loginAllowedOrigins.length ? { loginAllowedOrigins } : {}),
+  };
+}
+
+export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockConfig> {
+  const errors: string[] = [];
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported web API block configuration.'] };
+  const capabilityId = text(value.capabilityId);
+  if (!capabilityId) errors.push('The block needs a capability id.');
+  const pageUrl = trustworthyUrl(value.pageUrl);
+  if (!pageUrl) return { ok: false, errors: [...errors, 'The page URL must use HTTPS.'] };
+  const apiPageUrl = value.apiPageUrl === undefined ? null : trustworthyUrl(value.apiPageUrl);
+  if (value.apiPageUrl !== undefined && apiPageUrl?.origin !== pageUrl.origin) errors.push('The API page must be on the page origin.');
+  const endpoints = (Array.isArray(value.endpoints) ? value.endpoints : []).flatMap((endpoint) => readEndpoint(endpoint, errors) ?? []);
+  const ids = endpoints.map((endpoint) => endpoint.id);
+  if (new Set(ids).size !== ids.length) errors.push('Endpoint ids must be unique.');
+  const session = readSession(value.session, pageUrl.origin, endpoints, errors);
+  const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
+  if (exposed.some((id) => !ids.includes(id))) errors.push('MCP exposes an endpoint that is not defined.');
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      capability: {
+        capabilityId,
+        name: text(value.name) || pageUrl.hostname,
+        pageUrl: pageUrl.href,
+        allowedOrigins: [...new Set([pageUrl.origin, ...strings(value.allowedOrigins).flatMap((origin) => trustworthyUrl(origin)?.origin ?? [])])],
+        ...(apiPageUrl ? { apiPageUrl: apiPageUrl.href } : {}),
+        ...(session ? { session } : {}),
+        endpoints,
+      },
+      mcp: { endpointIds: exposed },
+    },
+  };
+}
+
+function readPattern(value: unknown, errors: string[]): SitePatternDefinition | null {
+  if (!isRecord(value)) {
+    errors.push('A pattern must be an object.');
+    return null;
+  }
+  const id = text(value.id);
+  const label = id || '(unnamed)';
+  const role = value.role === 'listing' || value.role === 'detail' ? value.role : null;
+  if (!id) errors.push('A pattern needs an id.');
+  if (!role) errors.push(`Pattern "${label}" needs a role.`);
+  const appliesTo = Array.isArray(value.appliesTo) ? value.appliesTo as SitePatternDefinition['appliesTo'] : [];
+  if (!appliesTo.length) errors.push(`Pattern "${label}" needs at least one scope rule.`);
+  for (const rule of appliesTo) {
+    const problem = isRecord(rule) ? validateScopeRule(rule) : 'A scope rule must be an object.';
+    if (problem) errors.push(`Pattern "${label}": ${problem}`);
+  }
+  const fields = (Array.isArray(value.fields) ? value.fields : []).flatMap((field) => {
+    if (!isRecord(field) || !text(field.id)) return [];
+    return [{ id: text(field.id), label: text(field.label) || text(field.id), kind: field.kind === 'link' ? 'link' as const : 'text' as const }];
+  });
+  const linkFieldId = text(value.linkFieldId);
+  if (role === 'listing' && !fields.some((field) => field.id === linkFieldId && field.kind === 'link')) {
+    errors.push(`Listing pattern "${label}" needs a link field.`);
+  }
+  if (!id || !role) return null;
+  return {
+    id,
+    name: text(value.name) || id,
+    role,
+    appliesTo,
+    fields,
+    minimumConfidence: number(value.minimumConfidence, 0.8, 0.5, 1),
+    ...(linkFieldId ? { linkFieldId } : {}),
+    ...(text(value.paginationCommandId) ? { paginationCommandId: text(value.paginationCommandId) } : {}),
+    ...(text(value.itemCommandId) ? { itemCommandId: text(value.itemCommandId) } : {}),
+    ...(value.matcher !== undefined ? { matcher: value.matcher } : {}),
+    version: number(value.version, 1, 1, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+export function readCollectionBlockConfig(value: unknown): ConfigResult<CollectionBlockConfig> {
+  const errors: string[] = [];
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported collection block configuration.'] };
+  const capabilityId = text(value.capabilityId);
+  if (!capabilityId) errors.push('The block needs a capability id.');
+  const startUrls = strings(value.startUrls).flatMap((candidate) => {
+    const url = trustworthyUrl(candidate);
+    if (!url) errors.push(`"${candidate}" is not an HTTPS start URL.`);
+    return url ? [url.href] : [];
+  });
+  const patterns = (Array.isArray(value.patterns) ? value.patterns : []).flatMap((pattern) => readPattern(pattern, errors) ?? []);
+  const ids = patterns.map((pattern) => pattern.id);
+  if (new Set(ids).size !== ids.length) errors.push('Pattern ids must be unique.');
+  const fieldMap = isRecord(value.fieldMap)
+    ? Object.fromEntries(Object.entries(value.fieldMap).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim())))
+    : undefined;
+  const requiredFields = Array.isArray(value.requiredFields)
+    ? value.requiredFields.flatMap((rule) => (isRecord(rule) && text(rule.field)
+      ? [{ field: text(rule.field), ...(typeof rule.minLength === 'number' ? { minLength: number(rule.minLength, 0, 0, 100_000) } : {}) }]
+      : []))
+    : undefined;
+  let key: CollectionDefinition['key'];
+  if (isRecord(value.key)) {
+    if (value.key.kind === 'url') key = { kind: 'url' };
+    else if (value.key.kind === 'field' && text(value.key.field)) key = { kind: 'field', field: text(value.key.field) };
+    else if (value.key.kind === 'fields' && strings(value.key.fields).length) key = { kind: 'fields', fields: strings(value.key.fields) };
+    else errors.push('The record key must be the URL, a field, or a list of fields.');
+  }
+  const ignoredQueryParameters = Array.isArray(value.ignoredQueryParameters) ? strings(value.ignoredQueryParameters) : undefined;
+  const jsonLdType = isRecord(value.jsonLd) ? text(value.jsonLd.type) : '';
+  if (jsonLdType && !/^[A-Za-z][A-Za-z0-9]*$/.test(jsonLdType)) errors.push(`"${jsonLdType}" is not a schema.org type name.`);
+  const output = readOutput(value.output, errors);
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      collection: {
+        capabilityId,
+        name: text(value.name) || 'Collection',
+        startUrls,
+        patterns,
+        maxPages: number(value.maxPages, 5, 1, 50),
+        maxItems: number(value.maxItems, 50, 1, 500),
+        followLinksToOtherSites: value.followLinksToOtherSites === true,
+        ...(fieldMap ? { fieldMap } : {}),
+        ...(requiredFields?.length ? { requiredFields } : {}),
+        ...(jsonLdType ? { jsonLd: { type: jsonLdType } } : {}),
+        ...(key ? { key } : {}),
+        ...(ignoredQueryParameters ? { ignoredQueryParameters } : {}),
+      },
+      mcp: { collect: isRecord(value.mcp) && value.mcp.collect === true },
+      ...(output ? { output } : {}),
+    },
+  };
+}
+
+export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockConfig> {
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported queue block configuration.'] };
+  const errors: string[] = [];
+  const queueId = text(value.queueId);
+  const target = isRecord(value.target) ? value.target : {};
+  const pluginId = text(target.pluginId);
+  const method = text(target.method);
+  if (!queueId) errors.push('The queue needs an id.');
+  if (!pluginId || !method) errors.push('The queue needs a target plugin and method.');
+  if (pluginId === QUEUE_PLUGIN_ID) errors.push('A queue cannot target another queue.');
+  const config = isRecord(value.config) ? value.config : {};
+  const retry = isRecord(config.retry) ? config.retry : {};
+  const defaults = DEFAULT_QUEUE_CONFIG;
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      queueId,
+      target: { pluginId, method, args: isRecord(target.args) ? target.args : {} },
+      config: {
+        concurrency: Math.round(number(config.concurrency, defaults.concurrency, 1, 4)),
+        minIntervalMs: number(config.minIntervalMs, defaults.minIntervalMs, 0, 3_600_000),
+        jitterMs: number(config.jitterMs, defaults.jitterMs, 0, 600_000),
+        retry: {
+          statuses: Array.isArray(retry.statuses) ? retry.statuses.filter((status): status is number => Number.isInteger(status)) : defaults.retry.statuses,
+          codes: Array.isArray(retry.codes) ? strings(retry.codes) : defaults.retry.codes,
+          maxAttempts: Math.round(number(retry.maxAttempts, defaults.retry.maxAttempts, 1, 10)),
+          baseDelayMs: number(retry.baseDelayMs, defaults.retry.baseDelayMs, 1_000, 3_600_000),
+          maxDelayMs: number(retry.maxDelayMs, defaults.retry.maxDelayMs, 1_000, 86_400_000),
+        },
+      },
+      state: isRecord(value.state) && Array.isArray(value.state.entries) ? value.state as unknown as QueueState : null,
+    },
+  };
+}
