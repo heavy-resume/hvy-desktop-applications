@@ -17,7 +17,7 @@ describe('UI boundary', () => {
   const scenarioSource = source('./faux/scenarios.test.ts');
 
   it('finds the annotated entry points', () => {
-    expect(entryPoints).toEqual(expect.arrayContaining(['getState', 'beginSignIn', 'startCollection', 'enqueue', 'resumeQueue', 'openDocumentAutomation', 'saveQueues', 'close']));
+    expect(entryPoints).toEqual(expect.arrayContaining(['getState', 'beginSignIn', 'startCollection', 'enqueue', 'resumeQueue', 'openDocumentAutomation', 'close']));
   });
 
   it('every UI entry point is driven by the faux flow or a scenario', () => {
@@ -35,7 +35,7 @@ describe('UI boundary', () => {
     const flow = createFauxFlow();
     const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`]);
     flow.bindProfiles(boards);
-    flow.approve(boards);
+    flow.approve();
     await flow.signIn();
     await flow.completeLogin();
     await flow.collect(boards);

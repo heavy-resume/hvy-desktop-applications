@@ -1,7 +1,8 @@
 import type { CliItemStoreConfig, ItemFieldBinding } from './cliItemStore';
 import type { CollectionDefinition } from './collection';
-import { MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
-import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueState } from './queue';
+import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
+import { DEFAULT_QUEUE_CONFIG, type QueueConfig } from './queue';
+import type { ServedDocumentDefinition } from './servedDocuments';
 import type { RecordSinkConfig } from './recordSink';
 import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
 import type { SessionDefinition, WebApiCapability } from './webApi';
@@ -9,6 +10,8 @@ import type { SessionDefinition, WebApiCapability } from './webApi';
 export const WEB_API_PLUGIN_ID = 'galaxy.web-api';
 export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
 export const QUEUE_PLUGIN_ID = 'galaxy.queue';
+/** The version a document's plugin authorization is recorded against; a new version asks again. */
+export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
 export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
 
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
@@ -85,7 +88,6 @@ export interface QueueBlockConfig {
   queueId: string;
   target: { pluginId: string; method: string; args: Record<string, unknown> };
   config: QueueConfig;
-  state: QueueState | null;
 }
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -118,6 +120,45 @@ function trustworthyUrl(value: unknown): URL | null {
   }
 }
 
+const POINTER = /^(\/[^\/]*)+$/;
+
+function pointer(value: unknown): string | null {
+  const candidate = text(value);
+  return POINTER.test(candidate) ? candidate : null;
+}
+
+/** An endpoint whose response serves a document: JSON pointers to its URL, checks, keys, and revision. */
+function readServedDocument(value: unknown, label: string, inputs: string[], errors: string[]): ServedDocumentDefinition | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !pointer(value.urlPointer)) {
+    errors.push(`Endpoint "${label}" serves a document but has no URL pointer.`);
+    return undefined;
+  }
+  if (inputs.length !== 1) errors.push(`Endpoint "${label}" serves a document, so it must take exactly one input, the document ID.`);
+  const optional = (name: 'extensionPointer' | 'byteLengthPointer' | 'sha256Pointer' | 'keyringPointer') => {
+    if (value[name] === undefined) return {};
+    const parsed = pointer(value[name]);
+    if (!parsed) errors.push(`Endpoint "${label}" has an invalid ${name}.`);
+    return parsed ? { [name]: parsed } : {};
+  };
+  const revision = (Array.isArray(value.revision) ? value.revision : []).flatMap((entry) => {
+    const parsed = isRecord(entry) ? pointer(entry.pointer) : null;
+    if (!parsed) {
+      errors.push(`Endpoint "${label}" has an invalid revision pointer.`);
+      return [];
+    }
+    return [{ pointer: parsed, ...(text(entry.prefix) ? { prefix: text(entry.prefix) } : {}) }];
+  });
+  return {
+    urlPointer: pointer(value.urlPointer)!,
+    ...optional('extensionPointer'),
+    ...optional('byteLengthPointer'),
+    ...optional('sha256Pointer'),
+    ...optional('keyringPointer'),
+    ...(revision.length ? { revision } : {}),
+  };
+}
+
 function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition | null {
   if (!isRecord(value)) {
     errors.push('An endpoint must be an object.');
@@ -141,7 +182,14 @@ function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition |
     const fromInputs = strings(value.idempotency.fromInputs);
     if (!/^[A-Za-z0-9-]+$/.test(header)) errors.push(`Endpoint "${label}" has an invalid idempotency header.`);
     if (fromInputs.some((name) => !properties.includes(name))) errors.push(`Endpoint "${label}" derives its idempotency key from undeclared inputs.`);
-    idempotency = { header, fromInputs };
+    idempotency = fromInputs.length ? { header, fromInputs } : { header };
+  }
+  const servesDocument = readServedDocument(value.servesDocument, label, properties, errors);
+  for (const [name, schema] of Object.entries(isRecord(inputSchema.properties) ? inputSchema.properties : {})) {
+    if (!isRecord(schema)) continue;
+    for (const link of ['x-hvy-document-id', 'x-hvy-document-revision']) {
+      if (schema[link] !== undefined && !properties.includes(text(schema[link]))) errors.push(`Endpoint "${label}" input "${name}" links ${link} to an undeclared input.`);
+    }
   }
   if (!id || !METHODS.has(method)) return null;
   return {
@@ -152,6 +200,7 @@ function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition |
     path,
     inputSchema,
     ...(idempotency ? { idempotency } : {}),
+    ...(servesDocument ? { servesDocument } : {}),
     ...(text(value.errorMessagePointer) ? { errorMessagePointer: text(value.errorMessagePointer) } : {}),
     ...(value.timeoutMs !== undefined ? { timeoutMs: number(value.timeoutMs, 15_000, 1_000, MAX_ENDPOINT_TIMEOUT_MS) } : {}),
   };
@@ -207,6 +256,20 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
   const ids = endpoints.map((endpoint) => endpoint.id);
   if (new Set(ids).size !== ids.length) errors.push('Endpoint ids must be unique.');
   const session = readSession(value.session, pageUrl.origin, endpoints, errors);
+  for (const endpoint of endpoints) {
+    for (const name of documentTextInputs(endpoint)) {
+      const { endpointId, idInput } = documentInputLinks(endpoint, name);
+      if (!endpoints.find((candidate) => candidate.id === endpointId)?.servesDocument) {
+        errors.push(`Endpoint "${endpoint.id}" input "${name}" must name an endpoint of this block that serves a document.`);
+      }
+      if (!idInput) errors.push(`Endpoint "${endpoint.id}" input "${name}" must name the input holding the document ID.`);
+    }
+  }
+  const storageOrigins = strings(value.storageOrigins).flatMap((origin) => {
+    const parsed = trustworthyUrl(origin);
+    if (!parsed) errors.push(`Storage origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
+    return parsed ? [parsed.origin] : [];
+  });
   const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
   if (exposed.some((id) => !ids.includes(id))) errors.push('MCP exposes an endpoint that is not defined.');
   if (errors.length) return { ok: false, errors };
@@ -221,6 +284,7 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
         ...(apiPageUrl ? { apiPageUrl: apiPageUrl.href } : {}),
         ...(session ? { session } : {}),
         endpoints,
+        ...(storageOrigins.length ? { storageOrigins: [...new Set(storageOrigins)] } : {}),
       },
       mcp: { endpointIds: exposed },
     },
@@ -354,7 +418,6 @@ export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockCon
           maxDelayMs: number(retry.maxDelayMs, defaults.retry.maxDelayMs, 1_000, 86_400_000),
         },
       },
-      state: isRecord(value.state) && Array.isArray(value.state.entries) ? value.state as unknown as QueueState : null,
     },
   };
 }

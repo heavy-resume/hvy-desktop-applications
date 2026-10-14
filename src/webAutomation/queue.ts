@@ -7,6 +7,8 @@ export type QueueEntryStatus = 'queued' | 'running' | 'waiting-retry' | 'done' |
 export interface QueueEntry {
   key: string;
   input: unknown;
+  /** Sent with every attempt of this entry, so a retried or interrupted call never creates a second result. */
+  idempotencyKey: string;
   status: QueueEntryStatus;
   attempts: number;
   lastError: string | null;
@@ -29,12 +31,12 @@ export interface QueueConfig {
   };
 }
 
-/** Persisted with the document; plain JSON. */
+/** Persisted in the app's queue store, per document and queue; plain JSON. */
 export interface QueueState {
   entries: QueueEntry[];
   paused: boolean;
   pauseReason: string | null;
-  /** True after a reload until the user resumes; nothing runs unattended. */
+  /** True after the document is reopened until the user resumes; nothing runs unattended. */
   awaitingResume: boolean;
 }
 
@@ -52,13 +54,17 @@ export const DEFAULT_QUEUE_CONFIG: QueueConfig = {
   retry: { statuses: [429, 502, 503, 504], codes: [], maxAttempts: 4, baseDelayMs: 30_000, maxDelayMs: 600_000 },
 };
 
+export type QueueTarget = (input: unknown, context: { idempotencyKey: string }) => Promise<unknown>;
+
 export class DurableQueue {
   private state: QueueState = { entries: [], paused: false, pauseReason: null, awaitingResume: false };
   private handler: ((result: QueueResult) => void) | null = null;
   private lastStartedAt: number | null = null;
   private wake: AbortController | null = null;
   private loops = 0;
-  private disposed = false;
+  private detached = false;
+  private written: Promise<void> = Promise.resolve();
+  private target: QueueTarget;
 
   constructor(private readonly deps: {
     id: string;
@@ -66,9 +72,13 @@ export class DurableQueue {
     clock: Clock;
     random: Random;
     emit: AutomationEmit;
-    target(input: unknown): Promise<unknown>;
-    onChange?(state: QueueState): void;
-  }) {}
+    createId(): string;
+    target: QueueTarget;
+    /** Persists each change (the app's queue store). A call starts only after its entry is written. */
+    onChange?(state: QueueState): void | Promise<void>;
+  }) {
+    this.target = deps.target;
+  }
 
   getState(): QueueState {
     return structuredClone(this.state);
@@ -86,7 +96,7 @@ export class DurableQueue {
     const existing = this.state.entries.find((entry) => entry.key === key);
     if (existing && ['queued', 'running', 'waiting-retry'].includes(existing.status)) return { added: false };
     const entry: QueueEntry = {
-      key, input, status: 'queued', attempts: 0, lastError: null, result: null, nextAttemptAt: null, delivered: false, updatedAt: this.deps.clock.now(),
+      key, input, idempotencyKey: this.deps.createId(), status: 'queued', attempts: 0, lastError: null, result: null, nextAttemptAt: null, delivered: false, updatedAt: this.deps.clock.now(),
     };
     this.state.entries = [...this.state.entries.filter((candidate) => candidate.key !== key), entry];
     this.deps.emit('queue', `${this.deps.id}: enqueued ${key}`);
@@ -152,14 +162,29 @@ export class DurableQueue {
     }
   }
 
-  /** The document closed: stop starting work and ignore results that arrive later. */
-  dispose(): void {
-    this.disposed = true;
+  /**
+   * The document was unloaded: start nothing new. A call already sent still
+   * finishes, and its result is kept until the document reopens and a handler
+   * is registered again.
+   */
+  detach(): void {
+    this.detached = true;
+    this.handler = null;
     this.wake?.abort();
   }
 
+  /** The document reopened: calls go to its target again, after the user resumes. */
+  attach(target: QueueTarget): void {
+    this.target = target;
+    this.detached = false;
+    if (this.state.entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry')) {
+      this.state.awaitingResume = true;
+      this.changed();
+    }
+  }
+
   private blocked(): boolean {
-    return this.disposed || this.state.paused || this.state.awaitingResume;
+    return this.detached || this.state.paused || this.state.awaitingResume;
   }
 
   private nextEligible(): QueueEntry | null {
@@ -195,12 +220,12 @@ export class DurableQueue {
     this.lastStartedAt = this.deps.clock.now();
     this.deps.emit('queue', `${this.deps.id}: run ${key} (attempt ${entry.attempts})`);
     try {
-      const result = await this.deps.target(entry.input);
-      if (this.disposed) return;
+      // Write-ahead: the entry and its idempotency key are stored before the call is made.
+      await this.written;
+      const result = await this.target(entry.input, { idempotencyKey: entry.idempotencyKey });
       const done = this.update(key, (current) => ({ ...current, status: 'done', result, lastError: null }));
       if (done) this.deliver(done);
     } catch (error) {
-      if (this.disposed) return;
       const code = errorCode(error);
       const status = errorStatus(error);
       if (code === 'not_authenticated' || code === 'not_authorized') {
@@ -243,6 +268,7 @@ export class DurableQueue {
   }
 
   private changed(): void {
-    this.deps.onChange?.(this.getState());
+    const state = this.getState();
+    this.written = this.written.then(() => this.deps.onChange?.(state));
   }
 }

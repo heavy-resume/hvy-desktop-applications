@@ -8,8 +8,7 @@ describe('automation settings', () => {
     const flow = createFauxFlow();
     const boards = listingCollection([`${ATS_ORIGIN}/acme/jobs`]);
     flow.bindProfiles(boards);
-    flow.useLocalSource();
-    flow.approve(boards);
+    flow.approve();
     await flow.signIn();
     await flow.completeLogin();
     const saved = JSON.parse(JSON.stringify(flow.settings.get()));
@@ -22,12 +21,10 @@ describe('automation settings', () => {
       profileBindings: { '/doc.hvy': { good: 'p1', empty: '', bad: 3 }, '': { x: 'p' } },
       authorizations: { '/doc.hvy': { ok: { profileId: 'p1', partHashes: { page: 'h', bad: 1 }, authorizedAt: 5 }, broken: { profileId: 'p1' } } },
       accounts: { wrongKey: { origin: 'https://a.test', profileId: 'p1', accountId: 'u' } },
-      documentInputBindings: { '/doc.hvy': { cap: { 'create.sourceText': '/r.hvy', 'x.y': 7 } } },
     })).toEqual({
       profileBindings: { '/doc.hvy': { good: 'p1' } },
       authorizations: { '/doc.hvy': { ok: { capabilityId: 'ok', profileId: 'p1', partHashes: { page: 'h' }, authorizedAt: 5 } } },
       accounts: {},
-      documentInputBindings: { '/doc.hvy': { cap: { 'create.sourceText': '/r.hvy' } } },
     });
   });
 });

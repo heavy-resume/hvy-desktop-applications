@@ -29,9 +29,16 @@ describe('block configuration readers', () => {
       'The session probe must be a GET endpoint of this block.',
     ]);
     const undeclared = structuredClone(analysisServiceCapability.endpoints);
-    undeclared[4] = { ...undeclared[4], inputSchema: { type: 'object', properties: {} } };
+    const getAnalysis = undeclared.findIndex((endpoint) => endpoint.id === 'get-analysis');
+    undeclared[getAnalysis] = { ...undeclared[getAnalysis], inputSchema: { type: 'object', properties: {} } };
     expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints: undeclared })))).toContain('Endpoint "get-analysis" uses {id} but does not declare it as an input.');
     expect(errorsOf(readWebApiBlockConfig(rawWebApi({ mcp: { endpointIds: ['nope'] } })))).toContain('MCP exposes an endpoint that is not defined.');
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ storageOrigins: ['http://storage.example.test'] }))))
+      .toContain('Storage origin "http://storage.example.test" must use HTTPS (or HTTP on a loopback host).');
+    const served = structuredClone(analysisServiceCapability.endpoints).map((endpoint) => (endpoint.id === 'open-source'
+      ? { ...endpoint, inputSchema: { type: 'object', properties: { id: {}, extra: {} } }, servesDocument: { urlPointer: 'readUrl' } }
+      : endpoint));
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints: served })))).toContain('Endpoint "open-source" serves a document but has no URL pointer.');
   });
 
   it('round-trips collections, including fingerprint scopes, and rejects unsafe scopes', () => {

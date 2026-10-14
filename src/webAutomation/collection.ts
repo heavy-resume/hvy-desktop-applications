@@ -61,30 +61,6 @@ export interface CollectionRunState {
   error: string | null;
 }
 
-export function collectionAuthorizationParts(definition: CollectionDefinition): Record<string, unknown> {
-  return {
-    sites: {
-      startUrls: [...definition.startUrls].sort(),
-      rules: definition.patterns.map((pattern) => ({ id: pattern.id, appliesTo: pattern.appliesTo })).sort((left, right) => left.id.localeCompare(right.id)),
-      followLinksToOtherSites: definition.followLinksToOtherSites,
-    },
-    patterns: definition.patterns.map((pattern) => ({
-      id: pattern.id,
-      role: pattern.role,
-      fields: pattern.fields,
-      linkFieldId: pattern.linkFieldId ?? null,
-      paginationCommandId: pattern.paginationCommandId ?? null,
-      itemCommandId: pattern.itemCommandId ?? null,
-      matcher: pattern.matcher ?? null,
-    })).sort((left, right) => left.id.localeCompare(right.id)),
-    extraction: {
-      jsonLdType: definition.jsonLd?.type ?? null,
-      key: definition.key ?? { kind: 'url' },
-      ignoredQueryParameters: definition.ignoredQueryParameters ?? null,
-    },
-  };
-}
-
 export function isNavigationAllowed(definition: CollectionDefinition, url: string, linkFromListing: boolean): boolean {
   const origin = new URL(url).origin;
   if (definition.startUrls.some((startUrl) => new URL(startUrl).origin === origin)) return true;

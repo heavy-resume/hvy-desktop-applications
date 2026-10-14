@@ -1,13 +1,15 @@
 import { getWebCapabilityProfileBinding } from '../webCapabilities';
-import { pinAuthorizationAccount, reviewAuthorization, type AuthorizationReview } from './authorization';
+import { reviewAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock } from './clock';
-import { documentTextInputs, endpointTimeoutMs, readJsonPointer, resolveEndpointRequest, type ApiEndpointDefinition } from './endpoints';
+import { documentInputLinks, documentTextInputs, endpointTimeoutMs, onlyInput, readJsonPointer, resolveEndpointRequest, type ApiEndpointDefinition } from './endpoints';
+import { readServedDocument, type ServedDocumentDefinition } from './servedDocuments';
+import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { WebAutomationError } from './errors';
 import type { AutomationEmit } from './events';
 import type { BrowserHost, HostResponse } from './host';
 import type { WorkerScheduler } from './scheduler';
 import type { SessionService } from './session';
-import { accountKey, type AutomationSettingsStore } from './settings';
+import type { AutomationSettingsStore } from './settings';
 
 export const DEFAULT_SIGNED_OUT_STATUSES = [401];
 
@@ -35,7 +37,15 @@ export interface WebApiCapability {
   apiPageUrl?: string;
   session?: SessionDefinition;
   endpoints: ApiEndpointDefinition[];
+  /** Origins served documents may be downloaded from (for example, a storage bucket), besides the page's own. */
+  storageOrigins?: string[];
 }
+
+/** A stable key for the call (a queue entry's), sent in the endpoint's idempotency header. */
+export interface CallOptions {
+  idempotencyKey?: string;
+}
+
 
 export interface WebApiResult {
   status: number;
@@ -43,18 +53,18 @@ export interface WebApiResult {
 }
 
 /**
- * What the user approves. `documentInputs` are the local document bindings
- * whose text will be sent; they are part of the approval, so changing which
- * document is sent requires review.
+ * What the user approves for a service, by category so a review names what
+ * changed. Which document's text is sent is part of `endpoints`: each
+ * document-text input declares the endpoint that serves it.
  */
-export function webApiAuthorizationParts(capability: WebApiCapability, documentInputs: Record<string, string> = {}): Record<string, unknown> {
+export function webApiAuthorizationParts(capability: WebApiCapability): Record<string, unknown> {
   return {
     page: { pageUrl: capability.pageUrl, apiPageUrl: capability.apiPageUrl ?? null, allowedOrigins: [...capability.allowedOrigins].sort() },
     session: capability.session ?? null,
     endpoints: capability.endpoints
-      .map((endpoint) => ({ id: endpoint.id, method: endpoint.method, path: endpoint.path, inputSchema: endpoint.inputSchema, idempotency: endpoint.idempotency ?? null }))
+      .map((endpoint) => ({ id: endpoint.id, method: endpoint.method, path: endpoint.path, inputSchema: endpoint.inputSchema, idempotency: endpoint.idempotency ?? null, servesDocument: endpoint.servesDocument ?? null }))
       .sort((left, right) => left.id.localeCompare(right.id)),
-    documents: Object.fromEntries(Object.entries(documentInputs).sort(([left], [right]) => left.localeCompare(right))),
+    storage: [...(capability.storageOrigins ?? [])].sort(),
   };
 }
 
@@ -78,9 +88,9 @@ export class ApiTransport {
 
   constructor(private readonly deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock; emit: AutomationEmit }) {}
 
-  call(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>): Promise<HostResponse> {
+  call(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>, options: CallOptions = {}): Promise<HostResponse> {
     const pageUrl = capability.apiPageUrl ?? capability.pageUrl;
-    const request = resolveEndpointRequest(pageUrl, endpoint, input);
+    const request = resolveEndpointRequest(pageUrl, endpoint, input, options);
     return this.deps.scheduler.run({ profileId, kind: 'api', label: `${capability.name}: ${endpoint.name}` }, async (lease) => {
       const origin = new URL(pageUrl).origin;
       const current = this.locations.get(lease.workerId);
@@ -105,16 +115,6 @@ export class ApiTransport {
     });
   }
 
-  /** Runs a WebMCP tool on a specific page (such as a document editor) in the profile's API worker. */
-  invokeWebMcpTool(profileId: string, pageUrl: string, name: string, args: Record<string, unknown>): Promise<unknown> {
-    return this.deps.scheduler.run({ profileId, kind: 'api', label: `WebMCP ${name}` }, async (lease) => {
-      if (this.locations.get(lease.workerId) !== new URL(pageUrl).href) {
-        const location = await this.deps.host.navigate(lease.workerId, pageUrl);
-        this.locations.set(lease.workerId, location.url);
-      }
-      return this.deps.host.invokeWebMcpTool(lease.workerId, { name, arguments: args });
-    });
-  }
 }
 
 export class WebApiService {
@@ -122,8 +122,11 @@ export class WebApiService {
     transport: ApiTransport;
     sessions: SessionService;
     settings: AutomationSettingsStore;
-    /** Reads a document-text source (a workspace path or `webmcp:<page URL>`) as text, using the profile for remote pages. */
-    readDocumentText(source: string, profileId: string): Promise<string>;
+    createId(): string;
+    /** Downloads a served document (host.download). */
+    download(url: string, options: { maxBytes: number }): Promise<Uint8Array>;
+    /** The text a document contributes to an input: the reference Markdown export. */
+    exportDocumentText(document: VisualDocument): string;
   }) {}
 
   profileFor(documentPath: string, capability: WebApiCapability): string {
@@ -132,12 +135,8 @@ export class WebApiService {
     return profileId;
   }
 
-  documentInputs(documentPath: string, capability: WebApiCapability): Record<string, string> {
-    return this.deps.settings.get().documentInputBindings[documentPath]?.[capability.capabilityId] ?? {};
-  }
-
-  authorizationParts(documentPath: string, capability: WebApiCapability): Record<string, unknown> {
-    return webApiAuthorizationParts(capability, this.documentInputs(documentPath, capability));
+  authorizationParts(capability: WebApiCapability): Record<string, unknown> {
+    return webApiAuthorizationParts(capability);
   }
 
   review(documentPath: string, capability: WebApiCapability): AuthorizationReview {
@@ -146,37 +145,58 @@ export class WebApiService {
       this.deps.settings.get().authorizations,
       documentPath,
       capability.capabilityId,
-      this.authorizationParts(documentPath, capability),
+      this.authorizationParts(capability),
       profileId,
-      this.currentAccountId(capability, profileId),
     );
   }
 
-  /** Fills document-text inputs the caller did not supply from the bound documents. */
-  private async withDocumentInputs(documentPath: string, capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  /**
+   * Fills document-text inputs the caller did not supply. Each declares the
+   * endpoint that serves its document (`x-hvy-document-endpoint`), the input
+   * holding the document's ID, and the input its revision fills. The document
+   * is opened when the call runs, so the text and its back reference always
+   * come from the same response.
+   */
+  private async withDocumentInputs(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const filled = { ...input };
-    const bindings = this.documentInputs(documentPath, capability);
     for (const name of documentTextInputs(endpoint)) {
       if (filled[name] !== undefined) continue;
-      const source = bindings[`${endpoint.id}.${name}`];
-      if (!source) throw new WebAutomationError('invalid_request', `Choose a document for "${name}" in "${capability.name}".`);
-      filled[name] = await this.deps.readDocumentText(source, profileId);
+      const { endpointId, idInput, revisionInput } = documentInputLinks(endpoint, name);
+      const documentId = idInput ? filled[idInput] : undefined;
+      if (!endpointId || documentId === undefined || documentId === '') {
+        throw new WebAutomationError('invalid_request', `"${name}" needs a document ID in "${idInput ?? '(none declared)'}".`);
+      }
+      const serving = findEndpoint(capability, endpointId);
+      if (!serving.servesDocument) throw new WebAutomationError('invalid_request', `"${serving.name}" does not serve a document.`);
+      const response = await this.send(capability, profileId, serving, { [onlyInput(serving)]: documentId });
+      const served = await readServedDocument(
+        { download: (url, options) => this.deps.download(url, options) },
+        serving as ApiEndpointDefinition & { servesDocument: ServedDocumentDefinition },
+        response.body,
+        [capabilityOrigin(capability), ...(capability.storageOrigins ?? [])],
+      );
+      filled[name] = this.deps.exportDocumentText(served.document);
+      if (revisionInput && served.revision !== null) filled[revisionInput] = served.revision;
     }
     return filled;
   }
 
-  private currentAccountId(capability: WebApiCapability, profileId: string): string | undefined {
-    return this.deps.settings.get().accounts[accountKey(capabilityOrigin(capability), profileId)]?.accountId;
-  }
-
-  async call(documentPath: string, capability: WebApiCapability, endpointId: string, input: Record<string, unknown>): Promise<WebApiResult> {
+  async call(documentPath: string, capability: WebApiCapability, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
     const profileId = this.profileFor(documentPath, capability);
     const review = this.review(documentPath, capability);
     if (review.reason !== 'authorized') {
       throw new WebAutomationError('not_authorized', `"${capability.name}" must be reviewed before it can run (${review.reason}).`);
     }
     const endpoint = findEndpoint(capability, endpointId);
-    const response = await this.deps.transport.call(capability, profileId, endpoint, await this.withDocumentInputs(documentPath, capability, profileId, endpoint, input));
+    // An endpoint whose key is not derived from inputs gets a fresh key per direct call; queued calls bring their own.
+    const idempotencyKey = options.idempotencyKey ?? (endpoint.idempotency && !endpoint.idempotency.fromInputs ? this.deps.createId() : undefined);
+    const response = await this.send(capability, profileId, endpoint, await this.withDocumentInputs(capability, profileId, endpoint, input), { idempotencyKey });
+    return { status: response.status, body: response.body };
+  }
+
+  /** Sends one request in the profile and turns sign-out and error statuses into errors. */
+  private async send(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>, options: CallOptions = {}): Promise<HostResponse> {
+    const response = await this.deps.transport.call(capability, profileId, endpoint, input, options);
     if (signedOutStatuses(capability).includes(response.status)) {
       this.deps.sessions.markSignedOut(capability, profileId);
       throw new WebAutomationError('not_authenticated', `Sign in to ${capability.name} again.`, response.status);
@@ -185,13 +205,6 @@ export class WebApiService {
       const detail = endpoint.errorMessagePointer ? readJsonPointer(response.body, endpoint.errorMessagePointer) : null;
       throw new WebAutomationError('http_error', typeof detail === 'string' && detail ? detail : `"${endpoint.name}" returned ${response.status}.`, response.status);
     }
-    const accountId = this.currentAccountId(capability, profileId);
-    if (accountId) {
-      this.deps.settings.update((settings) => ({
-        ...settings,
-        authorizations: pinAuthorizationAccount(settings.authorizations, documentPath, capability.capabilityId, accountId),
-      }));
-    }
-    return { status: response.status, body: response.body };
+    return response;
   }
 }

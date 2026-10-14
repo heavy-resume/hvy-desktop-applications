@@ -20,8 +20,14 @@ export interface BrowserHost {
   runCommand(workerId: string, request: CommandRequest): Promise<CommandResult>;
   /** Same-origin, credentialed request made from inside the page the worker is on. */
   request(workerId: string, request: HostRequest): Promise<HostResponse>;
-  /** Invokes a WebMCP tool the page the worker is on provides (the existing integration WebMCP bridge). */
-  invokeWebMcpTool(workerId: string, request: { name: string; arguments: Record<string, unknown> }): Promise<unknown>;
+
+  /**
+   * Downloads a served document from the host process, outside any page: a
+   * GET with no credentials or cookies, no redirects (a redirect is an error),
+   * no referrer, and no cache. Fails if more than `maxBytes` arrive. The caller
+   * checks the URL's origin first.
+   */
+  download(url: string, options: { maxBytes: number }): Promise<Uint8Array>;
 
   openUserWindow(profileId: string, url: string): Promise<void>;
   hideUserWindow(profileId: string): Promise<void>;

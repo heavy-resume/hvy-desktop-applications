@@ -2,7 +2,7 @@ import { setWebCapabilityProfileBinding } from '../webCapabilities';
 import { recordAuthorization, reviewAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock, Random } from './clock';
 import {
-  collectionAuthorizationParts,
+
   CollectionService,
   testSitePattern,
   type CollectionDefinition,
@@ -13,14 +13,16 @@ import {
 import type { SitePatternDefinition } from './sitePatterns';
 import { WebAutomationError } from './errors';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
-import { createLocalDocumentChannel, createWebMcpDocumentChannel, readDocumentTextFromChannel, webMcpDocumentPage } from './documentChannel';
+import { MAX_DOCUMENT_TEXT } from './servedDocuments';
+import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
 import { createEventChannel, type AutomationEvent } from './events';
 import type { BrowserHost } from './host';
-import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResult, type QueueState } from './queue';
+import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResult, type QueueState, type QueueTarget } from './queue';
 import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './scheduler';
 import { SessionService, type SessionState } from './session';
 import type { AutomationSettingsStore } from './settings';
-import { ApiTransport, WebApiService, type WebApiCapability, type WebApiResult } from './webApi';
+import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
+import { ApiTransport, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
 
 /** A plugin method the queue can target, resolved through the plugin-to-plugin call interface. */
 export interface PluginCallTarget {
@@ -38,11 +40,21 @@ export interface WebAutomationRuntimeDeps {
   clock: Clock;
   random: Random;
   settings: AutomationSettingsStore;
-  /** Opens a workspace HVY document, for document-text endpoint inputs bound to a local file. */
-  openWorkspaceDocument(path: string): Promise<VisualDocument>;
+  /**
+   * App-local queue state per document and queue, so unloading a document
+   * without saving loses nothing. A queue awaits `save` before each call.
+   */
+  queueStore: QueueStore;
+  /** New idempotency keys for queue entries (crypto.randomUUID in the app). */
+  createId(): string;
   /** The user's local site pattern library (integration registry). */
   patternLibrary?: () => SitePatternDefinition[];
   scheduler?: Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>;
+}
+
+export interface QueueStore {
+  load(documentPath: string, queueId: string): QueueState | null;
+  save(documentPath: string, queueId: string, state: QueueState): void | Promise<void>;
 }
 
 /** Document-level dependencies. */
@@ -50,6 +62,8 @@ export interface WebAutomationDocumentDeps {
   documentPath: string;
   /** How queues call their target plugin. */
   callPlugin: PluginCall;
+  /** Whether a plugin is allowed in this file (the reference implementation's per-file plugin authorization). */
+  isPluginAuthorized(pluginId: string): boolean;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -58,17 +72,21 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
   const scheduler = new WorkerScheduler({ ...deps.scheduler, host: deps.host, clock: deps.clock, random: deps.random, emit });
   const transport = new ApiTransport({ scheduler, host: deps.host, clock: deps.clock, emit });
   const sessions = new SessionService({ host: deps.host, transport, settings: deps.settings, clock: deps.clock, emit });
-  // A document-text source is read when the call runs, through the channel its binding names.
-  const readDocumentText = async (source: string, profileId: string): Promise<string> => {
-    const pageUrl = webMcpDocumentPage(source);
-    const channel = pageUrl
-      ? createWebMcpDocumentChannel((name, args) => transport.invokeWebMcpTool(profileId, pageUrl, name, args))
-      : createLocalDocumentChannel(await deps.openWorkspaceDocument(source));
-    return readDocumentTextFromChannel(channel);
-  };
-  const webApi = new WebApiService({ transport, sessions, settings: deps.settings, readDocumentText });
+  // The text a served document contributes to an input is the reference Markdown export, as the Heavy Resume
+  // extension sends.
+  const documentText = (document: VisualDocument): string => exportDocumentSourceMarkdown(document).slice(0, MAX_DOCUMENT_TEXT);
+  const webApi = new WebApiService({
+    transport,
+    sessions,
+    settings: deps.settings,
+    createId: deps.createId,
+    download: (url, options) => deps.host.download(url, options),
+    exportDocumentText: documentText,
+  });
   return {
     deps,
+    /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
+    queues: new Map<string, DurableQueue>(),
     events,
     emit,
     scheduler,
@@ -102,8 +120,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   const deps = { ...runtime.deps, ...document };
   const collections = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, patternLibrary: deps.patternLibrary });
   const queues = new Map<string, DurableQueue>();
-  const queueStates = new Map<string, QueueState>();
 
+  // The plugin must be allowed in this file (the reference implementation's per-file plugin authorization).
+  function requirePlugin(pluginId: string, displayName: string): void {
+    if (!deps.isPluginAuthorized(pluginId)) {
+      throw new WebAutomationError('not_authorized', `Allow ${displayName} in this file before it is used.`);
+    }
+  }
+
+  // The service approval: what this document does with your account there, tied to its configuration.
   function requireAuthorized(capabilityId: string, parts: Record<string, unknown>, profileId: string): void {
     const review = reviewAuthorization(deps.settings.get().authorizations, deps.documentPath, capabilityId, parts, profileId);
     if (review.reason !== 'authorized') {
@@ -142,44 +167,33 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       }));
     },
 
-    // UI: galaxy.web-api editor and reader, "Use document" picker for a document-text input.
-    bindDocumentInput(capability: WebApiCapability, endpointId: string, inputName: string, sourcePath: string | null): void {
-      const slot = `${endpointId}.${inputName}`;
-      deps.settings.update((settings) => {
-        const forDocument = { ...(settings.documentInputBindings[deps.documentPath] ?? {}) };
-        const forCapability = { ...(forDocument[capability.capabilityId] ?? {}) };
-        if (sourcePath) forCapability[slot] = sourcePath;
-        else delete forCapability[slot];
-        forDocument[capability.capabilityId] = forCapability;
-        return { ...settings, documentInputBindings: { ...settings.documentInputBindings, [deps.documentPath]: forDocument } };
-      });
-    },
-
-    // UI: authorization modal, content and reauthorization reason for a galaxy.web-api block.
+    // UI: "Sign in" modal for a galaxy.web-api block: what the document does with your account, and what changed.
     reviewWebApi(capability: WebApiCapability): AuthorizationReview {
       return webApi.review(deps.documentPath, capability);
     },
 
-    // UI: authorization modal, "Allow with [profile]" for a galaxy.web-api block.
+    // UI: "Sign in" modal, "Allow and sign in with [profile]" for a galaxy.web-api block.
     authorizeWebApi(capability: WebApiCapability): void {
       const profileId = profileFor(capability.capabilityId, capability.name);
       deps.settings.update((settings) => ({
         ...settings,
-        authorizations: recordAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId, webApi.authorizationParts(deps.documentPath, capability), profileId, deps.clock.now()),
+        authorizations: recordAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId, webApi.authorizationParts(capability), profileId, deps.clock.now()),
       }));
     },
 
     // UI: galaxy.web-api reader, account status on first use.
     async probeSession(capability: WebApiCapability): Promise<SessionState> {
+      requirePlugin(WEB_API_PLUGIN_ID, 'Web API');
       const profileId = profileFor(capability.capabilityId, capability.name);
-      requireAuthorized(capability.capabilityId, webApi.authorizationParts(deps.documentPath, capability), profileId);
+      requireAuthorized(capability.capabilityId, webApi.authorizationParts(capability), profileId);
       return sessions.probe(capability, profileId);
     },
 
     // UI: galaxy.web-api reader, "Sign in" button.
     async beginSignIn(capability: WebApiCapability): Promise<void> {
+      requirePlugin(WEB_API_PLUGIN_ID, 'Web API');
       const profileId = profileFor(capability.capabilityId, capability.name);
-      requireAuthorized(capability.capabilityId, webApi.authorizationParts(deps.documentPath, capability), profileId);
+      requireAuthorized(capability.capabilityId, webApi.authorizationParts(capability), profileId);
       await sessions.beginSignIn(capability, profileId);
     },
 
@@ -189,37 +203,18 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: galaxy.web-api reader, endpoint form "Run"; scripting doc.plugins.call("galaxy.web-api", "call", …).
-    callEndpoint(capability: WebApiCapability, endpointId: string, input: Record<string, unknown>): Promise<WebApiResult> {
-      return webApi.call(deps.documentPath, capability, endpointId, input);
-    },
-
-    // UI: authorization modal, content and reauthorization reason for a galaxy.web-collection block.
-    reviewCollection(definition: CollectionDefinition): AuthorizationReview {
-      return reviewAuthorization(
-        deps.settings.get().authorizations,
-        deps.documentPath,
-        definition.capabilityId,
-        collectionAuthorizationParts(definition),
-        profileFor(definition.capabilityId, definition.name),
-      );
-    },
-
-    // UI: authorization modal, "Allow with [profile]" for a galaxy.web-collection block.
-    authorizeCollection(definition: CollectionDefinition): void {
-      const profileId = profileFor(definition.capabilityId, definition.name);
-      deps.settings.update((settings) => ({
-        ...settings,
-        authorizations: recordAuthorization(settings.authorizations, deps.documentPath, definition.capabilityId, collectionAuthorizationParts(definition), profileId, deps.clock.now()),
-      }));
+    callEndpoint(capability: WebApiCapability, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
+      requirePlugin(WEB_API_PLUGIN_ID, 'Web API');
+      return webApi.call(deps.documentPath, capability, endpointId, input, options);
     },
 
     // UI: galaxy.web-collection reader, "Collect"; scripting collect({ … }). Records go to the consumer (usually a record sink).
     startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[]): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
-      requireAuthorized(definition.capabilityId, collectionAuthorizationParts(definition), profileId);
+      requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
       const startUrls = onlyStartUrls ?? definition.startUrls;
       if (startUrls.some((url) => !definition.startUrls.includes(url))) {
-        throw new WebAutomationError('invalid_request', 'Only approved start URLs can be collected.');
+        throw new WebAutomationError('invalid_request', "Only the block's own start URLs can be collected.");
       }
       return collections.start(definition, profileId, consumer, startUrls);
     },
@@ -227,7 +222,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: galaxy.web-collection reader, single item URL entry; scripting extract({ url }).
     extractItem(definition: CollectionDefinition, url: string, consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
-      requireAuthorized(definition.capabilityId, collectionAuthorizationParts(definition), profileId);
+      requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
       return collections.extract(definition, profileId, url, consumer);
     },
 
@@ -246,18 +241,30 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       collections.stop(runId);
     },
 
-    // Document load: openDocumentAutomation opens each queue block with its saved state.
-    openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG, persisted?: QueueState): void {
+    // Document load: openDocumentAutomation opens each queue block. A queue still finishing work from an earlier
+    // open of this document is reattached; otherwise its state comes from the app's queue store.
+    openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG): void {
+      const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey });
+      const registryKey = `${deps.documentPath}\u0000${queueId}`;
+      const existing = runtime.queues.get(registryKey);
+      if (existing) {
+        existing.attach(call);
+        queues.set(queueId, existing);
+        return;
+      }
       const item = new DurableQueue({
         id: queueId,
         config,
         clock: deps.clock,
         random: deps.random,
         emit,
-        target: async (input) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input }),
-        onChange: (state) => queueStates.set(queueId, state),
+        createId: deps.createId,
+        target: call,
+        onChange: (state) => deps.queueStore.save(deps.documentPath, queueId, state),
       });
-      if (persisted) item.restore(persisted);
+      const stored = deps.queueStore.load(deps.documentPath, queueId);
+      if (stored) item.restore(stored);
+      runtime.queues.set(registryKey, item);
       queues.set(queueId, item);
     },
 
@@ -296,15 +303,10 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return queue(queueId).list();
     },
 
-    // Document close: DocumentAutomation.close.
+    // Document close: DocumentAutomation.close. Calls already sent finish and their results wait for the next open.
     closeDocument(): void {
       for (const run of collections.getState()) collections.stop(run.runId);
-      for (const item of queues.values()) item.dispose();
-    },
-
-    /** Persisted queue state for saving with the document. */
-    persistedQueue(queueId: string): QueueState | null {
-      return queueStates.get(queueId) ?? null;
+      for (const item of queues.values()) item.detach();
     },
 
     isQueueIdle(queueId: string): boolean {

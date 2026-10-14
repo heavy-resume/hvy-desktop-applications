@@ -8,7 +8,7 @@ async function setup(exposed: string[] = ['profile', 'create-analysis'], collect
   const flow = createFauxFlow();
   const boards = listingCollection([`${ATS_ORIGIN}/globex/jobs`, `${ATS_ORIGIN}/initech/jobs`]);
   flow.bindProfiles(boards);
-  flow.approve(boards);
+  flow.approve();
   await flow.signIn();
   await flow.completeLogin();
   const documents = (): McpDocument[] => [{

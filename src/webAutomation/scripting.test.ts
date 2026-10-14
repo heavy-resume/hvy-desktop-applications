@@ -8,7 +8,7 @@ async function setup() {
   const flow = createFauxFlow();
   const boards = listingCollection([`${ATS_ORIGIN}/acme/jobs`, `${ATS_ORIGIN}/globex/jobs`]);
   flow.bindProfiles(boards);
-  flow.approve(boards);
+  flow.approve();
   await flow.signIn();
   await flow.completeLogin();
   const resolve: DocumentAutomationResolver = () => ({

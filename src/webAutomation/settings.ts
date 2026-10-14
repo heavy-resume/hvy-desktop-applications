@@ -15,8 +15,6 @@ export interface AutomationSettings {
   authorizations: CapabilityAuthorizations;
   /** `${origin}\0${profileId}` → account summary. */
   accounts: Record<string, AccountSummary>;
-  /** documentPath → capabilityId → `${endpointId}.${inputName}` → workspace document path supplying its text. */
-  documentInputBindings: Record<string, Record<string, Record<string, string>>>;
 }
 
 export interface AutomationSettingsStore {
@@ -25,7 +23,7 @@ export interface AutomationSettingsStore {
 }
 
 export function emptyAutomationSettings(): AutomationSettings {
-  return { profileBindings: {}, authorizations: {}, accounts: {}, documentInputBindings: {} };
+  return { profileBindings: {}, authorizations: {}, accounts: {} };
 }
 
 export function createMemorySettingsStore(initial: AutomationSettings = emptyAutomationSettings()): AutomationSettingsStore {
@@ -88,6 +86,5 @@ export function normalizeAutomationSettings(value: unknown): AutomationSettings 
     profileBindings: nestedStrings(source.profileBindings, 1) as AutomationSettings['profileBindings'],
     authorizations,
     accounts,
-    documentInputBindings: nestedStrings(source.documentInputBindings, 2) as AutomationSettings['documentInputBindings'],
   };
 }

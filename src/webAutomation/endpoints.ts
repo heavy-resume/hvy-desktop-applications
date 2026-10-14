@@ -3,6 +3,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { stableJson } from '../webCapabilities';
 import { WebAutomationError } from './errors';
 import type { HostRequest } from './host';
+import type { ServedDocumentDefinition } from './servedDocuments';
 
 export interface ApiEndpointDefinition {
   id: string;
@@ -13,9 +14,12 @@ export interface ApiEndpointDefinition {
   path: string;
   /** JSON Schema object; its properties are the only accepted inputs. */
   inputSchema: Record<string, unknown>;
-  idempotency?: { header: string; fromInputs: string[] };
+  /** The header carrying a stable key: the caller's (a queue entry's), or derived from `fromInputs`. */
+  idempotency?: { header: string; fromInputs?: string[] };
   errorMessagePointer?: string;
   timeoutMs?: number;
+  /** The response hands out an HVY document (see servedDocuments.ts). */
+  servesDocument?: ServedDocumentDefinition;
 }
 
 export const DEFAULT_ENDPOINT_TIMEOUT_MS = 15_000;
@@ -36,7 +40,7 @@ function declaredInputs(endpoint: ApiEndpointDefinition): Set<string> {
   return new Set(properties && typeof properties === 'object' && !Array.isArray(properties) ? Object.keys(properties) : []);
 }
 
-/** Inputs declared with `"x-hvy-source": "document-text"`, filled from a document the user picks. */
+/** Inputs declared with `"x-hvy-source": "document-text"`, filled from the document an endpoint serves. */
 export function documentTextInputs(endpoint: ApiEndpointDefinition): string[] {
   const properties = endpoint.inputSchema.properties;
   if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return [];
@@ -45,14 +49,42 @@ export function documentTextInputs(endpoint: ApiEndpointDefinition): string[] {
     .map(([name]) => name);
 }
 
+/**
+ * For a document-text input: the endpoint that serves its document
+ * (`x-hvy-document-endpoint`), the input holding the document's ID
+ * (`x-hvy-document-id`), and the input its revision fills
+ * (`x-hvy-document-revision`).
+ */
+export function documentInputLinks(endpoint: ApiEndpointDefinition, inputName: string): { endpointId: string | null; idInput: string | null; revisionInput: string | null } {
+  const properties = endpoint.inputSchema.properties as Record<string, Record<string, unknown>> | undefined;
+  const schema = properties?.[inputName] ?? {};
+  return {
+    endpointId: typeof schema['x-hvy-document-endpoint'] === 'string' ? schema['x-hvy-document-endpoint'] : null,
+    idInput: typeof schema['x-hvy-document-id'] === 'string' ? schema['x-hvy-document-id'] : null,
+    revisionInput: typeof schema['x-hvy-document-revision'] === 'string' ? schema['x-hvy-document-revision'] : null,
+  };
+}
+
+/** The one input of an endpoint that serves a document, which takes the document's ID. */
+export function onlyInput(endpoint: ApiEndpointDefinition): string {
+  const names = [...declaredInputs(endpoint)];
+  if (names.length !== 1) throw new WebAutomationError('invalid_request', `"${endpoint.name}" must take exactly one input, the document ID.`);
+  return names[0];
+}
+
 export function idempotencyKey(endpoint: ApiEndpointDefinition, input: Record<string, unknown>): string | null {
-  if (!endpoint.idempotency) return null;
+  if (!endpoint.idempotency?.fromInputs) return null;
   const source = endpoint.idempotency.fromInputs.map((name) => [name, input[name]]);
   return `hvy-${bytesToHex(sha256(new TextEncoder().encode(`${endpoint.id}\0${stableJson(source)}`))).slice(0, 32)}`;
 }
 
 /** Resolves an endpoint and its inputs into a request locked to the page origin. */
-export function resolveEndpointRequest(pageUrl: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>): HostRequest {
+export function resolveEndpointRequest(
+  pageUrl: string,
+  endpoint: ApiEndpointDefinition,
+  input: Record<string, unknown>,
+  options: { idempotencyKey?: string } = {},
+): HostRequest {
   const origin = new URL(pageUrl).origin;
   if (!endpoint.path.startsWith('/') || endpoint.path.startsWith('//')) {
     throw new WebAutomationError('invalid_request', `Endpoint "${endpoint.id}" must use a same-origin path.`);
@@ -82,7 +114,7 @@ export function resolveEndpointRequest(pageUrl: string, endpoint: ApiEndpointDef
   }
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (hasBody) headers['Content-Type'] = 'application/json';
-  const key = idempotencyKey(endpoint, input);
+  const key = options.idempotencyKey ?? idempotencyKey(endpoint, input);
   if (key && endpoint.idempotency) headers[endpoint.idempotency.header] = key;
   return {
     url: url.href,

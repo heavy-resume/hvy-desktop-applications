@@ -1,0 +1,270 @@
+import type { CollectionDefinition } from '../collection';
+import type { PlatformSignal, SitePatternDefinition } from '../sitePatterns';
+import type { FauxPage, FauxSite } from './fauxHost';
+
+export const ATS_ORIGIN = 'https://boards.faux-ats.test';
+export const OTHER_ATS_ORIGIN = 'https://jobs.other-ats.test';
+export const JSON_ONLY_ORIGIN = 'https://careers.jsononly.test';
+export const UNKNOWN_ORIGIN = 'https://jobs.unknown.test';
+
+interface FauxJob {
+  slug: string;
+  title: string;
+  location: string;
+  description: string;
+}
+
+function job(slug: string, title: string, skills: string): FauxJob {
+  return {
+    slug,
+    title,
+    location: 'Remote',
+    description: `We are hiring a ${title}. You will build reliable systems using ${skills}. Collaborate with product and design.`,
+  };
+}
+
+/** One company's board on a faux ATS: listing pages plus one detail page per job, all with the same markup. */
+export function atsCompany(company: string, displayName: string, pages: FauxJob[][], options: { challenge?: boolean; restoresOnBack?: boolean } = {}): Record<string, FauxPage> {
+  const result: Record<string, FauxPage> = {};
+  pages.forEach((jobs, index) => {
+    const path = index === 0 ? `/${company}/jobs` : `/${company}/jobs?page=${index + 1}`;
+    result[path] = {
+      challenge: index === 0 ? options.challenge : undefined,
+      restoresOnBack: options.restoresOnBack,
+      ...(index < pages.length - 1 ? { nextPage: `/${company}/jobs?page=${index + 2}` } : {}),
+      matches: {
+        'ats-listing': {
+          confidence: 0.93,
+          records: jobs.map((item) => ({ ref: `${company}-${item.slug}`, values: { title: item.title, link: `/${company}/jobs/${item.slug}?utm_source=board` } })),
+        },
+      },
+    };
+    for (const item of jobs) {
+      result[`/${company}/jobs/${item.slug}`] = {
+        matches: {
+          'ats-detail': {
+            confidence: 0.9,
+            records: [{ ref: `${company}-${item.slug}-detail`, values: { title: item.title, company: displayName, location: item.location, description: item.description } }],
+          },
+        },
+      };
+    }
+  });
+  return result;
+}
+
+export const atsListingPattern: SitePatternDefinition = {
+  id: 'ats-listing',
+  name: 'Faux ATS job board',
+  role: 'listing',
+  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs' }],
+  fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
+  minimumConfidence: 0.8,
+  linkFieldId: 'link',
+  paginationCommandId: 'next-page',
+  version: 1,
+};
+
+export const atsDetailPattern: SitePatternDefinition = {
+  id: 'ats-detail',
+  name: 'Faux ATS job posting',
+  role: 'detail',
+  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs/*' }],
+  fields: [
+    { id: 'title', label: 'Title', kind: 'text' },
+    { id: 'company', label: 'Company', kind: 'text' },
+    { id: 'location', label: 'Location', kind: 'text' },
+    { id: 'description', label: 'Description', kind: 'text' },
+  ],
+  minimumConfidence: 0.8,
+  version: 1,
+};
+
+export function fauxAtsSite(): FauxSite {
+  return {
+    origin: ATS_ORIGIN,
+    pages: {
+      ...atsCompany('acme', 'Acme', [
+        [job('eng-1', 'Senior Engineer', 'TypeScript and Rust'), job('eng-2', 'Platform Engineer', 'Go'), job('pm-1', 'Product Manager', 'roadmaps')],
+        [job('eng-3', 'Frontend Engineer', 'TypeScript'), job('data-1', 'Data Engineer', 'SQL')],
+      ]),
+      ...atsCompany('globex', 'Globex', [[job('eng-1', 'Backend Engineer', 'TypeScript'), job('ops-1', 'SRE', 'Kubernetes')]]),
+      ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
+      ...atsCompany('hooli', 'Hooli', [[job('eng-1', 'Engineer I', 'Python'), job('eng-2', 'Engineer II', 'Python')]], { restoresOnBack: false }),
+    },
+  };
+}
+
+/** A second ATS host, used to show that different origins run concurrently. */
+export function otherAtsSite(): FauxSite {
+  const pages = atsCompany('umbrella', 'Umbrella', [[job('eng-1', 'Engineer', 'TypeScript'), job('eng-2', 'Engineer', 'C++')]]);
+  return { origin: OTHER_ATS_ORIGIN, pages };
+}
+
+export const otherAtsListingPattern: SitePatternDefinition = {
+  ...atsListingPattern,
+  id: 'ats-listing',
+  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs' }, { target: 'page', host: 'jobs.other-ats.test', path: '/*/jobs' }],
+};
+
+export const otherAtsDetailPattern: SitePatternDefinition = {
+  ...atsDetailPattern,
+  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs/*' }, { target: 'page', host: 'jobs.other-ats.test', path: '/*/jobs/*' }],
+};
+
+/** The faux ATS listing pattern, also allowed to match the ATS when embedded as an iframe. */
+export const atsListingWithFramePattern: SitePatternDefinition = {
+  ...atsListingPattern,
+  appliesTo: [...atsListingPattern.appliesTo, { target: 'frame', host: 'boards.faux-ats.test', path: '/*/jobs' }],
+};
+
+export const CAREERS_ORIGIN = 'https://www.acme-corp.test';
+
+/** A company careers page that embeds its faux ATS board in an iframe. */
+export function careersSite(): FauxSite {
+  return { origin: CAREERS_ORIGIN, pages: { '/careers': { frames: [{ src: `${ATS_ORIGIN}/acme/jobs` }] } } };
+}
+
+export const SIDE_PANE_ORIGIN = 'https://www.sidepane.test';
+
+/** A board that shows each posting in a side pane after clicking its card. */
+export function sidePaneSite(): FauxSite {
+  const jobs = [job('1', 'Data Scientist', 'Python'), job('2', 'ML Engineer', 'TypeScript')];
+  return {
+    origin: SIDE_PANE_ORIGIN,
+    pages: {
+      '/search': {
+        matches: {
+          'pane-listing': { confidence: 0.91, records: jobs.map((item) => ({ ref: `card-${item.slug}`, values: { title: item.title, link: `/view/${item.slug}` } })) },
+        },
+        panes: Object.fromEntries(jobs.map((item) => [`card-${item.slug}`, {
+          matches: { 'pane-detail': { confidence: 0.88, records: [{ ref: `pane-${item.slug}`, values: { title: item.title, company: 'Sidepane Inc', description: item.description } }] } },
+        }])),
+      },
+    },
+  };
+}
+
+export const sidePaneListingPattern: SitePatternDefinition = {
+  id: 'pane-listing',
+  name: 'Side-pane board',
+  role: 'listing',
+  appliesTo: [{ target: 'page', host: 'www.sidepane.test', path: '/search' }],
+  fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
+  minimumConfidence: 0.8,
+  linkFieldId: 'link',
+  itemCommandId: 'open-card',
+  version: 1,
+};
+
+export const sidePaneDetailPattern: SitePatternDefinition = {
+  id: 'pane-detail',
+  name: 'Side-pane posting',
+  role: 'detail',
+  appliesTo: [{ target: 'page', host: 'www.sidepane.test', path: '/search' }],
+  fields: [
+    { id: 'title', label: 'Title', kind: 'text' },
+    { id: 'company', label: 'Company', kind: 'text' },
+    { id: 'description', label: 'Description', kind: 'text' },
+  ],
+  minimumConfidence: 0.8,
+  version: 1,
+};
+
+/** Markers shared by every customer of the white-labeled "TalentSuite" platform. */
+export const TALENTSUITE_SIGNALS: PlatformSignal[] = [
+  { kind: 'meta', name: 'generator', content: 'TalentSuite *' },
+  { kind: 'resource', path: '/ClientResources/*' },
+];
+
+export const INITRODE_ORIGIN = 'https://careers.initrode.test';
+export const INITRODE_HOSTED_ORIGIN = 'https://jobs.initrode-hosted.test';
+export const VANDELAY_ORIGIN = 'https://careers.vandelay.test';
+
+function talentSuiteCustomer(listingOrigin: string, detailOrigin: string, company: string, jobs: FauxJob[]): FauxSite[] {
+  const detailPages = Object.fromEntries(jobs.map((item) => [`/Portal/Job.aspx?id=${item.slug}`, {
+    signals: TALENTSUITE_SIGNALS,
+    matches: { 'talentsuite-detail': { confidence: 0.86, records: [{ ref: `${company}-${item.slug}`, values: { title: item.title, company, description: item.description } }] } },
+  } satisfies FauxPage]));
+  const listing: FauxPage = {
+    signals: [...TALENTSUITE_SIGNALS, { kind: 'form-field', name: '__VIEWSTATE' }],
+    matches: {
+      'talentsuite-listing': {
+        confidence: 0.87,
+        records: jobs.map((item) => ({ ref: `${company}-${item.slug}`, values: { title: item.title, link: `${detailOrigin}/Portal/Job.aspx?id=${item.slug}` } })),
+      },
+    },
+  };
+  if (listingOrigin === detailOrigin) return [{ origin: listingOrigin, pages: { '/Portal/Jobs.aspx': listing, ...detailPages } }];
+  return [{ origin: listingOrigin, pages: { '/Portal/Jobs.aspx': listing } }, { origin: detailOrigin, pages: detailPages }];
+}
+
+export function talentSuiteSites(): FauxSite[] {
+  return [
+    ...talentSuiteCustomer(INITRODE_ORIGIN, INITRODE_HOSTED_ORIGIN, 'Initrode', [job('11', 'Integration Engineer', 'TypeScript')]),
+    ...talentSuiteCustomer(VANDELAY_ORIGIN, VANDELAY_ORIGIN, 'Vandelay', [job('21', 'Import Engineer', 'Go'), job('22', 'Export Engineer', 'Rust')]),
+  ];
+}
+
+export const talentSuiteListingPattern: SitePatternDefinition = {
+  id: 'talentsuite-listing',
+  name: 'TalentSuite job list',
+  role: 'listing',
+  appliesTo: [{ target: 'fingerprint', signals: TALENTSUITE_SIGNALS }],
+  fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
+  minimumConfidence: 0.8,
+  linkFieldId: 'link',
+  version: 1,
+};
+
+export const talentSuiteDetailPattern: SitePatternDefinition = {
+  id: 'talentsuite-detail',
+  name: 'TalentSuite posting',
+  role: 'detail',
+  appliesTo: [{ target: 'fingerprint', signals: TALENTSUITE_SIGNALS }],
+  fields: [
+    { id: 'title', label: 'Title', kind: 'text' },
+    { id: 'company', label: 'Company', kind: 'text' },
+    { id: 'description', label: 'Description', kind: 'text' },
+  ],
+  minimumConfidence: 0.8,
+  version: 1,
+};
+
+export function jsonOnlySite(): FauxSite {
+  return {
+    origin: JSON_ONLY_ORIGIN,
+    pages: {
+      '/jobs/42': {
+        jsonLd: [{
+          '@context': 'https://schema.org',
+          '@graph': [{ '@type': 'Organization', name: 'Json Co' }, {
+            '@type': 'JobPosting',
+            title: 'Staff Engineer',
+            hiringOrganization: { '@type': 'Organization', name: 'Json Co' },
+            jobLocation: { '@type': 'Place', address: { addressLocality: 'Austin', addressRegion: 'TX' } },
+            datePosted: '2026-09-30',
+            description: '<p>Lead the <b>TypeScript</b> platform.</p><ul><li>Mentor engineers</li></ul>',
+          }],
+        }],
+      },
+    },
+  };
+}
+
+export function unknownSite(): FauxSite {
+  return { origin: UNKNOWN_ORIGIN, pages: { '/openings/7': {} } };
+}
+
+export function listingCollection(startUrls: string[], overrides: Partial<CollectionDefinition> = {}): CollectionDefinition {
+  return {
+    capabilityId: 'listings',
+    name: 'Listings',
+    startUrls,
+    patterns: [atsListingPattern, atsDetailPattern],
+    maxPages: 5,
+    maxItems: 50,
+    followLinksToOtherSites: false,
+    ...overrides,
+  };
+}

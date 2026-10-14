@@ -8,14 +8,12 @@ export interface CapabilityAuthorization {
   /** One hash per reviewable category, so a review can name what changed. */
   partHashes: Record<string, string>;
   authorizedAt: number;
-  /** The site account first used under this authorization; a different account requires review. */
-  accountId?: string;
 }
 
 /** documentPath → capabilityId → authorization. Stored in local app settings, never in the document. */
 export type CapabilityAuthorizations = Record<string, Record<string, CapabilityAuthorization>>;
 
-export type AuthorizationReviewReason = 'authorized' | 'first-use' | 'profile-changed' | 'capability-changed' | 'account-changed';
+export type AuthorizationReviewReason = 'authorized' | 'first-use' | 'profile-changed' | 'capability-changed';
 
 export interface AuthorizationReview {
   capabilityId: string;
@@ -37,7 +35,6 @@ export function reviewAuthorization(
   capabilityId: string,
   parts: Record<string, unknown>,
   profileId: string,
-  currentAccountId?: string,
 ): AuthorizationReview {
   const existing = authorizations[documentPath]?.[capabilityId];
   if (!existing) return { capabilityId, reason: 'first-use', changedCategories: [] };
@@ -46,22 +43,7 @@ export function reviewAuthorization(
   const categories = new Set([...Object.keys(current), ...Object.keys(existing.partHashes)]);
   const changedCategories = [...categories].filter((category) => current[category] !== existing.partHashes[category]).sort();
   if (changedCategories.length) return { capabilityId, reason: 'capability-changed', changedCategories };
-  if (existing.accountId && currentAccountId && existing.accountId !== currentAccountId) {
-    return { capabilityId, reason: 'account-changed', changedCategories: [] };
-  }
   return { capabilityId, reason: 'authorized', changedCategories: [] };
-}
-
-/** Records the account the first time an authorization is used with one. */
-export function pinAuthorizationAccount(
-  authorizations: CapabilityAuthorizations,
-  documentPath: string,
-  capabilityId: string,
-  accountId: string,
-): CapabilityAuthorizations {
-  const existing = authorizations[documentPath]?.[capabilityId];
-  if (!existing || existing.accountId) return authorizations;
-  return { ...authorizations, [documentPath]: { ...authorizations[documentPath], [capabilityId]: { ...existing, accountId } } };
 }
 
 export function recordAuthorization(

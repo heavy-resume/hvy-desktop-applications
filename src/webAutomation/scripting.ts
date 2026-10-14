@@ -59,7 +59,9 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
     },
     call: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input)));
+      // A queue passes its entry's stable idempotency key, so a retried call never creates a second result.
+      const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined;
+      return operation(args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey }));
     },
     /** Opens the site's login window. Scripts cannot complete a sign-in. */
     sign_in: (args, ctx) => {
