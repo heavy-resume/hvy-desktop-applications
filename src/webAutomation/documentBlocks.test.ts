@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { checkWebAutomationDocument, readWebAutomationBlocks } from './documentBlocks';
-import { analysisServiceCapability } from './faux/analysisService';
-import { buildSearchDocument, LISTING_STORE_CONFIG } from './faux/listingDocument';
-import { ATS_ORIGIN, listingCollection } from './faux/sites';
+import { analysisServiceCapability } from '../test/webAutomation/analysisService';
+import { buildSearchDocument, LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
+import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 
 const webApi = { ...structuredClone(analysisServiceCapability), mcp: { endpointIds: ['profile'] } };
 const collection = {
@@ -33,7 +33,7 @@ describe('web automation blocks in a document', () => {
 
   it('names what is wrong across blocks and templates', () => {
     const document = buildSearchDocument({
-      webApi: { ...webApi, pageUrl: 'http://app.faux-analysis.test/' },
+      webApi: { ...webApi, pageUrl: 'http://app.mock-analysis.test/' },
       collection: {
         ...collection,
         output: { ...collection.output, store: { ...LISTING_STORE_CONFIG, componentName: 'missing-item' }, policy: { ownedFields: ['title', 'salary'] } },

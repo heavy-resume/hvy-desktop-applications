@@ -94,3 +94,33 @@ export async function enabledDownloadedPlugins(settings: AppSettings, documentPa
 export function pluginAcceptanceKey(request: { id: string; uuid?: string; version: string }): string {
   return JSON.stringify([request.id, request.uuid ?? null, request.version]);
 }
+
+/**
+ * The policy a built-in plugin runs under: what the user chose, or by default
+ * enabled for all files, and per-file approval for a plugin that requires it
+ * (such as the web plugins), which can never be enabled for all files.
+ */
+export function builtInPluginPolicy(settings: Pick<AppSettings, 'pluginPolicies'>, plugin: Pick<HvyPlugin, 'id' | 'authorization'>): PluginPolicy {
+  const configured = settings.pluginPolicies[plugin.id];
+  if (plugin.authorization === 'required') return configured === 'disabled' ? 'disabled' : 'conditional';
+  return configured ?? 'enabled';
+}
+
+/** Built-in plugins for a document under their policies, as enabledDownloadedPlugins applies them to custom plugins. */
+export function enabledBuiltInPlugins(settings: Pick<AppSettings, 'pluginPolicies' | 'pluginAcceptances'>, plugins: HvyPlugin[], documentPath = ''): HvyPlugin[] {
+  return plugins.flatMap((plugin) => {
+    const policy = builtInPluginPolicy(settings, plugin);
+    if (policy === 'disabled') return [];
+    // A plugin that requires authorization is already a conditional registration and prompts itself.
+    if (policy === 'enabled' || plugin.authorization === 'required') return [plugin];
+    if ((settings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(plugin))) return [plugin];
+    return [createConditionallyAllowedPlugin({
+      id: plugin.id,
+      ...(plugin.uuid ? { uuid: plugin.uuid } : {}),
+      version: plugin.version,
+      hvyApiVersion: plugin.hvyApiVersion,
+      displayName: plugin.displayName,
+      load: async () => plugin,
+    })];
+  });
+}

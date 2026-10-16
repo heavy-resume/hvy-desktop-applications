@@ -1,14 +1,14 @@
-import type { DocumentItem } from '../recordSink';
-import type { WebApiCapability } from '../webApi';
-import type { FauxSite } from './fauxHost';
+import type { DocumentItem } from '../../webAutomation/recordSink';
+import type { WebApiCapability } from '../../webAutomation/webApi';
+import type { MockSite } from './mockHost';
 
 /**
- * A simulated signed-in API that the faux flow evaluates items against.
+ * A simulated signed-in API that the mock flow evaluates items against.
  * Generic tests use the neutral analysis service; site-specific contracts
  * (such as a real product's API) plug in through the same shape.
  */
-export interface FauxApiIntegration<State> {
-  site: FauxSite;
+export interface MockApiIntegration<State> {
+  site: MockSite;
   /** Inspectable server-side state for assertions. */
   state: State;
   /** The galaxy.web-api block snapshot for this service. */
@@ -23,5 +23,5 @@ export interface FauxApiIntegration<State> {
   /** Interprets create and status response bodies. */
   readResult(body: unknown): { id: string; status: 'pending' | 'ready'; url: string; fields: Record<string, unknown> };
   /** Other sites the service relies on, such as its storage. */
-  extraSites?: FauxSite[];
+  extraSites?: MockSite[];
 }

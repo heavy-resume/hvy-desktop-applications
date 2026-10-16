@@ -1,7 +1,7 @@
 import { executeHvyCliCommandSync, writeHvyVirtualFileSync } from '../../../../heavy-file-format/src/cli-core';
 import { deserializeDocument } from '../../../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
-import type { CliItemStoreConfig } from '../cliItemStore';
+import type { CliItemStoreConfig } from '../../webAutomation/cliItemStore';
 
 export const LISTING_LIST_PATH = '/body/listings/listing-list';
 export const LISTING_COMPONENT = 'listing-item';

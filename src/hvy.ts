@@ -14,7 +14,7 @@ import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { deserializeDocumentWithDiagnostics } from '../../heavy-file-format/src/serialization';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
-import { enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
+import { enabledBuiltInPlugins, enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import type {
@@ -290,7 +290,7 @@ export async function mountHvyDocument(
   const embedMode = mode === 'advanced' ? 'editor' : mode;
   const documentPath = state.document?.source.path ?? '';
   const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
-  const activeBuiltInPlugins = builtInPlugins.filter((plugin) => state.appSettings.pluginPolicies[plugin.id] !== 'disabled');
+  const activeBuiltInPlugins = enabledBuiltInPlugins(state.appSettings, builtInPlugins, documentPath);
   const plugins = [
     ...activeBuiltInPlugins,
     ...downloadedPlugins.filter((plugin) => !activeBuiltInPlugins.some((builtIn) => builtIn.id === plugin.id)),

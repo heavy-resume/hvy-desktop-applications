@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
 import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
+import type { CapabilityAuthorizations } from './webAutomation/authorization';
 import { normalizeIntegrationWebMcpApprovals, type IntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
 
@@ -535,6 +536,8 @@ export interface AppSettings {
   webCapabilityProfileBindings: WebCapabilityProfileBindings;
   webCapabilityAuthorizations: WebCapabilityAuthorizations;
   integrationWebMcpApprovals: IntegrationWebMcpApprovals;
+  /** Web API service approvals by document path (galaxy.web-api, approved at sign-in). */
+  webServiceApprovals: CapabilityAuthorizations;
 }
 
 export interface InstalledPluginPackageFile {
@@ -874,6 +877,7 @@ export function defaultAppSettings(): AppSettings {
     webCapabilityProfileBindings: {},
     webCapabilityAuthorizations: {},
     integrationWebMcpApprovals: {},
+    webServiceApprovals: {},
   };
 }
 

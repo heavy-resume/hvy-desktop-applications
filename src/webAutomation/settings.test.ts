@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createFauxFlow } from './faux/flow';
-import { ATS_ORIGIN, listingCollection } from './faux/sites';
+import { createMockFlow } from '../test/webAutomation/flow';
+import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 import { emptyAutomationSettings, normalizeAutomationSettings } from './settings';
 
 describe('automation settings', () => {
   it('round-trips settings produced by a real flow', async () => {
-    const flow = createFauxFlow();
+    const flow = createMockFlow();
     const boards = listingCollection([`${ATS_ORIGIN}/acme/jobs`]);
     flow.bindProfiles(boards);
     flow.approve();

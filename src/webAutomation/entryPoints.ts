@@ -1,5 +1,5 @@
 import { setWebCapabilityProfileBinding } from '../webCapabilities';
-import { recordAuthorization, reviewAuthorization, type AuthorizationReview } from './authorization';
+import { recordAuthorization, reviewAuthorization, revokeAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock, Random } from './clock';
 import {
 
@@ -113,7 +113,7 @@ export interface WebAutomationState {
 
 /**
  * The only functions a UI may call for web automation. Each entry point names
- * the UI that will call it. Scenarios in faux/ drive exactly these.
+ * the UI that will call it. The scenarios in scenarios.test.ts drive exactly these.
  */
 export function createWebAutomation(runtime: WebAutomationRuntime, document: WebAutomationDocumentDeps) {
   const { emit, scheduler, sessions, webApi } = runtime;
@@ -177,7 +177,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       const profileId = profileFor(capability.capabilityId, capability.name);
       deps.settings.update((settings) => ({
         ...settings,
-        authorizations: recordAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId, webApi.authorizationParts(capability), profileId, deps.clock.now()),
+        authorizations: recordAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId, webApi.authorizationParts(capability), profileId, deps.clock.now(), capability.name),
+      }));
+    },
+
+    // UI: app settings, "Web services for this file", unchecking a service and saving. The next use asks again.
+    revokeWebApi(capability: WebApiCapability): void {
+      deps.settings.update((settings) => ({
+        ...settings,
+        authorizations: revokeAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId),
       }));
     },
 

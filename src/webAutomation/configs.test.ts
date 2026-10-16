@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
-import { analysisServiceCapability } from './faux/analysisService';
-import { ATS_ORIGIN, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from './faux/sites';
+import { analysisServiceCapability } from '../test/webAutomation/analysisService';
+import { ATS_ORIGIN, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
 
 const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
   schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION,

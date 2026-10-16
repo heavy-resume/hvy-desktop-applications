@@ -1,24 +1,24 @@
-import { canonicalUrl } from '../records';
+import { canonicalUrl } from '../../webAutomation/records';
 import { deserializeDocument, serializeDocument } from '../../../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
-import { createCliItemStore, type CliItemStoreConfig } from '../cliItemStore';
-import { createMemoryItemStore, createRecordSink, DEFAULT_RECORD_SINK_CONFIG, updateItemFields, type DocumentItem, type RecordSinkConfig } from '../recordSink';
-import { seededRandom } from '../clock';
-import type { CollectionDefinition, CollectionRunState } from '../collection';
-import { createWebAutomationRuntime, type WebAutomation, type WebAutomationRuntimeDeps } from '../entryPoints';
-import { openDocumentAutomation, registerWebAutomationPlugins, type DocumentAutomation } from '../documentAutomation';
-import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from '../configs';
+import { createCliItemStore, type CliItemStoreConfig } from '../../webAutomation/cliItemStore';
+import { createMemoryItemStore, createRecordSink, DEFAULT_RECORD_SINK_CONFIG, updateItemFields, type DocumentItem, type RecordSinkConfig } from '../../webAutomation/recordSink';
+import { seededRandom } from '../../webAutomation/clock';
+import type { CollectionDefinition, CollectionRunState } from '../../webAutomation/collection';
+import { createWebAutomationRuntime, type WebAutomation, type WebAutomationRuntimeDeps } from '../../webAutomation/entryPoints';
+import { openDocumentAutomation, registerWebAutomationPlugins, type DocumentAutomation } from '../../webAutomation/documentAutomation';
+import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from '../../webAutomation/configs';
 import type { StateRuntime } from '../../../../heavy-file-format/src/state';
 import { createDocumentState } from './documentHost';
 import { pluginAcceptanceKey } from '../../pluginManager';
-import type { QueueResult, QueueState } from '../queue';
-import { createMemorySettingsStore } from '../settings';
-import type { SitePatternDefinition } from '../sitePatterns';
-import type { WebApiCapability, WebApiResult } from '../webApi';
-import { fauxAnalysisService, type FauxAnalysisServiceState } from './analysisService';
-import { FauxHost } from './fauxHost';
-import type { FauxApiIntegration } from './integration';
-import { careersSite, fauxAtsSite, jsonOnlySite, otherAtsSite, sidePaneSite, talentSuiteSites, unknownSite } from './sites';
+import type { QueueResult, QueueState } from '../../webAutomation/queue';
+import { createMemorySettingsStore } from '../../webAutomation/settings';
+import type { SitePatternDefinition } from '../../webAutomation/sitePatterns';
+import type { WebApiCapability, WebApiResult } from '../../webAutomation/webApi';
+import { mockAnalysisService, type MockAnalysisServiceState } from './analysisService';
+import { MockHost } from './mockHost';
+import type { MockApiIntegration } from './integration';
+import { careersSite, mockAtsSite, jsonOnlySite, otherAtsSite, sidePaneSite, talentSuiteSites, unknownSite } from './sites';
 import { buildSearchDocument } from './listingDocument';
 import { VirtualClock } from './virtualClock';
 
@@ -29,7 +29,7 @@ export const EVALUATE_QUEUE = 'evaluate';
 export const STATUS_QUEUE = 'status';
 
 /** The flow's queue blocks: evaluations, then status polls, both calling the service's web API block. */
-export function fauxQueueBlocks<State>(api: FauxApiIntegration<State>) {
+export function mockQueueBlocks<State>(api: MockApiIntegration<State>) {
   const target = (endpointId: string) => ({ pluginId: 'galaxy.web-api', method: 'call', args: { capabilityId: api.capability.capabilityId, endpointId } });
   return [
     { queueId: EVALUATE_QUEUE, target: target(api.createEndpointId), config: { minIntervalMs: 5_000, jitterMs: 2_000 } },
@@ -37,11 +37,11 @@ export function fauxQueueBlocks<State>(api: FauxApiIntegration<State>) {
   ];
 }
 
-export interface FauxFlowOptions<State> {
+export interface MockFlowOptions<State> {
   seed?: number;
   scheduler?: WebAutomationRuntimeDeps['scheduler'];
   /** The signed-in service items are evaluated against. Defaults to the neutral analysis service. */
-  api?: () => FauxApiIntegration<State>;
+  api?: () => MockApiIntegration<State>;
   /** How the document stores collected records. */
   sink?: RecordSinkConfig;
   /**
@@ -63,12 +63,12 @@ export interface FauxFlowOptions<State> {
  * Walks the collect → evaluate flow headless. Every step calls the same entry
  * point a UI will call; steps that stand in for a person are marked as user actions.
  */
-export function createFauxFlow<State = FauxAnalysisServiceState>(options: FauxFlowOptions<State> = {}) {
+export function createMockFlow<State = MockAnalysisServiceState>(options: MockFlowOptions<State> = {}) {
   const clock = new VirtualClock();
-  const api = (options.api ?? (fauxAnalysisService as unknown as () => FauxApiIntegration<State>))();
+  const api = (options.api ?? (mockAnalysisService as unknown as () => MockApiIntegration<State>))();
   const serviceOrigin = new URL(api.capability.pageUrl).origin;
-  const host = new FauxHost([
-    fauxAtsSite(), otherAtsSite(), careersSite(), sidePaneSite(), ...talentSuiteSites(), jsonOnlySite(), unknownSite(), api.site, ...(api.extraSites ?? []),
+  const host = new MockHost([
+    mockAtsSite(), otherAtsSite(), careersSite(), sidePaneSite(), ...talentSuiteSites(), jsonOnlySite(), unknownSite(), api.site, ...(api.extraSites ?? []),
   ]);
   const settings = createMemorySettingsStore();
   const pluginsReady = registerWebAutomationPlugins();
@@ -83,7 +83,7 @@ export function createFauxFlow<State = FauxAnalysisServiceState>(options: FauxFl
       timeline.push(`${stamp()} [settings] ${request.id} ${request.accepted ? 'allowed' : 'disallowed'} in this file`);
     },
   });
-  let document = (options.document?.build ?? (() => buildSearchDocument({ webApi: structuredClone(api.capability), queues: fauxQueueBlocks(api) })))();
+  let document = (options.document?.build ?? (() => buildSearchDocument({ webApi: structuredClone(api.capability), queues: mockQueueBlocks(api) })))();
   // The item list and the record sink collection runs are given.
   let items = options.document?.store ? createCliItemStore(document, options.document.store) : createMemoryItemStore();
   let sink = createRecordSink(items, options.sink ?? DEFAULT_RECORD_SINK_CONFIG);
@@ -212,6 +212,11 @@ export function createFauxFlow<State = FauxAnalysisServiceState>(options: FauxFl
       opened.authorizePlugin(WEB_COLLECTION_PLUGIN_ID);
       opened.authorizePlugin(WEB_API_PLUGIN_ID);
       automation.authorizeWebApi(capability);
+    },
+
+    // UI: app settings, "Web services for this file", unchecking the service and saving.
+    revokeService(capability: WebApiCapability = api.capability): void {
+      automation.revokeWebApi(capability);
     },
 
     // UI: a web plugin's block, "Allow in this file".
@@ -414,4 +419,4 @@ export function createFauxFlow<State = FauxAnalysisServiceState>(options: FauxFl
   };
 }
 
-export type FauxFlow<State = FauxAnalysisServiceState> = ReturnType<typeof createFauxFlow<State>>;
+export type MockFlow<State = MockAnalysisServiceState> = ReturnType<typeof createMockFlow<State>>;

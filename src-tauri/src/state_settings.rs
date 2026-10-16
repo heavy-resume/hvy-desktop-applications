@@ -393,6 +393,7 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
             })
             .collect(),
         integration_web_mcp_approvals: settings.integration_web_mcp_approvals,
+        web_service_approvals: settings.web_service_approvals,
     }
 }
 

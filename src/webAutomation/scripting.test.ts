@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createFauxFlow, EVALUATE_QUEUE } from './faux/flow';
-import { analysisServiceCapability } from './faux/analysisService';
-import { ATS_ORIGIN, listingCollection } from './faux/sites';
+import { createMockFlow, EVALUATE_QUEUE } from '../test/webAutomation/flow';
+import { analysisServiceCapability } from '../test/webAutomation/analysisService';
+import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 import { collectionScriptingMethods, queueScriptingMethods, webApiScriptingMethods, type DocumentAutomationResolver } from './scripting';
 
 async function setup() {
-  const flow = createFauxFlow();
+  const flow = createMockFlow();
   const boards = listingCollection([`${ATS_ORIGIN}/acme/jobs`, `${ATS_ORIGIN}/globex/jobs`]);
   flow.bindProfiles(boards);
   flow.approve();

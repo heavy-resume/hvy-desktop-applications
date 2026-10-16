@@ -1,4 +1,4 @@
-import type { Clock } from '../clock';
+import type { Clock } from '../../webAutomation/clock';
 
 interface Timer {
   at: number;

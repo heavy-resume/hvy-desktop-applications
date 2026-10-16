@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createFauxFlow, DOCUMENT_PATH } from './faux/flow';
-import { analysisServiceCapability } from './faux/analysisService';
-import { ATS_ORIGIN, listingCollection } from './faux/sites';
+import { createMockFlow, DOCUMENT_PATH } from '../test/webAutomation/flow';
+import { analysisServiceCapability } from '../test/webAutomation/analysisService';
+import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 import { listMcpWebCapabilities, McpWebHandler, type McpDocument } from './mcp';
 
 async function setup(exposed: string[] = ['profile', 'create-analysis'], collect = true) {
-  const flow = createFauxFlow();
+  const flow = createMockFlow();
   const boards = listingCollection([`${ATS_ORIGIN}/globex/jobs`, `${ATS_ORIGIN}/initech/jobs`]);
   flow.bindProfiles(boards);
   flow.approve();
@@ -20,7 +20,7 @@ async function setup(exposed: string[] = ['profile', 'create-analysis'], collect
   return { flow, documents, handler: new McpWebHandler(documents) };
 }
 
-async function settled<T>(flow: ReturnType<typeof createFauxFlow>, promise: Promise<T>): Promise<T> {
+async function settled<T>(flow: ReturnType<typeof createMockFlow>, promise: Promise<T>): Promise<T> {
   let outcome: { value?: T; error?: unknown } | null = null;
   promise.then((value) => { outcome = { value }; }, (error: unknown) => { outcome = { error }; });
   await flow.clock.runUntil(() => outcome !== null);
@@ -46,7 +46,7 @@ describe('MCP web capabilities', () => {
     await expect(handler.invoke({ operation: 'call', path: DOCUMENT_PATH, capabilityId: 'analysis', endpointId: 'create-analysis', input: {} }, 'read')).rejects.toThrow(/action access/);
     await expect(handler.invoke({ operation: 'call', path: '/elsewhere.hvy', capabilityId: 'analysis', endpointId: 'profile' }, 'read')).rejects.toThrow(/not open/);
     const files = await settled(flow, handler.invoke({ operation: 'call', path: DOCUMENT_PATH, capabilityId: 'analysis', endpointId: 'profile' }, 'read'));
-    expect(files).toMatchObject({ untrustedContent: true, origin: 'https://app.faux-analysis.test', value: { status: 200 } });
+    expect(files).toMatchObject({ untrustedContent: true, origin: 'https://app.mock-analysis.test', value: { status: 200 } });
   });
 
   it('starts collections and reports progress, including when a run needs attention', async () => {

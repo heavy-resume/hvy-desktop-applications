@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { seededRandom } from './clock';
-import { FauxHost } from './faux/fauxHost';
-import { VirtualClock } from './faux/virtualClock';
+import { MockHost } from '../test/webAutomation/mockHost';
+import { VirtualClock } from '../test/webAutomation/virtualClock';
 import { WorkerScheduler } from './scheduler';
 
 function setup(options: { perProfile?: number; global?: number } = {}) {
   const clock = new VirtualClock();
-  const host = new FauxHost([]);
+  const host = new MockHost([]);
   const log: string[] = [];
   const scheduler = new WorkerScheduler({
     host,

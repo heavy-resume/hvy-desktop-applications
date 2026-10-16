@@ -3604,6 +3604,7 @@ function defaultAppSettings() {
     webCapabilityProfileBindings: {},
     webCapabilityAuthorizations: {},
     integrationWebMcpApprovals: {},
+    webServiceApprovals: {},
   };
 }
 
@@ -3623,6 +3624,10 @@ function normalizeAppSettings(settings) {
     webCapabilityProfileBindings: normalizeNestedStringMap(settings?.webCapabilityProfileBindings),
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings?.webCapabilityAuthorizations),
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings?.integrationWebMcpApprovals),
+    // Validated by the renderer's normalizeCapabilityAuthorizations; kept as stored here, like Tauri does.
+    webServiceApprovals: settings?.webServiceApprovals && typeof settings.webServiceApprovals === 'object' && !Array.isArray(settings.webServiceApprovals)
+      ? settings.webServiceApprovals
+      : {},
   };
 }
 

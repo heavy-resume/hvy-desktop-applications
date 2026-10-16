@@ -6,6 +6,9 @@ import type { HvyMode } from '../hvy';
 import { type AppState } from '../state';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from '../webCapabilities';
 import { normalizeIntegrationWebMcpApprovals } from '../integrationWebMcp';
+import { builtInPluginPolicy } from '../pluginManager';
+import { revokeAuthorization } from '../webAutomation/authorization';
+import { normalizeCapabilityAuthorizations } from '../webAutomation/settings';
 import { copyIcon, eyeIcon } from './render-shell';
 import { escapeAttr, escapeHtml } from './shared';
 
@@ -482,23 +485,22 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
   );
   const pluginPolicies = { ...parsedSettings.pluginPolicies };
   for (const [key, policy] of Object.entries(visiblePluginPolicies)) {
-    if (builtInPlugins.some((plugin) => plugin.id === key)
-      && policy === 'enabled'
-      && !(key in parsedSettings.pluginPolicies)) {
+    // A built-in left at its own default is not stored, so the default can follow the plugin.
+    const builtIn = builtInPlugins.find((plugin) => plugin.id === key);
+    if (builtIn && !(key in parsedSettings.pluginPolicies) && policy === builtInPluginPolicy({ pluginPolicies: {} }, builtIn)) {
       continue;
     }
     pluginPolicies[key] = policy;
   }
-  const visiblePluginKeys = new Set(Object.keys(visiblePluginPolicies));
-  const acceptedForCurrentFile = [...data.keys()]
-    .filter((key) => key.startsWith('pluginAccepted:'))
-    .map((key) => key.slice('pluginAccepted:'.length));
+  // Per-file acceptances shown for the current file are replaced by whether their box is checked.
+  const listedAcceptances = new Set(data.getAll('pluginAcceptanceListed').map(String));
+  const acceptedForCurrentFile = [...listedAcceptances].filter((key) => data.has(`pluginAccepted:${key}`));
   const existingAcceptances = parsedSettings.pluginAcceptances[currentPath] ?? [];
   const nextCurrentAcceptances = [
-    ...existingAcceptances.filter((key) => !visiblePluginKeys.has(key)),
+    ...existingAcceptances.filter((key) => !listedAcceptances.has(key)),
     ...acceptedForCurrentFile,
   ];
-  const pluginAcceptances = currentPath && visiblePluginKeys.size > 0
+  const pluginAcceptances = currentPath && listedAcceptances.size > 0
     ? {
       ...parsedSettings.pluginAcceptances,
       ...(nextCurrentAcceptances.length > 0 || currentPath in parsedSettings.pluginAcceptances
@@ -506,6 +508,11 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
         : {}),
     }
     : parsedSettings.pluginAcceptances;
+  // Web services listed for the current file and unchecked are revoked; the next use asks again.
+  const revokedServices = data.getAll('serviceApprovalListed').map(String).filter((capabilityId) => !data.has(`serviceApproved:${capabilityId}`));
+  const webServiceApprovals = currentPath
+    ? revokedServices.reduce((approvals, capabilityId) => revokeAuthorization(approvals, currentPath, capabilityId), parsedSettings.webServiceApprovals)
+    : parsedSettings.webServiceApprovals;
   const homepageSelection = String(data.get('homepageSelection') ?? '');
   const homepage = homepageSelection.startsWith('included:')
     ? normalizeHomepageSetting({ kind: 'included', id: homepageSelection.slice('included:'.length) })
@@ -531,6 +538,7 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
       : parsedSettings.debugLogMaxBytes,
     pluginPolicies,
     pluginAcceptances,
+    webServiceApprovals,
   };
 }
 
@@ -566,6 +574,7 @@ export function parseAppSettings(value: string): AppSettings {
       webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(parsed.webCapabilityProfileBindings),
       webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(parsed.webCapabilityAuthorizations),
       integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(parsed.integrationWebMcpApprovals),
+      webServiceApprovals: normalizeCapabilityAuthorizations(parsed.webServiceApprovals),
     };
   } catch {
     return {
@@ -581,6 +590,7 @@ export function parseAppSettings(value: string): AppSettings {
       webCapabilityProfileBindings: {},
       webCapabilityAuthorizations: {},
       integrationWebMcpApprovals: {},
+      webServiceApprovals: {},
     };
   }
 }

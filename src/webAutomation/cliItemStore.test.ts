@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand, executeHvyCliCommandSync } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createCliItemStore, itemComponentId, validateCliItemStore } from './cliItemStore';
-import { buildListingDocument, LISTING_LIST_PATH, LISTING_STORE_CONFIG } from './faux/listingDocument';
+import { buildListingDocument, LISTING_LIST_PATH, LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { createRecordSink, updateItemFields } from './recordSink';
 
 const record = (key: string, values: Record<string, unknown>) => ({

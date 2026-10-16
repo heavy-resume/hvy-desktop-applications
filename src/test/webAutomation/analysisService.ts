@@ -1,14 +1,14 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { encryptDocumentBytes } from '../../../../heavy-file-format/src/encryption';
-import type { WebApiCapability } from '../webApi';
-import type { FauxSite } from './fauxHost';
-import type { FauxApiIntegration } from './integration';
+import type { WebApiCapability } from '../../webAutomation/webApi';
+import type { MockSite } from './mockHost';
+import type { MockApiIntegration } from './integration';
 
-export const ANALYSIS_ORIGIN = 'https://app.faux-analysis.test';
-export const SECOND_ACCOUNT_SESSION = 'faux-session-2';
+export const ANALYSIS_ORIGIN = 'https://app.mock-analysis.test';
+export const SECOND_ACCOUNT_SESSION = 'mock-session-2';
 /** Where the service stores documents; open-source hands out signed read URLs here. */
-export const STORAGE_ORIGIN = 'https://storage.faux-storage.test';
+export const STORAGE_ORIGIN = 'https://storage.mock-storage.test';
 const STORED_SOURCE_PATH = '/bucket/source-1';
 /** A sentence from the source document, for asserting that its text reached the service. */
 export const SOURCE_DOCUMENT_PHRASE = 'Builds systems in TypeScript and Rust.';
@@ -37,7 +37,7 @@ function storedSource() {
   return storedSourceBytes;
 }
 
-export interface FauxAnalysisServiceState {
+export interface MockAnalysisServiceState {
   /** The next N analysis creations answer 429. */
   rateLimitNextCreates: number;
   createCalls: number;
@@ -57,7 +57,7 @@ const objectSchema = (properties: Record<string, unknown>, required: string[] = 
 
 export const analysisServiceCapability: WebApiCapability = {
   capabilityId: 'analysis',
-  name: 'Faux Analysis',
+  name: 'Mock Analysis',
   pageUrl: `${ANALYSIS_ORIGIN}/`,
   allowedOrigins: [ANALYSIS_ORIGIN],
   storageOrigins: [STORAGE_ORIGIN],
@@ -124,23 +124,23 @@ export const analysisServiceCapability: WebApiCapability = {
 };
 
 /** A neutral signed-in service: web login, session probe, and idempotent analyses that finish asynchronously. */
-export function fauxAnalysisService(): FauxApiIntegration<FauxAnalysisServiceState> {
+export function mockAnalysisService(): MockApiIntegration<MockAnalysisServiceState> {
   // Encrypting the stored copy is real asynchronous work; start it now so a request never waits on it in virtual time.
   void storedSource();
-  const state: FauxAnalysisServiceState = {
+  const state: MockAnalysisServiceState = {
     rateLimitNextCreates: 0, createCalls: 0, lastSourceText: null, lastSourceRevision: null, sourceOpens: 0, servedUrlOverride: null, corruptStoredSource: false, analysesByKey: new Map(), analyses: new Map(),
   };
   const accounts: Record<string, { id: string; name: string }> = {
-    'faux-session': { id: 'a-1', name: 'Pat Example' },
+    'mock-session': { id: 'a-1', name: 'Pat Example' },
     [SECOND_ACCOUNT_SESSION]: { id: 'a-2', name: 'Sam Other' },
   };
   const signedIn = (cookies: Record<string, string>) => Boolean(accounts[cookies.session_id]);
   const unauthorized = { status: 401, body: { error: 'Unauthorized' } };
   const view = (id: string) => `${ANALYSIS_ORIGIN}/analyses/${id}`;
-  const site: FauxSite = {
+  const site: MockSite = {
     origin: ANALYSIS_ORIGIN,
     pages: { '/': {}, '/login': {}, '/login/done': {} },
-    login: { loginPath: '/login', completePath: '/login/done', cookie: { name: 'session_id', value: 'faux-session' } },
+    login: { loginPath: '/login', completePath: '/login/done', cookie: { name: 'session_id', value: 'mock-session' } },
     api: {
       'GET /api/session': ({ cookies }) => (signedIn(cookies) ? { status: 200, body: { account: accounts[cookies.session_id] } } : unauthorized),
       'POST /api/logout': ({ clearCookie }) => {
@@ -176,7 +176,7 @@ export function fauxAnalysisService(): FauxApiIntegration<FauxAnalysisServiceSta
         return {
           status: 200,
           body: {
-            readUrl: state.servedUrlOverride ?? `${STORAGE_ORIGIN}${STORED_SOURCE_PATH}?signature=faux`,
+            readUrl: state.servedUrlOverride ?? `${STORAGE_ORIGIN}${STORED_SOURCE_PATH}?signature=mock`,
             extension: '.hvy',
             generation: 3,
             sha256: bytesToHex(sha256(stored.bytes)),

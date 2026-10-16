@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createHvyCliSession, executeHvyCliCommand } from '../../../../heavy-file-format/src/cli-core';
-import { deserializeDocument, serializeDocument } from '../../../../heavy-file-format/src/serialization';
-import { createCliItemStore } from '../cliItemStore';
-import { LISTING_STORE_CONFIG } from './listingDocument';
-import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from './analysisService';
-import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from '../configs';
-import { createFauxFlow, EVALUATE_QUEUE, type FauxFlow } from './flow';
+import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-format/src/cli-core';
+import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
+import { createCliItemStore } from './cliItemStore';
+import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
+import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
+import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
+import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, type MockFlow } from '../test/webAutomation/flow';
 import {
   ATS_ORIGIN,
   atsDetailPattern,
@@ -26,20 +26,20 @@ import {
   otherAtsDetailPattern,
   otherAtsListingPattern,
   UNKNOWN_ORIGIN,
-} from './sites';
+} from '../test/webAutomation/sites';
 
 const ACME = `${ATS_ORIGIN}/acme/jobs`;
 const acmeJob = (slug: string) => `${ATS_ORIGIN}/acme/jobs/${slug}`;
 
-let flow: FauxFlow | null = null;
+let flow: MockFlow | null = null;
 
 afterEach((context) => {
   if (context.task.result?.state === 'fail' && flow) console.log(`Timeline:\n${flow.print()}`);
   flow = null;
 });
 
-async function signedInFlow(collection = listingCollection([ACME])): Promise<FauxFlow> {
-  flow = createFauxFlow();
+async function signedInFlow(collection = listingCollection([ACME])): Promise<MockFlow> {
+  flow = createMockFlow();
   flow.bindProfiles(collection);
   flow.approve();
   await flow.signIn();
@@ -47,9 +47,9 @@ async function signedInFlow(collection = listingCollection([ACME])): Promise<Fau
   return flow;
 }
 
-describe('faux integration: job search flow', () => {
+describe('mock integration: job search flow', () => {
   it('1. happy path: sign in, collect two pages, evaluate, write results back', async () => {
-    flow = createFauxFlow();
+    flow = createMockFlow();
     const boards = listingCollection([ACME]);
     flow.bindProfiles(boards);
     flow.approve();
@@ -67,15 +67,15 @@ describe('faux integration: job search flow', () => {
     const cards = flow.items.list();
     expect(cards.map((card) => card.key).sort()).toEqual(['data-1', 'eng-1', 'eng-2', 'eng-3', 'pm-1'].map(acmeJob).sort());
     expect(flow.item(acmeJob('eng-1'))).toMatchObject({ state: 'ok', provenance: { patternId: 'ats-detail' }, fields: { company: 'Acme', title: 'Senior Engineer' } });
-    expect(flow.print()).toMatch(/delay \d+\.\ds before boards\.faux-ats\.test/);
-    expect(flow.print()).toContain('← back to boards.faux-ats.test/acme/jobs');
+    expect(flow.print()).toMatch(/delay \d+\.\ds before boards\.mock-ats\.test/);
+    expect(flow.print()).toContain('← back to boards.mock-ats.test/acme/jobs');
 
     await flow.evaluate([acmeJob('eng-1'), acmeJob('eng-2'), acmeJob('pm-1')]);
     expect(flow.item(acmeJob('eng-1'))?.fields).toMatchObject({ evaluation: 'ready', rating: 'strong' });
     expect(flow.item(acmeJob('eng-2'))?.fields).toMatchObject({ evaluation: 'ready', rating: 'partial' });
     // The service's stored source document is opened when each call runs, and never copied into the queue.
     expect(flow.service.lastSourceText).toContain(SOURCE_DOCUMENT_PHRASE);
-    expect(flow.print()).toContain('download storage.faux-storage.test/bucket/source-1');
+    expect(flow.print()).toContain('download storage.mock-storage.test/bucket/source-1');
     expect(flow.listQueue(EVALUATE_QUEUE).every((entry) => !('sourceText' in (entry.input as Record<string, unknown>)))).toBe(true);
     expect(flow.item(acmeJob('pm-1'))?.fields.resultUrl).toMatch(/\/analyses\/analysis-\d$/);
   });
@@ -90,8 +90,8 @@ describe('faux integration: job search flow', () => {
     expect(rerun).toMatchObject({ status: 'done', collected: 0, skipped: 5 });
     expect(flow!.item(acmeJob('eng-1'))?.fields).toMatchObject({ status: 'applied', notes: 'Recruiter call Friday' });
     const secondRun = flow!.print().split('run-2 started')[1];
-    expect(secondRun).not.toContain('→ boards.faux-ats.test/acme/jobs/eng-1');
-    expect(secondRun).toContain('skip known https://boards.faux-ats.test/acme/jobs/eng-1');
+    expect(secondRun).not.toContain('→ boards.mock-ats.test/acme/jobs/eng-1');
+    expect(secondRun).toContain('skip known https://boards.mock-ats.test/acme/jobs/eng-1');
   });
 
   it('3. pattern reuse: a second company on the same ATS needs no teaching', async () => {
@@ -211,7 +211,7 @@ describe('faux integration: job search flow', () => {
     flow!.approve();
     await flow!.collect(sameOrigin);
     const serial = flow!.print().split('run-2 started')[1];
-    expect(serial.indexOf('finish: Listings: boards.faux-ats.test')).toBeLessThan(serial.lastIndexOf('start: Listings: boards.faux-ats.test'));
+    expect(serial.indexOf('finish: Listings: boards.mock-ats.test')).toBeLessThan(serial.lastIndexOf('start: Listings: boards.mock-ats.test'));
 
     const twoOrigins = listingCollection([`${ATS_ORIGIN}/globex/jobs`, `${OTHER_ATS_ORIGIN}/umbrella/jobs`], { patterns: [otherAtsListingPattern, otherAtsDetailPattern] });
     flow!.approve();
@@ -223,7 +223,7 @@ describe('faux integration: job search flow', () => {
   });
 
   it('11. authorization: web plugins are allowed per file, the service is approved at sign-in, and a changed configuration names what changed', async () => {
-    flow = createFauxFlow();
+    flow = createMockFlow();
     const boards = listingCollection([ACME]);
     flow.bindProfiles(boards);
     expect(flow.pluginAuthorization(WEB_COLLECTION_PLUGIN_ID)).toBe('prompt');
@@ -326,7 +326,7 @@ describe('faux integration: job search flow', () => {
   });
 
   it('20. test on another site: a pattern is checked on a second customer before relying on it', async () => {
-    flow = createFauxFlow();
+    flow = createMockFlow();
     expect(await flow.testPattern(talentSuiteListingPattern, `${VANDELAY_ORIGIN}/Portal/Jobs.aspx`)).toMatchObject({
       scopeMatched: null, fingerprintMatched: true, confidence: 0.87, records: 2, passes: true,
     });
@@ -337,7 +337,7 @@ describe('faux integration: job search flow', () => {
   });
 
   it('21. record sinks and keys: a refresh sink revisits pages but only rewrites the fields it owns; field keys dedupe without URLs', async () => {
-    flow = createFauxFlow({ sink: { onExisting: 'refresh', keepGoodOnFailure: true, ownedFields: ['title', 'company', 'location', 'description', 'url'] } });
+    flow = createMockFlow({ sink: { onExisting: 'refresh', keepGoodOnFailure: true, ownedFields: ['title', 'company', 'location', 'description', 'url'] } });
     const globex = listingCollection([`${ATS_ORIGIN}/globex/jobs`]);
     flow.bindProfiles(globex);
     flow.approve();
@@ -349,7 +349,7 @@ describe('faux integration: job search flow', () => {
     expect(flow.item(key)?.fields).toMatchObject({ title: 'Backend Engineer', company: 'Globex', status: 'saved' });
 
     const byTitle = listingCollection([`${ATS_ORIGIN}/hooli/jobs`], { key: { kind: 'field', field: 'title' } });
-    const keyed = createFauxFlow();
+    const keyed = createMockFlow();
     keyed.bindProfiles(byTitle);
     keyed.approve();
     await keyed.collect(byTitle);
@@ -358,7 +358,7 @@ describe('faux integration: job search flow', () => {
   });
 
   it('22. into a real HVY document: items are template instances that sort by result and survive a reload', async () => {
-    flow = createFauxFlow({ document: { store: LISTING_STORE_CONFIG } });
+    flow = createMockFlow({ document: { store: LISTING_STORE_CONFIG } });
     const boards = listingCollection([ACME]);
     flow.bindProfiles(boards);
     flow.approve();
@@ -466,7 +466,7 @@ describe('faux integration: job search flow', () => {
     expect(flow!.service.sourceOpens).toBe(1);
     expect(flow!.service.lastSourceText).toContain(SOURCE_DOCUMENT_PHRASE);
     expect(flow!.service.lastSourceRevision).toMatch(/^[0-9a-f]{64}$/);
-    expect(flow!.print()).toContain('download storage.faux-storage.test/bucket/source-1');
+    expect(flow!.print()).toContain('download storage.mock-storage.test/bucket/source-1');
     expect(flow!.print()).toContain('(no credentials)');
   });
 
@@ -499,5 +499,26 @@ describe('faux integration: job search flow', () => {
 
     flow!.restartApp();
     expect(flow!.pluginAuthorization(WEB_COLLECTION_PLUGIN_ID)).toBe('enabled');
+  });
+
+  it('29. revoking a service approval: calls stop and queued work waits for review, while the plugin stays allowed', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    expect(flow!.settings.get().authorizations[DOCUMENT_PATH]?.analysis).toMatchObject({ name: 'Mock Analysis', profileId: 'service' });
+
+    flow!.revokeService();
+    expect(flow!.settings.get().authorizations[DOCUMENT_PATH]).toBeUndefined();
+    expect(flow!.reviewWebApi()).toMatchObject({ reason: 'first-use' });
+    await expect(flow!.callEndpoint('profile')).rejects.toMatchObject({ code: 'not_authorized' });
+    await flow!.evaluate([acmeJob('eng-1')]);
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: true, pauseReason: 'not_authorized' });
+    expect(flow!.service.createCalls).toBe(0);
+    expect(flow!.pluginAuthorization(WEB_API_PLUGIN_ID)).toBe('enabled');
+
+    // UI: the "Sign in" modal asks again; allowing it lets the waiting work continue.
+    flow!.approve();
+    await flow!.resumeQueue(EVALUATE_QUEUE);
+    expect(flow!.item(acmeJob('eng-1'))?.fields.evaluation).toBe('ready');
   });
 });

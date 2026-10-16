@@ -5,6 +5,7 @@ import type { HvyMode, VisualDocument } from './hvy';
 import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 import { normalizeIntegrationWebMcpApprovals } from './integrationWebMcp';
+import { normalizeCapabilityAuthorizations } from './webAutomation/settings';
 
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
@@ -448,6 +449,7 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
     webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(settings.webCapabilityProfileBindings),
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings.webCapabilityAuthorizations),
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
+    webServiceApprovals: normalizeCapabilityAuthorizations(settings.webServiceApprovals),
   };
 }
 

@@ -13,7 +13,7 @@ import { runUserScript, type ScriptingRunResult } from '../../../../heavy-file-f
 import { activateStateRuntime, createStateRuntime, runWithStateRuntime, runWithStateRuntimeAsync, type StateRuntime } from '../../../../heavy-file-format/src/state';
 import { setPluginAuthorizationCallbacks, type HvyPluginAuthorizationRequest } from '../../../../heavy-file-format/src/plugins/authorization/plugin-authorization-policy';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
-import type { Clock } from '../clock';
+import type { Clock } from '../../webAutomation/clock';
 import { createTestState } from '../../../../heavy-file-format/tests/serialization-test-helpers';
 
 const BRYTHON = fileURLToPath(new URL('../../../../heavy-file-format/node_modules/brython/brython.min.js', import.meta.url));

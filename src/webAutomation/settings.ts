@@ -55,9 +55,9 @@ function nestedStrings(value: unknown, depth: number): Record<string, unknown> {
 }
 
 /** Loads persisted automation settings, dropping malformed entries rather than failing. */
-export function normalizeAutomationSettings(value: unknown): AutomationSettings {
-  const source = isRecord(value) ? value : {};
-  const authorizations = Object.fromEntries(Object.entries(isRecord(source.authorizations) ? source.authorizations : {}).flatMap(([documentPath, byCapability]) => {
+/** Loads service approvals (also Galaxy's `appSettings.webServiceApprovals`), dropping malformed entries. */
+export function normalizeCapabilityAuthorizations(value: unknown): CapabilityAuthorizations {
+  return Object.fromEntries(Object.entries(isRecord(value) ? value : {}).flatMap(([documentPath, byCapability]) => {
     const entries = Object.entries(isRecord(byCapability) ? byCapability : {}).flatMap(([capabilityId, raw]) => {
       if (!isRecord(raw) || typeof raw.profileId !== 'string' || !isRecord(raw.partHashes) || typeof raw.authorizedAt !== 'number') return [];
       const partHashes = Object.fromEntries(Object.entries(raw.partHashes).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
@@ -66,11 +66,17 @@ export function normalizeAutomationSettings(value: unknown): AutomationSettings 
         profileId: raw.profileId,
         partHashes,
         authorizedAt: raw.authorizedAt,
-        ...(typeof raw.accountId === 'string' && raw.accountId ? { accountId: raw.accountId } : {}),
+        ...(typeof raw.name === 'string' && raw.name ? { name: raw.name } : {}),
       }]];
     });
     return entries.length ? [[documentPath, Object.fromEntries(entries)]] : [];
   }));
+}
+
+/** Loads persisted automation settings, dropping malformed entries rather than failing. */
+export function normalizeAutomationSettings(value: unknown): AutomationSettings {
+  const source = isRecord(value) ? value : {};
+  const authorizations = normalizeCapabilityAuthorizations(source.authorizations);
   const accounts = Object.fromEntries(Object.entries(isRecord(source.accounts) ? source.accounts : {}).flatMap(([key, raw]) => {
     if (!isRecord(raw) || typeof raw.origin !== 'string' || typeof raw.profileId !== 'string' || typeof raw.accountId !== 'string') return [];
     if (key !== accountKey(raw.origin, raw.profileId)) return [];

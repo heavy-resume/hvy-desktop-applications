@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { createFauxFlow } from './faux/flow';
-import { ATS_ORIGIN, listingCollection } from './faux/sites';
+import { createMockFlow } from '../test/webAutomation/flow';
+import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 
 const source = (relative: string) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 
@@ -13,14 +13,14 @@ function uiAnnotated(text: string): string[] {
 
 describe('UI boundary', () => {
   const entryPoints = [...uiAnnotated(source('./entryPoints.ts')), ...uiAnnotated(source('./documentAutomation.ts'))];
-  const flowSource = source('./faux/flow.ts');
-  const scenarioSource = source('./faux/scenarios.test.ts');
+  const flowSource = source('../test/webAutomation/flow.ts');
+  const scenarioSource = source('./scenarios.test.ts');
 
   it('finds the annotated entry points', () => {
     expect(entryPoints).toEqual(expect.arrayContaining(['getState', 'beginSignIn', 'startCollection', 'enqueue', 'resumeQueue', 'openDocumentAutomation', 'close']));
   });
 
-  it('every UI entry point is driven by the faux flow or a scenario', () => {
+  it('every UI entry point is driven by the mock flow or a scenario', () => {
     const called = new Set([...`${flowSource}\n${scenarioSource}`.matchAll(/(?:(?:automation|runtime|opened)\.|\b(?=openDocumentAutomation))(\w+)\(/g)].map((match) => match[1]));
     expect(entryPoints.filter((name) => !called.has(name))).toEqual([]);
   });
@@ -32,7 +32,7 @@ describe('UI boundary', () => {
   });
 
   it('published state is plain data a renderer can take as a literal', async () => {
-    const flow = createFauxFlow();
+    const flow = createMockFlow();
     const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`]);
     flow.bindProfiles(boards);
     flow.approve();

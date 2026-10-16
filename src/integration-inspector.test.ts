@@ -111,7 +111,7 @@ declare global {
   }
 }
 
-const fauxInbox = `
+const mockInbox = `
   <style>
     .inbox { width: 700px; }
     .mail-row, .promotion { display: grid; grid-template-columns: 140px 1fr; width: 680px; min-height: 72px; padding: 8px; }
@@ -207,7 +207,7 @@ describe('integration structural inspector', () => {
     page = await browser.newPage();
     pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
-    await page.setContent(fauxInbox);
+    await page.setContent(mockInbox);
     await page.addScriptTag({ content: inspectorSource });
   });
 
@@ -265,7 +265,7 @@ describe('integration structural inspector', () => {
   it('publishes self-contained ready-check validation results for the UI', async () => {
     await page.close();
     page = await browser.newPage();
-    await page.setContent(fauxInbox);
+    await page.setContent(mockInbox);
     await page.evaluate(() => {
       window.__hvyGalaxyPublish = (value) => { window.__readyCheckResult = value; };
     });
@@ -295,7 +295,7 @@ describe('integration structural inspector', () => {
   it('boxes matching ready-check landmarks green and changed values red', async () => {
     await page.close();
     page = await browser.newPage();
-    await page.setContent(fauxInbox);
+    await page.setContent(mockInbox);
     await page.evaluate(() => {
       window.__hvyGalaxyPublish = (value) => { window.__readyCheckResult = value; };
     });
@@ -537,7 +537,7 @@ describe('integration structural inspector', () => {
   });
 
   it('treats Done with no selected fields as a canceled collection', async () => {
-    await page.setContent(fauxInbox);
+    await page.setContent(mockInbox);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
       window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
@@ -1825,7 +1825,7 @@ describe('integration structural inspector', () => {
   });
 
   it('only offers accepted record matches when scoping an item command', async () => {
-    await page.setContent(fauxInbox);
+    await page.setContent(mockInbox);
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => {
       const parent = document.querySelector('[data-record="first"]')!;

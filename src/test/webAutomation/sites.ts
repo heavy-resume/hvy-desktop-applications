@@ -1,20 +1,20 @@
-import type { CollectionDefinition } from '../collection';
-import type { PlatformSignal, SitePatternDefinition } from '../sitePatterns';
-import type { FauxPage, FauxSite } from './fauxHost';
+import type { CollectionDefinition } from '../../webAutomation/collection';
+import type { PlatformSignal, SitePatternDefinition } from '../../webAutomation/sitePatterns';
+import type { MockPage, MockSite } from './mockHost';
 
-export const ATS_ORIGIN = 'https://boards.faux-ats.test';
+export const ATS_ORIGIN = 'https://boards.mock-ats.test';
 export const OTHER_ATS_ORIGIN = 'https://jobs.other-ats.test';
 export const JSON_ONLY_ORIGIN = 'https://careers.jsononly.test';
 export const UNKNOWN_ORIGIN = 'https://jobs.unknown.test';
 
-interface FauxJob {
+interface MockJob {
   slug: string;
   title: string;
   location: string;
   description: string;
 }
 
-function job(slug: string, title: string, skills: string): FauxJob {
+function job(slug: string, title: string, skills: string): MockJob {
   return {
     slug,
     title,
@@ -23,9 +23,9 @@ function job(slug: string, title: string, skills: string): FauxJob {
   };
 }
 
-/** One company's board on a faux ATS: listing pages plus one detail page per job, all with the same markup. */
-export function atsCompany(company: string, displayName: string, pages: FauxJob[][], options: { challenge?: boolean; restoresOnBack?: boolean } = {}): Record<string, FauxPage> {
-  const result: Record<string, FauxPage> = {};
+/** One company's board on a mock ATS: listing pages plus one detail page per job, all with the same markup. */
+export function atsCompany(company: string, displayName: string, pages: MockJob[][], options: { challenge?: boolean; restoresOnBack?: boolean } = {}): Record<string, MockPage> {
+  const result: Record<string, MockPage> = {};
   pages.forEach((jobs, index) => {
     const path = index === 0 ? `/${company}/jobs` : `/${company}/jobs?page=${index + 1}`;
     result[path] = {
@@ -55,9 +55,9 @@ export function atsCompany(company: string, displayName: string, pages: FauxJob[
 
 export const atsListingPattern: SitePatternDefinition = {
   id: 'ats-listing',
-  name: 'Faux ATS job board',
+  name: 'Mock ATS job board',
   role: 'listing',
-  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs' }],
+  appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs' }],
   fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
   minimumConfidence: 0.8,
   linkFieldId: 'link',
@@ -67,9 +67,9 @@ export const atsListingPattern: SitePatternDefinition = {
 
 export const atsDetailPattern: SitePatternDefinition = {
   id: 'ats-detail',
-  name: 'Faux ATS job posting',
+  name: 'Mock ATS job posting',
   role: 'detail',
-  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs/*' }],
+  appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs/*' }],
   fields: [
     { id: 'title', label: 'Title', kind: 'text' },
     { id: 'company', label: 'Company', kind: 'text' },
@@ -80,7 +80,7 @@ export const atsDetailPattern: SitePatternDefinition = {
   version: 1,
 };
 
-export function fauxAtsSite(): FauxSite {
+export function mockAtsSite(): MockSite {
   return {
     origin: ATS_ORIGIN,
     pages: {
@@ -96,7 +96,7 @@ export function fauxAtsSite(): FauxSite {
 }
 
 /** A second ATS host, used to show that different origins run concurrently. */
-export function otherAtsSite(): FauxSite {
+export function otherAtsSite(): MockSite {
   const pages = atsCompany('umbrella', 'Umbrella', [[job('eng-1', 'Engineer', 'TypeScript'), job('eng-2', 'Engineer', 'C++')]]);
   return { origin: OTHER_ATS_ORIGIN, pages };
 }
@@ -104,31 +104,31 @@ export function otherAtsSite(): FauxSite {
 export const otherAtsListingPattern: SitePatternDefinition = {
   ...atsListingPattern,
   id: 'ats-listing',
-  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs' }, { target: 'page', host: 'jobs.other-ats.test', path: '/*/jobs' }],
+  appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs' }, { target: 'page', host: 'jobs.other-ats.test', path: '/*/jobs' }],
 };
 
 export const otherAtsDetailPattern: SitePatternDefinition = {
   ...atsDetailPattern,
-  appliesTo: [{ target: 'page', host: 'boards.faux-ats.test', path: '/*/jobs/*' }, { target: 'page', host: 'jobs.other-ats.test', path: '/*/jobs/*' }],
+  appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs/*' }, { target: 'page', host: 'jobs.other-ats.test', path: '/*/jobs/*' }],
 };
 
-/** The faux ATS listing pattern, also allowed to match the ATS when embedded as an iframe. */
+/** The mock ATS listing pattern, also allowed to match the ATS when embedded as an iframe. */
 export const atsListingWithFramePattern: SitePatternDefinition = {
   ...atsListingPattern,
-  appliesTo: [...atsListingPattern.appliesTo, { target: 'frame', host: 'boards.faux-ats.test', path: '/*/jobs' }],
+  appliesTo: [...atsListingPattern.appliesTo, { target: 'frame', host: 'boards.mock-ats.test', path: '/*/jobs' }],
 };
 
 export const CAREERS_ORIGIN = 'https://www.acme-corp.test';
 
-/** A company careers page that embeds its faux ATS board in an iframe. */
-export function careersSite(): FauxSite {
+/** A company careers page that embeds its mock ATS board in an iframe. */
+export function careersSite(): MockSite {
   return { origin: CAREERS_ORIGIN, pages: { '/careers': { frames: [{ src: `${ATS_ORIGIN}/acme/jobs` }] } } };
 }
 
 export const SIDE_PANE_ORIGIN = 'https://www.sidepane.test';
 
 /** A board that shows each posting in a side pane after clicking its card. */
-export function sidePaneSite(): FauxSite {
+export function sidePaneSite(): MockSite {
   const jobs = [job('1', 'Data Scientist', 'Python'), job('2', 'ML Engineer', 'TypeScript')];
   return {
     origin: SIDE_PANE_ORIGIN,
@@ -181,12 +181,12 @@ export const INITRODE_ORIGIN = 'https://careers.initrode.test';
 export const INITRODE_HOSTED_ORIGIN = 'https://jobs.initrode-hosted.test';
 export const VANDELAY_ORIGIN = 'https://careers.vandelay.test';
 
-function talentSuiteCustomer(listingOrigin: string, detailOrigin: string, company: string, jobs: FauxJob[]): FauxSite[] {
+function talentSuiteCustomer(listingOrigin: string, detailOrigin: string, company: string, jobs: MockJob[]): MockSite[] {
   const detailPages = Object.fromEntries(jobs.map((item) => [`/Portal/Job.aspx?id=${item.slug}`, {
     signals: TALENTSUITE_SIGNALS,
     matches: { 'talentsuite-detail': { confidence: 0.86, records: [{ ref: `${company}-${item.slug}`, values: { title: item.title, company, description: item.description } }] } },
-  } satisfies FauxPage]));
-  const listing: FauxPage = {
+  } satisfies MockPage]));
+  const listing: MockPage = {
     signals: [...TALENTSUITE_SIGNALS, { kind: 'form-field', name: '__VIEWSTATE' }],
     matches: {
       'talentsuite-listing': {
@@ -199,7 +199,7 @@ function talentSuiteCustomer(listingOrigin: string, detailOrigin: string, compan
   return [{ origin: listingOrigin, pages: { '/Portal/Jobs.aspx': listing } }, { origin: detailOrigin, pages: detailPages }];
 }
 
-export function talentSuiteSites(): FauxSite[] {
+export function talentSuiteSites(): MockSite[] {
   return [
     ...talentSuiteCustomer(INITRODE_ORIGIN, INITRODE_HOSTED_ORIGIN, 'Initrode', [job('11', 'Integration Engineer', 'TypeScript')]),
     ...talentSuiteCustomer(VANDELAY_ORIGIN, VANDELAY_ORIGIN, 'Vandelay', [job('21', 'Import Engineer', 'Go'), job('22', 'Export Engineer', 'Rust')]),
@@ -231,7 +231,7 @@ export const talentSuiteDetailPattern: SitePatternDefinition = {
   version: 1,
 };
 
-export function jsonOnlySite(): FauxSite {
+export function jsonOnlySite(): MockSite {
   return {
     origin: JSON_ONLY_ORIGIN,
     pages: {
@@ -252,7 +252,7 @@ export function jsonOnlySite(): FauxSite {
   };
 }
 
-export function unknownSite(): FauxSite {
+export function unknownSite(): MockSite {
   return { origin: UNKNOWN_ORIGIN, pages: { '/openings/7': {} } };
 }
 

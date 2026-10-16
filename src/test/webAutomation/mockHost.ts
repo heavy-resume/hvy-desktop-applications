@@ -10,11 +10,11 @@ import type {
   PageInspection,
   PageLocation,
   PatternMatch,
-} from '../host';
-import { globMatches, type PlatformSignal } from '../sitePatterns';
-import { WebAutomationError } from '../errors';
+} from '../../webAutomation/host';
+import { globMatches, type PlatformSignal } from '../../webAutomation/sitePatterns';
+import { WebAutomationError } from '../../webAutomation/errors';
 
-export interface FauxPage {
+export interface MockPage {
   /** Pattern ID → what that pattern extracts here. Stands in for structural matching. */
   matches?: Record<string, PatternMatch>;
   jsonLd?: unknown[];
@@ -27,10 +27,10 @@ export interface FauxPage {
   challenge?: boolean;
   frames?: Array<{ src: string }>;
   /** Side-pane boards: record ref → what the pane shows after the item command. */
-  panes?: Record<string, Pick<FauxPage, 'matches' | 'jsonLd'>>;
+  panes?: Record<string, Pick<MockPage, 'matches' | 'jsonLd'>>;
 }
 
-export interface FauxRouteRequest {
+export interface MockRouteRequest {
   method: string;
   path: string;
   params: Record<string, string>;
@@ -40,22 +40,22 @@ export interface FauxRouteRequest {
   clearCookie(name: string): void;
 }
 
-export type FauxRoute = (request: FauxRouteRequest) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>;
+export type MockRoute = (request: MockRouteRequest) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>;
 
-export interface FauxSite {
+export interface MockSite {
   origin: string;
   /** Keyed by path, optionally with query: "/acme/jobs?page=2". */
-  pages: Record<string, FauxPage>;
+  pages: Record<string, MockPage>;
   /** Keyed by "METHOD /path/{param}". */
-  api?: Record<string, FauxRoute>;
+  api?: Record<string, MockRoute>;
   login?: { loginPath: string; completePath: string; cookie: { name: string; value: string } };
   /** Files served for download (for example, a storage bucket), keyed by path; the query (a signature) is ignored. */
   files?: Record<string, { bytes(): Uint8Array | Promise<Uint8Array>; redirectTo?: string }>;
 }
 
-const CLEARANCE_COOKIE = 'faux_clearance';
+const CLEARANCE_COOKIE = 'mock_clearance';
 
-interface FauxWorker {
+interface MockWorker {
   profileId: string;
   history: string[];
   index: number;
@@ -64,17 +64,17 @@ interface FauxWorker {
   pane: string | null;
 }
 
-export class FauxHost implements BrowserHost {
+export class MockHost implements BrowserHost {
   private heldRequests: Array<{ path: string; released: Promise<void> }> = [];
-  private readonly sites = new Map<string, FauxSite>();
+  private readonly sites = new Map<string, MockSite>();
   private readonly jars = new Map<string, Map<string, Record<string, string>>>();
-  private readonly workers = new Map<string, FauxWorker>();
+  private readonly workers = new Map<string, MockWorker>();
   private readonly userWindows = new Map<string, { url: string; visible: boolean }>();
   private readonly listeners = new Set<(event: NavigationEvent) => void>();
   private nextWorker = 1;
   log: (message: string) => void = () => undefined;
 
-  constructor(sites: FauxSite[]) {
+  constructor(sites: MockSite[]) {
     for (const site of sites) this.sites.set(site.origin, site);
   }
 
@@ -220,7 +220,7 @@ export class FauxHost implements BrowserHost {
   /** The user finishes the site's own login form in the user window, optionally as a different account. */
   completeLogin(profileId: string, origin: string, cookieValue?: string): void {
     const site = this.sites.get(origin);
-    if (!site?.login) throw new Error(`${origin} has no faux login.`);
+    if (!site?.login) throw new Error(`${origin} has no mock login.`);
     this.cookies(profileId, origin)[site.login.cookie.name] = cookieValue ?? site.login.cookie.value;
     const url = new URL(site.login.completePath, origin).href;
     this.userWindows.set(profileId, { url, visible: true });
@@ -279,13 +279,13 @@ export class FauxHost implements BrowserHost {
 
   // ── Internals ────────────────────────────────────────────────
 
-  private worker(workerId: string): FauxWorker {
+  private worker(workerId: string): MockWorker {
     const worker = this.workers.get(workerId);
     if (!worker) throw new Error(`Unknown worker ${workerId}.`);
     return worker;
   }
 
-  private page(url: string | undefined): FauxPage | undefined {
+  private page(url: string | undefined): MockPage | undefined {
     if (!url) return undefined;
     const parsed = new URL(url);
     const site = this.sites.get(parsed.origin);
@@ -306,12 +306,12 @@ export class FauxHost implements BrowserHost {
     return cookies;
   }
 
-  private signalPresent(url: string, page: FauxPage | undefined, signal: PlatformSignal): boolean {
+  private signalPresent(url: string, page: MockPage | undefined, signal: PlatformSignal): boolean {
     if (signal.kind === 'path') return globMatches(signal.glob, new URL(url).pathname);
     return (page?.signals ?? []).some((candidate) => stableJson(candidate) === stableJson(signal));
   }
 
-  private findRoute(site: FauxSite | undefined, method: string, path: string): { handler: FauxRoute; params: Record<string, string> } | null {
+  private findRoute(site: MockSite | undefined, method: string, path: string): { handler: MockRoute; params: Record<string, string> } | null {
     for (const [key, handler] of Object.entries(site?.api ?? {})) {
       const [routeMethod, template] = key.split(' ');
       if (routeMethod !== method) continue;

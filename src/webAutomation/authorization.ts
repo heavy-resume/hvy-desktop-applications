@@ -4,6 +4,8 @@ import { stableJson } from '../webCapabilities';
 
 export interface CapabilityAuthorization {
   capabilityId: string;
+  /** The service's display name, for listing approvals in app settings. */
+  name?: string;
   profileId: string;
   /** One hash per reviewable category, so a review can name what changed. */
   partHashes: Record<string, string>;
@@ -53,12 +55,22 @@ export function recordAuthorization(
   parts: Record<string, unknown>,
   profileId: string,
   now: number,
+  name?: string,
 ): CapabilityAuthorizations {
   return {
     ...authorizations,
     [documentPath]: {
       ...(authorizations[documentPath] ?? {}),
-      [capabilityId]: { capabilityId, profileId, partHashes: hashAuthorizationParts(parts), authorizedAt: now },
+      [capabilityId]: { capabilityId, ...(name ? { name } : {}), profileId, partHashes: hashAuthorizationParts(parts), authorizedAt: now },
     },
   };
+}
+
+/** Withdraws a service approval; the next use asks again. */
+export function revokeAuthorization(authorizations: CapabilityAuthorizations, documentPath: string, capabilityId: string): CapabilityAuthorizations {
+  const { [capabilityId]: _revoked, ...remaining } = authorizations[documentPath] ?? {};
+  const next = { ...authorizations };
+  if (Object.keys(remaining).length) next[documentPath] = remaining;
+  else delete next[documentPath];
+  return next;
 }

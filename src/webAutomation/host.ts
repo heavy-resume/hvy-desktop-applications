@@ -3,7 +3,7 @@ import type { PlatformSignal } from './sitePatterns';
 /**
  * What the background automation needs from a browser host. The real
  * implementation lives in the Tauri and Electron hosts (worker webviews,
- * inspector injection, result routing by worker ID); the faux host
+ * inspector injection, result routing by worker ID); the mock host
  * implements the same contract over simulated sites.
  */
 export interface BrowserHost {
