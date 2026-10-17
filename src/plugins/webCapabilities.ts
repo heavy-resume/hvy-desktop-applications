@@ -111,7 +111,7 @@ function localRecordsConfig(config: WebRecordsCapabilityConfig): WebRecordsCapab
   return { ...config, record: { ...config.record, scrollPage: action.scrollPage !== false } };
 }
 
-function button(label: string, primary = false): HTMLButtonElement {
+export function button(label: string, primary = false): HTMLButtonElement {
   const element = document.createElement('button');
   element.type = 'button';
   element.className = `hvy-galaxy-button${primary ? ' primary-button' : ''}`;
@@ -198,7 +198,7 @@ function openCommandInputsModal(command: WebCommandCapabilityConfig['command'], 
   form.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select')?.focus();
 }
 
-function selectedProfile(config: WebCapabilityConfig) {
+export function selectedProfile(config: Pick<WebCapabilityConfig, 'capabilityId'>) {
   const path = state.document?.source.path ?? '';
   const profileId = getWebCapabilityProfileBinding(
     state.appSettings.webCapabilityProfileBindings,
@@ -208,7 +208,7 @@ function selectedProfile(config: WebCapabilityConfig) {
   return state.integrationRegistry.profiles.find((profile) => profile.id === profileId) ?? null;
 }
 
-async function persistProfileBinding(config: WebCapabilityConfig, profileId: string): Promise<void> {
+async function persistProfileBinding(config: Pick<WebCapabilityConfig, 'capabilityId'>, profileId: string): Promise<void> {
   const path = state.document?.source.path ?? '';
   const settings = {
     ...state.appSettings,
@@ -305,7 +305,7 @@ function openAuthorizationModal(config: WebCapabilityConfig, onAuthorized: () =>
   allow.focus();
 }
 
-function buildProfileControls(config: WebCapabilityConfig, refresh: () => void): HTMLElement {
+export function buildProfileControls(config: Pick<WebCapabilityConfig, 'capabilityId'>, refresh: () => void): HTMLElement {
   const wrapper = document.createElement('label');
   wrapper.className = 'hvy-web-profile';
   const label = document.createElement('span');

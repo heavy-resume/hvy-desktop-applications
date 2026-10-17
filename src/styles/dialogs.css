@@ -1201,3 +1201,24 @@
   border-top: 1px solid var(--hvy-border-color, #d8d8d8);
   color: var(--muted-text);
 }
+
+.plugin-approval-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.plugin-approval-option {
+  align-items: start;
+}
+
+.plugin-approval-option-text {
+  display: grid;
+  gap: 2px;
+}
+
+.plugin-approval-option-detail {
+  font-weight: 400;
+  color: var(--hvy-text-muted, #697571);
+  font-size: 12px;
+}

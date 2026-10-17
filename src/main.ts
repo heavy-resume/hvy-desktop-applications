@@ -8,6 +8,7 @@ import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
+import { setOpenDocumentCheck } from './webAutomation/app';
 import { removeRuntimeDocument, runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile, type RuntimeDocument } from './runtimeDocuments';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -85,6 +86,8 @@ export interface HotReloadSessionSnapshot {
 }
 type PreparedImportSource = ImportSourceFile & { text: string; sourceDocument?: VisualDocument };
 export const documentSessions = new Map<string, DocumentSession>();
+// A document stays open while it is in the document pane or a background tab; web automation closes only then.
+setOpenDocumentCheck((document) => state.document?.mounted?.document === document || [...documentSessions.values()].some((session) => session.document === document));
 export const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 let openedDocumentTabOrder: string[] = [];
 let documentChangeEventCount = 0;
@@ -580,6 +583,17 @@ export function pathStartsWithWorkspace(path: string, workspacePath: string): bo
   const normalizedWorkspacePath = normalizeFilePath(workspacePath).replace(/\/+$/, '');
   return normalizedPath === normalizedWorkspacePath || normalizedPath.startsWith(`${normalizedWorkspacePath}/`);
 }
+/** Remounts the open document where the reader is, as switching back to its tab does. */
+export async function remountKeepingView(): Promise<void> {
+  const viewState = captureDocumentViewState(mountRoot);
+  const scrollRatio = captureMountScrollRatio(mountRoot);
+  await mountCurrentDocument();
+  await restoreDocumentViewState(mountRoot, viewState);
+  restoreMountScrollRatio(mountRoot, scrollRatio);
+  // The toolbar reflects the new mount, such as plugins no longer waiting for approval.
+  rerender({ preserveMountedDocument: true });
+}
+
 export async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
   if (!state.document || !mountRoot || !document) return;
   const generation = ++mountGeneration;
@@ -627,6 +641,8 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     powerScripts,
     getPowerScriptAcceptance: ({ fingerprint }) =>
       (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint),
+    // Scripts that ran before the plugin was allowed run again, now with it; the reader keeps their place.
+    onPluginAllowed: () => void remountKeepingView(),
     onPowerScriptAcceptanceChanged: ({ document: acceptedDocument, fingerprint, accepted }) => {
       if (!accepted || (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint)) return;
       const acceptedFingerprints = [...(state.appSettings.powerScriptAcceptances[path] ?? []), fingerprint];

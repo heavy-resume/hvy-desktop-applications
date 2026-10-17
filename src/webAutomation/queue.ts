@@ -31,7 +31,7 @@ export interface QueueConfig {
   };
 }
 
-/** Persisted in the app's queue store, per document and queue; plain JSON. */
+/** Saved in the document's queue block when the document is saved; plain JSON. */
 export interface QueueState {
   entries: QueueEntry[];
   paused: boolean;
@@ -63,7 +63,6 @@ export class DurableQueue {
   private wake: AbortController | null = null;
   private loops = 0;
   private detached = false;
-  private written: Promise<void> = Promise.resolve();
   private target: QueueTarget;
 
   constructor(private readonly deps: {
@@ -74,8 +73,6 @@ export class DurableQueue {
     emit: AutomationEmit;
     createId(): string;
     target: QueueTarget;
-    /** Persists each change (the app's queue store). A call starts only after its entry is written. */
-    onChange?(state: QueueState): void | Promise<void>;
   }) {
     this.target = deps.target;
   }
@@ -84,12 +81,23 @@ export class DurableQueue {
     return structuredClone(this.state);
   }
 
-  /** Restores persisted entries. Interrupted work is re-queued but waits for resume(). */
+  /**
+   * What the document saves in the queue block: everything except entries
+   * that are finished and whose results were delivered, or were cancelled.
+   */
+  savedState(): QueueState {
+    const state = this.getState();
+    return {
+      ...state,
+      entries: state.entries.filter((entry) => entry.status !== 'cancelled' && !(entry.delivered && (entry.status === 'done' || entry.status === 'failed'))),
+    };
+  }
+
+  /** Restores entries saved in the document. Interrupted work is re-queued but waits for resume(). */
   restore(state: QueueState): void {
     const entries = state.entries.map((entry) => (entry.status === 'running' ? { ...entry, status: 'queued' as const } : { ...entry }));
     const pending = entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry');
     this.state = { entries, paused: state.paused, pauseReason: state.pauseReason, awaitingResume: pending };
-    this.changed();
   }
 
   enqueue(key: string, input: unknown): { added: boolean } {
@@ -100,7 +108,6 @@ export class DurableQueue {
     };
     this.state.entries = [...this.state.entries.filter((candidate) => candidate.key !== key), entry];
     this.deps.emit('queue', `${this.deps.id}: enqueued ${key}`);
-    this.changed();
     this.pump();
     return { added: true };
   }
@@ -127,7 +134,6 @@ export class DurableQueue {
     this.state.paused = true;
     this.state.pauseReason = reason;
     this.deps.emit('queue', `${this.deps.id}: paused (${reason})`);
-    this.changed();
   }
 
   resume(): void {
@@ -135,7 +141,6 @@ export class DurableQueue {
     this.state.pauseReason = null;
     this.state.awaitingResume = false;
     this.deps.emit('queue', `${this.deps.id}: resumed`);
-    this.changed();
     this.pump();
   }
 
@@ -177,10 +182,7 @@ export class DurableQueue {
   attach(target: QueueTarget): void {
     this.target = target;
     this.detached = false;
-    if (this.state.entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry')) {
-      this.state.awaitingResume = true;
-      this.changed();
-    }
+    if (this.state.entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry')) this.state.awaitingResume = true;
   }
 
   private blocked(): boolean {
@@ -220,8 +222,6 @@ export class DurableQueue {
     this.lastStartedAt = this.deps.clock.now();
     this.deps.emit('queue', `${this.deps.id}: run ${key} (attempt ${entry.attempts})`);
     try {
-      // Write-ahead: the entry and its idempotency key are stored before the call is made.
-      await this.written;
       const result = await this.target(entry.input, { idempotencyKey: entry.idempotencyKey });
       const done = this.update(key, (current) => ({ ...current, status: 'done', result, lastError: null }));
       if (done) this.deliver(done);
@@ -263,12 +263,6 @@ export class DurableQueue {
       updated = { ...change(entry), updatedAt: this.deps.clock.now() };
       return updated;
     });
-    this.changed();
     return updated;
-  }
-
-  private changed(): void {
-    const state = this.getState();
-    this.written = this.written.then(() => this.deps.onChange?.(state));
   }
 }

@@ -3,6 +3,7 @@ import { createDesktopEmbeddingProvider, desktopTextProcessingSettings } from '.
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
 import { recallUserFileAttachmentBytes } from '../../heavy-file-format/src/document-attachment-actions';
+import { visitBlocks } from '../../heavy-file-format/src/block-traversal';
 import { canPreviewUserFileAttachment, resolveUserFileAttachment } from '../../heavy-file-format/src/document-attachments';
 import { openPhvyPasteConfirmationPopover } from '../../heavy-file-format/src/bind/handlers/phvy-paste-confirmation-popover';
 import { setHostChatClient } from '../../heavy-file-format/src/chat/chat';
@@ -14,7 +15,8 @@ import { escapeHtml as escapeHvyHtml } from '../../heavy-file-format/src/utils';
 import { deserializeDocumentWithDiagnostics } from '../../heavy-file-format/src/serialization';
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
-import { enabledBuiltInPlugins, enabledDownloadedPlugins, pluginAcceptanceKey } from './pluginManager';
+import { blockedPlugins, enabledBuiltInPlugins, enabledDownloadedPlugins, pluginAcceptanceKey, setPluginAcceptances, type BlockedPlugin } from './pluginManager';
+import { hasWebAutomationHost, releaseWebAutomation, saveWebAutomationQueues, WEB_AUTOMATION_PLUGIN_IDS } from './webAutomation/app';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import type {
@@ -79,6 +81,8 @@ export interface MountedDocument {
   mount: HvyMount;
   document: VisualDocument;
   unsavedBaseline?: boolean;
+  /** Plugins this document uses that still need approval in this file. */
+  blockedPlugins?: BlockedPlugin[];
 }
 
 export function powerScriptDescriptors(document: VisualDocument): Array<{ id: string; hash: string }> {
@@ -118,6 +122,8 @@ export interface MountHvyDocumentOptions {
   powerScripts?: Parameters<HvyEmbedModule['mountHvy']>[0]['powerScripts'];
   getPowerScriptAcceptance?: Parameters<HvyEmbedModule['mountHvy']>[0]['getPowerScriptAcceptance'];
   onPowerScriptAcceptanceChanged?: Parameters<HvyEmbedModule['mountHvy']>[0]['onPowerScriptAcceptanceChanged'];
+  /** A plugin was allowed in this file; the host reopens the document so its scripts run with the plugin. */
+  onPluginAllowed?: () => void;
 }
 
 let hvyEmbedModule: Promise<HvyEmbedModule> | null = null;
@@ -290,7 +296,9 @@ export async function mountHvyDocument(
   const embedMode = mode === 'advanced' ? 'editor' : mode;
   const documentPath = state.document?.source.path ?? '';
   const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
-  const activeBuiltInPlugins = enabledBuiltInPlugins(state.appSettings, builtInPlugins, documentPath);
+  // The web automation plugins need a browser host; without one, documents do not get them.
+  const availableBuiltInPlugins = builtInPlugins.filter((plugin) => hasWebAutomationHost() || !WEB_AUTOMATION_PLUGIN_IDS.has(plugin.id));
+  const activeBuiltInPlugins = await enabledBuiltInPlugins(state.appSettings, availableBuiltInPlugins, documentPath);
   const plugins = [
     ...activeBuiltInPlugins,
     ...downloadedPlugins.filter((plugin) => !activeBuiltInPlugins.some((builtIn) => builtIn.id === plugin.id)),
@@ -307,21 +315,14 @@ export async function mountHvyDocument(
       (state.appSettings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(request))
     ),
     onPluginAuthorizationChanged: (request) => {
-      const key = pluginAcceptanceKey(request);
-      const current = state.appSettings.pluginAcceptances[documentPath] ?? [];
-      const next = request.accepted
-        ? [...new Set([...current, key])]
-        : current.filter((candidate) => candidate !== key);
       const settings = {
         ...state.appSettings,
-        pluginAcceptances: {
-          ...state.appSettings.pluginAcceptances,
-          [documentPath]: next,
-        },
+        pluginAcceptances: setPluginAcceptances(state.appSettings.pluginAcceptances, documentPath, [pluginAcceptanceKey(request)], request.accepted),
       };
       state.appSettings = settings;
       void saveAppSettings(settings).then((saved) => {
         state.appSettings = saved;
+        if (request.accepted) options.onPluginAllowed?.();
       });
     },
     chatSettings: {
@@ -360,17 +361,22 @@ export async function mountHvyDocument(
     searchSnapshot: options.searchSnapshot ?? null,
     onDocumentChange: options.onDocumentChange,
   });
-  const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, withEmbeddedSearchCollapsedSurface(root, mount)), options);
+  const mounted = withMetaTemplateContextMenu(root, withChatPanelResize(root, withEmbeddedSearchCollapsedSurface(root, withWebAutomation(mount))), options);
   const interactiveMount = withViewerCarouselInteractions(root, mounted);
   const finalMount = withAttachmentDownload(
     root,
     withDesktopAttachmentLinkOpening(root, document, withExternalLinkOpening(root, mode, interactiveMount)),
   );
+  const blockPluginIds: string[] = [];
+  visitBlocks(document.sections, (block) => {
+    if (block.schema.plugin) blockPluginIds.push(block.schema.plugin);
+  });
   return {
     mount: finalMount,
     get document() {
       return finalMount.getDocument();
     },
+    blockedPlugins: blockedPlugins(plugins, blockPluginIds),
   };
 }
 
@@ -414,6 +420,26 @@ export function restoreRawHvyAttachmentBytes(
     document.attachments = nextAttachments;
   }
   return document;
+}
+
+/** Saving writes each queue's state into its block first; unmounting releases the document's automation. */
+function withWebAutomation<T extends Pick<HvyMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync'>>(mount: T): T {
+  const { destroy, serializeDocumentBytes, serializeDocumentBytesAsync } = mount;
+  return {
+    ...mount,
+    serializeDocumentBytes() {
+      saveWebAutomationQueues(mount.getDocument());
+      return serializeDocumentBytes.call(mount);
+    },
+    serializeDocumentBytesAsync() {
+      saveWebAutomationQueues(mount.getDocument());
+      return serializeDocumentBytesAsync.call(mount);
+    },
+    destroy() {
+      releaseWebAutomation(mount.getDocument());
+      destroy.call(mount);
+    },
+  };
 }
 
 function withAttachmentDownload(root: HTMLElement, mount: HvyMount): HvyMount {

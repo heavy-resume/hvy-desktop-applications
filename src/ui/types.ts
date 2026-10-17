@@ -199,6 +199,9 @@ export interface UiHandlers {
   selectDocumentEncryptionKey(keyId: string): void;
   setDocumentEncryptionKeyLabel(label: string): void;
   confirmDocumentEncryption(): void;
+  openPluginApprovals(): void;
+  cancelPluginApprovals(): void;
+  allowPlugins(acceptanceKeys: string[]): void;
   cancelDocumentEncryption(): void;
   closeAbout(): void;
   openDebugLog(): void;

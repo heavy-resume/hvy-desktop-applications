@@ -99,6 +99,27 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/webMcpTool.ts',
     root: 'app',
   },
+  {
+    id: 'galaxy.web-api',
+    key: 'galaxyWebApi',
+    exportName: 'webApiPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.web-collection',
+    key: 'galaxyWebCollection',
+    exportName: 'webCollectionPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.queue',
+    key: 'galaxyQueue',
+    exportName: 'queuePlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {

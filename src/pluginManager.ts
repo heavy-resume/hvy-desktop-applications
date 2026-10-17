@@ -1,7 +1,7 @@
 import { loadInstalledPluginPackages, type AppSettings, type InstalledPluginPackageFile } from './backend';
 import { loadHvyPluginZip, readHvyPluginZipManifest, type LoadedHvyPluginPackage } from '../../heavy-file-format/src/plugin-package-zip';
 import type { HvyPluginPackageManifest } from '../../heavy-file-format/src/plugin-package';
-import { createConditionallyAllowedPlugin } from '../../heavy-file-format/src/plugins/authorization/conditional-plugin';
+import { createConditionallyAllowedPlugin, loadConditionallyAllowedPlugin } from '../../heavy-file-format/src/plugins/authorization/conditional-plugin';
 import type { HvyPlugin } from '../../heavy-file-format/src/plugins/types';
 
 export type PluginPolicy = 'disabled' | 'enabled' | 'conditional';
@@ -106,21 +106,67 @@ export function builtInPluginPolicy(settings: Pick<AppSettings, 'pluginPolicies'
   return configured ?? 'enabled';
 }
 
-/** Built-in plugins for a document under their policies, as enabledDownloadedPlugins applies them to custom plugins. */
-export function enabledBuiltInPlugins(settings: Pick<AppSettings, 'pluginPolicies' | 'pluginAcceptances'>, plugins: HvyPlugin[], documentPath = ''): HvyPlugin[] {
-  return plugins.flatMap((plugin) => {
+/**
+ * Built-in plugins for a document under their policies, as enabledDownloadedPlugins applies them to custom plugins:
+ * a plugin the file has accepted is passed as its implementation, so the document's scripts can use it from the start.
+ */
+export async function enabledBuiltInPlugins(settings: Pick<AppSettings, 'pluginPolicies' | 'pluginAcceptances'>, plugins: HvyPlugin[], documentPath = ''): Promise<HvyPlugin[]> {
+  const accepted = (plugin: HvyPlugin) => (settings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(plugin));
+  const enabled: HvyPlugin[] = [];
+  for (const plugin of plugins) {
     const policy = builtInPluginPolicy(settings, plugin);
-    if (policy === 'disabled') return [];
-    // A plugin that requires authorization is already a conditional registration and prompts itself.
-    if (policy === 'enabled' || plugin.authorization === 'required') return [plugin];
-    if ((settings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(plugin))) return [plugin];
-    return [createConditionallyAllowedPlugin({
+    if (policy === 'disabled') continue;
+    if (policy === 'enabled') {
+      enabled.push(plugin);
+    } else if (plugin.authorization === 'required') {
+      // Already a conditional registration: it prompts itself until the file accepts it.
+      enabled.push(accepted(plugin) ? await loadConditionallyAllowedPlugin(plugin) : plugin);
+    } else if (accepted(plugin)) {
+      enabled.push(plugin);
+    } else {
+      enabled.push(createConditionallyAllowedPlugin({
+        id: plugin.id,
+        ...(plugin.uuid ? { uuid: plugin.uuid } : {}),
+        version: plugin.version,
+        hvyApiVersion: plugin.hvyApiVersion,
+        displayName: plugin.displayName,
+        load: async () => plugin,
+      }));
+    }
+  }
+  return enabled;
+}
+
+/** A plugin a document uses that is waiting for approval in that file. */
+export interface BlockedPlugin {
+  id: string;
+  uuid?: string;
+  version: string;
+  displayName: string;
+  /** How many of the document's blocks use it. */
+  blocks: number;
+}
+
+/**
+ * The plugins a document's blocks use that still need approval in this file:
+ * the conditional registrations among the plugins it was mounted with (an
+ * approved plugin is mounted as its implementation instead).
+ */
+export function blockedPlugins(plugins: HvyPlugin[], blockPluginIds: string[]): BlockedPlugin[] {
+  return plugins
+    .filter((plugin) => plugin.authorization === 'required' && blockPluginIds.includes(plugin.id))
+    .map((plugin) => ({
       id: plugin.id,
       ...(plugin.uuid ? { uuid: plugin.uuid } : {}),
-      version: plugin.version,
-      hvyApiVersion: plugin.hvyApiVersion,
-      displayName: plugin.displayName,
-      load: async () => plugin,
-    })];
-  });
+      version: plugin.version ?? '',
+      displayName: plugin.displayName ?? plugin.id,
+      blocks: blockPluginIds.filter((id) => id === plugin.id).length,
+    }));
+}
+
+/** A file's plugin approvals after allowing or disallowing some plugins in it (keys from pluginAcceptanceKey). */
+export function setPluginAcceptances(acceptances: AppSettings['pluginAcceptances'], documentPath: string, keys: string[], accepted: boolean): AppSettings['pluginAcceptances'] {
+  const current = acceptances[documentPath] ?? [];
+  const next = accepted ? [...new Set([...current, ...keys])] : current.filter((candidate) => !keys.includes(candidate));
+  return { ...acceptances, [documentPath]: next };
 }

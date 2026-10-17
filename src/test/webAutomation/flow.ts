@@ -11,14 +11,14 @@ import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from '../../webAutomation
 import type { StateRuntime } from '../../../../heavy-file-format/src/state';
 import { createDocumentState } from './documentHost';
 import { pluginAcceptanceKey } from '../../pluginManager';
-import type { QueueResult, QueueState } from '../../webAutomation/queue';
+import type { QueueResult } from '../../webAutomation/queue';
 import { createMemorySettingsStore } from '../../webAutomation/settings';
 import type { SitePatternDefinition } from '../../webAutomation/sitePatterns';
 import type { WebApiCapability, WebApiResult } from '../../webAutomation/webApi';
 import { mockAnalysisService, type MockAnalysisServiceState } from './analysisService';
 import { MockHost } from './mockHost';
 import type { MockApiIntegration } from './integration';
-import { careersSite, mockAtsSite, jsonOnlySite, otherAtsSite, sidePaneSite, talentSuiteSites, unknownSite } from './sites';
+import { mockWebSites } from './sites';
 import { buildSearchDocument } from './listingDocument';
 import { VirtualClock } from './virtualClock';
 
@@ -67,9 +67,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   const clock = new VirtualClock();
   const api = (options.api ?? (mockAnalysisService as unknown as () => MockApiIntegration<State>))();
   const serviceOrigin = new URL(api.capability.pageUrl).origin;
-  const host = new MockHost([
-    mockAtsSite(), otherAtsSite(), careersSite(), sidePaneSite(), ...talentSuiteSites(), jsonOnlySite(), unknownSite(), api.site, ...(api.extraSites ?? []),
-  ]);
+  const host = new MockHost(mockWebSites(api));
   const settings = createMemorySettingsStore();
   const pluginsReady = registerWebAutomationPlugins();
   // Stand-in for Galaxy's appSettings.pluginAcceptances, written as hvy.ts's mount callbacks write it.
@@ -92,23 +90,14 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   host.log = (message) => timeline.push(`${stamp()} [host] ${message}`);
 
   const patternLibrary: SitePatternDefinition[] = [];
-  // Stand-in for the app-local queue store: it outlives document reloads and app restarts. Only the current
-  // app instance writes to it; an earlier one stopped when the app restarted.
-  const queueStates = new Map<string, QueueState>();
-  let appInstance = 0;
+  // The document as last saved to disk: what an app restart reopens.
+  let savedText = serializeDocument(document);
   let entryIds = 0;
   const random = seededRandom(options.seed ?? 7);
   let runtime = startRuntime();
 
   function startRuntime() {
-    const instance = ++appInstance;
     const runtime = createWebAutomationRuntime({
-      queueStore: {
-        load: (documentPath, queueId) => structuredClone(queueStates.get(`${documentPath}\u0000${queueId}`) ?? null),
-        save: (documentPath, queueId, state) => {
-          if (instance === appInstance) queueStates.set(`${documentPath}\u0000${queueId}`, structuredClone(state));
-        },
-      },
       createId: () => `idempotency-${++entryIds}`,
       patternLibrary: () => patternLibrary,
       host,
@@ -125,8 +114,8 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   let automation: WebAutomation = opened.automation;
   loadDocument();
 
-  function reopen(): void {
-    document = deserializeDocument(serializeDocument(document), '.hvy');
+  function reopen(text = serializeDocument(document)): void {
+    document = deserializeDocument(text, '.hvy');
     if (options.document?.store) {
       items = createCliItemStore(document, options.document.store);
       sink = createRecordSink(items, options.sink ?? DEFAULT_RECORD_SINK_CONFIG);
@@ -372,14 +361,22 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     },
 
     /**
-     * Unloads the document and reopens it from its saved text. Queues live in
-     * the app, so nothing needs saving first; calls already sent finish while
+     * Switches away from the document and back. Queues stay in the app's
+     * memory, so nothing needs saving first; calls already sent finish while
      * it is unloaded. Script callbacks do not survive.
      */
     reload(): void {
       opened.close();
       timeline.push(`${stamp()} [document] closed and reopened`);
       reopen();
+    },
+
+    // UI: File > Save. Each queue block takes its queue's state, then the document is serialized.
+    save(): string {
+      opened.saveQueues();
+      savedText = serializeDocument(document);
+      timeline.push(`${stamp()} [document] saved`);
+      return savedText;
     },
 
     // UI: document closed (tab closed or document switched off).
@@ -396,14 +393,14 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
 
     /**
      * The app quits and starts again: calls in flight are lost with it, and a
-     * fresh runtime reopens the document from the same settings, cookies, and
-     * queue store.
+     * fresh runtime reopens the document as last saved, with the same
+     * settings and cookies. Anything not saved is lost.
      */
     restartApp(): void {
       opened.close();
       runtime = startRuntime();
       timeline.push(`${stamp()} [app] restarted`);
-      reopen();
+      reopen(savedText);
     },
 
     settle,

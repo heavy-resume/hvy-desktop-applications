@@ -22,7 +22,7 @@ import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './s
 import { SessionService, type SessionState } from './session';
 import type { AutomationSettingsStore } from './settings';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
-import { ApiTransport, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
+import { ApiTransport, capabilityOrigin, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
 
 /** A plugin method the queue can target, resolved through the plugin-to-plugin call interface. */
 export interface PluginCallTarget {
@@ -40,21 +40,11 @@ export interface WebAutomationRuntimeDeps {
   clock: Clock;
   random: Random;
   settings: AutomationSettingsStore;
-  /**
-   * App-local queue state per document and queue, so unloading a document
-   * without saving loses nothing. A queue awaits `save` before each call.
-   */
-  queueStore: QueueStore;
   /** New idempotency keys for queue entries (crypto.randomUUID in the app). */
   createId(): string;
   /** The user's local site pattern library (integration registry). */
   patternLibrary?: () => SitePatternDefinition[];
   scheduler?: Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>;
-}
-
-export interface QueueStore {
-  load(documentPath: string, queueId: string): QueueState | null;
-  save(documentPath: string, queueId: string, state: QueueState): void | Promise<void>;
 }
 
 /** Document-level dependencies. */
@@ -120,6 +110,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   const deps = { ...runtime.deps, ...document };
   const collections = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, patternLibrary: deps.patternLibrary });
   const queues = new Map<string, DurableQueue>();
+  // Script callbacks for sign-in changes, by capability and key. They do not survive the document closing.
+  const sessionWatchers = new Map<string, () => void>();
 
   // The plugin must be allowed in this file (the reference implementation's per-file plugin authorization).
   function requirePlugin(pluginId: string, displayName: string): void {
@@ -205,6 +197,17 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       await sessions.beginSignIn(capability, profileId);
     },
 
+    // UI: scripting doc.plugins.call("galaxy.web-api", "on_session", { key, handler }), registered by a form's initial
+    // script, such as a resume list that fills in once you sign in. The same key replaces an earlier handler.
+    onSessionChange(capability: WebApiCapability, key: string, handler: (state: SessionState) => void): void {
+      const watcherKey = `${capability.capabilityId}\0${key}`;
+      sessionWatchers.get(watcherKey)?.();
+      sessionWatchers.set(watcherKey, sessions.onChange((state) => {
+        const profileId = deps.settings.get().profileBindings[deps.documentPath]?.[capability.capabilityId];
+        if (state.origin === capabilityOrigin(capability) && state.profileId === profileId) handler(state);
+      }));
+    },
+
     // UI: galaxy.web-api reader, "Sign out" button.
     async signOut(capability: WebApiCapability): Promise<void> {
       await sessions.signOut(capability, profileFor(capability.capabilityId, capability.name));
@@ -249,9 +252,10 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       collections.stop(runId);
     },
 
-    // Document load: openDocumentAutomation opens each queue block. A queue still finishing work from an earlier
-    // open of this document is reattached; otherwise its state comes from the app's queue store.
-    openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG): void {
+    // Document load: openDocumentAutomation opens each queue block. A queue still in memory from an earlier open of
+    // this document (switched away and back) is reattached, since it is newer; otherwise it starts from the state
+    // saved in its block.
+    openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG, saved: QueueState | null = null): void {
       const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey });
       const registryKey = `${deps.documentPath}\u0000${queueId}`;
       const existing = runtime.queues.get(registryKey);
@@ -268,12 +272,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
         emit,
         createId: deps.createId,
         target: call,
-        onChange: (state) => deps.queueStore.save(deps.documentPath, queueId, state),
       });
-      const stored = deps.queueStore.load(deps.documentPath, queueId);
-      if (stored) item.restore(stored);
+      if (saved) item.restore(saved);
       runtime.queues.set(registryKey, item);
       queues.set(queueId, item);
+    },
+
+    // Document save: what the queue block keeps (DocumentAutomation.saveQueues writes it before serializing).
+    savedQueueState(queueId: string): QueueState {
+      return queue(queueId).savedState();
     },
 
     // UI: scripting doc.plugins.call(queue, "enqueue", …), called from an item's Evaluate form.
@@ -315,6 +322,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     closeDocument(): void {
       for (const run of collections.getState()) collections.stop(run.runId);
       for (const item of queues.values()) item.detach();
+      for (const stop of sessionWatchers.values()) stop();
+      sessionWatchers.clear();
     },
 
     isQueueIdle(queueId: string): boolean {

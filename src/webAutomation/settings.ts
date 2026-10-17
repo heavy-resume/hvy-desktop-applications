@@ -54,7 +54,6 @@ function nestedStrings(value: unknown, depth: number): Record<string, unknown> {
   }));
 }
 
-/** Loads persisted automation settings, dropping malformed entries rather than failing. */
 /** Loads service approvals (also Galaxy's `appSettings.webServiceApprovals`), dropping malformed entries. */
 export function normalizeCapabilityAuthorizations(value: unknown): CapabilityAuthorizations {
   return Object.fromEntries(Object.entries(isRecord(value) ? value : {}).flatMap(([documentPath, byCapability]) => {

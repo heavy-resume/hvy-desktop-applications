@@ -1,6 +1,7 @@
 import { getAttachment, removeAttachment, setAttachment } from '../../heavy-file-format/src/attachments';
 import { decryptDocumentEnvelopeBytes, encryptDocumentBytes } from '../../heavy-file-format/src/encryption';
-import { deserializeDocumentBytesAsync, serializeDocumentBytesAsync } from '../../heavy-file-format/src/serialization';
+import { serializeDocumentBytesAsync } from '../../heavy-file-format/src/document-byte-serialization';
+import { deserializeDocumentBytesAsync } from '../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../heavy-file-format/src/types';
 import type { DocumentExtension, Workspace, WorkspaceTreeNode } from './backend';
 import { readDocumentFileBytes, stageDocumentKeyMigrationFile } from './backend';

@@ -63,6 +63,17 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
       const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined;
       return operation(args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey }));
     },
+    /**
+     * Calls `handler` with `{ status, accountName }` whenever the account this
+     * document uses there signs in or out. Registered by a form's initial
+     * script; the same `key` replaces an earlier handler.
+     */
+    on_session: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const handler = required(callback(args.handler), 'on_session needs a handler function.');
+      lookup.automation.onSessionChange(capability(lookup, args), String(args.key ?? 'default'), (state) => handler({ status: state.status, accountName: state.accountName }));
+      return null;
+    },
     /** Opens the site's login window. Scripts cannot complete a sign-in. */
     sign_in: (args, ctx) => {
       const lookup = resolve(ctx);

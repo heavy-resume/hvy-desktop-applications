@@ -123,6 +123,7 @@ export interface AppState {
   documentKeyDeleteId: string | null;
   documentKeyExportSelection: string[];
   documentEncryptionDialogOpen: boolean;
+  pluginApprovalDialogOpen: boolean;
   documentEncryptionAction: 'encrypt' | 'decrypt' | null;
   documentEncryptionKeyId: string | null;
   documentEncryptionKeyLabel: string;
@@ -482,6 +483,7 @@ export const state: AppState = {
   documentKeyDeleteId: null,
   documentKeyExportSelection: [],
   documentEncryptionDialogOpen: false,
+  pluginApprovalDialogOpen: false,
   documentEncryptionAction: null,
   documentEncryptionKeyId: null,
   documentEncryptionKeyLabel: '',

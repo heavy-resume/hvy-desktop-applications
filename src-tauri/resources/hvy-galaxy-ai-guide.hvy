@@ -49,6 +49,9 @@ reader_max_width: 64rem
   12. `hvy.web-records` — portable record extraction through a locally configured browser profile.
   13. `hvy.web-command` — portable web-page commands through a locally configured browser profile.
   14. `hvy.webmcp-tool` — calls to an explicitly approved site-provided WebMCP tool.
+  15. `galaxy.web-api` — calls to a signed-in service's endpoints, allowed per file and approved at sign-in.
+  16. `galaxy.web-collection` — collects records from web pages into the document, allowed per file.
+  17. `galaxy.queue` — a paced, retrying queue in front of another plugin method; its state is saved in the block.
 
  <!--hvy:text {}-->
   The list printed by `man hvy plugin` is only the subset with dedicated plugin-specific CLI commands. It is not the complete built-in plugin catalog. Any built-in can be inserted with `hvy insert INDEX plugin SECTION_PATH ID PLUGIN_ID`, then configured through its `plugin.json` and `plugin.txt` virtual files. Use `man hvy insert` for the generic insertion command.

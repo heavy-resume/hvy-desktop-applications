@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { checkWebAutomationDocument, readWebAutomationBlocks } from './documentBlocks';
+import './lint';
 import { analysisServiceCapability } from '../test/webAutomation/analysisService';
 import { buildSearchDocument, LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
@@ -50,6 +51,22 @@ describe('web automation blocks in a document', () => {
       'queue-1: the queue targets "analysis", which no web API block in this document defines.',
       'queue-2: the queue targets "other", which no web API block in this document defines.',
     ]);
+  });
+
+  it('reports each block\'s problems through hvy lint, on that block', async () => {
+    const document = buildSearchDocument({
+      webApi,
+      collection,
+      queues: [
+        { queueId: 'evaluate', target: { pluginId: 'galaxy.web-api', method: 'call', args: { capabilityId: 'analysis', endpointId: 'create-analysis' } } },
+        { queueId: 'evaluate', target: { pluginId: 'galaxy.web-api', method: 'call', args: { capabilityId: 'other', endpointId: 'x' } } },
+      ],
+    });
+    const output = (await executeHvyCliCommand(document, createHvyCliSession(), 'hvy lint')).output;
+    expect(output).toMatch(/queue-1[^\n]*Queue id "evaluate" is used by more than one block/);
+    expect(output).toMatch(/queue-2[^\n]*Queue id "evaluate" is used by more than one block/);
+    expect(output).toMatch(/queue-2[^\n]*the queue targets "other"/);
+    expect(output).not.toMatch(/queue-1[^\n]*the queue targets/);
   });
 
   it('checks the output against the template', () => {

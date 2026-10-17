@@ -413,6 +413,12 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'cancel-delete-document-key') handlers.cancelDeleteDocumentKey();
     if (action === 'close-document-key-manager') handlers.closeDocumentKeyManager();
     if (action === 'confirm-document-encryption') handlers.confirmDocumentEncryption();
+    if (action === 'review-plugin-approvals') handlers.openPluginApprovals();
+    if (action === 'cancel-plugin-approvals') handlers.cancelPluginApprovals();
+    if (action === 'confirm-plugin-approvals') {
+      const dialog = target.closest<HTMLElement>('.plugin-approval-dialog');
+      handlers.allowPlugins([...(dialog?.querySelectorAll<HTMLInputElement>('input[data-plugin-acceptance-key]:checked') ?? [])].map((input) => input.dataset.pluginAcceptanceKey ?? ''));
+    }
     if (action === 'cancel-document-encryption') handlers.cancelDocumentEncryption();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();

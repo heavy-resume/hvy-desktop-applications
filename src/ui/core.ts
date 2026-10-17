@@ -12,6 +12,7 @@ import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, rend
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
 import { renderColorThemeDialog } from './render-theme';
 import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
+import { renderPluginApprovalBar, renderPluginApprovalDialog } from './render-plugin-approval';
 import { renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
 import { bindWorkspaceManagerReordering, renderEmptyState, renderNewWorkspaceDialog, renderWorkspaceInitializationDialog, renderWorkspaceManagerDialog, renderWorkspaces, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
@@ -154,6 +155,7 @@ export function renderDocumentControls(state: AppState): void {
     <header class="document-toolbar">
       ${renderToolbar(state)}
     </header>
+    ${renderPluginApprovalBar(state)}
     <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
   documentModeControlsRoot().innerHTML = state.document && !workspaceChatActive ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
   const mount = hvyMountRoot();
@@ -305,6 +307,7 @@ export function renderModals(state: AppState): void {
       ${renderDocumentKeyManagerDialog(state)}
       ${renderDocumentKeyDeleteDialog(state)}
       ${renderDocumentEncryptionDialog(state)}
+      ${renderPluginApprovalDialog(state)}
     ${renderRecoveryDialog(state)}
     ${renderExternalFileChangeDialog(state)}
     ${renderTabStackPopover(state)}

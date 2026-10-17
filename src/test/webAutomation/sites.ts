@@ -1,6 +1,7 @@
 import type { CollectionDefinition } from '../../webAutomation/collection';
 import type { PlatformSignal, SitePatternDefinition } from '../../webAutomation/sitePatterns';
 import type { MockPage, MockSite } from './mockHost';
+import type { MockApiIntegration } from './integration';
 
 export const ATS_ORIGIN = 'https://boards.mock-ats.test';
 export const OTHER_ATS_ORIGIN = 'https://jobs.other-ats.test';
@@ -267,4 +268,9 @@ export function listingCollection(startUrls: string[], overrides: Partial<Collec
     followLinksToOtherSites: false,
     ...overrides,
   };
+}
+
+/** Every simulated site: the job boards, and the signed-in service with its storage. */
+export function mockWebSites<State>(api: MockApiIntegration<State>): MockSite[] {
+  return [mockAtsSite(), otherAtsSite(), careersSite(), sidePaneSite(), ...talentSuiteSites(), jsonOnlySite(), unknownSite(), api.site, ...(api.extraSites ?? [])];
 }

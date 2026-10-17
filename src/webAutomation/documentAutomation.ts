@@ -3,8 +3,8 @@ import { createConditionallyAllowedPlugin, loadConditionallyAllowedPlugin } from
 import { getPluginAuthorizationMode, setPluginAuthorized } from '../../../heavy-file-format/src/plugins/authorization/plugin-authorization-policy';
 import { getHostPlugins, registerHostPlugin } from '../../../heavy-file-format/src/plugins/registry';
 import { createScriptingPluginsApi } from '../../../heavy-file-format/src/plugins/scripting/plugin-apis';
-import type { HvyPlugin } from '../../../heavy-file-format/src/plugins/types';
-import { runWithStateRuntime, type StateRuntime } from '../../../heavy-file-format/src/state';
+import type { HvyPlugin, HvyPluginFactory } from '../../../heavy-file-format/src/plugins/types';
+import { getActiveStateRuntime, runWithStateRuntime, type StateRuntime } from '../../../heavy-file-format/src/state';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { createCliItemStore } from './cliItemStore';
 import type { RecordConsumer } from './collection';
@@ -13,6 +13,8 @@ import { readWebAutomationBlocks } from './documentBlocks';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
 import { createRecordSink } from './recordSink';
+// Registers the blocks' checks with hvy lint.
+import './lint';
 import {
   collectionScriptingMethods,
   queueScriptingMethods,
@@ -21,34 +23,68 @@ import {
   type DocumentAutomationResolver,
 } from './scripting';
 
-const openDocuments = new WeakMap<object, DocumentAutomationLookup>();
+const openDocuments = new WeakMap<object, { lookup: DocumentAutomationLookup; adoptActiveRuntime(): void }>();
+let openOnDemand: ((rawDocument: object) => DocumentAutomationLookup) | null = null;
+
+/**
+ * How the app opens a document's automation: the first time one of the
+ * document's web automation plugins renders or is called from a script.
+ * Both run inside the document's state runtime, which the app's mount
+ * otherwise keeps private.
+ */
+export function setDocumentAutomationOpener(opener: (rawDocument: object) => DocumentAutomationLookup): void {
+  openOnDemand = opener;
+}
 
 /** Plugin methods find their document's automation through the raw document they are called with. */
 export const resolveDocumentAutomation: DocumentAutomationResolver = (ctx) => {
-  const lookup = openDocuments.get(ctx.rawDocument);
+  const open = openDocuments.get(ctx.rawDocument);
+  // Remounting a document gives it a new state runtime; its automation follows the document there.
+  open?.adoptActiveRuntime();
+  const lookup = open?.lookup ?? openOnDemand?.(ctx.rawDocument);
   if (!lookup) throw new WebAutomationError('invalid_request', 'Web automation is not open for this document.');
   return lookup;
 };
 
 const metadata = (id: string, displayName: string) => ({ id, version: WEB_AUTOMATION_PLUGIN_VERSION, hvyApiVersion: '0.1', displayName });
 
-/** The scripting side of the web automation plugins. Renderers are added with the UI. */
-const implementations: Record<string, HvyPlugin> = {
-  [WEB_API_PLUGIN_ID]: { ...metadata(WEB_API_PLUGIN_ID, 'Web API'), scripting: { methods: webApiScriptingMethods(resolveDocumentAutomation) } },
-  [WEB_COLLECTION_PLUGIN_ID]: { ...metadata(WEB_COLLECTION_PLUGIN_ID, 'Web Collection'), scripting: { methods: collectionScriptingMethods(resolveDocumentAutomation) } },
-};
+/** Readers for the blocks. The app supplies them; headless runs use the plugins without. */
+export interface WebAutomationReaders {
+  webApi: HvyPluginFactory;
+  collection: HvyPluginFactory;
+  queue: HvyPluginFactory;
+}
 
 /**
- * The plugins that reach the web are conditional registrations: a document
- * gets their implementation only after the user allows the plugin in that
- * file (the reference implementation's per-file plugin authorization). The
- * queue reaches nothing itself, so it needs no authorization.
+ * The web automation plugins. The ones that reach the web are conditional
+ * registrations: a document gets their implementation only after the user
+ * allows the plugin in that file (the reference implementation's per-file
+ * plugin authorization). The queue reaches nothing itself, so it needs no
+ * authorization.
  */
-export const WEB_AUTOMATION_PLUGINS: HvyPlugin[] = [
-  createConditionallyAllowedPlugin({ ...metadata(WEB_API_PLUGIN_ID, 'Web API'), load: async () => implementations[WEB_API_PLUGIN_ID] }),
-  createConditionallyAllowedPlugin({ ...metadata(WEB_COLLECTION_PLUGIN_ID, 'Web Collection'), load: async () => implementations[WEB_COLLECTION_PLUGIN_ID] }),
-  { ...metadata(QUEUE_PLUGIN_ID, 'Queue'), scripting: { methods: queueScriptingMethods(resolveDocumentAutomation) } },
-];
+export function createWebAutomationPlugins(readers?: WebAutomationReaders): HvyPlugin[] {
+  const webApi: HvyPlugin = {
+    ...metadata(WEB_API_PLUGIN_ID, 'Web API'),
+    ...(readers ? { create: readers.webApi } : {}),
+    scripting: { methods: webApiScriptingMethods(resolveDocumentAutomation) },
+  };
+  const collection: HvyPlugin = {
+    ...metadata(WEB_COLLECTION_PLUGIN_ID, 'Web Collection'),
+    ...(readers ? { create: readers.collection } : {}),
+    scripting: { methods: collectionScriptingMethods(resolveDocumentAutomation) },
+  };
+  return [
+    createConditionallyAllowedPlugin({ ...metadata(WEB_API_PLUGIN_ID, 'Web API'), load: async () => webApi }),
+    createConditionallyAllowedPlugin({ ...metadata(WEB_COLLECTION_PLUGIN_ID, 'Web Collection'), load: async () => collection }),
+    {
+      ...metadata(QUEUE_PLUGIN_ID, 'Queue'),
+      ...(readers ? { create: readers.queue } : {}),
+      scripting: { methods: queueScriptingMethods(resolveDocumentAutomation) },
+    },
+  ];
+}
+
+export const WEB_AUTOMATION_PLUGINS: HvyPlugin[] = createWebAutomationPlugins();
 
 /**
  * Registers the plugins, and loads the conditional implementations up front:
@@ -71,8 +107,8 @@ function registration(pluginId: string): HvyPlugin {
 
 /**
  * Opens a document's web automation from its own blocks: queues open with
- * their state from the app's queue store (or reattach, if work from an
- * earlier open is still finishing) and call their targets through
+ * the state saved in their blocks (or reattach, if the app still holds them
+ * from an earlier open) and call their targets through
  * doc.plugins.call, and collection outputs are wired to record sinks over
  * the document. `stateRuntime` is the document's app state, which holds its
  * plugin authorizations.
@@ -82,10 +118,11 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   documentPath: string;
   document: VisualDocument;
   stateRuntime: StateRuntime;
-  /** The document changed outside a script (a record sink wrote items); the host rerenders. */
-  onDocumentChange?(): void;
+  /** The document changed outside a script (a record sink wrote items); the host rerenders in the document's state runtime. */
+  onDocumentChange?(stateRuntime: StateRuntime): void;
 }) {
-  const { document, stateRuntime } = options;
+  const { document } = options;
+  let stateRuntime = options.stateRuntime;
   const blocks = readWebAutomationBlocks(document);
   const plugins = createScriptingPluginsApi(document, { allowAsync: true, requireDocumentPermission: false });
   const isPluginAuthorized = (pluginId: string) => getPluginAuthorizationMode(document, registration(pluginId), stateRuntime) === 'enabled';
@@ -107,7 +144,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     sinks.set(config.collection.capabilityId, {
       onRecord: (record) => {
         sink.onRecord(record);
-        options.onDocumentChange?.();
+        options.onDocumentChange?.(stateRuntime);
       },
       isKnown: sink.isKnown,
     });
@@ -118,8 +155,14 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     collection: (capabilityId) => blocks.collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config.collection ?? null,
     sink: (capabilityId) => sinks.get(capabilityId) ?? null,
   };
-  openDocuments.set(document, lookup);
-  for (const { config } of blocks.queues) automation.openQueue(config.queueId, config.target, config.config);
+  openDocuments.set(document, {
+    lookup,
+    adoptActiveRuntime: () => {
+      const active = getActiveStateRuntime();
+      if (active.state.document === document) stateRuntime = active;
+    },
+  });
+  for (const { config } of blocks.queues) automation.openQueue(config.queueId, config.target, config.config, config.state);
 
   return {
     automation,
@@ -134,6 +177,18 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     // UI: a web plugin's block shows the prompt or its reader.
     pluginAuthorization(pluginId: string): 'prompt' | 'enabled' | 'hidden' {
       return getPluginAuthorizationMode(document, registration(pluginId), stateRuntime);
+    },
+
+    // Document save: just before the app serializes the document, each queue block takes the queue's state.
+    // Queue progress is not a document edit until then, so it adds no undo entries.
+    saveQueues(): void {
+      for (const { block, config } of blocks.queues) {
+        const { state: _previous, ...pluginConfig } = block.schema.pluginConfig;
+        const state = automation.savedQueueState(config.queueId);
+        block.schema.pluginConfig = state.entries.length || state.paused
+          ? { ...pluginConfig, state: state as unknown as JsonObject }
+          : pluginConfig;
+      }
     },
 
     // UI: document closed or replaced in the document pane.

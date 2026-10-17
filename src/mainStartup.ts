@@ -19,6 +19,7 @@ import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './document
 import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
+import { installDevWebAutomationHost } from './webAutomation/devHost';
 
 let findShortcutBound = false;
 
@@ -45,6 +46,7 @@ export async function boot(): Promise<void> {
     await refreshRecents();
     await refreshArchivedWorkspaces();
     state.appSettings = await loadAppSettings();
+    await installDevWebAutomationHost();
     await refreshInstalledPlugins();
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     state.aiSettings = await loadAiSettings();

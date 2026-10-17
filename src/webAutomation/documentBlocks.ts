@@ -19,7 +19,13 @@ export interface WebAutomationBlocks {
   collections: Array<{ blockId: string; block: VisualBlock; config: CollectionBlockConfig }>;
   queues: Array<{ blockId: string; block: VisualBlock; config: QueueBlockConfig }>;
   /** Blocks whose configuration could not be read. */
-  problems: string[];
+  problems: WebAutomationProblem[];
+}
+
+/** A problem with one block, or with several blocks together (such as a duplicate id). */
+export interface WebAutomationProblem {
+  blocks: VisualBlock[];
+  message: string;
 }
 
 /** Reads every web automation block in a document through the block configuration readers. */
@@ -29,7 +35,7 @@ export function readWebAutomationBlocks(document: VisualDocument): WebAutomation
     const pluginId = block.schema.plugin;
     const blockId = block.schema.id || '(unnamed plugin)';
     const value = block.schema.pluginConfig;
-    const report = (errors: string[]) => blocks.problems.push(...errors.map((error) => `${blockId}: ${error}`));
+    const report = (errors: string[]) => blocks.problems.push(...errors.map((message) => ({ blocks: [block], message })));
     if (pluginId === WEB_API_PLUGIN_ID) {
       const result = readWebApiBlockConfig(value);
       if (result.ok) blocks.webApis.push({ blockId, block, config: result.value });
@@ -47,8 +53,50 @@ export function readWebAutomationBlocks(document: VisualDocument): WebAutomation
   return blocks;
 }
 
-function duplicates(values: string[]): string[] {
-  return [...new Set(values.filter((value, index) => values.indexOf(value) !== index))];
+function duplicates<T>(entries: T[], id: (entry: T) => string): Array<{ id: string; entries: T[] }> {
+  const byId = new Map<string, T[]>();
+  for (const entry of entries) byId.set(id(entry), [...(byId.get(id(entry)) ?? []), entry]);
+  return [...byId].filter(([, group]) => group.length > 1).map(([key, group]) => ({ id: key, entries: group }));
+}
+
+/** Every problem with a document's web automation blocks, checked against each other and the document's templates. */
+export function findWebAutomationProblems(document: VisualDocument): WebAutomationProblem[] {
+  const blocks = readWebAutomationBlocks(document);
+  const problems = [...blocks.problems];
+  const capabilities = [
+    ...blocks.webApis.map(({ block, config }) => ({ block, id: config.capability.capabilityId })),
+    ...blocks.collections.map(({ block, config }) => ({ block, id: config.collection.capabilityId })),
+  ];
+  for (const { id, entries } of duplicates(capabilities, (entry) => entry.id)) {
+    problems.push({ blocks: entries.map((entry) => entry.block), message: `Capability id "${id}" is used by more than one block.` });
+  }
+  for (const { id, entries } of duplicates(blocks.queues, (entry) => entry.config.queueId)) {
+    problems.push({ blocks: entries.map((entry) => entry.block), message: `Queue id "${id}" is used by more than one block.` });
+  }
+
+  for (const { block, config } of blocks.collections) {
+    if (!config.output) continue;
+    problems.push(...validateCliItemStore(document, config.output.store).map((message) => ({ blocks: [block], message })));
+  }
+
+  for (const { block, config } of blocks.queues) {
+    if (config.target.pluginId !== WEB_API_PLUGIN_ID) continue;
+    if (config.target.method !== 'call') {
+      problems.push({ blocks: [block], message: `galaxy.web-api has no "${config.target.method}" method for queues.` });
+      continue;
+    }
+    const capabilityId = String(config.target.args.capabilityId ?? '');
+    const endpointId = String(config.target.args.endpointId ?? '');
+    const api = blocks.webApis.find(({ config: candidate }) => candidate.capability.capabilityId === capabilityId);
+    if (!api) {
+      problems.push({ blocks: [block], message: `the queue targets "${capabilityId}", which no web API block in this document defines.` });
+      continue;
+    }
+    if (!api.config.capability.endpoints.some((candidate) => candidate.id === endpointId)) {
+      problems.push({ blocks: [block], message: `"${capabilityId}" has no endpoint "${endpointId}".` });
+    }
+  }
+  return problems;
 }
 
 /**
@@ -56,33 +104,7 @@ function duplicates(values: string[]): string[] {
  * the document's templates. Empty means the blocks can run as configured.
  */
 export function checkWebAutomationDocument(document: VisualDocument): string[] {
-  const blocks = readWebAutomationBlocks(document);
-  const problems = [...blocks.problems];
-  const capabilityIds = [...blocks.webApis.map(({ config }) => config.capability.capabilityId), ...blocks.collections.map(({ config }) => config.collection.capabilityId)];
-  for (const id of duplicates(capabilityIds)) problems.push(`Capability id "${id}" is used by more than one block.`);
-  for (const id of duplicates(blocks.queues.map(({ config }) => config.queueId))) problems.push(`Queue id "${id}" is used by more than one block.`);
-
-  for (const { blockId, config } of blocks.collections) {
-    if (!config.output) continue;
-    problems.push(...validateCliItemStore(document, config.output.store).map((problem) => `${blockId}: ${problem}`));
-  }
-
-  for (const { blockId, config } of blocks.queues) {
-    if (config.target.pluginId !== WEB_API_PLUGIN_ID) continue;
-    if (config.target.method !== 'call') {
-      problems.push(`${blockId}: galaxy.web-api has no "${config.target.method}" method for queues.`);
-      continue;
-    }
-    const capabilityId = String(config.target.args.capabilityId ?? '');
-    const endpointId = String(config.target.args.endpointId ?? '');
-    const api = blocks.webApis.find(({ config: candidate }) => candidate.capability.capabilityId === capabilityId);
-    if (!api) {
-      problems.push(`${blockId}: the queue targets "${capabilityId}", which no web API block in this document defines.`);
-      continue;
-    }
-    if (!api.config.capability.endpoints.some((candidate) => candidate.id === endpointId)) {
-      problems.push(`${blockId}: "${capabilityId}" has no endpoint "${endpointId}".`);
-    }
-  }
-  return problems;
+  return findWebAutomationProblems(document).map(({ blocks, message }) => (
+    blocks.length === 1 ? `${blocks[0].schema.id || '(unnamed plugin)'}: ${message}` : message
+  ));
 }

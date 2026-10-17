@@ -4,6 +4,7 @@ import { runInThisContext } from 'node:vm';
 import { visitBlocks } from '../../../../heavy-file-format/src/block-traversal';
 import type { VisualBlock } from '../../../../heavy-file-format/src/editor/types';
 import { FORM_PLUGIN_VERSION, parseFormSpec, type FormFieldValue } from '../../../../heavy-file-format/src/plugins/form';
+import { createLiveState, reconcileLiveState, type LiveFormState } from '../../../../heavy-file-format/src/plugins/form-live-state/form-live-state';
 import { resetPluginDocumentHookState, runPluginDocumentHooks } from '../../../../heavy-file-format/src/plugins/hooks';
 import { FORM_PLUGIN_ID, registerHostPlugin } from '../../../../heavy-file-format/src/plugins/registry';
 import { createBrythonMinimalVfsPlugin } from '../../../../heavy-file-format/src/plugins/scripting/brython-minimal-vfs-plugin';
@@ -98,15 +99,8 @@ function findPluginBlock(document: VisualDocument, blockId: string, pluginId: st
   return found;
 }
 
-/** A mounted form's live state, as the form plugin keeps it while the form is on screen. */
-export interface LiveForm {
-  values: Record<string, FormFieldValue>;
-  options: Record<string, Array<{ label: string; value: string }>>;
-  errors: Record<string, string>;
-}
-
 /** doc.form over a mounted form's live state, as the form plugin's buildFormApi provides it, without rendering. */
-function createFormApi(live: LiveForm): ScriptingFormApi {
+function createFormApi(live: LiveFormState): ScriptingFormApi {
   return {
     get_value: (label) => live.values[label],
     set_value: (label, value) => {
@@ -166,7 +160,7 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
   };
   activateStateRuntime(runtime);
   const loaded = runPluginDocumentHooks('load');
-  const forms = new Map<string, LiveForm>();
+  const forms = new Map<string, LiveFormState>();
 
   return {
     runtime,
@@ -185,7 +179,6 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       runWithStateRuntime(runtime, () => runtime.callbacks.renderApp());
     },
 
-    /** The user submits a form: its submit script runs with doc.form over the field values. */
     /** The form appears on screen: its initial script runs, as the form plugin runs it once per document. */
     async mountForm(blockId: string): Promise<ScriptingRunResult | null> {
       const { spec } = liveForm(blockId);
@@ -200,19 +193,18 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
     },
 
     /** What the form shows: field values, options, and errors. */
-    form(blockId: string): LiveForm {
+    form(blockId: string): LiveFormState {
       return structuredClone(liveForm(blockId).live);
     },
   };
 
+  // The form's live state follows its definition in the document, as the form plugin reconciles it on each render.
   function liveForm(blockId: string) {
     const block = findPluginBlock(document, blockId, FORM_PLUGIN_ID);
     const { spec } = parseFormSpec(block.text, block.schema.pluginConfig);
-    let live = forms.get(blockId);
-    if (!live) {
-      live = { values: Object.fromEntries(spec.fields.map((field) => [field.label, field.value])), options: {}, errors: {} };
-      forms.set(blockId, live);
-    }
+    const live = forms.get(blockId) ?? createLiveState(spec);
+    forms.set(blockId, live);
+    reconcileLiveState(live, spec);
     return { block, spec, live };
   }
 

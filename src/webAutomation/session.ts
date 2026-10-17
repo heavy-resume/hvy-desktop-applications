@@ -24,6 +24,7 @@ interface PendingLogin {
 export class SessionService {
   private readonly states = new Map<string, SessionState>();
   private readonly pendingLogins = new Map<string, PendingLogin>();
+  private readonly listeners = new Set<(state: SessionState) => void>();
 
   constructor(private readonly deps: {
     host: BrowserHost;
@@ -35,6 +36,12 @@ export class SessionService {
     deps.host.onNavigation((event) => {
       void this.handleNavigation(event);
     });
+  }
+
+  /** Called whenever an account's sign-in status changes. */
+  onChange(listener: (state: SessionState) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   getState(): SessionState[] {
@@ -134,6 +141,8 @@ export class SessionService {
 
   private setState(capability: WebApiCapability, profileId: string, patch: Partial<Omit<SessionState, 'origin' | 'profileId'>>): void {
     const current = this.stateFor(capability, profileId);
-    this.states.set(accountKey(current.origin, profileId), { ...current, ...patch });
+    const next = { ...current, ...patch };
+    this.states.set(accountKey(current.origin, profileId), next);
+    if (next.status !== current.status) for (const listener of this.listeners) listener({ ...next });
   }
 }

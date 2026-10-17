@@ -434,7 +434,7 @@ describe('mock integration: job search flow', () => {
     expect(flow!.service.analyses.size).toBe(1);
   });
 
-  it('25. the app restarts mid-call: the stored entry is resent with the same idempotency key after Resume', async () => {
+  it('25. saved mid-call, then the app restarts: the saved entry is resent with the same idempotency key after Resume', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
     await flow!.collect(boards);
@@ -443,6 +443,8 @@ describe('mock integration: job search flow', () => {
     await flow!.clock.runUntil(() => flow!.listQueue(EVALUATE_QUEUE)[0]?.status === 'running');
     const { idempotencyKey } = flow!.listQueue(EVALUATE_QUEUE)[0];
 
+    // UI: File > Save. The queue block keeps the running entry and its key.
+    expect(flow!.save()).toContain(idempotencyKey);
     flow!.restartApp();
     // The old app's request still reaches the service, but its response is lost with the app.
     release();
@@ -520,5 +522,44 @@ describe('mock integration: job search flow', () => {
     flow!.approve();
     await flow!.resumeQueue(EVALUATE_QUEUE);
     expect(flow!.item(acmeJob('eng-1'))?.fields.evaluation).toBe('ready');
+  });
+
+  it('31. a script hears when the account signs in or out, and a handler with the same key replaces the earlier one', async () => {
+    flow = createMockFlow();
+    flow.bindProfiles(listingCollection([ACME]));
+    flow.approve();
+    const replaced: string[] = [];
+    const heard: string[] = [];
+    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => replaced.push(state.status));
+    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => heard.push(`${state.status} ${state.accountName ?? ''}`.trim()));
+
+    await flow.signIn();
+    await flow.completeLogin();
+    await flow.signOut();
+    expect(heard).toEqual(['pending-login', 'signed-in Pat Example', 'signed-out']);
+    expect(replaced).toEqual([]);
+
+    // Closing the document drops its scripts' handlers.
+    flow.closeDocument();
+    await flow.signIn();
+    expect(heard).toHaveLength(3);
+  });
+
+  it('30. quitting without saving: the queue comes back as of the last save, which keeps no delivered results', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    await flow!.evaluate([acmeJob('eng-1')]);
+    expect(flow!.listQueue(EVALUATE_QUEUE)[0]).toMatchObject({ status: 'done', delivered: true });
+
+    // UI: File > Save. A delivered result is already in the item, so the queue block keeps nothing.
+    expect(flow!.save()).not.toContain('"state"');
+    await flow!.evaluate([acmeJob('eng-2')], { settle: false });
+    expect(flow!.listQueue(EVALUATE_QUEUE)).toHaveLength(2);
+
+    // The app quits before the document is saved again: the second entry is lost with it.
+    flow!.restartApp();
+    expect(flow!.listQueue(EVALUATE_QUEUE)).toEqual([]);
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ awaitingResume: false });
   });
 });

@@ -1,7 +1,7 @@
 import type { CliItemStoreConfig, ItemFieldBinding } from './cliItemStore';
 import type { CollectionDefinition } from './collection';
 import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
-import { DEFAULT_QUEUE_CONFIG, type QueueConfig } from './queue';
+import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntryStatus, type QueueState } from './queue';
 import type { ServedDocumentDefinition } from './servedDocuments';
 import type { RecordSinkConfig } from './recordSink';
 import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
@@ -88,6 +88,8 @@ export interface QueueBlockConfig {
   queueId: string;
   target: { pluginId: string; method: string; args: Record<string, unknown> };
   config: QueueConfig;
+  /** The queue as of the document's last save, or null when it has never held entries. */
+  state: QueueState | null;
 }
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -418,6 +420,35 @@ export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockCon
           maxDelayMs: number(retry.maxDelayMs, defaults.retry.maxDelayMs, 1_000, 86_400_000),
         },
       },
+      state: readQueueState(value.state),
     },
+  };
+}
+
+const QUEUE_ENTRY_STATUSES = new Set<QueueEntryStatus>(['queued', 'running', 'waiting-retry', 'done', 'failed', 'cancelled']);
+
+/** Reads the queue state saved in a block, dropping malformed entries rather than failing. */
+function readQueueState(value: unknown): QueueState | null {
+  if (!isRecord(value) || !Array.isArray(value.entries)) return null;
+  const entries = value.entries.flatMap((raw): QueueEntry[] => {
+    if (!isRecord(raw) || !text(raw.key) || !text(raw.idempotencyKey) || !QUEUE_ENTRY_STATUSES.has(raw.status as QueueEntryStatus)) return [];
+    return [{
+      key: text(raw.key),
+      input: raw.input ?? null,
+      idempotencyKey: text(raw.idempotencyKey),
+      status: raw.status as QueueEntryStatus,
+      attempts: Number.isInteger(raw.attempts) ? Number(raw.attempts) : 0,
+      lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+      result: raw.result ?? null,
+      nextAttemptAt: typeof raw.nextAttemptAt === 'number' ? raw.nextAttemptAt : null,
+      delivered: raw.delivered === true,
+      updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
+    }];
+  });
+  return {
+    entries,
+    paused: value.paused === true,
+    pauseReason: typeof value.pauseReason === 'string' ? value.pauseReason : null,
+    awaitingResume: false,
   };
 }

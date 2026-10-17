@@ -443,3 +443,18 @@
 .document-host .editor-sidebar-tab {
   color: var(--hvy-accent-1-text, #ffffff);
 }
+
+.plugin-approval-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--hvy-warning, #c79200);
+  border-radius: 8px;
+  background: var(--hvy-surface-alt, #f7f3e8);
+  color: var(--hvy-text, #1a2530);
+  font-size: 13px;
+}
