@@ -1,4 +1,4 @@
-import type { PlatformSignal } from './sitePatterns';
+import type { PlatformSignal, SitePatternDefinition } from './sitePatterns';
 
 /**
  * What the background automation needs from a browser host. The real
@@ -39,8 +39,8 @@ export interface PageLocation {
 }
 
 export interface InspectionRequest {
-  /** Pattern IDs whose structural matchers should run on the page. */
-  patternIds: string[];
+  /** Patterns whose structural matchers should run on the page (results are keyed by pattern ID). */
+  patterns: SitePatternDefinition[];
   /** Fingerprints to evaluate, keyed by pattern ID. */
   fingerprints: Record<string, PlatformSignal[]>;
 }
@@ -69,7 +69,8 @@ export interface PageInspection {
 }
 
 export interface CommandRequest {
-  patternId: string;
+  /** The pattern the command belongs to; its matcher holds the command. */
+  pattern: SitePatternDefinition;
   commandId: string;
   recordRef?: string;
 }

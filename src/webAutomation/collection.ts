@@ -93,7 +93,7 @@ export async function testSitePattern(
   return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(url).origin, label: `Test ${pattern.name}`, interactive: true }, async (lease) => {
     await lease.pace(url);
     await deps.host.navigate(lease.workerId, url);
-    const inspection = await deps.host.inspect(lease.workerId, { patternIds: [pattern.id], fingerprints: patternFingerprints([pattern]) });
+    const inspection = await deps.host.inspect(lease.workerId, { patterns: [pattern], fingerprints: patternFingerprints([pattern]) });
     const urlRules = pattern.appliesTo.filter((rule) => rule.target !== 'fingerprint');
     const hasFingerprint = pattern.appliesTo.some((rule) => rule.target === 'fingerprint');
     const scopeMatched = urlRules.length ? urlRules.some((rule) => urlMatchesRule(rule, url)) : null;
@@ -265,7 +265,7 @@ export class CollectionService {
         if (pattern.itemCommandId) {
           // Side-pane board: the item opens beside the listing; there is no navigation to undo.
           await lease.pace(listingUrl);
-          const opened = await host.runCommand(lease.workerId, { patternId: pattern.id, commandId: pattern.itemCommandId, recordRef: record.ref });
+          const opened = await host.runCommand(lease.workerId, { pattern, commandId: pattern.itemCommandId, recordRef: record.ref });
           if (opened.status !== 'executed') {
             this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
             continue;
@@ -301,7 +301,7 @@ export class CollectionService {
       if (page >= run.definition.maxPages || !pattern.paginationCommandId || newLinks === 0) return;
       this.checkStopped(run);
       await lease.pace(listingUrl);
-      const result = await host.runCommand(lease.workerId, { patternId: pattern.id, commandId: pattern.paginationCommandId });
+      const result = await host.runCommand(lease.workerId, { pattern, commandId: pattern.paginationCommandId });
       if (result.status !== 'executed') {
         emit('collection', `no next page (${result.status})`);
         return;
@@ -318,7 +318,7 @@ export class CollectionService {
     for (;;) {
       this.checkStopped(run);
       const inspection = await this.deps.host.inspect(lease.workerId, {
-        patternIds: patterns.map((pattern) => pattern.id),
+        patterns,
         fingerprints: patternFingerprints(patterns),
       });
       if (inspection.ready) return inspection;

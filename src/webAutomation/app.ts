@@ -3,6 +3,7 @@ import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { saveAppSettings } from '../backend';
 import { state } from '../state';
 import { systemClock } from './clock';
+import { sitePatternsFromIntegrations } from './integrationPatterns';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
 import { createWebAutomationRuntime, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
@@ -58,6 +59,8 @@ function appRuntime(): WebAutomationRuntime {
     random: Math.random,
     settings,
     createId: () => crypto.randomUUID(),
+    // The user's taught integrations, as site patterns collection runs fall back on.
+    patternLibrary: () => sitePatternsFromIntegrations(state.integrationRegistry),
   });
   return runtime;
 }

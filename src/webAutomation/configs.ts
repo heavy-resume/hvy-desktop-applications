@@ -435,6 +435,7 @@ function readQueueState(value: unknown): QueueState | null {
     return [{
       key: text(raw.key),
       input: raw.input ?? null,
+      ...(raw.context === undefined ? {} : { context: raw.context }),
       idempotencyKey: text(raw.idempotencyKey),
       status: raw.status as QueueEntryStatus,
       attempts: Number.isInteger(raw.attempts) ? Number(raw.attempts) : 0,

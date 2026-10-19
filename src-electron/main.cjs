@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { pathToFileURL } = require('node:url');
+const { createWebAutomationHost } = require('./web-automation-host.cjs');
 const { promisify } = require('node:util');
 const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
 
@@ -25,7 +26,6 @@ const APP_SETTINGS = 'app-settings.json';
 const INTEGRATION_VAULT_FILE = 'integration-cookie-vault-electron.json';
 const INTEGRATION_VAULT_KEY_FILE = 'integration-vault-key-electron.bin';
 const DOCUMENT_KEY_VAULT_FILE = 'document-key-vault-v1.json';
-const DOCUMENT_KEY_VAULT_KEY_FILE = 'document-key-vault-key-electron.bin';
 const DOCUMENT_KEY_MIGRATION_PREFIX = 'document-key-migration-';
 const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
 const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
@@ -111,7 +111,7 @@ app.on('open-file', (event, filePath) => {
 });
 
 app.whenReady().then(async () => {
-  recoverPendingDocumentKeyMigrations();
+  await recoverPendingDocumentKeyMigrations();
   mainWindow = createWindow();
   bindWindowShortcuts(mainWindow);
   buildMenu();
@@ -641,6 +641,7 @@ async function handleCommand(command, args) {
     case 'read_plugin_project_files': return readPluginProjectFiles(args.workspacePath, args.directoryName);
     case 'write_plugin_project_file': return writePluginProjectFile(args.request);
     case 'write_plugin_project_build': return writePluginProjectBuild(args.request);
+    case 'web_automation_host': return webAutomationHost.command(args.command, args);
     case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName, args.integrationId, args.pageId);
     case 'integration_browser_is_open': {
       const browser = integrationBrowsers.get(args.profileId || 'default-google');
@@ -653,7 +654,7 @@ async function handleCommand(command, args) {
     case 'reset_integration_vault': return resetIntegrationVault();
     case 'load_document_key_vault_status': return loadDocumentKeyVaultStatus();
     case 'load_document_keys': return loadDocumentKeys(args.keyIds);
-    case 'try_load_document_keys': return null;
+    case 'try_load_document_keys': return tryLoadDocumentKeys(args.keyIds);
     case 'list_document_key_metadata': return listDocumentKeyMetadata();
     case 'store_document_keys': return storeDocumentKeys(args.entries);
     case 'delete_document_key': return deleteDocumentKey(args.keyId);
@@ -766,6 +767,11 @@ const INTEGRATION_URLS = {
 const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
 const INTEGRATION_TOOLBAR = fs.readFileSync(path.join(__dirname, '..', 'public', 'integration-browser-toolbar.html'), 'utf8');
 const INTEGRATION_TOOLBAR_HEIGHT = 52;
+// Web automation's browser host: workers, the sign-in window, and inspection (web-automation-host.cjs).
+const webAutomationHost = createWebAutomationHost({
+  inspectorSource: INTEGRATION_INSPECTOR,
+  sendEvent: (event) => mainWindow?.webContents.send('hvy:web-automation-navigation', event),
+});
 
 function setIntegrationToolbarInspectionState(browser, state = {}) {
   if (!browser?.toolbarContents || browser.toolbarContents.isDestroyed()) return;
@@ -972,36 +978,41 @@ function writeFileAtomically(target, bytes) {
   fs.renameSync(temporary, target);
 }
 
-function loadDocumentKeyVaultStatus() {
-  const configured = fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE));
+const DOCUMENT_KEY_VAULT_INCOMPLETE_MESSAGE = 'The protected local vault is incomplete. Its protected key and encrypted data file do not match.';
+let documentKeyVaultKeyCache = null;
+
+async function runDocumentKeyVaultKeyHelper(mode) {
+  const { stdout } = await runFile(rustHelperPath(), ['--document-key-vault-key', mode], { encoding: 'utf8' });
+  return JSON.parse(stdout);
+}
+
+async function loadDocumentKeyVaultStatus() {
   const hasVault = fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_FILE));
-  const status = (state, message) => ({
+  const status = (configured, state, message) => ({
     configured,
     hasVault,
-    storageMode: 'safeStorageVault',
+    storageMode: 'nativeKeyringVault',
     state,
     ...(message ? { message } : {}),
   });
-  if (configured !== hasVault) return status('incomplete', 'The protected local vault is incomplete. Its protected key and encrypted data file do not match.');
+  let key = documentKeyVaultKeyCache;
+  if (!key) {
+    const result = await runDocumentKeyVaultKeyHelper('get');
+    if (result.state === 'missing') return hasVault ? status(false, 'incomplete', DOCUMENT_KEY_VAULT_INCOMPLETE_MESSAGE) : status(false, 'empty');
+    if (result.state === 'denied') return status(false, 'denied', 'Access to operating-system protected storage was denied or the store is locked.');
+    if (result.state === 'unavailable') return status(false, 'unavailable', 'Operating-system protected storage is unavailable.');
+    if (result.state !== 'found') return status(false, 'corrupt', 'The protected local vault could not be read.');
+    key = Buffer.from(result.key, 'base64');
+  }
+  if (!hasVault) return status(true, 'incomplete', DOCUMENT_KEY_VAULT_INCOMPLETE_MESSAGE);
   try {
-    if (!safeStorage.isEncryptionAvailable()) return status('unavailable', 'Operating-system protected storage is unavailable.');
-    if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') {
-      return status('unavailable', 'No protected operating-system credential store is available.');
-    }
+    if (key.length !== 32) throw new Error('The document key vault wrapping key is invalid.');
+    readDocumentKeyVault(key);
   } catch {
-    return status('unavailable', 'Operating-system protected storage is unavailable.');
+    return status(true, 'corrupt', 'The protected local vault could not be read or decrypted.');
   }
-  if (!configured) return status('empty');
-  try {
-    readDocumentKeyVault(readDocumentKeyVaultKey());
-    return status('ready');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/denied|permission|cancel|interaction.*not.*allowed|locked|user.*interaction/i.test(message)) {
-      return status('denied', 'Access to operating-system protected storage was denied or the store is locked.');
-    }
-    return status('corrupt', 'The protected local vault could not be read or decrypted.');
-  }
+  documentKeyVaultKeyCache = key;
+  return status(true, 'ready');
 }
 
 function requireUsableDocumentKeyVault(status) {
@@ -1009,19 +1020,22 @@ function requireUsableDocumentKeyVault(status) {
   throw new Error(status.message || `The protected local vault is ${status.state}.`);
 }
 
-function setupDocumentKeyVault() {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
-  const key = crypto.randomBytes(32);
-  writeFileAtomically(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE), safeStorage.encryptString(key.toString('base64')));
+async function setupDocumentKeyVault() {
+  const result = await runDocumentKeyVaultKeyHelper('create');
+  if (result.state !== 'found') throw new Error(result.message || 'Operating-system protected storage is unavailable.');
+  const key = Buffer.from(result.key, 'base64');
   writeDocumentKeyVault(key, { version: 1, keys: {} });
+  documentKeyVaultKeyCache = key;
   return key;
 }
 
-function readDocumentKeyVaultKey() {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
-  const encryptedKey = fs.readFileSync(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE));
-  const key = Buffer.from(safeStorage.decryptString(encryptedKey), 'base64');
+async function readDocumentKeyVaultKey() {
+  if (documentKeyVaultKeyCache) return documentKeyVaultKeyCache;
+  const result = await runDocumentKeyVaultKeyHelper('get');
+  if (result.state !== 'found') throw new Error(result.message || `The document key vault wrapping key is ${result.state}.`);
+  const key = Buffer.from(result.key, 'base64');
   if (key.length !== 32) throw new Error('The document key vault wrapping key is invalid.');
+  documentKeyVaultKeyCache = key;
   return key;
 }
 
@@ -1033,22 +1047,35 @@ function readDocumentKeyVault(key) {
   return readDocumentKeyVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key);
 }
 
-function loadDocumentKeys(keyIds) {
+async function loadDocumentKeys(keyIds) {
   if (!Array.isArray(keyIds) || keyIds.length === 0) return {};
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state === 'empty') return {};
   requireUsableDocumentKeyVault(status);
-  const vault = readDocumentKeyVault(readDocumentKeyVaultKey());
+  return pickDocumentKeys(readDocumentKeyVault(await readDocumentKeyVaultKey()), keyIds);
+}
+
+async function tryLoadDocumentKeys(keyIds) {
+  if (!Array.isArray(keyIds) || keyIds.length === 0 || !fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_FILE))) return {};
+  if (!documentKeyVaultKeyCache) {
+    const result = await runDocumentKeyVaultKeyHelper('try-get');
+    if (result.state !== 'found') return null;
+    documentKeyVaultKeyCache = Buffer.from(result.key, 'base64');
+  }
+  return pickDocumentKeys(readDocumentKeyVault(documentKeyVaultKeyCache), keyIds);
+}
+
+function pickDocumentKeys(vault, keyIds) {
   return Object.fromEntries(keyIds.flatMap((keyId) => typeof keyId === 'string' && vault.keys[keyId]?.key
     ? [[keyId, vault.keys[keyId].key]]
     : []));
 }
 
-function listDocumentKeyMetadata() {
-  const status = loadDocumentKeyVaultStatus();
+async function listDocumentKeyMetadata() {
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state === 'empty') return [];
   requireUsableDocumentKeyVault(status);
-  const vault = readDocumentKeyVault(readDocumentKeyVaultKey());
+  const vault = readDocumentKeyVault(await readDocumentKeyVaultKey());
   return Object.entries(vault.keys).map(([keyId, entry]) => ({
     keyId,
     createdAt: entry.createdAt,
@@ -1058,11 +1085,11 @@ function listDocumentKeyMetadata() {
   })).sort((left, right) => left.keyId.localeCompare(right.keyId));
 }
 
-function storeDocumentKeys(entries) {
+async function storeDocumentKeys(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return loadDocumentKeyVaultStatus();
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state !== 'empty') requireUsableDocumentKeyVault(status);
-  const key = status.state === 'ready' ? readDocumentKeyVaultKey() : setupDocumentKeyVault();
+  const key = status.state === 'ready' ? await readDocumentKeyVaultKey() : await setupDocumentKeyVault();
   const vault = readDocumentKeyVault(key);
   for (const entry of entries) {
     if (!entry || typeof entry.keyId !== 'string' || typeof entry.key !== 'string') throw new Error('Invalid document key entry.');
@@ -1089,11 +1116,11 @@ function storeDocumentKeys(entries) {
   return loadDocumentKeyVaultStatus();
 }
 
-function deleteDocumentKey(keyId) {
+async function deleteDocumentKey(keyId) {
   if (typeof keyId !== 'string' || !keyId.trim()) throw new Error('Invalid document key ID.');
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   requireUsableDocumentKeyVault(status);
-  const key = readDocumentKeyVaultKey();
+  const key = await readDocumentKeyVaultKey();
   deleteDocumentKeyFromVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key, keyId);
   return loadDocumentKeyVaultStatus();
 }
@@ -1191,11 +1218,11 @@ function commitDocumentKeyMigration(migrationId) {
   } catch (error) { throw error; }
 }
 
-function restoreDocumentKeyMigrationVault(journal) {
+async function restoreDocumentKeyMigrationVault(journal) {
   if (!journal.keyChanges?.length) return;
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state !== 'ready') throw new Error(status.message || 'The protected local vault is unavailable during migration recovery.');
-  const wrappingKey = readDocumentKeyVaultKey();
+  const wrappingKey = await readDocumentKeyVaultKey();
   const vault = readDocumentKeyVault(wrappingKey);
   for (const change of journal.keyChanges) {
     const preserved = vault.keys[change.preservedKeyId];
@@ -1212,7 +1239,7 @@ function restoreDocumentKeyMigrationVault(journal) {
   writeDocumentKeyVault(wrappingKey, vault);
 }
 
-function rollbackDocumentKeyMigration(migrationId) {
+async function rollbackDocumentKeyMigration(migrationId) {
   const { journalPath, journal } = readDocumentKeyMigration(migrationId);
   if (journal.phase === 'complete') {
     for (const entry of journal.entries) {
@@ -1229,7 +1256,7 @@ function rollbackDocumentKeyMigration(migrationId) {
     }
     if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
   }
-  restoreDocumentKeyMigrationVault(journal);
+  await restoreDocumentKeyMigrationVault(journal);
   if (fs.existsSync(journalPath)) fs.unlinkSync(journalPath);
 }
 
@@ -1245,7 +1272,7 @@ function finalizeDocumentKeyMigration(migrationId) {
   fs.unlinkSync(journalPath);
 }
 
-function recoverPendingDocumentKeyMigrations() {
+async function recoverPendingDocumentKeyMigrations() {
   const directory = sharedAppDataDir();
   if (!fs.existsSync(directory)) return;
   for (const name of fs.readdirSync(directory)) {
@@ -1260,7 +1287,7 @@ function recoverPendingDocumentKeyMigrations() {
         }
         fs.unlinkSync(journalPath);
       } else {
-        rollbackDocumentKeyMigration(migrationId);
+        await rollbackDocumentKeyMigration(migrationId);
       }
     } catch (error) {
       console.error('Unable to recover document key migration', migrationId, error);

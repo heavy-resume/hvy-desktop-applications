@@ -1466,6 +1466,11 @@
     };
   };
 
+  const linkHref = (element) => {
+    const anchor = element.closest?.('a[href]') || element.querySelector?.('a[href]');
+    return anchor ? new URL(anchor.getAttribute('href'), location.href).href : null;
+  };
+
   const extractedValue = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
     const completeText = visibleText(element);
@@ -1890,6 +1895,8 @@
               : target.cardinality === 'list'
                 ? target.elements.map((item) => extractedValue(item.element))
                 : extractedValue(target.element),
+            // The link a field points at, such as a job title linking to its posting.
+            href: missing || target.cardinality === 'list' ? null : linkHref(target.element),
           } : {}),
         };
       }),

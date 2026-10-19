@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { completeWebMcpBrokerRequest, includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
+import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nativeWindowTheme } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
@@ -20,6 +20,8 @@ import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
 import { installDevWebAutomationHost } from './webAutomation/devHost';
+import { hasWebAutomationHost, setWebAutomationHost } from './webAutomation/app';
+import { createElectronBrowserHost } from './webAutomation/electronHost';
 
 let findShortcutBound = false;
 
@@ -47,6 +49,8 @@ export async function boot(): Promise<void> {
     await refreshArchivedWorkspaces();
     state.appSettings = await loadAppSettings();
     await installDevWebAutomationHost();
+    // Web automation runs on Electron's browser host, unless development mode installed a mock one.
+    if (!hasWebAutomationHost() && isElectronRuntime()) setWebAutomationHost(createElectronBrowserHost());
     await refreshInstalledPlugins();
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     state.aiSettings = await loadAiSettings();

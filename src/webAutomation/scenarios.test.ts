@@ -545,6 +545,24 @@ describe('mock integration: job search flow', () => {
     expect(heard).toHaveLength(3);
   });
 
+  it('32. a delayed entry waits its turn, and its context comes back with the result without reaching the service', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    const job = flow!.item(acmeJob('eng-1'))!;
+    const results: unknown[] = [];
+    flow!.automation.onQueueResult(EVALUATE_QUEUE, (result) => results.push(result));
+    const startedAt = flow!.clock.now();
+    flow!.automation.enqueue(EVALUATE_QUEUE, job.key, flow!.api.createInput(job), { delayMs: 8_000, context: { polls: 2 } });
+
+    await flow!.advance(7_000);
+    expect(flow!.service.createCalls).toBe(0);
+    await flow!.settle();
+    expect(flow!.clock.now() - startedAt).toBeGreaterThanOrEqual(8_000);
+    // The endpoint refuses unknown inputs, so a completed call also shows the context was not sent.
+    expect(results).toMatchObject([{ key: job.key, status: 'done', context: { polls: 2 } }]);
+  });
+
   it('30. quitting without saving: the queue comes back as of the last save, which keeps no delivered results', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);

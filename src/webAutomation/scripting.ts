@@ -135,7 +135,12 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
 export function queueScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
   const queueId = (args: Record<string, unknown>) => String(args.queueId ?? '');
   return {
-    enqueue: (args, ctx) => resolve(ctx).automation.enqueue(queueId(args), String(args.key ?? ''), args.input ?? null),
+    // `delay_ms` holds the entry back, such as a status check backing off while a report is pending. `context` is the
+    // script's own bookkeeping: handed back with the result, never sent to the target.
+    enqueue: (args, ctx) => resolve(ctx).automation.enqueue(queueId(args), String(args.key ?? ''), args.input ?? null, {
+      ...(typeof args.delay_ms === 'number' ? { delayMs: args.delay_ms } : {}),
+      ...(args.context === undefined ? {} : { context: args.context }),
+    }),
     status: (args, ctx) => resolve(ctx).automation.listQueue(queueId(args)).find((entry) => entry.key === String(args.key ?? '')) ?? null,
     list: (args, ctx) => resolve(ctx).automation.listQueue(queueId(args)),
     cancel: (args, ctx) => {

@@ -140,7 +140,7 @@ export class MockHost implements BrowserHost {
     const pane = worker.pane ? page?.panes?.[worker.pane] : undefined;
     const visible = { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
     const matches = worker.restored
-      ? Object.fromEntries(Object.entries(visible).filter(([patternId]) => request.patternIds.includes(patternId)))
+      ? Object.fromEntries(Object.entries(visible).filter(([patternId]) => request.patterns.some((pattern) => pattern.id === patternId)))
       : {};
     const fingerprintMatches = Object.fromEntries(Object.entries(request.fingerprints).flatMap(([patternId, signals]) => (
       signals.length && signals.every((signal) => this.signalPresent(url, page, signal)) ? [[patternId, signals.length]] : []

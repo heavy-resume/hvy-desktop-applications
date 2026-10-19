@@ -284,8 +284,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: scripting doc.plugins.call(queue, "enqueue", …), called from an item's Evaluate form.
-    enqueue(queueId: string, key: string, input: unknown): { added: boolean } {
-      return queue(queueId).enqueue(key, input);
+    enqueue(queueId: string, key: string, input: unknown, options: { delayMs?: number; context?: unknown } = {}): { added: boolean } {
+      return queue(queueId).enqueue(key, input, options);
     },
 
     // UI: scripting doc.plugins.call(queue, "on_result", { handler }), registered by the document load script.

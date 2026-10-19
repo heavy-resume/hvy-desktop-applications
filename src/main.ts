@@ -590,8 +590,6 @@ export async function remountKeepingView(): Promise<void> {
   await mountCurrentDocument();
   await restoreDocumentViewState(mountRoot, viewState);
   restoreMountScrollRatio(mountRoot, scrollRatio);
-  // The toolbar reflects the new mount, such as plugins no longer waiting for approval.
-  rerender({ preserveMountedDocument: true });
 }
 
 export async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
@@ -765,6 +763,8 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     });
     setDocumentDirty(nextDirty, { preserveStatus: true, recoveryBaseline: true });
   });
+  // The controls were drawn before this mount existed; they reflect it now, such as plugins waiting for approval.
+  renderAllAroundDocument();
 }
 export async function ensureCurrentDocumentMounted(): Promise<void> {
   if (!state.document || state.document.mounted) return;

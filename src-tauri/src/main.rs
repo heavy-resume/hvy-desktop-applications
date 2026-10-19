@@ -30,6 +30,18 @@ fn main() {
         eprintln!("Unknown extraction command: {arg}");
         std::process::exit(2);
     }
+    if let Some(mode) = hvy_galaxy_lib::document_key_vault_key_cli_mode_arg(&args) {
+        match hvy_galaxy_lib::document_key_vault_key_cli(mode) {
+            Ok(output) => {
+                print!("{output}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if args.iter().any(|arg| arg == "--mcp-stdio") {
         if let Err(error) = hvy_galaxy_lib::run_mcp_stdio_main() {
             eprintln!("{error}");

@@ -916,6 +916,15 @@ fn document_key_vault_key(allow_interaction: bool) -> AppResult<Vec<u8>> {
     if let Some(key) = cached_key.clone() {
         return Ok(key);
     }
+    let key = document_key_vault_secret(allow_interaction)?.map_err(|error| AppError::Message(error.to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::Message("The document key vault wrapping key is invalid.".into()));
+    }
+    *cached_key = Some(key.clone());
+    Ok(key)
+}
+
+fn document_key_vault_secret(allow_interaction: bool) -> AppResult<keyring::Result<Vec<u8>>> {
     #[cfg(target_os = "macos")]
     let _interaction_lock = if allow_interaction {
         None
@@ -925,12 +934,35 @@ fn document_key_vault_key(allow_interaction: bool) -> AppResult<Vec<u8>> {
     };
     #[cfg(not(target_os = "macos"))]
     let _ = allow_interaction;
-    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
-    if key.len() != 32 {
-        return Err(AppError::Message("The document key vault wrapping key is invalid.".into()));
+    Ok(document_key_vault_entry()?.get_secret())
+}
+
+// Lets the Electron shell share the Tauri keyring entry that wraps the document key vault.
+pub fn document_key_vault_key_cli(mode: &str) -> Result<String, String> {
+    let result = match mode {
+        "get" => document_key_vault_secret(true),
+        "try-get" => document_key_vault_secret(false),
+        "create" => document_key_vault_entry().map(|entry| {
+            let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+            entry.set_secret(&key).map(|_| key)
+        }),
+        other => return Err(format!("Unknown document key vault key mode: {other}")),
     }
-    *cached_key = Some(key.clone());
-    Ok(key)
+    .map_err(|error| error.to_string())?;
+    let output = match result {
+        Ok(key) => serde_json::json!({ "state": "found", "key": BASE64.encode(key) }),
+        Err(keyring::Error::NoEntry) => serde_json::json!({ "state": "missing" }),
+        Err(keyring::Error::NoStorageAccess(_)) => serde_json::json!({ "state": "denied" }),
+        Err(keyring::Error::PlatformFailure(_)) => serde_json::json!({ "state": "unavailable" }),
+        Err(error) => serde_json::json!({ "state": "error", "message": error.to_string() }),
+    };
+    Ok(output.to_string())
+}
+
+pub fn document_key_vault_key_cli_mode_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--document-key-vault-key")
+        .map(|pair| pair[1].as_str())
 }
 
 fn document_key_vault_path(app: &AppHandle) -> AppResult<PathBuf> {

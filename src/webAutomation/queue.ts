@@ -7,6 +7,9 @@ export type QueueEntryStatus = 'queued' | 'running' | 'waiting-retry' | 'done' |
 export interface QueueEntry {
   key: string;
   input: unknown;
+  /** The caller's own bookkeeping, such as a status check's poll count: saved with the entry and handed back with its
+   * result, never sent to the target. */
+  context?: unknown;
   /** Sent with every attempt of this entry, so a retried or interrupted call never creates a second result. */
   idempotencyKey: string;
   status: QueueEntryStatus;
@@ -42,6 +45,8 @@ export interface QueueState {
 
 export interface QueueResult {
   key: string;
+  /** The context the entry was enqueued with. */
+  context: unknown;
   status: 'done' | 'failed';
   result?: unknown;
   error?: string;
@@ -100,11 +105,13 @@ export class DurableQueue {
     this.state = { entries, paused: state.paused, pauseReason: state.pauseReason, awaitingResume: pending };
   }
 
-  enqueue(key: string, input: unknown): { added: boolean } {
+  /** `delayMs` holds the entry back, such as a status check that backs off while a report is still pending. */
+  enqueue(key: string, input: unknown, options: { delayMs?: number; context?: unknown } = {}): { added: boolean } {
     const existing = this.state.entries.find((entry) => entry.key === key);
     if (existing && ['queued', 'running', 'waiting-retry'].includes(existing.status)) return { added: false };
     const entry: QueueEntry = {
-      key, input, idempotencyKey: this.deps.createId(), status: 'queued', attempts: 0, lastError: null, result: null, nextAttemptAt: null, delivered: false, updatedAt: this.deps.clock.now(),
+      ...(options.context === undefined ? {} : { context: options.context }),
+      key, input, idempotencyKey: this.deps.createId(), status: 'queued', attempts: 0, lastError: null, result: null, nextAttemptAt: options.delayMs ? this.deps.clock.now() + options.delayMs : null, delivered: false, updatedAt: this.deps.clock.now(),
     };
     this.state.entries = [...this.state.entries.filter((candidate) => candidate.key !== key), entry];
     this.deps.emit('queue', `${this.deps.id}: enqueued ${key}`);
@@ -191,15 +198,15 @@ export class DurableQueue {
 
   private nextEligible(): QueueEntry | null {
     const now = this.deps.clock.now();
-    return this.state.entries.find((entry) => entry.status === 'queued'
-      || (entry.status === 'waiting-retry' && (entry.nextAttemptAt ?? 0) <= now)) ?? null;
+    return this.state.entries.find((entry) => (entry.status === 'queued' || entry.status === 'waiting-retry') && (entry.nextAttemptAt ?? 0) <= now) ?? null;
   }
 
   private async loop(): Promise<void> {
     while (!this.blocked()) {
       const entry = this.nextEligible();
       if (!entry) {
-        const retryTimes = this.state.entries.filter((candidate) => candidate.status === 'waiting-retry').map((candidate) => candidate.nextAttemptAt ?? 0);
+        // Entries held back until a later time: retries, and entries enqueued with a delay.
+        const retryTimes = this.state.entries.filter((candidate) => candidate.nextAttemptAt !== null && (candidate.status === 'waiting-retry' || candidate.status === 'queued')).map((candidate) => candidate.nextAttemptAt ?? 0);
         if (!retryTimes.length) return;
         this.wake = new AbortController();
         await this.deps.clock.sleep(Math.max(0, Math.min(...retryTimes) - this.deps.clock.now()), this.wake.signal).catch(() => undefined);
@@ -252,8 +259,8 @@ export class DurableQueue {
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
     this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}`);
     this.handler(entry.status === 'done'
-      ? { key: entry.key, status: 'done', result: entry.result }
-      : { key: entry.key, status: 'failed', error: entry.lastError ?? 'Failed.' });
+      ? { key: entry.key, context: entry.context ?? null, status: 'done', result: entry.result }
+      : { key: entry.key, context: entry.context ?? null, status: 'failed', error: entry.lastError ?? 'Failed.' });
   }
 
   private update(key: string, change: (entry: QueueEntry) => QueueEntry): QueueEntry | null {
