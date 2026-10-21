@@ -589,6 +589,45 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('offers a section of paragraphs and lists as a field, and reads it with its line breaks', async () => {
+    await page.setContent(`
+      <article class="job-detail">
+        <h1 class="job-title">Senior Frontend Engineer</h1>
+        <div class="job-description">
+          <p>Build the operator console.</p>
+          <h2>What you'll do</h2>
+          <ul><li>Work with the team.</li><li>Ship every week.</li></ul>
+          <p hidden>Internal note.</p>
+          <button>Apply</button>
+        </div>
+      </article>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.job-detail')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '.job-detail',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+    }), parentSnapshot);
+    await clickPointerAt(page, '.job-description p:first-child');
+    const choices = await page.locator('#hvy-galaxy-inspector-picker button').allTextContents();
+    expect(choices).toContain('p — Build the operator console.');
+    // The section is offered with its length and where it starts and ends; the whole posting (the record) is not.
+    const section = choices.find((choice) => choice.startsWith('div.job-description · '));
+    expect(section).toContain('Starts  Build the operator console.');
+    expect(section).toContain('Ends  Build the operator console.');
+    expect(choices.some((choice) => choice.startsWith('article'))).toBe(false);
+
+    const value = await page.evaluate(() => {
+      const parent = document.querySelector('.job-detail')!;
+      return window.__hvyGalaxyInspector.extractPattern({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'description', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.job-description')!, parent, 'target') }],
+      }).records[0].targets[0].value;
+    });
+    expect(value).toBe("Build the operator console.\n\nWhat you'll do\n\nWork with the team.\n\nShip every week.");
+    expect(pageErrors).toEqual([]);
+  });
+
   it('assigns each saved example its best unused live record', async () => {
     await page.setContent(`
       <main>

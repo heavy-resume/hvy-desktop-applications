@@ -102,7 +102,7 @@ function createWebAutomationHost(deps) {
     return { url: window.webContents.getURL() };
   }
 
-  // Runs each pattern's inspector matcher on the page, and reads its JSON-LD and frames.
+  // Runs each pattern's inspector matcher on the page, and reads its frames.
   async function inspect(workerId, request) {
     const { window } = worker(workerId);
     return window.webContents.executeJavaScript(inspector(`(async () => {
@@ -112,15 +112,10 @@ function createWebAutomationHost(deps) {
         const extraction = await inspector.extractAcrossPage(pattern.matcher);
         matches[pattern.id] = extraction.records || [];
       }
-      const jsonLd = [];
-      for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
-        try { jsonLd.push(JSON.parse(script.textContent || '')); } catch (_) {}
-      }
       return {
         url: location.href,
         ready: document.readyState !== 'loading',
         matches,
-        jsonLd,
         frames: [...document.querySelectorAll('iframe[src]')].map((frame) => ({ src: frame.src })),
       };
     })()`));

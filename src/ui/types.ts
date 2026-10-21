@@ -79,6 +79,8 @@ export interface UiHandlers {
   openAbout(): void;
   openIntegrations(): void;
   closeIntegrations(): void;
+  /** A step of setting up a site for a document's collection, or Done (see siteSetupSession.ts). */
+  siteSetupStep(step: string): void;
   openIntegration(destination: 'msn' | 'gmail' | 'calendar'): void;
   openIntegrationPage(integrationId: string, pageId: string, profileId?: string): void;
   openIntegrationReadyChecks(integrationId: string, pageId: string): void;

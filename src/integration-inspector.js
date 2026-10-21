@@ -116,6 +116,39 @@
     return { directText, accessibleName: accessibleName.trim() };
   };
 
+  // Ported from the Heavy Resume extension's description picker (src/content/dom.ts visible / extractDescription), so
+  // a field picked as a container reads the way the extension reads a job description.
+  const renderedVisibly = (element) => {
+    for (let current = element; current; current = current.parentElement ?? current.getRootNode?.().host ?? null) {
+      const style = getComputedStyle(current);
+      if (current.hasAttribute('hidden') || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+    return true;
+  };
+
+  /** Visible text only, keeping paragraph, list, and heading breaks; no scripts, hidden sections, or form controls. */
+  const readableText = (element) => {
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        parts.push(node.textContent ?? '');
+        return;
+      }
+      if (!(node instanceof Element) || !renderedVisibly(node) || node.matches('script,style,noscript,input,textarea,select,button,svg')) return;
+      if (/^(P|DIV|SECTION|ARTICLE|LI|H[1-6]|BR)$/.test(node.tagName)) parts.push('\n');
+      node.childNodes.forEach(visit);
+      if (/^(P|DIV|SECTION|ARTICLE|LI|H[1-6])$/.test(node.tagName)) parts.push('\n');
+    };
+    visit(element);
+    return parts.join('').replace(/[\t ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 40000);
+  };
+
+  const previewText = (text, fromEnd = false) => {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    if (compact.length <= 120) return compact;
+    return fromEnd ? `…${compact.slice(-119)}` : `${compact.slice(0, 119)}…`;
+  };
+
   const visibleText = (element) => {
     const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
     if (text) return text;
@@ -975,7 +1008,7 @@
       }
     }
     const directlyRendersImage = (element) => element.matches('img') || getComputedStyle(element).backgroundImage !== 'none';
-    const candidates = [...new Set([...imagesBehindTarget, ...hitStack, ...chain])]
+    const elementCandidates = [...new Set([...imagesBehindTarget, ...hitStack, ...chain])]
       .filter((element) => inspectionKind === 'parent' ? isParentCandidate(element) : isMeaningful(element))
       .filter((element) => inspectionKind !== 'target' || !(scopeElement || scopeSelector || scopeSnapshot) || composedContains(resolvedScope(), element))
       .sort((left, right) => Number(directlyRendersImage(right)) - Number(directlyRendersImage(left)))
@@ -991,6 +1024,21 @@
         return all.findIndex((candidate) => signatureFor(candidate) === signature) === index;
       })
       .slice(0, 10);
+    // A field can also be a section holding its text in children, such as a job description of paragraphs and lists, as
+    // the Heavy Resume extension's description picker offers: enclosing elements inside the record, without repeating
+    // text already offered.
+    const offeredText = new Set(elementCandidates.map((element) => readableText(element).replace(/\s+/g, ' ')));
+    const containerCandidates = inspectionKind !== 'target' || commandRecorder ? [] : chain
+      .filter((element) => !elementCandidates.includes(element) && !element.matches('html,body,script,style,noscript,svg,iframe,frame,input,textarea,select,button'))
+      .filter((element) => !(scopeElement || scopeSelector || scopeSnapshot) || (element !== resolvedScope() && composedContains(resolvedScope(), element)))
+      .filter((element) => {
+        const text = readableText(element).replace(/\s+/g, ' ');
+        if (text.length < 10 || offeredText.has(text)) return false;
+        offeredText.add(text);
+        return true;
+      })
+      .slice(0, 4);
+    const candidates = [...elementCandidates, ...containerCandidates];
     const describe = (element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -1038,6 +1086,21 @@
         ? `${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${inspectionKind === 'scope' ? scopeIdentity(element, scopeAnchorElement).label || structuralLabel : structuralLabel}`
         : `${image ? '🖼️ ' : ''}${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${(completeText || directText || accessibleName || (image ? image.alt || 'image' : 'control')).slice(0, 100)}`;
       choice.style.cssText = 'display:block;width:100%;padding:8px;border:0;border-bottom:1px solid #dde3df;background:transparent;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer';
+      if (!parentLike && !commandRecorder && !isMeaningful(element)) {
+        // A section holding its text in children: compare where it starts and ends, as the extension's picker shows.
+        const text = readableText(element);
+        const lines = [
+          [`${element.tagName.toLowerCase()}${structuralLabel === 'container' ? '' : structuralLabel} · ${text.length.toLocaleString()} characters`, 'font-weight:700'],
+          [`Starts  ${previewText(text)}`, 'color:#31413e'],
+          [`Ends  ${previewText(text, true)}`, 'color:#31413e'],
+        ];
+        choice.replaceChildren(...lines.map(([line, style]) => {
+          const row = document.createElement('span');
+          row.textContent = line;
+          row.style.cssText = `display:block;overflow:hidden;text-overflow:ellipsis;${style}`;
+          return row;
+        }));
+      }
       choice.addEventListener('mouseenter', () => {
         picker.querySelectorAll('button').forEach((button) => { button.style.background = 'transparent'; });
         choice.style.background = '#dce8e1';
@@ -1473,7 +1536,8 @@
 
   const extractedValue = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
-    const completeText = visibleText(element);
+    // Line breaks kept, so a section of paragraphs and lists reads as it does on the page.
+    const completeText = readableText(element) || visibleText(element);
     if (completeText) return completeText;
     if (directText) return directText;
     if (accessibleName) return accessibleName;

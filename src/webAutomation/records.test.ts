@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { findJsonLdEntities, htmlToText, normalizeJsonLdEntity } from './jsonLd';
 import { canonicalUrl, recordKey, validateRecord } from './records';
 
 describe('record keys', () => {
@@ -17,36 +16,12 @@ describe('record keys', () => {
     expect(recordKey({ kind: 'field', field: 'identifier' }, url, {})).toBeNull();
   });
 
-  it('validates only the values a collection requires', () => {
+  it('validates only the fields a collection requires, naming them by their labels', () => {
+    const body = { id: 'body', label: 'Body', kind: 'long-text' as const };
     expect(validateRecord({ title: 'x' })).toBeNull();
-    expect(validateRecord({ title: 'x' }, [{ field: 'body' }])).toBe('"body" is missing.');
-    expect(validateRecord({ body: 'short' }, [{ field: 'body', minLength: 10 }])).toBe('"body" is shorter than 10 characters.');
-    expect(validateRecord({ body: 'long enough text' }, [{ field: 'body', minLength: 10 }])).toBeNull();
-  });
-});
-
-describe('JSON-LD entities', () => {
-  const page = [{ '@graph': [
-    { '@type': 'WebPage', name: 'Page' },
-    { '@type': ['JobPosting'], title: 'Engineer', hiringOrganization: 'Acme', identifier: { value: 'R-1' }, description: 'Hi &amp; welcome' },
-    { '@type': 'Event', name: 'Launch', startDate: '2026-10-01', location: { '@type': 'Place', name: 'Hall A' }, organizer: { name: 'Acme' } },
-  ] }, 'junk', null];
-
-  it('finds entities of the requested type in arrays and @graph', () => {
-    expect(findJsonLdEntities(page, 'JobPosting')).toHaveLength(1);
-    expect(findJsonLdEntities(page, 'Event')).toHaveLength(1);
-    expect(findJsonLdEntities(page, 'Product')).toEqual([]);
-  });
-
-  it('uses a registered normalizer when there is one, and flattens other types', () => {
-    expect(normalizeJsonLdEntity('JobPosting', findJsonLdEntities(page, 'JobPosting')[0]))
-      .toEqual({ title: 'Engineer', company: 'Acme', identifier: 'R-1', description: 'Hi & welcome' });
-    expect(normalizeJsonLdEntity('Event', findJsonLdEntities(page, 'Event')[0]))
-      .toEqual({ name: 'Launch', startDate: '2026-10-01', location: 'Hall A', organizer: 'Acme' });
-  });
-
-  it('turns HTML into readable text', () => {
-    expect(htmlToText('<p>One&nbsp;two</p><ul><li>Three</li><li>Four &#8211; five</li></ul><br/>Six'))
-      .toBe('One two\nThree\nFour – five\n\nSix');
+    expect(validateRecord({ title: 'x' }, [body])).toBeNull();
+    expect(validateRecord({ title: 'x' }, [{ ...body, required: true }])).toBe('"Body" is missing.');
+    expect(validateRecord({ body: 'short' }, [{ ...body, required: true, minLength: 10 }])).toBe('"Body" is shorter than 10 characters.');
+    expect(validateRecord({ body: 'long enough text' }, [{ ...body, required: true, minLength: 10 }])).toBeNull();
   });
 });

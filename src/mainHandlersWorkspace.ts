@@ -483,7 +483,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.workspaceFileViews[workspacePath] = 'templates';
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file);
+    await openDocument(file, { created: true });
     state.status = `Created ${file.name}`;
   }),
   setNewDocumentType: (type) => {
@@ -634,7 +634,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       });
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { deferMount: true });
+    await openDocument(file, { deferMount: true, created: true });
     rerender();
     await mountCurrentDocument(pendingMountDocument ?? undefined);
     if (!state.document?.mounted) return;

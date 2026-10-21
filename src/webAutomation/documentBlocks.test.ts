@@ -47,6 +47,7 @@ describe('web automation blocks in a document', () => {
     expect(checkWebAutomationDocument(document)).toEqual([
       'service: The page URL must use HTTPS.',
       'collection: The output owns fields that have no place in the template.',
+      'collection: Records may write "salary", which is not one of the fields.',
       'Queue id "evaluate" is used by more than one block.',
       'queue-1: the queue targets "analysis", which no web API block in this document defines.',
       'queue-2: the queue targets "other", which no web API block in this document defines.',

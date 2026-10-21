@@ -223,6 +223,24 @@ export interface AppState {
   integrationWebMcpRecordBuilderOpen: boolean;
   integrationWebMcpRecordBuilderPath: string;
   integrationWebMcpConfigureAfterReview: boolean;
+  /** Setting up a site for a document's collection: what the Integrations manager shows while it does. */
+  siteSetup: {
+    collectionName: string;
+    documentName: string;
+    /** What one item is called ("job"). */
+    itemName: string;
+    /** The setup's name: the site's, or the address for a new one. */
+    siteName: string;
+    /** The address it is set up on. */
+    url: string;
+    /** The list page (the address) and, once chosen, one item's own page. */
+    listIntegrationId: string;
+    itemIntegrationId: string | null;
+    fields: Array<{ id: string; label: string }>;
+    /** Work in progress, such as finding an item on the list. */
+    pending: string | null;
+    error: string | null;
+  } | null;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
@@ -578,6 +596,7 @@ export const state: AppState = {
   integrationWebMcpConfigureAfterReview: false,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
+  siteSetup: null,
   integrationCommandDraftIntegrationId: null,
   integrationCommandDraftActionId: null,
   integrationCommandDraftPageId: null,

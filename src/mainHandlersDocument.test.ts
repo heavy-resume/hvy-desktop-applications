@@ -95,7 +95,7 @@ const mainMocks = vi.hoisted(() => ({
     if (state.document) state.document.dirty = dirty;
   }),
   runBusy: vi.fn(async (_label: string, task: () => Promise<void>) => task()),
-  updateHomepageDocumentPath: vi.fn(),
+  relocateDocumentSettings: vi.fn(),
   updateOpenDocumentFile: vi.fn((previousPath: string, file: { path: string; name: string; extension: '.hvy' }) => {
     if (state.document?.source.path !== previousPath) return;
     state.document.source.path = file.path;

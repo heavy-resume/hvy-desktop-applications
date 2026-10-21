@@ -6,6 +6,8 @@ import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 import { normalizeIntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizeCapabilityAuthorizations } from './webAutomation/settings';
+import { relocatedDocumentSettings } from './documentSettingsRelocation';
+import { relocateWebAutomationDocument } from './webAutomation/app';
 
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
@@ -453,12 +455,12 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
   };
 }
 
-export async function updateHomepageDocumentPath(previousPath: string, nextPath: string): Promise<void> {
-  if (state.appSettings.homepage.kind !== 'file' || state.appSettings.homepage.path !== previousPath) return;
-  state.appSettings = await saveAppSettings({
-    ...state.appSettings,
-    homepage: { kind: 'file', path: nextPath },
-  });
+/** A document moved (renamed, moved between workspaces, or archived): the settings kept for its path follow it. */
+export async function relocateDocumentSettings(previousPath: string, nextPath: string): Promise<void> {
+  relocateWebAutomationDocument(previousPath, nextPath);
+  const relocated = relocatedDocumentSettings(state.appSettings, previousPath, nextPath);
+  if (relocated === state.appSettings) return;
+  state.appSettings = await saveAppSettings(relocated);
 }
 
 export async function clearHomepageDocumentPath(path: string): Promise<void> {

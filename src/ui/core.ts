@@ -119,7 +119,8 @@ export function renderLeftPanel(state: AppState): void {
 
 export function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet<string>, expandedFilters: ReadonlySet<string>): string {
   const profiles = state.integrationRegistry.profiles;
-  const pages = state.integrationRegistry.integrations.flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
+  // Pages in a site setup belong to that document, not to the sidebar.
+  const pages = state.integrationRegistry.integrations.filter((integration) => !integration.siteSetup).flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
   if (pages.length === 0) return '<div class="empty-panel">Fetch data and trigger actions on web pages. Configure to begin.</div>';
   return `<div class="integration-quick-views">${pages.map(({ integration, page }) => {
     const quickViewId = `${integration.id}:${page.id}`;

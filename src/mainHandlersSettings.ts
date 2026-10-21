@@ -7,6 +7,7 @@ import { findFileInWorkspaces, state } from './state';
 import { applyAppColorTheme, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
+import { adoptIntoSiteSetup, endSiteSetup, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 import { openDocumentKeyFileDialog } from './backend';
@@ -979,7 +980,9 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = 'Ready';
     }, { preserveMountedDocument: true });
   },
+  siteSetupStep: (step) => runSiteSetupStep(step as SiteSetupStep),
   closeIntegrations: () => {
+    endSiteSetup();
     state.integrationsDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -996,7 +999,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   addIntegrationPage: (name, url) => {
     try {
-      const integration = createCustomPageIntegration(name, url);
+      const integration = adoptIntoSiteSetup(createCustomPageIntegration(name, url));
       state.integrationRegistry = {
         ...state.integrationRegistry,
         integrations: [...state.integrationRegistry.integrations, integration],

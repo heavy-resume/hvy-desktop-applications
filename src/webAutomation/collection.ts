@@ -2,7 +2,6 @@ import type { Clock } from './clock';
 import { errorMessage, WebAutomationError } from './errors';
 import type { AutomationEmit } from './events';
 import type { BrowserHost, PageInspection, PatternMatch } from './host';
-import { findJsonLdEntities, normalizeJsonLdEntity } from './jsonLd';
 import type { WorkerLease, WorkerScheduler } from './scheduler';
 import {
   canonicalUrl,
@@ -11,7 +10,6 @@ import {
   type CollectedRecord,
   type CollectedRecordState,
   type RecordKeyStrategy,
-  type RequiredField,
 } from './records';
 import { patternFingerprints, resolveSitePattern, urlMatchesRule, type SitePatternDefinition } from './sitePatterns';
 
@@ -25,25 +23,65 @@ export interface RecordConsumer {
   isKnown?(key: string): boolean;
 }
 
-/** The document snapshot stored in a galaxy.web-collection block. */
+/**
+ * A field a collection's records have. Patterns fill fields by `id`, which
+ * never changes once created; `label` is what the user sees and can be
+ * renamed. A required field that is missing or too short makes a record
+ * `invalid`.
+ */
+export interface CollectionField {
+  id: string;
+  label: string;
+  /** `long-text` fields are picked as a container and keep their line breaks. */
+  kind: 'text' | 'long-text';
+  required?: boolean;
+  minLength?: number;
+}
+
+/**
+ * Where a run starts: a list of items, such as a company's careers page or a
+ * job board search. `values` fills fields the pages do not show (a careers
+ * page rarely names its own company); a value read from a page wins.
+ */
+export interface StartPage {
+  id: string;
+  url: string;
+  values?: Record<string, string>;
+}
+
+/** The value every collected record has: its page's URL. It is not a configurable field. */
+export const RECORD_URL_FIELD = 'url';
+
+/**
+ * A site setup: how to read one kind of page, such as Greenhouse job boards
+ * or one company's careers page. Its patterns name it (`siteId`), and their
+ * scope rules say which addresses it reads, so a start page is read by
+ * whichever setup matches it; nothing ties the two together.
+ */
+export interface CollectionSite {
+  id: string;
+  name: string;
+  /** Who published it, and its version, when it was not set up here: a pasted setup with the same id updates it. */
+  from?: { name: string; version: number };
+}
+
+/** The document snapshot stored in a galaxy.web-collection block. Its patterns are its own: runs use nothing else. */
 export interface CollectionDefinition {
   capabilityId: string;
   name: string;
-  startUrls: string[];
+  /** What one item is called when setting up a site, such as "job" ("Point at two job rows"). Defaults to "item". */
+  itemName?: string;
+  fields: CollectionField[];
+  startPages: StartPage[];
+  sites: CollectionSite[];
   patterns: SitePatternDefinition[];
   maxPages: number;
   maxItems: number;
   followLinksToOtherSites: boolean;
-  /** Extracted field ID → record value name. Unmapped fields keep their ID. */
-  fieldMap?: Record<string, string>;
-  /** Values a record must have to be valid; otherwise it is emitted with state `invalid`. */
-  requiredFields?: RequiredField[];
   /** Record identity. Defaults to the canonical URL of the record's page. */
   key?: RecordKeyStrategy;
   /** Query parameters ignored when canonicalizing URLs (defaults cover tracking parameters). */
   ignoredQueryParameters?: string[];
-  /** Fallback when no detail pattern matches: read this schema.org type from the page's JSON-LD. */
-  jsonLd?: { type: string };
 }
 
 export type CollectionRunStatus = 'running' | 'needs-attention' | 'done' | 'stopped' | 'failed';
@@ -57,13 +95,15 @@ export interface CollectionRunState {
   collected: number;
   skipped: number;
   problems: number;
+  /** Start pages this run could not read at all, by start page id: a site to set up, not an item. */
+  startPageProblems: Record<string, string>;
   attention: { workerId: string; url: string; reason: string } | null;
   error: string | null;
 }
 
 export function isNavigationAllowed(definition: CollectionDefinition, url: string, linkFromListing: boolean): boolean {
   const origin = new URL(url).origin;
-  if (definition.startUrls.some((startUrl) => new URL(startUrl).origin === origin)) return true;
+  if (definition.startPages.some((startPage) => new URL(startPage.url).origin === origin)) return true;
   if (definition.patterns.some((pattern) => pattern.appliesTo.some((rule) => urlMatchesRule(rule, url)))) return true;
   return linkFromListing && definition.followLinksToOtherSites;
 }
@@ -131,28 +171,17 @@ export class CollectionService {
     host: BrowserHost;
     clock: Clock;
     emit: AutomationEmit;
-    /**
-     * The user's local pattern library. Used only after the document's own
-     * patterns find nothing, and never to widen where a run may navigate.
-     */
-    patternLibrary?: () => SitePatternDefinition[];
   }) {}
-
-  /** Library patterns not shadowed by a document pattern with the same ID. */
-  private libraryPatterns(run: ActiveRun): SitePatternDefinition[] {
-    const own = new Set(run.definition.patterns.map((pattern) => pattern.id));
-    return (this.deps.patternLibrary?.() ?? []).filter((pattern) => !own.has(pattern.id));
-  }
 
   getState(): CollectionRunState[] {
     return [...this.runs.values()].map((run) => structuredClone(run.state));
   }
 
-  start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startUrls = definition.startUrls): { runId: string; done: Promise<CollectionRunState> } {
+  start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
-    const done = Promise.allSettled(startUrls.map((startUrl) => this.deps.scheduler.run(
-      { profileId, kind: 'collection', origin: new URL(startUrl).origin, label: `${definition.name}: ${new URL(startUrl).host}`, signal: run.controller.signal },
-      (lease) => this.collectFrom(run, lease, startUrl),
+    const done = Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
+      { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
+      (lease) => this.collectFrom(run, lease, startPage),
     ))).then((results) => this.finish(run, results));
     return { runId: run.state.runId, done };
   }
@@ -194,7 +223,7 @@ export class CollectionService {
       controller: new AbortController(),
       resumeAttention: null,
       consumer,
-      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, attention: null, error: null },
+      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
     this.deps.emit('collection', `${runId} started: ${definition.name}`, { profileId });
@@ -222,15 +251,23 @@ export class CollectionService {
     }
   }
 
-  private async collectFrom(run: ActiveRun, lease: WorkerLease, startUrl: string): Promise<void> {
+  private async collectFrom(run: ActiveRun, lease: WorkerLease, startPage: StartPage): Promise<void> {
     const { host, emit } = this.deps;
+    const startUrl = startPage.url;
+    // The start page's fixed values, for what its pages do not show. Values read from a page win.
+    const fixed: Record<string, unknown> = { ...(startPage.values ?? {}) };
     this.assertAllowed(run, startUrl, false);
     await lease.pace(startUrl);
     await host.navigate(lease.workerId, startUrl);
     const start = await this.resolveRole(run, lease, await this.inspectAt(run, lease), 'listing');
     if (start.kind !== 'match') {
-      // Not a listing we know: treat the start URL as a single item.
-      await this.writeDetail(run, lease, startUrl, start.inspection, {});
+      // Not a listing we know: the start page may be one item's own page. If nothing applies, the site needs setting
+      // up; that is the start page's problem, not an item.
+      await this.writeDetail(run, lease, startUrl, start.inspection, fixed, (problem) => {
+        run.state.problems += 1;
+        run.state.startPageProblems[startPage.id] = problem;
+        emit('collection', `start page ${startPage.id}: ${problem}`);
+      });
       return;
     }
     let inspection = start.inspection;
@@ -253,7 +290,7 @@ export class CollectionService {
         if (seen.has(linkKey)) continue;
         seen.add(linkKey);
         newLinks += 1;
-        const listingValues = this.mapFields(run, pattern, record.values, pattern.linkFieldId);
+        const listingValues = { ...fixed, ...this.mapFields(pattern, record.values) };
         // A key from listing values alone lets the consumer skip the page; field keys
         // that only appear on the detail page are checked by the consumer when it receives the record.
         const knownKey = this.keyFor(run, link, listingValues);
@@ -314,7 +351,7 @@ export class CollectionService {
   }
 
   private async inspectAt(run: ActiveRun, lease: WorkerLease): Promise<PageInspection> {
-    const patterns = [...run.definition.patterns, ...this.libraryPatterns(run)];
+    const patterns = run.definition.patterns;
     for (;;) {
       this.checkStopped(run);
       const inspection = await this.deps.host.inspect(lease.workerId, {
@@ -355,9 +392,7 @@ export class CollectionService {
     | { kind: 'ambiguous'; names: string[]; inspection: PageInspection }
     | { kind: 'none'; inspection: PageInspection }
   > {
-    const own = resolveSitePattern(run.definition.patterns, role, inspection);
-    const resolution = own.kind === 'none' ? resolveSitePattern(this.libraryPatterns(run), role, inspection) : own;
-    if (own.kind === 'none' && resolution.kind === 'match') this.deps.emit('collection', `using library pattern "${resolution.pattern.name}"`);
+    const resolution = resolveSitePattern(run.definition.patterns, role, inspection);
     if (resolution.kind === 'ambiguous') return { kind: 'ambiguous', names: resolution.candidates.map((pattern) => pattern.name), inspection };
     if (resolution.kind === 'none') return { kind: 'none', inspection };
     let page = inspection;
@@ -376,29 +411,26 @@ export class CollectionService {
     return { kind: 'match', pattern: matched.pattern, match: matched.match, inspection: page };
   }
 
-  private mapFields(run: ActiveRun, pattern: SitePatternDefinition, values: Record<string, unknown>, omitFieldId?: string): Record<string, unknown> {
+  /** The configured fields a pattern read here. An empty value is not a value: it never replaces a fixed one. */
+  private mapFields(pattern: SitePatternDefinition, values: Record<string, unknown>): Record<string, unknown> {
     return Object.fromEntries(pattern.fields
-      .filter((field) => field.id !== omitFieldId && values[field.id] !== undefined)
-      .map((field) => [run.definition.fieldMap?.[field.id] ?? field.id, values[field.id]]));
+      .filter((field) => field.kind !== 'link' && values[field.id] !== undefined && values[field.id] !== null && values[field.id] !== '')
+      .map((field) => [field.id, values[field.id]]));
   }
 
-  private async writeDetail(run: ActiveRun, lease: WorkerLease, url: string, inspection: PageInspection, listingValues: Record<string, unknown>): Promise<void> {
+  private async writeDetail(run: ActiveRun, lease: WorkerLease, url: string, inspection: PageInspection, listingValues: Record<string, unknown>, noPattern?: (problem: string) => void): Promise<void> {
     const resolved = await this.resolveRole(run, lease, inspection, 'detail');
     if (resolved.kind === 'ambiguous') {
       this.writeProblem(run, url, listingValues, `Several patterns could apply: ${resolved.names.join(', ')}.`);
       return;
     }
     if (resolved.kind === 'match' && resolved.match.records[0]) {
-      this.writeRecord(run, url, { ...listingValues, ...this.mapFields(run, resolved.pattern, resolved.match.records[0].values) }, resolved.pattern.id);
+      this.writeRecord(run, url, { ...listingValues, ...this.mapFields(resolved.pattern, resolved.match.records[0].values) }, resolved.pattern.id);
       return;
     }
-    const jsonLdType = run.definition.jsonLd?.type;
-    const entity = jsonLdType ? findJsonLdEntities(resolved.inspection.jsonLd, jsonLdType)[0] : undefined;
-    if (jsonLdType && entity) {
-      this.writeRecord(run, url, { ...listingValues, ...normalizeJsonLdEntity(jsonLdType, entity) }, `json-ld:${jsonLdType}`);
-      return;
-    }
-    this.writeProblem(run, url, listingValues, `No pattern for ${new URL(url).host}.`);
+    const problem = `No pattern for ${new URL(url).host}.`;
+    if (noPattern) noPattern(problem);
+    else this.writeProblem(run, url, listingValues, problem);
   }
 
   private keyFor(run: ActiveRun, url: string, values: Record<string, unknown>): string | null {
@@ -406,7 +438,7 @@ export class CollectionService {
   }
 
   private writeRecord(run: ActiveRun, url: string, values: Record<string, unknown>, patternId: string): void {
-    const problem = validateRecord(values, run.definition.requiredFields);
+    const problem = validateRecord(values, run.definition.fields);
     this.emitRecord(run, url, values, problem ? 'invalid' : 'ok', patternId, problem ?? undefined);
   }
 

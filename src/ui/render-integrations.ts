@@ -65,8 +65,80 @@ function renderPageCommandCard(integrationId: string, pageId: string, command: i
   return `<article class="integration-page-command-card"><div class="integration-page-command-summary"><strong>${escapeHtml(command.name)}</strong><small>${command.steps.length} ${command.steps.length === 1 ? 'step' : 'steps'}</small><ol class="integration-page-command-steps" aria-label="Steps for ${escapeAttr(command.name)}">${steps}</ol></div><div class="integration-record-actions"><button type="button" class="hvy-galaxy-button danger-button" data-action="request-delete-integration-page-command" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" data-command-id="${escapeAttr(command.id)}">Delete</button><button type="button" class="hvy-galaxy-button primary-button" data-action="run-integration-page-command" data-integration-id="${escapeAttr(integrationId)}" data-page-id="${escapeAttr(pageId)}" data-command-id="${escapeAttr(command.id)}">Run</button></div></article>`;
 }
 
+/** A short address: host and path, without the scheme. */
+function shortAddress(url: string): string {
+  const parsed = new URL(url);
+  return `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+}
+
+/**
+ * Setting up a site for a document's collection: three steps in place of the
+ * full manager. Each step uses the existing record type builder or command
+ * recorder; Done saves the setup into the document, and closing saves nothing.
+ */
+function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['siteSetup']>): string {
+  const item = setup.itemName;
+  const find = (id: string | null) => state.integrationRegistry.integrations.find((integration) => integration.id === id) ?? null;
+  const list = find(setup.listIntegrationId);
+  const listPage = list?.pages[0] ?? null;
+  const rows = list?.actions[0]?.pattern ? list.actions[0] : null;
+  const next = listPage?.commands?.find((command) => command.scope === 'page') ?? null;
+  const itemIntegration = find(setup.itemIntegrationId);
+  const itemPage = itemIntegration?.pages[0] ?? null;
+  const posting = itemIntegration?.actions[0]?.pattern ? itemIntegration.actions[0] : null;
+  const fieldLabels = (action: NonNullable<typeof rows>) => action.pattern!.fields
+    .map((field) => setup.fields.find((candidate) => candidate.id === field.label)?.label ?? field.label)
+    .join(', ');
+  const button = (label: string, step: string, primary = false, disabled = false) =>
+    `<button type="button" class="hvy-galaxy-button${primary ? ' primary-button' : ''}" data-action="site-setup-step" data-step="${step}" ${disabled || setup.pending ? 'disabled' : ''}>${escapeHtml(label)}</button>`;
+  const step = (number: number, title: string, done: boolean, optional: boolean, body: string, status: string, actions: string) => `
+    <li class="site-setup-step${done ? ' is-done' : ''}">
+      <span class="site-setup-step-marker" aria-hidden="true">${done ? '✓' : number}</span>
+      <div class="site-setup-step-body">
+        <h3 class="site-setup-step-title">${escapeHtml(title)}${optional ? ' <small class="site-setup-step-optional">Optional</small>' : ''}</h3>
+        <p class="site-setup-step-text">${body}</p>
+        ${status ? `<p class="site-setup-step-status">${status}</p>` : ''}
+        <div class="site-setup-step-actions">${actions}</div>
+      </div>
+    </li>`;
+  const rowsStep = step(1, `Point at two ${item} rows`, Boolean(rows), false,
+    `On the list page, pick two ${escapeHtml(item)} rows, then assign what each shows to a field. The link to each ${escapeHtml(item)} comes from the title.`,
+    rows ? `Reads: ${escapeHtml(fieldLabels(rows))} · ${rows.pattern!.parents.length} examples` : '',
+    rows ? button('Redo rows', 'rows') : button('Point at rows', 'rows', true));
+  const nextStep = step(2, 'Point at Next', Boolean(next), true,
+    'If the list has more pages, record clicking its Next link. Skip this when everything fits on one page.',
+    next ? `Recorded: ${escapeHtml(next.name)}` : '',
+    next && listPage && list
+      ? `<button type="button" class="hvy-galaxy-button" data-action="request-delete-integration-page-command" data-integration-id="${escapeAttr(list.id)}" data-page-id="${escapeAttr(listPage.id)}" data-command-id="${escapeAttr(next.id)}">Remove</button>`
+      : button('Record Next', 'next', false, !rows));
+  const other = button(`Use a different ${item}…`, 'other-item-page', false, !rows);
+  const itemStep = step(3, `Point at one ${item}'s page`, Boolean(posting), false,
+    `Galaxy opens the first ${escapeHtml(item)} from the list. Pick the whole posting, then assign its fields.`,
+    posting && itemPage ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${escapeHtml(shortAddress(itemPage.url))}` : itemPage ? `Page: ${escapeHtml(shortAddress(itemPage.url))}` : '',
+    posting
+      ? `${button('Redo page', 'item-page')}${other}`
+      : itemPage
+        ? `${button(`Point at this ${item}'s page`, 'item-page', true)}${other}`
+        : `${button(`Open the first ${item}`, 'open-item-page', Boolean(rows), !rows)}${other}`);
+  const profiles = state.integrationRegistry.profiles;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog integrations-dialog site-setup-dialog" role="dialog" aria-modal="true" aria-label="Set up this site" data-prevent-dismiss="true">
+        <div class="modal-header">
+          <div><h2>Set up this site</h2><p class="dialog-note site-setup-address">${escapeHtml(shortAddress(setup.url))}</p><p class="dialog-note">For “${escapeHtml(setup.collectionName)}” in ${escapeHtml(setup.documentName)}. Nothing is saved until Done.</p></div>
+          <div class="integrations-header-actions"><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integrations" aria-label="Cancel">×</button></div>
+        </div>
+        ${setup.pending ? `<p class="site-setup-pending" role="status">${escapeHtml(setup.pending)}</p>` : ''}
+        ${setup.error ? `<p class="integration-fetch-error" role="alert">${escapeHtml(setup.error)}</p>` : ''}
+        <ol class="site-setup-steps">${rowsStep}${nextStep}${itemStep}</ol>
+        <div class="dialog-actions site-setup-footer"><label class="integration-profile-select site-setup-profile"><span>Browser profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Browser profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button" data-action="close-integrations">Cancel</button>${button('Done', 'done', Boolean(rows && posting), !rows)}</div>
+      </section>
+    </div>`;
+}
+
 export function renderIntegrationsDialog(state: AppState): string {
   if (!state.integrationsDialogOpen) return '';
+  if (state.siteSetup) return renderSiteSetupDialog(state, state.siteSetup);
   const selectedIntegration = state.integrationRegistry.integrations.find((integration) => integration.id === state.selectedIntegrationId)
     ?? state.integrationRegistry.integrations[0];
   const profiles = state.integrationRegistry.profiles;
@@ -92,11 +164,12 @@ export function renderIntegrationsDialog(state: AppState): string {
   const savedSourceKeys = new Set((selectedPage.retrievalSources ?? []).map((source) => `${source.kind}|${source.url}`));
   const structuredSources = `<section><div class="integration-section-heading"><div><h4>Structured Data</h4><p>Use feeds or same-origin data endpoints when the page already provides structured records.</p></div><button type="button" class="hvy-galaxy-button" data-action="discover-integration-sources" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" ${state.integrationStructuredSourcePending ? 'disabled' : ''}>${state.integrationStructuredSourcePending ? 'Scanning…' : 'Find data sources'}</button></div>${state.integrationStructuredSourceError ? `<div class="integration-fetch-error" role="alert"><strong>Source lookup failed</strong><span>${escapeHtml(state.integrationStructuredSourceError)}</span></div>` : ''}${selectedPage.retrievalSources?.length ? `<div class="integration-source-list">${selectedPage.retrievalSources.map((source) => `<article><div><strong>${escapeHtml(source.name)}</strong><span>${escapeHtml(source.kind.toUpperCase())} · ${escapeHtml(source.url)}</span></div><button type="button" class="hvy-galaxy-button" data-action="fetch-integration-source" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-source-id="${escapeAttr(source.id)}" ${state.integrationStructuredSourcePending ? 'disabled' : ''}>Fetch</button></article>`).join('')}</div>` : ''}${discoveredSources.length ? `<div class="integration-discovered-sources"><strong>Available on the current page</strong>${discoveredSources.map((source, index) => `<article><div><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.kind.toUpperCase())} · ${source.authenticated ? 'Uses this profile’s signed-in session' : 'Public feed'}<br>${escapeHtml(source.url)}</span></div><button type="button" class="hvy-galaxy-button" data-action="save-integration-source" data-integration-id="${escapeAttr(selectedIntegration.id)}" data-page-id="${escapeAttr(selectedPage.id)}" data-source-index="${index}" ${savedSourceKeys.has(`${source.kind}|${source.url}`) ? 'disabled' : ''}>${savedSourceKeys.has(`${source.kind}|${source.url}`) ? 'Saved' : 'Save'}</button></article>`).join('')}</div>` : state.integrationStructuredSourcePageId === selectedPage.id && !state.integrationStructuredSourcePending ? '<small>No advertised feeds or observed same-origin data endpoints.</small>' : ''}</section>`;
   const webMcpTools = renderWebMcpSection(state, selectedIntegration.id, selectedPage.id);
+  const managerHeading = '<div><h2>Web Pages</h2><p class="dialog-note">Open pages with reusable profiles, then define their record types and commands.</p></div>';
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="dialog integrations-dialog integrations-manager" role="dialog" aria-modal="true" aria-label="Integrations" data-prevent-dismiss="true">
         <div class="modal-header">
-          <div><h2>Web Pages</h2><p class="dialog-note">Open pages with reusable profiles, then define their record types and commands.</p></div>
+          ${managerHeading}
           <div class="integrations-header-actions">
             <div class="integration-profile-controls"><label class="integration-profile-select"><span>Use profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Use profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button icon-button" data-action="request-add-integration-profile" title="Add profile" aria-label="Add profile">+</button></div>
             <button type="button" class="hvy-galaxy-button icon-button" data-action="close-integrations" aria-label="Close">×</button>
@@ -104,7 +177,7 @@ export function renderIntegrationsDialog(state: AppState): string {
         </div>
         <div class="integrations-manager-body">
           <nav class="integration-list" aria-label="Configured web pages">
-            ${state.integrationRegistry.integrations.map((integration) => `<button type="button" class="hvy-galaxy-button integration-list-item ${integration.id === selectedIntegration.id ? 'selected' : ''}" data-action="select-integration" data-integration-id="${escapeAttr(integration.id)}"><strong>${escapeHtml(integration.name)}</strong><span>${escapeHtml(new URL(integration.pages[0].url).hostname)} · ${integration.actions.length} record ${integration.actions.length === 1 ? 'type' : 'types'}</span></button>`).join('')}
+            ${state.integrationRegistry.integrations.filter((integration) => !integration.siteSetup).map((integration) => `<button type="button" class="hvy-galaxy-button integration-list-item ${integration.id === selectedIntegration.id ? 'selected' : ''}" data-action="select-integration" data-integration-id="${escapeAttr(integration.id)}"><strong>${escapeHtml(integration.name)}</strong><span>${escapeHtml(new URL(integration.pages[0].url).hostname)} · ${integration.actions.length} record ${integration.actions.length === 1 ? 'type' : 'types'}</span></button>`).join('')}
             <button type="button" class="hvy-galaxy-button integration-list-add" data-action="request-add-integration-page">+ Add web page</button>
           </nav>
           <main class="integration-detail">
@@ -234,7 +307,19 @@ export function renderIntegrationActionBuilderDialog(state: AppState): string {
   const parents = state.integrationActionAnchors;
   const targets = state.integrationActionExamples;
   const labelsComplete = targets.length > 0 && targets.every((_, index) => state.integrationActionTargetLabels[index]?.trim());
-  const fieldHeaders = targets.map((_, fieldIndex) => `<th><div class="integration-field-column-header"><input class="hvy-galaxy-input" aria-label="Field ${fieldIndex + 1} name" data-field="integration-target-label" data-index="${fieldIndex}" value="${escapeAttr(state.integrationActionTargetLabels[fieldIndex] ?? '')}" placeholder="Field ${fieldIndex + 1}"><button type="button" tabindex="-1" class="integration-field-remove integration-field-column-remove" data-action="remove-integration-action-selection" data-kind="target" data-index="${fieldIndex}" aria-label="Remove ${escapeAttr(state.integrationActionTargetLabels[fieldIndex] || `field ${fieldIndex + 1}`)}">×</button><div><button type="button" tabindex="-1" class="hvy-galaxy-button integration-field-setting ${state.integrationActionTargetCardinalities[fieldIndex] === 'list' ? 'is-active' : ''}" data-action="toggle-integration-target-many" data-index="${fieldIndex}" aria-pressed="${state.integrationActionTargetCardinalities[fieldIndex] === 'list'}">Many</button></div></div></th>`).join('');
+  // Setting up a site for a document's collection: each column is assigned one of its fields rather than named.
+  const setupFields = state.siteSetup && state.integrationRegistry.integrations.some((integration) => integration.id === state.integrationActionDraftIntegrationId && integration.siteSetup)
+    ? state.siteSetup.fields
+    : null;
+  const fieldLabel = (label: string) => setupFields?.find((field) => field.id === label)?.label ?? label;
+  const fieldNameControl = (fieldIndex: number) => {
+    const current = state.integrationActionTargetLabels[fieldIndex] ?? '';
+    if (!setupFields) return `<input class="hvy-galaxy-input" aria-label="Field ${fieldIndex + 1} name" data-field="integration-target-label" data-index="${fieldIndex}" value="${escapeAttr(current)}" placeholder="Field ${fieldIndex + 1}">`;
+    const taken = new Set(state.integrationActionTargetLabels.filter((label, index) => index !== fieldIndex && label));
+    const options = setupFields.map((field) => `<option value="${escapeAttr(field.id)}" ${field.id === current ? 'selected' : ''} ${taken.has(field.id) ? 'disabled' : ''}>${escapeHtml(field.label)}</option>`).join('');
+    return `<select class="hvy-galaxy-select" aria-label="Field ${fieldIndex + 1}" data-field="integration-target-label" data-index="${fieldIndex}"><option value="" ${current ? '' : 'selected'}>Assign to…</option>${options}</select>`;
+  };
+  const fieldHeaders = targets.map((_, fieldIndex) => `<th><div class="integration-field-column-header">${fieldNameControl(fieldIndex)}<button type="button" tabindex="-1" class="integration-field-remove integration-field-column-remove" data-action="remove-integration-action-selection" data-kind="target" data-index="${fieldIndex}" aria-label="Remove ${escapeAttr(state.integrationActionTargetLabels[fieldIndex] || `field ${fieldIndex + 1}`)}">×</button><div><button type="button" tabindex="-1" class="hvy-galaxy-button integration-field-setting ${state.integrationActionTargetCardinalities[fieldIndex] === 'list' ? 'is-active' : ''}" data-action="toggle-integration-target-many" data-index="${fieldIndex}" aria-pressed="${state.integrationActionTargetCardinalities[fieldIndex] === 'list'}">Many</button></div></div></th>`).join('');
   const exampleRows = parents.map((_parent, parentIndex) => {
     const liveRecord = state.integrationActionLiveExampleRecords[parentIndex];
     const liveTargets = liveRecord && typeof liveRecord === 'object' && Array.isArray((liveRecord as { targets?: unknown }).targets)
@@ -253,7 +338,7 @@ export function renderIntegrationActionBuilderDialog(state: AppState): string {
     }).join('');
     return `<tr><th scope="row"><span>Example ${parentIndex + 1}${liveTargets.length ? `<small>Best live fit${liveScore === null ? '' : ` · ${liveScore}%`}</small>` : hasCapturedValues ? '<small>Captured example</small>' : '<small>No live fit</small>'}</span><button type="button" tabindex="-1" class="integration-field-remove integration-field-column-remove integration-example-remove" data-action="remove-integration-action-selection" data-kind="example" data-index="${parentIndex}" aria-label="Remove example ${parentIndex + 1}">×</button></th>${cells}</tr>`;
   }).join('');
-  const requirements = targets.map((_, fieldIndex) => `<button type="button" class="hvy-galaxy-button integration-field-setting ${state.integrationActionTargetOptional[fieldIndex] ? '' : 'is-active'}" data-action="toggle-integration-target-required" data-index="${fieldIndex}" aria-pressed="${state.integrationActionTargetOptional[fieldIndex] ? 'false' : 'true'}">${escapeHtml(state.integrationActionTargetLabels[fieldIndex] || `Field ${fieldIndex + 1}`)}</button>`).join('');
+  const requirements = targets.map((_, fieldIndex) => `<button type="button" class="hvy-galaxy-button integration-field-setting ${state.integrationActionTargetOptional[fieldIndex] ? '' : 'is-active'}" data-action="toggle-integration-target-required" data-index="${fieldIndex}" aria-pressed="${state.integrationActionTargetOptional[fieldIndex] ? 'false' : 'true'}">${escapeHtml(fieldLabel(state.integrationActionTargetLabels[fieldIndex] ?? '') || `Field ${fieldIndex + 1}`)}</button>`).join('');
   const canSave = Boolean(state.integrationActionDraftName.trim()) && labelsComplete && parents.length > 0;
   const configuredScopeLabel = (state.integrationActionScope as { selected?: { scopeLabel?: unknown } } | null)?.selected?.scopeLabel;
   const configuredScopeText = typeof configuredScopeLabel === 'string' && configuredScopeLabel ? configuredScopeLabel : 'Selected page section';
@@ -279,7 +364,7 @@ export function renderIntegrationCommandBuilderDialog(state: AppState): string {
     return `<div class="integration-selection-row"><div class="integration-selection-review"><strong>${index + 1}</strong><span>${detail}</span><small>Resolved and performed successfully while recording.</small></div></div>`;
   }).join('');
   const inputFields = state.integrationCommandDraftSteps.flatMap((step, index) => (step.gesture === 'type' || step.gesture === 'select') && step.inputId ? [`<label><span>Parameter for step ${index + 1}</span><input class="hvy-galaxy-input" name="recordedInput:${escapeAttr(step.inputId)}" placeholder="Parameter name" required autocomplete="off"></label>`] : []).join('');
-  return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Name recorded command" data-form="integration-command-reconcile"><div class="modal-header"><div><p class="eyebrow">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'}</p><h2>Name the recorded action</h2><p class="dialog-note">The browser already verified every interaction. Name the action and its text parameters; temporary recording values are not retained.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Action name</span><input class="hvy-galaxy-input" name="commandName" placeholder="Action name" required autocomplete="off"></label>${inputFields}<section class="integration-selection-collection"><h3>Verified sequence</h3><div>${steps}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Save action</button></div></form></div>`;
+  return `<div class="modal-backdrop" role="presentation"><form class="dialog integration-action-builder-dialog" role="dialog" aria-modal="true" aria-label="Name recorded command" data-form="integration-command-reconcile"><div class="modal-header"><div><p class="eyebrow">${state.integrationCommandDraftScope === 'record' ? 'Item command' : 'Page command'}</p><h2>Name the recorded action</h2><p class="dialog-note">The browser already verified every interaction. Name the action and its text parameters; temporary recording values are not retained.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><label><span>Action name</span><input class="hvy-galaxy-input" name="commandName" placeholder="Action name" required autocomplete="off"${state.siteSetup && state.integrationCommandDraftScope === 'page' ? ' value="Next"' : ''}></label>${inputFields}<section class="integration-selection-collection"><h3>Verified sequence</h3><div>${steps}</div></section><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="cancel-integration-command-builder">Cancel</button><button type="submit" class="hvy-galaxy-button primary-button">Save action</button></div></form></div>`;
 }
 
 export function renderIntegrationCommandRunDialog(state: AppState): string {

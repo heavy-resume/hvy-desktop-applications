@@ -110,9 +110,10 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
     collect: (args, ctx) => {
       const lookup = resolve(ctx);
       const base = collection(lookup, args);
-      // Scripts choose among the approved start URLs; new sites go through the block and its review.
-      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startUrls;
-      const unapproved = startUrls.filter((url) => !base.startUrls.includes(url));
+      // Scripts choose among the block's start pages by address; new sites go through the block and its review.
+      const approved = base.startPages.map((page) => page.url);
+      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : approved;
+      const unapproved = startUrls.filter((url) => !approved.includes(url));
       if (unapproved.length) throw new WebAutomationError('invalid_request', `Not an approved start URL: ${unapproved.join(', ')}.`);
       const definition: CollectionDefinition = {
         ...base,

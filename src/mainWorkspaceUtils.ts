@@ -6,7 +6,7 @@ import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncrypt
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, updateHomepageDocumentPath } from './mainUtilities';
+import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, relocateDocumentSettings } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, documentSessions, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
@@ -106,7 +106,7 @@ export async function saveImportedDocumentToWorkspace(
   });
   documentSessions.delete(file.path);
   upsertWorkspace(await loadWorkspace(workspacePath));
-  await openDocument({ ...file, bytes }, { deferMount: true });
+  await openDocument({ ...file, bytes }, { deferMount: true, created: true });
   await refreshRecents();
   await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;
@@ -146,7 +146,7 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   if (!sourceEncrypted && !destinationFolder) {
     const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
     await applyArchivedFileRelocations(file.relocatedArchivedFiles);
-    await updateHomepageDocumentPath(path, file.path);
+    await relocateDocumentSettings(path, file.path);
     await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
     state.status = `Moved to ${file.name}`;
     return;
@@ -210,7 +210,7 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
     await deleteDocumentFile(path);
   }
   await applyArchivedFileRelocations(file.relocatedArchivedFiles);
-  await updateHomepageDocumentPath(path, file.path);
+  await relocateDocumentSettings(path, file.path);
   await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
   state.status = `Moved to ${file.name}`;
 }
@@ -313,7 +313,7 @@ export async function convertOpenWorkspaceFileKind(path: string, workspacePath: 
       manifestBytes: removal.manifestBytes,
     });
     const file = { ...created, bytes: sourceFile.bytes };
-    await updateHomepageDocumentPath(path, file.path);
+    await relocateDocumentSettings(path, file.path);
     state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
     await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
     await refreshSavedTemplates(workspacePath);
@@ -321,7 +321,7 @@ export async function convertOpenWorkspaceFileKind(path: string, workspacePath: 
     return;
   }
   const file = await convertWorkspaceDocumentKind({ path, workspacePath, toTemplate });
-  await updateHomepageDocumentPath(path, file.path);
+  await relocateDocumentSettings(path, file.path);
   state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
   await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
   await refreshSavedTemplates(workspacePath);
@@ -373,7 +373,7 @@ export async function applyArchivedFileRelocations(relocations: WorkspaceFileRel
   for (const relocation of relocations) {
     updateOpenDocumentFile(relocation.previousPath, relocation);
     if (state.selectedFilePath === relocation.previousPath) state.selectedFilePath = relocation.path;
-    await updateHomepageDocumentPath(relocation.previousPath, relocation.path);
+    await relocateDocumentSettings(relocation.previousPath, relocation.path);
     await relocateDocumentHistory(relocation.previousPath, relocation.path, relocation.name);
     await relocateRecoveryDraftsForDocument(
       relocation.previousPath,

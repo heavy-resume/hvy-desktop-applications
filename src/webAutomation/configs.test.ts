@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
 import { analysisServiceCapability } from '../test/webAutomation/analysisService';
-import { ATS_ORIGIN, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
+import { ATS_ORIGIN, atsDetailPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
 
 const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
   schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION,
@@ -46,8 +46,8 @@ describe('block configuration readers', () => {
       patterns: [talentSuiteListingPattern, talentSuiteDetailPattern],
       key: { kind: 'fields', fields: ['company', 'title'] },
       ignoredQueryParameters: ['ref'],
-      requiredFields: [{ field: 'title' }],
-      jsonLd: { type: 'Event' },
+      fields: LISTING_FIELDS.map((field) => (field.id === 'title' ? { ...field, required: true } : field)),
+      startPages: [{ id: 'acme', url: `${ATS_ORIGIN}/acme/jobs`, values: { company: 'Acme' } }],
     });
     expect(readCollectionBlockConfig({ schemaVersion: 1, ...structuredClone(collection), mcp: { collect: true } }))
       .toEqual({ ok: true, value: { collection, mcp: { collect: true } } });
@@ -55,11 +55,39 @@ describe('block configuration readers', () => {
     const broad = { ...talentSuiteListingPattern, appliesTo: [{ target: 'page', host: '*.com' }] };
     const genericOnly = { ...talentSuiteDetailPattern, appliesTo: [{ target: 'fingerprint', signals: [{ kind: 'form-field', name: '__VIEWSTATE' }] }] };
     const noLink = { ...talentSuiteListingPattern, id: 'no-link', linkFieldId: undefined };
-    expect(errorsOf(readCollectionBlockConfig({ schemaVersion: 1, ...collection, startUrls: ['ftp://x.test'], patterns: [broad, genericOnly, noLink] }))).toEqual([
-      '"ftp://x.test" is not an HTTPS start URL.',
+    expect(errorsOf(readCollectionBlockConfig({ schemaVersion: 1, ...collection, startPages: [{ id: 'ftp', url: 'ftp://x.test' }], patterns: [broad, genericOnly, noLink] }))).toEqual([
+      '"ftp://x.test" is not an HTTPS start page.',
       'Pattern "talentsuite-listing": A wildcard host must name a registrable domain, such as "*.example.com".',
       'Pattern "talentsuite-detail": Add at least one signal specific to this platform.',
       'Listing pattern "no-link" needs a link field.',
+    ]);
+  });
+
+  it('refuses references that do not resolve: fields, start page values, keys, the output, and pattern commands', () => {
+    const acme = `${ATS_ORIGIN}/acme/jobs`;
+    const unknownField = { ...atsDetailPattern, fields: [...atsDetailPattern.fields, { id: 'salary', kind: 'text' }] };
+    const missingCommand = { ...atsDetailPattern, id: 'with-command', itemCommandId: 'open', matcher: { pattern: {}, commands: {} } };
+    expect(errorsOf(readCollectionBlockConfig({
+      schemaVersion: 1,
+      ...listingCollection([acme]),
+      fields: [...LISTING_FIELDS, { id: 'url', label: 'Link', kind: 'text' }, { id: 'title', label: 'Again', kind: 'text' }],
+      startPages: [{ id: 'acme', url: acme, values: { team: 'Platform' } }, { id: 'acme', url: `${ATS_ORIGIN}/globex/jobs` }],
+      patterns: [unknownField, missingCommand],
+      key: { kind: 'field', field: 'requisition' },
+      output: {
+        store: { listPath: '/body/jobs/list', componentName: 'job', recordPath: 'item', fields: { salary: { kind: 'text', path: 'salary.txt' }, rating: { kind: 'text', path: 'rating.txt' } } },
+        // The rating is written by other glue; records only write what they own.
+        policy: { ownedFields: ['salary'] },
+      },
+    }))).toEqual([
+      '"url" is not a field id: use lowercase letters, digits, "-" or "_", and not "url".',
+      'Field id "title" is used twice.',
+      `Start page "${acme}" fills "team", which is not one of the fields.`,
+      'Start page id "acme" is used twice.',
+      `Pattern "${atsDetailPattern.name}" fills "salary", which is not one of the fields.`,
+      `Pattern "${atsDetailPattern.name}" runs command "open", which it does not have.`,
+      'The record key uses "requisition", which is not one of the fields.',
+      'Records may write "salary", which is not one of the fields.',
     ]);
   });
 

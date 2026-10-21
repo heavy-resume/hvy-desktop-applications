@@ -67,7 +67,7 @@ export function listMcpWebCapabilities(documents: McpDocument[], access: McpInte
         kind: 'collection',
         capabilityId: collection.capabilityId,
         name: collection.name,
-        startUrls: collection.startUrls,
+        startUrls: collection.startPages.map((page) => page.url),
       })),
   ]);
 }

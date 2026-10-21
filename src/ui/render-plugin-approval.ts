@@ -41,8 +41,8 @@ export function renderPluginApprovalDialog(state: AppState): string {
         <p class="dialog-note">These plugins can run code. Allow only the ones you trust, for this file. You can change this later in App Settings.</p>
         <div class="plugin-approval-list">${rows}</div>
         <div class="dialog-actions">
-          <button class="hvy-galaxy-button primary-button" type="button" data-action="confirm-plugin-approvals">Allow</button>
           <button class="hvy-galaxy-button" type="button" data-action="cancel-plugin-approvals">Cancel</button>
+          <button class="hvy-galaxy-button primary-button" type="button" data-action="confirm-plugin-approvals">Allow</button>
         </div>
       </section>
     </div>`;

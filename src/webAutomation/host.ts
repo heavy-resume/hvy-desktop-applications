@@ -64,7 +64,6 @@ export interface PageInspection {
   matches: Record<string, PatternMatch>;
   /** Number of matched signals per requested fingerprint; absent when it did not match. */
   fingerprintMatches: Record<string, number>;
-  jsonLd: unknown[];
   frames: Array<{ src: string }>;
 }
 

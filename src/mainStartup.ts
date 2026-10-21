@@ -20,6 +20,7 @@ import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
 import { installDevWebAutomationHost } from './webAutomation/devHost';
+import { installSiteSetup } from './siteSetupSession';
 import { hasWebAutomationHost, setWebAutomationHost } from './webAutomation/app';
 import { createElectronBrowserHost } from './webAutomation/electronHost';
 
@@ -51,6 +52,8 @@ export async function boot(): Promise<void> {
     await installDevWebAutomationHost();
     // Web automation runs on Electron's browser host, unless development mode installed a mock one.
     if (!hasWebAutomationHost() && isElectronRuntime()) setWebAutomationHost(createElectronBrowserHost());
+    // Collections set up their sites in the Integrations manager, saving into the document on Done.
+    installSiteSetup();
     await refreshInstalledPlugins();
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     state.aiSettings = await loadAiSettings();

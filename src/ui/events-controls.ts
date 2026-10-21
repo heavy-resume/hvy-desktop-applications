@@ -214,7 +214,7 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
     }
   }, { signal });
   root.addEventListener('input', (event) => {
-    const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement ? event.target : null;
+    const target = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement ? event.target : null;
     if (target instanceof HTMLInputElement && !target.closest('#hvyMount') && isFolderlessNameInput(target)) {
       stripInvalidCharactersFromNameInput(target);
     }
@@ -230,17 +230,26 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       if (form) updateWorkspaceFilterSubmit(form);
       return;
     }
-    if (field === 'integration-target-label' && target instanceof HTMLInputElement) {
+    if (field === 'integration-target-label' && (target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
       const index = Number(target.dataset.index);
       handlers.updateIntegrationTargetLabel(index, target.value);
       const builder = target.closest<HTMLElement>('.integration-action-builder-dialog');
-      const displayName = target.value.trim() || `Field ${index + 1}`;
+      // A site setup for a collection assigns fields: show the field's label, and keep one column per field.
+      const chosenLabel = target instanceof HTMLSelectElement && target.value ? target.selectedOptions[0]?.textContent ?? '' : target.value;
+      const displayName = chosenLabel.trim() || `Field ${index + 1}`;
+      if (target instanceof HTMLSelectElement && builder) {
+        const selects = [...builder.querySelectorAll<HTMLSelectElement>('select[data-field="integration-target-label"]')];
+        for (const select of selects) {
+          const taken = new Set(selects.filter((other) => other !== select && other.value).map((other) => other.value));
+          for (const option of select.options) option.disabled = Boolean(option.value) && taken.has(option.value);
+        }
+      }
       const requiredButton = builder?.querySelector<HTMLButtonElement>(`[data-action="toggle-integration-target-required"][data-index="${index}"]`);
       if (requiredButton) requiredButton.textContent = displayName;
       const removeButton = builder?.querySelector<HTMLButtonElement>(`[data-action="remove-integration-action-selection"][data-kind="target"][data-index="${index}"]`);
       if (removeButton) removeButton.setAttribute('aria-label', `Remove ${displayName}`);
       const complete = builder
-        ? [...builder.querySelectorAll<HTMLInputElement>('input[data-field="integration-target-label"]')].every((input) => input.value.trim())
+        ? [...builder.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field="integration-target-label"]')].every((input) => input.value.trim())
         : false;
       builder?.querySelectorAll<HTMLButtonElement>('[data-action="test-integration-action-pattern"], [data-action="preview-integration-action"]')
         .forEach((button) => { button.disabled = !complete; });
@@ -252,7 +261,7 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
       handlers.updateIntegrationActionDraftName(target.value);
       const builder = target.closest<HTMLElement>('.integration-action-builder-dialog');
       const labelsComplete = builder
-        ? [...builder.querySelectorAll<HTMLInputElement>('input[data-field="integration-target-label"]')].every((input) => input.value.trim())
+        ? [...builder.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field="integration-target-label"]')].every((input) => input.value.trim())
         : false;
       builder?.querySelectorAll<HTMLButtonElement>('[data-action="save-integration-action-draft"]')
         .forEach((button) => { button.disabled = !target.value.trim() || !labelsComplete || state.integrationActionAnchors.length === 0 || state.integrationActionPreviewPending; });

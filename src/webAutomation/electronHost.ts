@@ -1,11 +1,11 @@
 import type { BrowserHost, ExtractedRecord, HostResponse, NavigationEvent, PageInspection, PatternMatch } from './host';
-import { fieldIdForLabel, LINK_FIELD_ID, type IntegrationPatternMatcher } from './integrationPatterns';
+import { LINK_FIELD_ID, type IntegrationPatternMatcher } from './integrationPatterns';
 import type { SitePatternDefinition } from './sitePatterns';
 
 /**
  * Web automation's BrowserHost in Electron: hidden worker windows that share
  * a browser profile's session, inspected with the integration inspector
- * (src-electron/web-automation-host.cjs). Site patterns made from taught
+ * (src-electron/web-automation-host.cjs). Site patterns made from picked
  * integrations carry the inspector's pattern and their commands.
  */
 
@@ -25,7 +25,6 @@ interface RawInspection {
   url: string;
   ready: boolean;
   matches: Record<string, InspectorRecord[]>;
-  jsonLd: unknown[];
   frames: Array<{ src: string }>;
 }
 
@@ -45,7 +44,8 @@ function matcherOf(pattern: SitePatternDefinition): IntegrationPatternMatcher | 
 function recordValues(record: InspectorRecord): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const target of record.targets) {
-    values[fieldIdForLabel(target.label)] = target.value;
+    // A picked field's label is the collection field it was assigned to.
+    values[target.label] = target.value;
     if (target.href && values[LINK_FIELD_ID] === undefined) values[LINK_FIELD_ID] = target.href;
   }
   return values;
@@ -86,7 +86,6 @@ export function createElectronBrowserHost(): BrowserHost {
         matches: Object.fromEntries(Object.entries(raw.matches).map(([id, records]) => [id, patternMatch(records)])),
         // Fingerprint signals are not evaluated by this host yet.
         fingerprintMatches: {},
-        jsonLd: raw.jsonLd,
         frames: raw.frames,
       };
     },

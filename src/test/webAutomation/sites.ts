@@ -1,11 +1,10 @@
-import type { CollectionDefinition } from '../../webAutomation/collection';
+import type { CollectionDefinition, CollectionField, StartPage } from '../../webAutomation/collection';
 import type { PlatformSignal, SitePatternDefinition } from '../../webAutomation/sitePatterns';
 import type { MockPage, MockSite } from './mockHost';
 import type { MockApiIntegration } from './integration';
 
 export const ATS_ORIGIN = 'https://boards.mock-ats.test';
 export const OTHER_ATS_ORIGIN = 'https://jobs.other-ats.test';
-export const JSON_ONLY_ORIGIN = 'https://careers.jsononly.test';
 export const UNKNOWN_ORIGIN = 'https://jobs.unknown.test';
 
 interface MockJob {
@@ -59,7 +58,7 @@ export const atsListingPattern: SitePatternDefinition = {
   name: 'Mock ATS job board',
   role: 'listing',
   appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs' }],
-  fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
+  fields: [{ id: 'title', kind: 'text' }, { id: 'link', kind: 'link' }],
   minimumConfidence: 0.8,
   linkFieldId: 'link',
   paginationCommandId: 'next-page',
@@ -72,10 +71,10 @@ export const atsDetailPattern: SitePatternDefinition = {
   role: 'detail',
   appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs/*' }],
   fields: [
-    { id: 'title', label: 'Title', kind: 'text' },
-    { id: 'company', label: 'Company', kind: 'text' },
-    { id: 'location', label: 'Location', kind: 'text' },
-    { id: 'description', label: 'Description', kind: 'text' },
+    { id: 'title', kind: 'text' },
+    { id: 'company', kind: 'text' },
+    { id: 'location', kind: 'text' },
+    { id: 'description', kind: 'text' },
   ],
   minimumConfidence: 0.8,
   version: 1,
@@ -151,7 +150,7 @@ export const sidePaneListingPattern: SitePatternDefinition = {
   name: 'Side-pane board',
   role: 'listing',
   appliesTo: [{ target: 'page', host: 'www.sidepane.test', path: '/search' }],
-  fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
+  fields: [{ id: 'title', kind: 'text' }, { id: 'link', kind: 'link' }],
   minimumConfidence: 0.8,
   linkFieldId: 'link',
   itemCommandId: 'open-card',
@@ -164,9 +163,9 @@ export const sidePaneDetailPattern: SitePatternDefinition = {
   role: 'detail',
   appliesTo: [{ target: 'page', host: 'www.sidepane.test', path: '/search' }],
   fields: [
-    { id: 'title', label: 'Title', kind: 'text' },
-    { id: 'company', label: 'Company', kind: 'text' },
-    { id: 'description', label: 'Description', kind: 'text' },
+    { id: 'title', kind: 'text' },
+    { id: 'company', kind: 'text' },
+    { id: 'description', kind: 'text' },
   ],
   minimumConfidence: 0.8,
   version: 1,
@@ -212,7 +211,7 @@ export const talentSuiteListingPattern: SitePatternDefinition = {
   name: 'TalentSuite job list',
   role: 'listing',
   appliesTo: [{ target: 'fingerprint', signals: TALENTSUITE_SIGNALS }],
-  fields: [{ id: 'title', label: 'Title', kind: 'text' }, { id: 'link', label: 'Link', kind: 'link' }],
+  fields: [{ id: 'title', kind: 'text' }, { id: 'link', kind: 'link' }],
   minimumConfidence: 0.8,
   linkFieldId: 'link',
   version: 1,
@@ -224,44 +223,38 @@ export const talentSuiteDetailPattern: SitePatternDefinition = {
   role: 'detail',
   appliesTo: [{ target: 'fingerprint', signals: TALENTSUITE_SIGNALS }],
   fields: [
-    { id: 'title', label: 'Title', kind: 'text' },
-    { id: 'company', label: 'Company', kind: 'text' },
-    { id: 'description', label: 'Description', kind: 'text' },
+    { id: 'title', kind: 'text' },
+    { id: 'company', kind: 'text' },
+    { id: 'description', kind: 'text' },
   ],
   minimumConfidence: 0.8,
   version: 1,
 };
 
-export function jsonOnlySite(): MockSite {
-  return {
-    origin: JSON_ONLY_ORIGIN,
-    pages: {
-      '/jobs/42': {
-        jsonLd: [{
-          '@context': 'https://schema.org',
-          '@graph': [{ '@type': 'Organization', name: 'Json Co' }, {
-            '@type': 'JobPosting',
-            title: 'Staff Engineer',
-            hiringOrganization: { '@type': 'Organization', name: 'Json Co' },
-            jobLocation: { '@type': 'Place', address: { addressLocality: 'Austin', addressRegion: 'TX' } },
-            datePosted: '2026-09-30',
-            description: '<p>Lead the <b>TypeScript</b> platform.</p><ul><li>Mentor engineers</li></ul>',
-          }],
-        }],
-      },
-    },
-  };
-}
-
 export function unknownSite(): MockSite {
   return { origin: UNKNOWN_ORIGIN, pages: { '/openings/7': {} } };
+}
+
+/** The fields the mock listings have. */
+export const LISTING_FIELDS: CollectionField[] = [
+  { id: 'title', label: 'Title', kind: 'text' },
+  { id: 'company', label: 'Company', kind: 'text' },
+  { id: 'location', label: 'Location', kind: 'text' },
+  { id: 'description', label: 'Description', kind: 'long-text' },
+];
+
+/** Start pages for addresses, with ids in order. */
+export function startPagesFor(urls: string[]): StartPage[] {
+  return urls.map((url, index) => ({ id: `start-${index + 1}`, url }));
 }
 
 export function listingCollection(startUrls: string[], overrides: Partial<CollectionDefinition> = {}): CollectionDefinition {
   return {
     capabilityId: 'listings',
     name: 'Listings',
-    startUrls,
+    fields: LISTING_FIELDS,
+    startPages: startPagesFor(startUrls),
+    sites: [],
     patterns: [atsListingPattern, atsDetailPattern],
     maxPages: 5,
     maxItems: 50,
@@ -272,5 +265,5 @@ export function listingCollection(startUrls: string[], overrides: Partial<Collec
 
 /** Every simulated site: the job boards, and the signed-in service with its storage. */
 export function mockWebSites<State>(api: MockApiIntegration<State>): MockSite[] {
-  return [mockAtsSite(), otherAtsSite(), careersSite(), sidePaneSite(), ...talentSuiteSites(), jsonOnlySite(), unknownSite(), api.site, ...(api.extraSites ?? [])];
+  return [mockAtsSite(), otherAtsSite(), careersSite(), sidePaneSite(), ...talentSuiteSites(), unknownSite(), api.site, ...(api.extraSites ?? [])];
 }

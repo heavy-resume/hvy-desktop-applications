@@ -17,7 +17,6 @@ import { WebAutomationError } from '../../webAutomation/errors';
 export interface MockPage {
   /** Pattern ID → what that pattern extracts here. Stands in for structural matching. */
   matches?: Record<string, PatternMatch>;
-  jsonLd?: unknown[];
   signals?: PlatformSignal[];
   /** Where the pagination command leads, as a path or URL. */
   nextPage?: string;
@@ -27,7 +26,7 @@ export interface MockPage {
   challenge?: boolean;
   frames?: Array<{ src: string }>;
   /** Side-pane boards: record ref → what the pane shows after the item command. */
-  panes?: Record<string, Pick<MockPage, 'matches' | 'jsonLd'>>;
+  panes?: Record<string, Pick<MockPage, 'matches'>>;
 }
 
 export interface MockRouteRequest {
@@ -135,7 +134,7 @@ export class MockHost implements BrowserHost {
     const url = worker.history[worker.index];
     const page = this.page(url);
     if (page?.challenge && !this.cookies(worker.profileId, new URL(url).origin)[CLEARANCE_COOKIE]) {
-      return { url, ready: false, attention: 'challenge', matches: {}, fingerprintMatches: {}, jsonLd: [], frames: [] };
+      return { url, ready: false, attention: 'challenge', matches: {}, fingerprintMatches: {}, frames: [] };
     }
     const pane = worker.pane ? page?.panes?.[worker.pane] : undefined;
     const visible = { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
@@ -150,7 +149,6 @@ export class MockHost implements BrowserHost {
       ready: true,
       matches: structuredClone(matches),
       fingerprintMatches,
-      jsonLd: structuredClone(pane?.jsonLd ?? page?.jsonLd ?? []),
       frames: structuredClone(page?.frames ?? []),
     };
   }

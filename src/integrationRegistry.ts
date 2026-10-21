@@ -178,6 +178,8 @@ export interface IntegrationDefinition {
   editable: boolean;
   pages: IntegrationPageDefinition[];
   actions: IntegrationActionDefinition[];
+  /** In a site setup for a document's collection: kept in memory, saved into the document on Done, never into the registry. */
+  siteSetup?: true;
 }
 
 export interface IntegrationProfileDefinition {
@@ -241,8 +243,16 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
   return { version: 1, integrations: custom, profiles };
 }
 
+let registrySaved: ((registry: IntegrationRegistry) => void) | null = null;
+
+/** Called after every registry save, with the pages of a site setup in progress included (the setup checks them). */
+export function onIntegrationRegistrySaved(listener: ((registry: IntegrationRegistry) => void) | null): void {
+  registrySaved = listener;
+}
+
 export function saveIntegrationRegistry(registry: IntegrationRegistry): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(registry));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...registry, integrations: registry.integrations.filter((integration) => !integration.siteSetup) }));
+  registrySaved?.(registry);
 }
 
 export function matcherSnapshot(value: unknown): unknown {

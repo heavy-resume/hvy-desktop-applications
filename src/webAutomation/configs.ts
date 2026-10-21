@@ -1,5 +1,5 @@
 import type { CliItemStoreConfig, ItemFieldBinding } from './cliItemStore';
-import type { CollectionDefinition } from './collection';
+import { RECORD_URL_FIELD, type CollectionDefinition, type CollectionField, type CollectionSite, type StartPage } from './collection';
 import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
 import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntryStatus, type QueueState } from './queue';
 import type { ServedDocumentDefinition } from './servedDocuments';
@@ -311,7 +311,7 @@ function readPattern(value: unknown, errors: string[]): SitePatternDefinition | 
   }
   const fields = (Array.isArray(value.fields) ? value.fields : []).flatMap((field) => {
     if (!isRecord(field) || !text(field.id)) return [];
-    return [{ id: text(field.id), label: text(field.label) || text(field.id), kind: field.kind === 'link' ? 'link' as const : 'text' as const }];
+    return [{ id: text(field.id), kind: field.kind === 'link' ? 'link' as const : 'text' as const }];
   });
   const linkFieldId = text(value.linkFieldId);
   if (role === 'listing' && !fields.some((field) => field.id === linkFieldId && field.kind === 'link')) {
@@ -329,8 +329,82 @@ function readPattern(value: unknown, errors: string[]): SitePatternDefinition | 
     ...(text(value.paginationCommandId) ? { paginationCommandId: text(value.paginationCommandId) } : {}),
     ...(text(value.itemCommandId) ? { itemCommandId: text(value.itemCommandId) } : {}),
     ...(value.matcher !== undefined ? { matcher: value.matcher } : {}),
+    ...(text(value.siteId) ? { siteId: text(value.siteId) } : {}),
+    ...(value.source !== undefined ? { source: value.source } : {}),
     version: number(value.version, 1, 1, Number.MAX_SAFE_INTEGER),
   };
+}
+
+const FIELD_ID = /^[a-z][a-z0-9_-]*$/;
+
+/** The configured fields. Ids are what patterns, start pages, keys, and the output refer to, so they must be unique. */
+function readCollectionFields(value: unknown, errors: string[]): CollectionField[] {
+  const fields = (Array.isArray(value) ? value : []).flatMap((field): CollectionField[] => {
+    const id = isRecord(field) ? text(field.id) : '';
+    if (!isRecord(field) || !FIELD_ID.test(id) || id === RECORD_URL_FIELD) {
+      errors.push(`"${id || '(unnamed)'}" is not a field id: use lowercase letters, digits, "-" or "_", and not "${RECORD_URL_FIELD}".`);
+      return [];
+    }
+    if (field.kind !== undefined && field.kind !== 'text' && field.kind !== 'long-text') errors.push(`Field "${id}" has an unknown kind.`);
+    return [{
+      id,
+      label: text(field.label) || id,
+      kind: field.kind === 'long-text' ? 'long-text' : 'text',
+      ...(field.required === true ? { required: true } : {}),
+      ...(typeof field.minLength === 'number' ? { minLength: number(field.minLength, 0, 0, 100_000) } : {}),
+    }];
+  });
+  const ids = fields.map((field) => field.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Field id "${id}" is used twice.`);
+  return fields;
+}
+
+/** Start pages: unique ids, trustworthy addresses, and fixed values only for configured fields. */
+function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[]): StartPage[] {
+  const pages = (Array.isArray(value) ? value : []).flatMap((page): StartPage[] => {
+    if (!isRecord(page)) return [];
+    const id = text(page.id);
+    const url = trustworthyUrl(page.url);
+    if (!id) errors.push('A start page needs an id.');
+    if (!url) errors.push(`"${text(page.url)}" is not an HTTPS start page.`);
+    const values = Object.fromEntries(Object.entries(isRecord(page.values) ? page.values : {})
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim()))
+      .map(([field, fixed]) => [field, fixed.trim()]));
+    for (const field of Object.keys(values).filter((field) => !fieldIds.has(field))) {
+      errors.push(`Start page "${text(page.url)}" fills "${field}", which is not one of the fields.`);
+    }
+    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}) }] : [];
+  });
+  const ids = pages.map((page) => page.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);
+  return pages;
+}
+
+/** Site setups: unique ids, each named; a publisher's version is a whole number. */
+function readSites(value: unknown, errors: string[]): CollectionSite[] {
+  const sites = (Array.isArray(value) ? value : []).flatMap((site): CollectionSite[] => {
+    const id = isRecord(site) ? text(site.id) : '';
+    if (!isRecord(site) || !id) {
+      errors.push('A site setup needs an id.');
+      return [];
+    }
+    const from = isRecord(site.from) && text(site.from.name) ? { name: text(site.from.name), version: number(site.from.version, 1, 1, Number.MAX_SAFE_INTEGER) } : null;
+    return [{ id, name: text(site.name) || id, ...(from ? { from } : {}) }];
+  });
+  const ids = sites.map((site) => site.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Site setup id "${id}" is used twice.`);
+  return sites;
+}
+
+/** A pattern fills only configured fields, and its Next and item commands are its own. */
+function checkPatternReferences(pattern: SitePatternDefinition, fieldIds: Set<string>, errors: string[]): void {
+  for (const field of pattern.fields.filter((candidate) => candidate.kind === 'text' && !fieldIds.has(candidate.id))) {
+    errors.push(`Pattern "${pattern.name}" fills "${field.id}", which is not one of the fields.`);
+  }
+  const commands = isRecord(pattern.matcher) && isRecord(pattern.matcher.commands) ? pattern.matcher.commands : null;
+  for (const commandId of [pattern.paginationCommandId, pattern.itemCommandId]) {
+    if (commandId && commands && !(commandId in commands)) errors.push(`Pattern "${pattern.name}" runs command "${commandId}", which it does not have.`);
+  }
 }
 
 export function readCollectionBlockConfig(value: unknown): ConfigResult<CollectionBlockConfig> {
@@ -338,22 +412,18 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
   if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported collection block configuration.'] };
   const capabilityId = text(value.capabilityId);
   if (!capabilityId) errors.push('The block needs a capability id.');
-  const startUrls = strings(value.startUrls).flatMap((candidate) => {
-    const url = trustworthyUrl(candidate);
-    if (!url) errors.push(`"${candidate}" is not an HTTPS start URL.`);
-    return url ? [url.href] : [];
-  });
+  const fields = readCollectionFields(value.fields, errors);
+  const fieldIds = new Set(fields.map((field) => field.id));
+  const startPages = readStartPages(value.startPages, fieldIds, errors);
+  const sites = readSites(value.sites, errors);
   const patterns = (Array.isArray(value.patterns) ? value.patterns : []).flatMap((pattern) => readPattern(pattern, errors) ?? []);
   const ids = patterns.map((pattern) => pattern.id);
   if (new Set(ids).size !== ids.length) errors.push('Pattern ids must be unique.');
-  const fieldMap = isRecord(value.fieldMap)
-    ? Object.fromEntries(Object.entries(value.fieldMap).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim())))
-    : undefined;
-  const requiredFields = Array.isArray(value.requiredFields)
-    ? value.requiredFields.flatMap((rule) => (isRecord(rule) && text(rule.field)
-      ? [{ field: text(rule.field), ...(typeof rule.minLength === 'number' ? { minLength: number(rule.minLength, 0, 0, 100_000) } : {}) }]
-      : []))
-    : undefined;
+  for (const pattern of patterns) checkPatternReferences(pattern, fieldIds, errors);
+  const siteIds = new Set(sites.map((site) => site.id));
+  for (const pattern of patterns.filter((candidate) => candidate.siteId && !siteIds.has(candidate.siteId))) {
+    errors.push(`Pattern "${pattern.name}" belongs to site setup "${pattern.siteId}", which is not one of the site setups.`);
+  }
   let key: CollectionDefinition['key'];
   if (isRecord(value.key)) {
     if (value.key.kind === 'url') key = { kind: 'url' };
@@ -361,10 +431,14 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
     else if (value.key.kind === 'fields' && strings(value.key.fields).length) key = { kind: 'fields', fields: strings(value.key.fields) };
     else errors.push('The record key must be the URL, a field, or a list of fields.');
   }
+  const keyFields = key?.kind === 'field' ? [key.field] : key?.kind === 'fields' ? key.fields : [];
+  for (const field of keyFields.filter((id) => !fieldIds.has(id))) errors.push(`The record key uses "${field}", which is not one of the fields.`);
   const ignoredQueryParameters = Array.isArray(value.ignoredQueryParameters) ? strings(value.ignoredQueryParameters) : undefined;
-  const jsonLdType = isRecord(value.jsonLd) ? text(value.jsonLd.type) : '';
-  if (jsonLdType && !/^[A-Za-z][A-Za-z0-9]*$/.test(jsonLdType)) errors.push(`"${jsonLdType}" is not a schema.org type name.`);
   const output = readOutput(value.output, errors);
+  // The template has places other glue fills (results, notes); records may write only the fields they own.
+  for (const name of (output?.policy.ownedFields ?? []).filter((name) => name !== RECORD_URL_FIELD && !fieldIds.has(name))) {
+    errors.push(`Records may write "${name}", which is not one of the fields.`);
+  }
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
@@ -372,14 +446,14 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
       collection: {
         capabilityId,
         name: text(value.name) || 'Collection',
-        startUrls,
+        ...(text(value.itemName) ? { itemName: text(value.itemName) } : {}),
+        fields,
+        startPages,
+        sites,
         patterns,
         maxPages: number(value.maxPages, 5, 1, 50),
         maxItems: number(value.maxItems, 50, 1, 500),
         followLinksToOtherSites: value.followLinksToOtherSites === true,
-        ...(fieldMap ? { fieldMap } : {}),
-        ...(requiredFields?.length ? { requiredFields } : {}),
-        ...(jsonLdType ? { jsonLd: { type: jsonLdType } } : {}),
         ...(key ? { key } : {}),
         ...(ignoredQueryParameters ? { ignoredQueryParameters } : {}),
       },

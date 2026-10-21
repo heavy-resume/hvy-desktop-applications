@@ -6,6 +6,7 @@ import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, type MockFlow } from '../test/webAutomation/flow';
+import { readSiteSetupText, siteSetupText } from './siteSetups';
 import {
   ATS_ORIGIN,
   atsDetailPattern,
@@ -21,7 +22,6 @@ import {
   talentSuiteDetailPattern,
   talentSuiteListingPattern,
   VANDELAY_ORIGIN,
-  JSON_ONLY_ORIGIN,
   OTHER_ATS_ORIGIN,
   otherAtsDetailPattern,
   otherAtsListingPattern,
@@ -94,7 +94,7 @@ describe('mock integration: job search flow', () => {
     expect(secondRun).toContain('skip known https://boards.mock-ats.test/acme/jobs/eng-1');
   });
 
-  it('3. pattern reuse: a second company on the same ATS needs no teaching', async () => {
+  it('3. pattern reuse: a second company on the same ATS needs no setup', async () => {
     const boards = listingCollection([`${ATS_ORIGIN}/globex/jobs`]);
     await signedInFlow(boards);
     const run = await flow!.collect(boards);
@@ -102,17 +102,12 @@ describe('mock integration: job search flow', () => {
     expect(flow!.item(`${ATS_ORIGIN}/globex/jobs/eng-1`)).toMatchObject({ provenance: { patternId: 'ats-detail' }, fields: { company: 'Globex' } });
   });
 
-  it('4. no pattern and JSON-LD: unknown pages become visible card states, JSON-LD needs no teaching', async () => {
-    const boards = listingCollection([`${UNKNOWN_ORIGIN}/openings/7`, `${JSON_ONLY_ORIGIN}/jobs/42`], { jsonLd: { type: 'JobPosting' } });
+  it('4. no pattern: a place nothing reads is the place\'s problem, not an item', async () => {
+    const boards = listingCollection([`${UNKNOWN_ORIGIN}/openings/7`]);
     await signedInFlow(boards);
     const run = await flow!.collect(boards);
-    expect(run).toMatchObject({ status: 'done', collected: 1, problems: 1 });
-    expect(flow!.item(`${UNKNOWN_ORIGIN}/openings/7`)).toMatchObject({ state: 'no_pattern', problem: 'No pattern for jobs.unknown.test.' });
-    expect(flow!.item(`${JSON_ONLY_ORIGIN}/jobs/42`)).toMatchObject({
-      state: 'ok',
-      provenance: { patternId: 'json-ld:JobPosting' },
-      fields: { title: 'Staff Engineer', company: 'Json Co', location: 'Austin, TX', description: 'Lead the TypeScript platform.\nMentor engineers' },
-    });
+    expect(run).toMatchObject({ status: 'done', collected: 0, problems: 1, startPageProblems: { 'start-1': 'No pattern for jobs.unknown.test.' } });
+    expect(flow!.item(`${UNKNOWN_ORIGIN}/openings/7`)).toBeNull();
   });
 
   it('5. challenge: the run pauses for attention, the user solves it, and the run resumes', async () => {
@@ -249,11 +244,11 @@ describe('mock integration: job search flow', () => {
   });
 
   it('12. single posting and stop: one URL is extracted directly, and a stopped run ends cleanly', async () => {
-    const boards = listingCollection([ACME, `${JSON_ONLY_ORIGIN}/jobs/42`], { jsonLd: { type: 'JobPosting' } });
+    const boards = listingCollection([ACME]);
     await signedInFlow(boards);
-    const single = await flow!.extract(boards, `${JSON_ONLY_ORIGIN}/jobs/42?utm_campaign=mail#apply`);
+    const single = await flow!.extract(boards, `${ATS_ORIGIN}/acme/jobs/eng-1?utm_campaign=mail#apply`);
     expect(single).toMatchObject({ status: 'done', collected: 1 });
-    expect(flow!.item(`${JSON_ONLY_ORIGIN}/jobs/42`)?.provenance.patternId).toBe('json-ld:JobPosting');
+    expect(flow!.item(`${ATS_ORIGIN}/acme/jobs/eng-1`)?.provenance.patternId).toBe('ats-detail');
 
     const challenged = listingCollection([`${ATS_ORIGIN}/initech/jobs`]);
     flow!.approve();
@@ -310,19 +305,21 @@ describe('mock integration: job search flow', () => {
     expect((await flow!.callEndpoint('profile')).status).toBe(200);
   });
 
-  it('19. pattern library: a pattern taught once applies on re-run, but never widens where a run may go', async () => {
+  it('19. site setups in the block: pasted setups apply on re-run, but fingerprints never widen where a run may go', async () => {
     const mixed = listingCollection([`${UNKNOWN_ORIGIN}/openings/7`, `${SIDE_PANE_ORIGIN}/search`, `${INITRODE_ORIGIN}/Portal/Jobs.aspx`]);
     await signedInFlow(mixed);
     const before = await flow!.collect(mixed);
     expect(before).toMatchObject({ status: 'done', collected: 0, problems: 3 });
 
-    flow!.teachPatterns(sidePaneListingPattern, sidePaneDetailPattern, talentSuiteListingPattern, talentSuiteDetailPattern);
-    const after = await flow!.collect(mixed);
+    const pasted = readSiteSetupText(siteSetupText([
+      { id: 'pane', name: 'Side pane board', from: { name: 'Publisher', version: 1 }, patterns: [sidePaneListingPattern, sidePaneDetailPattern] },
+      { id: 'talent-suite', name: 'TalentSuite', patterns: [talentSuiteListingPattern, talentSuiteDetailPattern] },
+    ]))!;
+    const after = await flow!.collect(flow!.addSiteSetups(mixed, ...pasted));
     expect(after).toMatchObject({ status: 'done', collected: 2 });
     expect(flow!.item(`${SIDE_PANE_ORIGIN}/view/1`)).toMatchObject({ state: 'ok', provenance: { patternId: 'pane-detail' } });
-    expect(flow!.print()).toContain('using library pattern "TalentSuite job list"');
     expect(flow!.print()).toContain(`skip out of scope ${INITRODE_HOSTED_ORIGIN}/Portal/Job.aspx?id=11`);
-    expect(flow!.item(`${UNKNOWN_ORIGIN}/openings/7`)?.state).toBe('no_pattern');
+    expect(after.startPageProblems).toEqual({ 'start-1': 'No pattern for jobs.unknown.test.' });
   });
 
   it('20. test on another site: a pattern is checked on a second customer before relying on it', async () => {

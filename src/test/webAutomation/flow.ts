@@ -14,6 +14,7 @@ import { pluginAcceptanceKey } from '../../pluginManager';
 import type { QueueResult } from '../../webAutomation/queue';
 import { createMemorySettingsStore } from '../../webAutomation/settings';
 import type { SitePatternDefinition } from '../../webAutomation/sitePatterns';
+import { withSiteSetups, type SiteSetup } from '../../webAutomation/siteSetups';
 import type { WebApiCapability, WebApiResult } from '../../webAutomation/webApi';
 import { mockAnalysisService, type MockAnalysisServiceState } from './analysisService';
 import { MockHost } from './mockHost';
@@ -72,12 +73,14 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   const pluginsReady = registerWebAutomationPlugins();
   // Stand-in for Galaxy's appSettings.pluginAcceptances, written as hvy.ts's mount callbacks write it.
   const pluginAcceptances: Record<string, string[]> = {};
+  // The document's path: renaming it changes this, as Galaxy's rename does.
+  let documentPath = DOCUMENT_PATH;
   const documentState = (current: VisualDocument) => createDocumentState(current, {
-    getAcceptance: (request) => (pluginAcceptances[DOCUMENT_PATH] ?? []).includes(pluginAcceptanceKey(request)),
+    getAcceptance: (request) => (pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(request)),
     onAcceptanceChanged: (request) => {
       const key = pluginAcceptanceKey(request);
-      const current = pluginAcceptances[DOCUMENT_PATH] ?? [];
-      pluginAcceptances[DOCUMENT_PATH] = request.accepted ? [...new Set([...current, key])] : current.filter((candidate) => candidate !== key);
+      const current = pluginAcceptances[documentPath] ?? [];
+      pluginAcceptances[documentPath] = request.accepted ? [...new Set([...current, key])] : current.filter((candidate) => candidate !== key);
       timeline.push(`${stamp()} [settings] ${request.id} ${request.accepted ? 'allowed' : 'disallowed'} in this file`);
     },
   });
@@ -89,7 +92,6 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   const stamp = () => `+${(clock.now() / 1000).toFixed(1)}s`.padStart(9);
   host.log = (message) => timeline.push(`${stamp()} [host] ${message}`);
 
-  const patternLibrary: SitePatternDefinition[] = [];
   // The document as last saved to disk: what an app restart reopens.
   let savedText = serializeDocument(document);
   let entryIds = 0;
@@ -99,7 +101,6 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   function startRuntime() {
     const runtime = createWebAutomationRuntime({
       createId: () => `idempotency-${++entryIds}`,
-      patternLibrary: () => patternLibrary,
       host,
       clock,
       random,
@@ -110,7 +111,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     return runtime;
   }
   let stateRuntime = documentState(document);
-  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: DOCUMENT_PATH, document, stateRuntime, onDocumentChange: () => options.document?.changed?.() });
+  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.() });
   let automation: WebAutomation = opened.automation;
   loadDocument();
 
@@ -121,7 +122,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       sink = createRecordSink(items, options.sink ?? DEFAULT_RECORD_SINK_CONFIG);
     }
     stateRuntime = documentState(document);
-    opened = openDocumentAutomation(runtime, { documentPath: DOCUMENT_PATH, document, stateRuntime, onDocumentChange: () => options.document?.changed?.() });
+    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.() });
     automation = opened.automation;
     loadDocument();
   }
@@ -262,10 +263,10 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       await clock.runUntil(() => automation.getState().sessions.every((session) => session.status !== 'pending-login'));
     },
 
-    /** User action: saves taught patterns to the local library (pattern builder "Save"). */
-    teachPatterns(...patterns: SitePatternDefinition[]): void {
-      timeline.push(`${stamp()} [user] saves ${patterns.map((pattern) => pattern.name).join(', ')} to the pattern library`);
-      patternLibrary.push(...patterns);
+    /** User action: pastes site setups (or finishes setting one up); they are saved into the collection block. */
+    addSiteSetups(definition: CollectionDefinition, ...setups: SiteSetup[]): CollectionDefinition {
+      timeline.push(`${stamp()} [user] adds site setups ${setups.map((setup) => setup.name).join(', ')} to "${definition.name}"`);
+      return { ...definition, ...withSiteSetups(definition, setups) };
     },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".

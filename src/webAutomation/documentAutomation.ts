@@ -7,7 +7,6 @@ import type { HvyPlugin, HvyPluginFactory } from '../../../heavy-file-format/src
 import { getActiveStateRuntime, runWithStateRuntime, type StateRuntime } from '../../../heavy-file-format/src/state';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { createCliItemStore } from './cliItemStore';
-import type { RecordConsumer } from './collection';
 import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { readWebAutomationBlocks } from './documentBlocks';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
@@ -115,7 +114,8 @@ function registration(pluginId: string): HvyPlugin {
  */
 // UI: document opened in the document pane.
 export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
-  documentPath: string;
+  /** The document's current path: it changes when the document is renamed or moved. */
+  documentPath(): string;
   document: VisualDocument;
   stateRuntime: StateRuntime;
   /** The document changed outside a script (a record sink wrote items); the host rerenders in the document's state runtime. */
@@ -137,23 +137,25 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       return runWithStateRuntime(stateRuntime, () => plugins.call(pluginId, method, args as JsonObject));
     },
   });
-  const sinks = new Map<string, RecordConsumer>();
-  for (const { config } of blocks.collections) {
-    if (!config.output) continue;
-    const sink = createRecordSink(createCliItemStore(document, config.output.store), config.output.policy);
-    sinks.set(config.collection.capabilityId, {
-      onRecord: (record) => {
-        sink.onRecord(record);
-        options.onDocumentChange?.(stateRuntime);
-      },
-      isKnown: sink.isKnown,
-    });
-  }
+  // Blocks are read when used, not when the document opened: a block's configuration changes while it is open (start
+  // pages added in the reader, site setups saved into it, the AI editing plugin.json).
+  const collectionBlock = (capabilityId: string) => readWebAutomationBlocks(document).collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config ?? null;
   const lookup: DocumentAutomationLookup = {
     automation,
-    webApi: (capabilityId) => blocks.webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability ?? null,
-    collection: (capabilityId) => blocks.collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config.collection ?? null,
-    sink: (capabilityId) => sinks.get(capabilityId) ?? null,
+    webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability ?? null,
+    collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
+    sink: (capabilityId) => {
+      const output = collectionBlock(capabilityId)?.output;
+      if (!output) return null;
+      const sink = createRecordSink(createCliItemStore(document, output.store), output.policy);
+      return {
+        onRecord: (record) => {
+          sink.onRecord(record);
+          options.onDocumentChange?.(stateRuntime);
+        },
+        isKnown: sink.isKnown,
+      };
+    },
   };
   openDocuments.set(document, {
     lookup,

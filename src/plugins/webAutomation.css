@@ -15,9 +15,6 @@
 .hvy-web-automation-failures {
   display: grid;
   gap: 0.5rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
 }
 
 .hvy-web-automation-failure {
@@ -30,4 +27,80 @@
 
 .hvy-web-automation-entry {
   overflow-wrap: anywhere;
+}
+
+.hvy-web-places {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.hvy-web-places-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.hvy-web-place-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.hvy-web-place {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-place-values {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-place-hint {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.hvy-web-place-summary {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.hvy-web-place-name {
+  font-weight: 650;
+}
+
+.hvy-web-dialog-body {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.hvy-web-place-result {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.hvy-web-place-result:empty {
+  display: none;
+}
+
+.hvy-web-place-setup {
+  display: grid;
+  gap: 0.1rem;
+  overflow-wrap: anywhere;
+}
+
+/* Its display would otherwise show a hidden one (a place with no fields left to fill). */
+.hvy-web-place-values[hidden] {
+  display: none;
 }

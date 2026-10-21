@@ -10,9 +10,9 @@ export type SitePatternScopeRule =
   | { target: 'page' | 'frame'; host: string; path?: string }
   | { target: 'fingerprint'; signals: PlatformSignal[] };
 
+/** A field a pattern reads: one of its collection's configured fields (by id), or, on a listing, the link to each item. */
 export interface SitePatternField {
   id: string;
-  label: string;
   kind: 'text' | 'link';
 }
 
@@ -34,6 +34,10 @@ export interface SitePatternDefinition {
   itemCommandId?: string;
   /** Opaque structural matcher evaluated by the host's inspector. */
   matcher?: unknown;
+  /** The site setup it belongs to: copying, updating, or removing that setup takes it along. */
+  siteId?: string;
+  /** Opaque: what the pattern was set up from, so it can be set up again (edited). Runs never read it. */
+  source?: unknown;
   version: number;
 }
 

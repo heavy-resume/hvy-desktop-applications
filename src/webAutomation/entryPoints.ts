@@ -42,14 +42,13 @@ export interface WebAutomationRuntimeDeps {
   settings: AutomationSettingsStore;
   /** New idempotency keys for queue entries (crypto.randomUUID in the app). */
   createId(): string;
-  /** The user's local site pattern library (integration registry). */
-  patternLibrary?: () => SitePatternDefinition[];
   scheduler?: Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>;
 }
 
 /** Document-level dependencies. */
 export interface WebAutomationDocumentDeps {
-  documentPath: string;
+  /** The document's current path: it changes when the document is renamed or moved. */
+  documentPath(): string;
   /** How queues call their target plugin. */
   callPlugin: PluginCall;
   /** Whether a plugin is allowed in this file (the reference implementation's per-file plugin authorization). */
@@ -73,16 +72,28 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     download: (url, options) => deps.host.download(url, options),
     exportDocumentText: documentText,
   });
+  const documentQueues = new Map<string, DurableQueue>();
   return {
     deps,
     /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
-    queues: new Map<string, DurableQueue>(),
+    queues: documentQueues,
     events,
     emit,
     scheduler,
     transport,
     sessions,
     webApi,
+
+    // A document moved (renamed, moved between workspaces, or archived): its queues still in memory follow it, so the
+    // next open reattaches them.
+    relocateDocument(previousPath: string, nextPath: string): void {
+      const prefix = `${previousPath}\u0000`;
+      for (const [key, queue] of [...documentQueues]) {
+        if (!key.startsWith(prefix)) continue;
+        documentQueues.delete(key);
+        documentQueues.set(`${nextPath}\u0000${key.slice(prefix.length)}`, queue);
+      }
+    },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".
     testSitePattern(profileId: string, pattern: SitePatternDefinition, url: string): Promise<SitePatternTestResult> {
@@ -108,7 +119,7 @@ export interface WebAutomationState {
 export function createWebAutomation(runtime: WebAutomationRuntime, document: WebAutomationDocumentDeps) {
   const { emit, scheduler, sessions, webApi } = runtime;
   const deps = { ...runtime.deps, ...document };
-  const collections = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, patternLibrary: deps.patternLibrary });
+  const collections = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit });
   const queues = new Map<string, DurableQueue>();
   // Script callbacks for sign-in changes, by capability and key. They do not survive the document closing.
   const sessionWatchers = new Map<string, () => void>();
@@ -122,14 +133,14 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
 
   // The service approval: what this document does with your account there, tied to its configuration.
   function requireAuthorized(capabilityId: string, parts: Record<string, unknown>, profileId: string): void {
-    const review = reviewAuthorization(deps.settings.get().authorizations, deps.documentPath, capabilityId, parts, profileId);
+    const review = reviewAuthorization(deps.settings.get().authorizations, deps.documentPath(), capabilityId, parts, profileId);
     if (review.reason !== 'authorized') {
       throw new WebAutomationError('not_authorized', `This document must be authorized before it can use "${capabilityId}" (${review.reason}).`);
     }
   }
 
   function profileFor(capabilityId: string, name: string): string {
-    const profileId = deps.settings.get().profileBindings[deps.documentPath]?.[capabilityId];
+    const profileId = deps.settings.get().profileBindings[deps.documentPath()]?.[capabilityId];
     if (!profileId) throw new WebAutomationError('no_profile', `Choose a profile for "${name}".`);
     return profileId;
   }
@@ -155,13 +166,13 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     bindProfile(capabilityId: string, profileId: string): void {
       deps.settings.update((settings) => ({
         ...settings,
-        profileBindings: setWebCapabilityProfileBinding(settings.profileBindings, deps.documentPath, capabilityId, profileId),
+        profileBindings: setWebCapabilityProfileBinding(settings.profileBindings, deps.documentPath(), capabilityId, profileId),
       }));
     },
 
     // UI: "Sign in" modal for a galaxy.web-api block: what the document does with your account, and what changed.
     reviewWebApi(capability: WebApiCapability): AuthorizationReview {
-      return webApi.review(deps.documentPath, capability);
+      return webApi.review(deps.documentPath(), capability);
     },
 
     // UI: "Sign in" modal, "Allow and sign in with [profile]" for a galaxy.web-api block.
@@ -169,7 +180,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       const profileId = profileFor(capability.capabilityId, capability.name);
       deps.settings.update((settings) => ({
         ...settings,
-        authorizations: recordAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId, webApi.authorizationParts(capability), profileId, deps.clock.now(), capability.name),
+        authorizations: recordAuthorization(settings.authorizations, deps.documentPath(), capability.capabilityId, webApi.authorizationParts(capability), profileId, deps.clock.now(), capability.name),
       }));
     },
 
@@ -177,7 +188,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     revokeWebApi(capability: WebApiCapability): void {
       deps.settings.update((settings) => ({
         ...settings,
-        authorizations: revokeAuthorization(settings.authorizations, deps.documentPath, capability.capabilityId),
+        authorizations: revokeAuthorization(settings.authorizations, deps.documentPath(), capability.capabilityId),
       }));
     },
 
@@ -203,7 +214,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       const watcherKey = `${capability.capabilityId}\0${key}`;
       sessionWatchers.get(watcherKey)?.();
       sessionWatchers.set(watcherKey, sessions.onChange((state) => {
-        const profileId = deps.settings.get().profileBindings[deps.documentPath]?.[capability.capabilityId];
+        const profileId = deps.settings.get().profileBindings[deps.documentPath()]?.[capability.capabilityId];
         if (state.origin === capabilityOrigin(capability) && state.profileId === profileId) handler(state);
       }));
     },
@@ -216,18 +227,18 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: galaxy.web-api reader, endpoint form "Run"; scripting doc.plugins.call("galaxy.web-api", "call", …).
     callEndpoint(capability: WebApiCapability, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
       requirePlugin(WEB_API_PLUGIN_ID, 'Web API');
-      return webApi.call(deps.documentPath, capability, endpointId, input, options);
+      return webApi.call(deps.documentPath(), capability, endpointId, input, options);
     },
 
     // UI: galaxy.web-collection reader, "Collect"; scripting collect({ … }). Records go to the consumer (usually a record sink).
     startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[]): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
-      const startUrls = onlyStartUrls ?? definition.startUrls;
-      if (startUrls.some((url) => !definition.startUrls.includes(url))) {
-        throw new WebAutomationError('invalid_request', "Only the block's own start URLs can be collected.");
+      const startPages = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages;
+      if (onlyStartUrls?.some((url) => !definition.startPages.some((page) => page.url === url))) {
+        throw new WebAutomationError('invalid_request', "Only the block's own start pages can be collected.");
       }
-      return collections.start(definition, profileId, consumer, startUrls);
+      return collections.start(definition, profileId, consumer, startPages);
     },
 
     // UI: galaxy.web-collection reader, single item URL entry; scripting extract({ url }).
@@ -257,7 +268,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // saved in its block.
     openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG, saved: QueueState | null = null): void {
       const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey });
-      const registryKey = `${deps.documentPath}\u0000${queueId}`;
+      const registryKey = `${deps.documentPath()}\u0000${queueId}`;
       const existing = runtime.queues.get(registryKey);
       if (existing) {
         existing.attach(call);

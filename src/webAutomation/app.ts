@@ -3,7 +3,6 @@ import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { saveAppSettings } from '../backend';
 import { state } from '../state';
 import { systemClock } from './clock';
-import { sitePatternsFromIntegrations } from './integrationPatterns';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
 import { createWebAutomationRuntime, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
@@ -21,6 +20,8 @@ let runtime: WebAutomationRuntime | null = null;
 // Account summaries are refreshed by the session probe, so they are not persisted.
 let accounts: Record<string, AccountSummary> = {};
 const openedByDocument = new WeakMap<object, DocumentAutomation>();
+// Each open document's path, kept current when a document is renamed or moved.
+const documentPaths = new Map<object, string>();
 
 export const WEB_AUTOMATION_PLUGIN_IDS = new Set(WEB_AUTOMATION_PLUGINS.map((plugin) => plugin.id));
 
@@ -59,8 +60,6 @@ function appRuntime(): WebAutomationRuntime {
     random: Math.random,
     settings,
     createId: () => crypto.randomUUID(),
-    // The user's taught integrations, as site patterns collection runs fall back on.
-    patternLibrary: () => sitePatternsFromIntegrations(state.integrationRegistry),
   });
   return runtime;
 }
@@ -73,8 +72,9 @@ export function subscribeWebAutomation(listener: () => void): () => void {
 setDocumentAutomationOpener((rawDocument) => {
   const document = rawDocument as VisualDocument;
   const stateRuntime = getActiveStateRuntime();
+  documentPaths.set(document, state.document?.source.path ?? '');
   const opened = openDocumentAutomation(appRuntime(), {
-    documentPath: state.document?.source.path ?? '',
+    documentPath: () => documentPaths.get(document) ?? '',
     document,
     stateRuntime,
     // A record sink wrote items outside any script: rerender, as a plugin hook's requestRerender does.
@@ -108,5 +108,14 @@ export function releaseWebAutomation(document: object): void {
     if (isDocumentOpen(document)) return;
     openedByDocument.get(document)?.close();
     openedByDocument.delete(document);
+    documentPaths.delete(document);
   }, 0);
+}
+
+/** A document moved (renamed, moved between workspaces, or archived): its open automation and its queues follow it. */
+export function relocateWebAutomationDocument(previousPath: string, nextPath: string): void {
+  for (const [document, path] of documentPaths) {
+    if (path === previousPath) documentPaths.set(document, nextPath);
+  }
+  runtime?.relocateDocument(previousPath, nextPath);
 }

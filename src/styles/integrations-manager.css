@@ -803,3 +803,103 @@
   align-items: center;
   gap: 8px;
 }
+
+.dialog.integrations-dialog.site-setup-dialog {
+  grid-template-rows: none;
+  width: min(760px, calc(100vw - 32px));
+  height: auto;
+  overflow: auto;
+}
+
+.site-setup-dialog .modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.site-setup-steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-setup-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--hvy-border);
+  border-radius: 10px;
+}
+
+.site-setup-step.is-done {
+  background: var(--hvy-surface-alt);
+}
+
+.site-setup-step-marker {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--hvy-border);
+  font-weight: 700;
+}
+
+.site-setup-step.is-done .site-setup-step-marker {
+  border-color: var(--hvy-success);
+  background: var(--hvy-success);
+  color: #fff;
+}
+
+.site-setup-step-body {
+  display: grid;
+  gap: 6px;
+}
+
+.site-setup-step-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.site-setup-step-optional {
+  margin-left: 6px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.site-setup-step-text,
+.site-setup-step-status {
+  margin: 0;
+}
+
+.site-setup-step-status {
+  font-weight: 600;
+}
+
+.site-setup-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.site-setup-pending {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.site-setup-address {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.site-setup-footer {
+  align-items: end;
+}
+
+.site-setup-profile {
+  margin-right: auto;
+}

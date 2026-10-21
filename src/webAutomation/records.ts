@@ -8,7 +8,7 @@ export type CollectedRecordState = 'ok' | 'no_pattern' | 'invalid';
 export interface CollectedRecordProvenance {
   sourceUrl: string;
   collectedAt: number;
-  /** The detail pattern used, or `json-ld:<Type>`. Absent when nothing matched. */
+  /** The detail pattern used. Absent when nothing matched. */
   patternId?: string;
 }
 
@@ -25,18 +25,13 @@ export interface CollectedRecord {
 /**
  * How a record's identity is derived:
  * - `url`: the canonical URL of the record's page (default);
- * - `field`: one extracted value, such as a JSON-LD identifier;
+ * - `field`: one extracted value, such as a posting identifier;
  * - `fields`: several values joined, for records without a stable page.
  */
 export type RecordKeyStrategy =
   | { kind: 'url' }
   | { kind: 'field'; field: string }
   | { kind: 'fields'; fields: string[] };
-
-export interface RequiredField {
-  field: string;
-  minLength?: number;
-}
 
 /** Query parameters that only track how a link was reached. Collections can add their own. */
 export const DEFAULT_IGNORED_QUERY_PARAMETERS = ['utm_*', 'gclid', 'fbclid', 'mc_cid', 'mc_eid'];
@@ -79,11 +74,13 @@ export function recordKey(
   return parts.every(Boolean) ? parts.join('\u001f') : null;
 }
 
-export function validateRecord(values: Record<string, unknown>, requiredFields: RequiredField[] = []): string | null {
-  for (const rule of requiredFields) {
-    const text = valueText(values[rule.field]);
-    if (!text) return `"${rule.field}" is missing.`;
-    if (rule.minLength && text.length < rule.minLength) return `"${rule.field}" is shorter than ${rule.minLength} characters.`;
+/** The first problem with a record's required fields, named by their labels, or null when it has none. */
+export function validateRecord(values: Record<string, unknown>, fields: Array<{ id: string; label: string; required?: boolean; minLength?: number }> = []): string | null {
+  for (const field of fields) {
+    if (!field.required) continue;
+    const text = valueText(values[field.id]);
+    if (!text) return `"${field.label}" is missing.`;
+    if (field.minLength && text.length < field.minLength) return `"${field.label}" is shorter than ${field.minLength} characters.`;
   }
   return null;
 }
