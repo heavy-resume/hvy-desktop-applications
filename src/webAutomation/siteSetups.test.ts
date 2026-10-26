@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LISTING_FIELDS, listingCollection } from '../test/webAutomation/sites';
 import type { CollectionDefinition, CollectionSite } from './collection';
 import { readCollectionBlockConfig } from './configs';
-import { fieldsNotRead, placesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup } from './siteSetups';
+import { fieldsNotRead, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup } from './siteSetups';
 import type { SitePatternDefinition } from './sitePatterns';
 
 const ACME = 'https://boards.test/acme/jobs';
@@ -26,7 +26,7 @@ function pattern(siteId: string, id: string, fields: string[], scope: { host: st
 const boards: CollectionSite = { id: 'boards', name: 'Boards', from: { name: 'Publisher', version: 2 } };
 const initech: CollectionSite = { id: 'initech', name: 'careers.initech.test/jobs/' };
 
-/** Places on a hiring platform both read by one setup, and a company's own careers page set up by pointing at it. */
+/** Start pages on a hiring platform both read by one setup, and a company's own careers page set up by pointing at it. */
 function collection(): CollectionDefinition {
   return {
     ...listingCollection([], { fields: LISTING_FIELDS }),
@@ -43,16 +43,16 @@ function collection(): CollectionDefinition {
 const valid = (definition: CollectionDefinition) => readCollectionBlockConfig({ schemaVersion: 1, ...structuredClone(definition) });
 
 describe('site setups', () => {
-  it('reads every place on a site with one setup, with nothing tying a place to it', () => {
+  it('reads every start page on a site with one setup, with nothing tying a start page to it', () => {
     const jobs = collection();
     expect(recognizeAddress(jobs, 'https://boards.test/hooli/jobs')?.site).toEqual(boards);
     expect(recognizeAddress(jobs, OWN)?.site).toEqual(initech);
     expect(recognizeAddress(jobs, 'https://elsewhere.test/jobs')).toBeNull();
-    expect(placesReadBy(jobs, 'boards').map((page) => page.id)).toEqual(['acme', 'globex']);
+    expect(startPagesReadBy(jobs, 'boards').map((page) => page.id)).toEqual(['acme', 'globex']);
     expect(valid(jobs).ok).toBe(true);
   });
 
-  it('names the fields a setup does not read, for a place to fill', () => {
+  it('names the fields a setup does not read, for a start page to fill', () => {
     const jobs = collection();
     expect(fieldsNotRead(jobs, siteSetupOf(jobs, 'boards')!.patterns).map((field) => field.id)).toEqual(['company']);
     expect(fieldsNotRead(jobs, siteSetupOf(jobs, 'initech')!.patterns).map((field) => field.id)).toEqual(['location', 'description']);
@@ -90,7 +90,7 @@ describe('site setups', () => {
     expect(() => readSiteSetupText('HVY site setup: Boards\n{"hvy":"site-setup/1","sites":[{"id"')).toThrow('incomplete');
   });
 
-  it('removes a setup with its patterns; its places stay, and are no longer read', () => {
+  it('removes a setup with its patterns; its start pages stay, and are no longer read', () => {
     const jobs = collection();
     const removed = { ...jobs, ...withoutSiteSetup(jobs, 'boards') };
     expect(removed.patterns.map((candidate) => candidate.id)).toEqual(['initech:list']);

@@ -9,7 +9,7 @@ import type { SitePatternDefinition } from './sitePatterns';
  */
 export interface SiteSetupRequest {
   collection: CollectionDefinition;
-  /** The address it is set up on: the place being added or fixed. */
+  /** The address it is set up on: the start page being added or fixed. */
   url: string;
   /** The setup being done again, or the new one's id and name. */
   site: CollectionSite;
@@ -17,7 +17,7 @@ export interface SiteSetupRequest {
   patterns: SitePatternDefinition[];
   /** Why the block would refuse these patterns, without saving them. */
   check(patterns: SitePatternDefinition[]): string[];
-  /** Done: the reader saves them (or goes on adding the place). Returns why it was refused, if it was. */
+  /** Done: the reader saves them (or goes on adding the start page). Returns why it was refused, if it was. */
   finish(patterns: SitePatternDefinition[]): string[];
 }
 
@@ -32,7 +32,7 @@ export function canSetUpSites(): boolean {
   return opener !== null;
 }
 
-// UI: collection reader, "Set up this site" (adding a place nothing reads, or fixing one).
+// UI: collection reader, "Set up this site" (adding a start page nothing reads, or fixing one).
 export function setUpSite(request: SiteSetupRequest): void {
   opener?.(request);
 }

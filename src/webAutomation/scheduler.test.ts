@@ -14,7 +14,7 @@ function setup(options: { perProfile?: number; global?: number; delayScale?: num
     random: seededRandom(1),
     emit: (_source, message) => log.push(message),
     maxCollectionWorkersPerProfile: options.perProfile ?? 2,
-    maxCollectionWorkersGlobal: options.global ?? 4,
+    collectionLimits: () => ({ perSite: 2, total: options.global ?? 4 }),
     idleTimeoutMs: 60_000,
     ...(options.delayScale !== undefined ? { navigationDelayScale: options.delayScale } : {}),
   });
@@ -108,5 +108,22 @@ describe('worker scheduler', () => {
       expect(Number(scaled)).toBeCloseTo(gaps[index] / 1000, 1);
       expect(Number(full)).toBeCloseTo(Number(scaled) * 4, 0);
     }
+  });
+  it('reads the collection limits as each job is placed, so a changed setting applies to the next job', async () => {
+    const clock = new VirtualClock();
+    let limits = { perSite: 1, total: 4 };
+    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, collectionLimits: () => limits });
+    const job = (label: string) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label }, holdFor(clock, 10_000));
+    const first = [job('a'), job('b')];
+    await clock.step(0);
+    expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['b']);
+    // App Settings: two pages on one site. The next placement lets the waiting job in, in order.
+    limits = { perSite: 2, total: 4 };
+    const third = job('c');
+    await clock.step(0);
+    expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['c']);
+    expect(scheduler.getState().workers.filter((worker) => worker.busy).map((worker) => worker.label).sort()).toEqual(['a', 'b']);
+    await clock.runUntil(() => scheduler.getState().waitingJobs.length === 0 && scheduler.getState().workers.every((worker) => !worker.busy));
+    await Promise.all([...first, third]);
   });
 });

@@ -6,7 +6,7 @@ import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, type MockFlow } from '../test/webAutomation/flow';
-import { readWebAutomationBlocks } from './documentBlocks';
+import { ignoredProfileContexts } from './profileContexts';
 import { readSiteSetupText, siteSetupText } from './siteSetups';
 import {
   ATS_ORIGIN,
@@ -73,7 +73,7 @@ describe('mock integration: job search flow', () => {
     const timeline = flow.print();
     expect(timeline.indexOf('start-1: page 2, 5 found, 0 already listed')).toBeLessThan(timeline.indexOf('record ok'));
     expect(timeline).not.toContain('← back');
-    expect(run.places['start-1']).toMatchObject({ status: 'done', pages: 2, found: 5, known: 0, toCollect: 5, read: 5, collected: 5, problems: 0, current: null });
+    expect(run.startPages['start-1']).toMatchObject({ status: 'done', pages: 2, found: 5, known: 0, toCollect: 5, read: 5, collected: 5, problems: 0, current: null });
 
     await flow.evaluate([acmeJob('eng-1'), acmeJob('eng-2'), acmeJob('pm-1')]);
     expect(flow.item(acmeJob('eng-1'))?.fields).toMatchObject({ evaluation: 'ready', rating: 'strong' });
@@ -107,7 +107,7 @@ describe('mock integration: job search flow', () => {
     expect(flow!.item(`${ATS_ORIGIN}/globex/jobs/eng-1`)).toMatchObject({ provenance: { patternId: 'ats-detail' }, fields: { company: 'Globex' } });
   });
 
-  it('4. no pattern: a place nothing reads is the place\'s problem, not an item', async () => {
+  it('4. no pattern: a start page nothing reads is the start page\'s problem, not an item', async () => {
     const boards = listingCollection([`${UNKNOWN_ORIGIN}/openings/7`]);
     await signedInFlow(boards);
     const run = await flow!.collect(boards);
@@ -138,7 +138,7 @@ describe('mock integration: job search flow', () => {
     await signedInFlow(boards);
     const paused = await flow!.collect(boards);
     expect(paused).toMatchObject({ status: 'needs-attention', attention: { reason: 'unexpected-page', url: `${ATS_ORIGIN}/wonka/jobs/eng-1?utm_source=board` } });
-    expect(paused.places['start-1']).toMatchObject({ status: 'collecting', read: 0, toCollect: 2 });
+    expect(paused.startPages['start-1']).toMatchObject({ status: 'collecting', read: 0, toCollect: 2 });
 
     flow!.solveChallenge(ATS_ORIGIN);
     const resumed = await flow!.resumeAttention(paused.runId);
@@ -146,19 +146,19 @@ describe('mock integration: job search flow', () => {
     expect(resumed).toMatchObject({ status: 'done', collected: 2, problems: 0, attention: null });
   });
 
-  it('5b. places: one left out of collecting all is skipped, and still collects on its own', async () => {
+  it('5b. start pages: one left out of collecting all is skipped, and still collects on its own', async () => {
     const globex = `${ATS_ORIGIN}/globex/jobs`;
     const base = listingCollection([ACME, globex]);
     const boards = { ...base, startPages: base.startPages.map((page) => (page.url === globex ? { ...page, included: false as const } : page)) };
     await signedInFlow(boards);
     const all = await flow!.collect(boards);
-    expect(Object.keys(all.places)).toEqual(['start-1']);
-    expect(all.places['start-1']).toMatchObject({ status: 'done', collected: 5 });
+    expect(Object.keys(all.startPages)).toEqual(['start-1']);
+    expect(all.startPages['start-1']).toMatchObject({ status: 'done', collected: 5 });
     expect(flow!.item(`${globex}/eng-1`)).toBeNull();
 
     const one = await flow!.collect(boards, [globex]);
-    expect(Object.keys(one.places)).toEqual(['start-2']);
-    expect(one.places['start-2']).toMatchObject({ status: 'done', pages: 1 });
+    expect(Object.keys(one.startPages)).toEqual(['start-2']);
+    expect(one.startPages['start-2']).toMatchObject({ status: 'done', pages: 1 });
     expect(flow!.item(`${globex}/eng-1`)).toMatchObject({ fields: { company: 'Globex' } });
   });
 
@@ -660,10 +660,11 @@ describe('mock integration: job search flow', () => {
     expect(flow!.listQueue(EVALUATE_QUEUE)).toEqual([]);
     expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ awaitingResume: false });
   });
-  it('33. the document names its browser profiles: an instance\'s own wins over the file\'s, and a name this machine lacks is chosen again', async () => {
+  it('33. browser profiles: a web profile context sets its section or container\'s, the file\'s covers the rest, and a name this machine lacks is chosen again', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
-    // The file's profile is Boards; the service's block names its own, Service (a home page's work mail, say).
+    // The file's profile is Boards; the service's block sits in a container whose web profile context names Service
+    // (a home page's work mail, say).
     expect(flow!.automation.profileOf(boards.capabilityId)).toEqual({ id: 'boards', name: 'Boards' });
     expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
     // Both are in the saved file, so they reopen with it.
@@ -671,18 +672,32 @@ describe('mock integration: job search flow', () => {
     flow!.restartApp();
     expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
 
-    const serviceBlock = () => readWebAutomationBlocks(flow!.document).webApis[0].block;
-    const setOwnProfile = (profile: string) => {
-      serviceBlock().schema.pluginConfig = { ...serviceBlock().schema.pluginConfig, profile };
-    };
+    const container = () => flow!.document.sections.flatMap((section) => section.blocks).find((block) => block.schema.id === 'service-profile')!;
+    const context = () => container().schema.containerBlocks!.find((block) => block.schema.id === 'profile')!;
+    // A second context beside it sets nothing, and lint says so.
+    const second = structuredClone(context());
+    second.schema.id = 'second-profile';
+    second.schema.pluginConfig = { ...second.schema.pluginConfig, profile: 'Boards' };
+    container().schema.containerBlocks!.push(second);
+    expect(ignoredProfileContexts(flow!.document)).toEqual([second]);
+    expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
+    expect((await executeHvyCliCommand(flow!.document, createHvyCliSession(), 'hvy lint')).output).toContain('Another web profile context comes first');
+    container().schema.containerBlocks!.splice(container().schema.containerBlocks!.indexOf(second), 1);
+
+    // UI: the context's "Change profile…", Boards: the service follows it, and is asked about again there.
+    flow!.chooseContextProfile('Boards');
+    expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'boards', name: 'Boards' });
+    expect(flow!.reviewWebApi()).toMatchObject({ reason: 'profile-changed' });
+    flow!.chooseContextProfile('Service');
+
     // A copy from another machine names a profile this one has no profile called: nothing runs until one is chosen.
-    setOwnProfile('Work');
+    context().schema.pluginConfig = { ...context().schema.pluginConfig, profile: 'Work' };
     expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toBeNull();
     await expect(flow!.probe()).rejects.toThrow(/Choose a browser profile for "Mock Analysis"/);
 
-    // UI: "Change profile…", "Every web plugin in this file": the block follows the file's profile, and the service
-    // is asked about again before it is used there.
-    setOwnProfile('');
+    // The context removed: the block uses the file's profile, and the service is asked about again before it is used
+    // there.
+    container().schema.containerBlocks!.splice(container().schema.containerBlocks!.indexOf(context()), 1);
     expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'boards', name: 'Boards' });
     expect(flow!.reviewWebApi()).toMatchObject({ reason: 'profile-changed' });
   });
@@ -693,8 +708,8 @@ describe('mock integration: job search flow', () => {
     const limited = { ...boards, startPages: boards.startPages.map((page) => (page.url === ACME ? { ...page, maxPages: 2, maxItems: 4 } : page)) };
     await signedInFlow(limited);
     const run = await flow!.collect(limited);
-    expect(run.places['start-1']).toMatchObject({ pages: 2, toCollect: 4, collected: 4 });
-    expect(run.places['start-2']).toMatchObject({ pages: 1, toCollect: 1, collected: 1 });
+    expect(run.startPages['start-1']).toMatchObject({ pages: 2, toCollect: 4, collected: 4 });
+    expect(run.startPages['start-2']).toMatchObject({ pages: 1, toCollect: 1, collected: 1 });
   });
   it('35. two pages on one site both need you: the run asks about one, then the other, and neither is lost', async () => {
     const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`, `${ATS_ORIGIN}/cyberdyne/jobs`]);
@@ -713,5 +728,19 @@ describe('mock integration: job search flow', () => {
     expect(second.attention!.url).not.toBe(first.attention!.url);
     const done = await flow!.resumeAttention(first.runId);
     expect(done).toMatchObject({ status: 'done', collected: 2, attention: null });
+  });
+  it('36. a list page of items already listed ends a page that stops there; one that keeps going reads on', async () => {
+    // Acme lists three jobs, then two more on its second page. A first run reads only the first page.
+    await signedInFlow(listingCollection([ACME], { maxPages: 1 }));
+    await flow!.collect(listingCollection([ACME], { maxPages: 1 }));
+    // Its first page is now all known: stopping there leaves the second page unread.
+    const stopping = await flow!.collect(listingCollection([ACME], { stopAtKnownPage: true }));
+    expect(stopping.startPages['start-1']).toMatchObject({ pages: 1, known: 3, collected: 0 });
+    expect(flow!.print()).toContain('start-1: every item on page 1 is already listed, so the rest are too');
+    // The page's own choice wins over the default: it keeps going, and reads the second page.
+    const base = listingCollection([ACME], { stopAtKnownPage: true });
+    const keepsGoing = { ...base, startPages: base.startPages.map((page) => ({ ...page, stopAtKnownPage: false })) };
+    const read = await flow!.collect(keepsGoing);
+    expect(read.startPages['start-1']).toMatchObject({ pages: 2, known: 3, collected: 2 });
   });
 });

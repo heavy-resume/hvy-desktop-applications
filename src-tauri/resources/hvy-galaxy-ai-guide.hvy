@@ -52,6 +52,7 @@ reader_max_width: 64rem
   15. `galaxy.web-api` — calls to a signed-in service's endpoints, allowed per file and approved at sign-in.
   16. `galaxy.web-collection` — collects records from web pages into the document, allowed per file.
   17. `galaxy.queue` — a paced, retrying queue in front of another plugin method; its state is saved in the block.
+  18. `galaxy.web-profile-context` — names the browser profile for the web plugins in its section or container.
 
  <!--hvy:text {}-->
   The list printed by `man hvy plugin` is only the subset with dedicated plugin-specific CLI commands. It is not the complete built-in plugin catalog. Any built-in can be inserted with `hvy insert INDEX plugin SECTION_PATH ID PLUGIN_ID`, then configured through its `plugin.json` and `plugin.txt` virtual files. Use `man hvy insert` for the generic insertion command.

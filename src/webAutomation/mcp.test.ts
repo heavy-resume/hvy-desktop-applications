@@ -54,7 +54,7 @@ describe('MCP web capabilities', () => {
     const { runId } = await handler.invoke({ operation: 'collect', path: DOCUMENT_PATH, capabilityId: 'listings' }, 'read') as { runId: string };
     await flow.settle();
     // Both pages are on one site and run at once: Initech is challenged straight away, and Globex carries on.
-    await flow.clock.runUntil(() => flow.automation.getState().runs[0].places['start-1'].status === 'done');
+    await flow.clock.runUntil(() => flow.automation.getState().runs[0].startPages['start-1'].status === 'done');
     const status = await handler.invoke({ operation: 'collect-status', path: DOCUMENT_PATH, runId }, 'read');
     expect(status).toMatchObject({
       untrustedContent: true,

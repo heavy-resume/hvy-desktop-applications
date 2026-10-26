@@ -3633,6 +3633,8 @@ function defaultAppSettings() {
     webCapabilityAuthorizations: {},
     integrationWebMcpApprovals: {},
     webServiceApprovals: {},
+    // Validated by the renderer's normalizeCollectionWorkerLimits.
+    webCollectionLimits: { perSite: 2, total: 4 },
   };
 }
 

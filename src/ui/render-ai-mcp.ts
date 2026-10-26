@@ -8,7 +8,7 @@ import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBind
 import { normalizeIntegrationWebMcpApprovals } from '../integrationWebMcp';
 import { builtInPluginPolicy } from '../pluginManager';
 import { revokeAuthorization } from '../webAutomation/authorization';
-import { normalizeCapabilityAuthorizations } from '../webAutomation/settings';
+import { DEFAULT_COLLECTION_WORKER_LIMITS, normalizeCapabilityAuthorizations, normalizeCollectionWorkerLimits } from '../webAutomation/settings';
 import { copyIcon, eyeIcon } from './render-shell';
 import { escapeAttr, escapeHtml } from './shared';
 
@@ -539,6 +539,9 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
     pluginPolicies,
     pluginAcceptances,
     webServiceApprovals,
+    webCollectionLimits: data.has('webCollectionPerSite')
+      ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')) })
+      : parsedSettings.webCollectionLimits,
   };
 }
 
@@ -575,6 +578,7 @@ export function parseAppSettings(value: string): AppSettings {
       webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(parsed.webCapabilityAuthorizations),
       integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(parsed.integrationWebMcpApprovals),
       webServiceApprovals: normalizeCapabilityAuthorizations(parsed.webServiceApprovals),
+      webCollectionLimits: normalizeCollectionWorkerLimits(parsed.webCollectionLimits),
     };
   } catch {
     return {
@@ -591,6 +595,7 @@ export function parseAppSettings(value: string): AppSettings {
       webCapabilityAuthorizations: {},
       integrationWebMcpApprovals: {},
       webServiceApprovals: {},
+      webCollectionLimits: DEFAULT_COLLECTION_WORKER_LIMITS,
     };
   }
 }

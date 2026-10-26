@@ -129,6 +129,9 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   const queues = new Map<string, DurableQueue>();
   // Script callbacks for sign-in changes, by capability and key. They do not survive the document closing.
   const sessionWatchers = new Map<string, () => void>();
+  // Each script handler's handover of the account's current state, by capability and key: run again once the document
+  // may use the account (its service approved), since what the handler did before that was refused.
+  const sessionHandovers = new Map<string, () => void>();
 
   // The plugin must be allowed in this file (the reference implementation's per-file plugin authorization).
   function requirePlugin(pluginId: string, displayName: string): void {
@@ -196,10 +199,11 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: web plugin readers, the profile an instance uses ("Signed in · Personal"), or none yet.
     profileOf,
 
-    // UI: "Change profile…", or a profile chosen while allowing a site, once the choice is saved in the document. Every
-    // web reader redraws in it (they redraw on events), and the log records it.
-    profileChosen(name: string, capabilityId: string | null): void {
-      emit('document', capabilityId ? `${capabilityId} uses browser profile ${name}` : `this file uses browser profile ${name}`);
+    // UI: the browser profile dialog, once the choice is saved in the document: for the file ("this file") or for a web
+    // profile context ("a web profile context"). Every web reader redraws in it (they redraw on events), and the log
+    // records it.
+    profileChosen(name: string, scope: string): void {
+      emit('document', `${scope} uses browser profile ${name}`);
     },
 
     // UI: "Sign in" modal for a galaxy.web-api block: what the document does with your account, and what changed.
@@ -207,13 +211,14 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return webApi.review(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name));
     },
 
-    // UI: "Sign in" modal, "Allow and sign in with [profile]" for a galaxy.web-api block.
+    // UI: "Allow [service]…" modal, "Allow", for a galaxy.web-api block; signing in follows if the profile is not signed in.
     authorizeWebApi(capability: WebApiCapability): void {
       const profileId = profileFor(capability.capabilityId, capability.name);
       deps.settings.update((settings) => ({
         ...settings,
         authorizations: recordAuthorization(settings.authorizations, deps.documentPath(), capability.capabilityId, webApi.authorizationParts(capability), profileId, deps.clock.now(), capability.name),
       }));
+      for (const [key, handOver] of sessionHandovers) if (key.startsWith(`${capability.capabilityId}\0`)) handOver();
     },
 
     // UI: app settings, "Web services for this file", unchecking a service and saving. The next use asks again.
@@ -250,9 +255,13 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       sessionWatchers.set(watcherKey, sessions.onChange((state) => {
         if (state.origin === capabilityOrigin(capability) && state.profileId === boundProfile()) handler(state);
       }));
-      const profileId = boundProfile();
-      const current = profileId ? sessions.stateFor(capability, profileId) : null;
-      if (current && current.status !== 'unknown') handler(current);
+      const handOver = () => {
+        const profileId = boundProfile();
+        const current = profileId ? sessions.stateFor(capability, profileId) : null;
+        if (current && current.status !== 'unknown') handler(current);
+      };
+      sessionHandovers.set(watcherKey, handOver);
+      handOver();
     },
 
     // UI: galaxy.web-api reader, "Sign out" button.
@@ -270,7 +279,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[]): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
-      // Collecting everything skips the places left out of it; naming a place collects it either way.
+      // Collecting everything skips the start pages left out of it; naming a start page collects it either way.
       const startPages = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages.filter((page) => page.included !== false);
       if (onlyStartUrls?.some((url) => !definition.startPages.some((page) => page.url === url))) {
         throw new WebAutomationError('invalid_request', "Only the block's own start pages can be collected.");
@@ -374,6 +383,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       for (const item of queues.values()) item.detach();
       for (const stop of sessionWatchers.values()) stop();
       sessionWatchers.clear();
+      sessionHandovers.clear();
     },
 
     isQueueIdle(queueId: string): boolean {

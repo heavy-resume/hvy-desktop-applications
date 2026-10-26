@@ -7,10 +7,11 @@ import type { HvyPlugin, HvyPluginFactory } from '../../../heavy-file-format/src
 import { getActiveStateRuntime, runWithStateRuntime, type StateRuntime } from '../../../heavy-file-format/src/state';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { createCliItemStore } from './cliItemStore';
-import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID } from './configs';
+import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
 import { readWebAutomationBlocks } from './documentBlocks';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
+import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
 import { capabilityOrigin } from './webApi';
@@ -54,6 +55,7 @@ export interface WebAutomationReaders {
   webApi: HvyPluginFactory;
   collection: HvyPluginFactory;
   queue: HvyPluginFactory;
+  profileContext: HvyPluginFactory;
 }
 
 /**
@@ -81,6 +83,11 @@ export function createWebAutomationPlugins(readers?: WebAutomationReaders): HvyP
       ...metadata(QUEUE_PLUGIN_ID, 'Queue'),
       ...(readers ? { create: readers.queue } : {}),
       scripting: { methods: queueScriptingMethods(resolveDocumentAutomation) },
+    },
+    // Names a browser profile for the web plugins around it; it reaches nothing itself.
+    {
+      ...metadata(WEB_PROFILE_CONTEXT_PLUGIN_ID, 'Web Profile Context'),
+      ...(readers ? { create: readers.profileContext } : {}),
     },
   ];
 }
@@ -138,12 +145,14 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       const capability = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability;
       return capability ? capabilityOrigin(capability) : null;
     },
-    // The instance's own profile, or the file's. Read when used: choosing one writes it into the document.
+    // The profile of the web profile context around the instance, or the file's. Read when used: choosing one writes
+    // it into the document.
     profileName: (capabilityId) => {
       const { webApis, collections } = readWebAutomationBlocks(document);
-      const own = webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.profile
-        ?? collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config.profile;
-      return own ?? documentProfileName(document.meta);
+      const block = webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.block
+        ?? collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.block;
+      const context = block ? profileContextFor(document, block) : null;
+      return context ? contextProfileName(context) : documentProfileName(document.meta);
     },
     callPlugin: (pluginId, method, args) => {
       // A queue's target plugin not allowed in this file pauses the queue for review rather than failing entries.

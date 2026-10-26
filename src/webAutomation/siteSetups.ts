@@ -3,7 +3,7 @@ import { resolveSitePattern, type SitePatternDefinition } from './sitePatterns';
 
 /**
  * Site setups in a collection: how to read a kind of page, as a named group
- * of patterns. A place to look (a start page) is read by whichever setup's
+ * of patterns. A start page is read by whichever setup's
  * patterns match its address, so nothing ties the two together. Setups copy
  * as text, so they can be pasted into another collection, shared, or
  * published (a distributed document's publisher lists the sites it supports).
@@ -35,12 +35,12 @@ export function recognizeAddress(collection: CollectionDefinition, url: string):
   return null;
 }
 
-/** The places a site setup reads now. */
-export function placesReadBy(collection: CollectionDefinition, siteId: string): StartPage[] {
+/** The start pages a site setup reads now. */
+export function startPagesReadBy(collection: CollectionDefinition, siteId: string): StartPage[] {
   return collection.startPages.filter((page) => recognizeAddress(collection, page.url)?.site?.id === siteId);
 }
 
-/** The fields no pattern of these reads: what a place may need as fixed values, such as a company its pages don't name. */
+/** The fields no pattern of these reads: what a start page may need as fixed values, such as a company its pages don't name. */
 export function fieldsNotRead(collection: CollectionDefinition, patterns: SitePatternDefinition[]): CollectionField[] {
   const read = new Set(patterns.flatMap((pattern) => pattern.fields.filter((field) => field.kind === 'text').map((field) => field.id)));
   return collection.fields.filter((field) => !read.has(field.id));
@@ -129,7 +129,7 @@ export function withSiteSetups(collection: CollectionDefinition, setups: SiteSet
   };
 }
 
-/** A site setup and its patterns, removed; places stay. */
+/** A site setup and its patterns, removed; start pages stay. */
 export function withoutSiteSetup(collection: CollectionDefinition, siteId: string): Pick<CollectionDefinition, 'sites' | 'patterns'> {
   return {
     sites: collection.sites.filter((site) => site.id !== siteId),

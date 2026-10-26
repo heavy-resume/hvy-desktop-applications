@@ -112,6 +112,15 @@ Run the desktop app:
 npm run tauri dev
 ```
 
+Web automation waits a random 1.5–4.5 s between page loads on a site, as a
+person browsing would. In development, `VITE_WEB_AUTOMATION_DELAY_SCALE`
+scales those waits (production always uses the full delays). The automation
+log still reports how long each wait would be at full pacing:
+
+```bash
+VITE_WEB_AUTOMATION_DELAY_SCALE=0.25 npm run tauri dev
+```
+
 Run Rust unit tests:
 
 ```bash

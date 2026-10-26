@@ -1,16 +1,19 @@
 import { randomBetween, type Clock, type Random } from './clock';
 import type { AutomationEmit } from './events';
 import type { BrowserHost } from './host';
+import { COLLECTION_WORKER_LIMIT_BOUNDS, DEFAULT_COLLECTION_WORKER_LIMITS, type CollectionWorkerLimits } from './settings';
 
 export interface SchedulerOptions {
   host: BrowserHost;
   clock: Clock;
   random: Random;
   emit: AutomationEmit;
-  /** Collection workers on one site (origin) at once, per profile. Their loads there still take turns. */
-  maxCollectionWorkersPerSite?: number;
+  /**
+   * Collection workers at once: on one site (origin) per profile, whose loads there still take turns, and in all.
+   * Read when a job is placed, so a change in App Settings applies to the next one.
+   */
+  collectionLimits?: () => CollectionWorkerLimits;
   maxCollectionWorkersPerProfile?: number;
-  maxCollectionWorkersGlobal?: number;
   idleTimeoutMs?: number;
   navigationDelayMs?: { min: number; max: number };
   /**
@@ -78,9 +81,8 @@ export class WorkerScheduler {
 
   constructor(options: SchedulerOptions) {
     this.options = {
-      maxCollectionWorkersPerSite: 2,
-      maxCollectionWorkersPerProfile: 4,
-      maxCollectionWorkersGlobal: 4,
+      collectionLimits: () => DEFAULT_COLLECTION_WORKER_LIMITS,
+      maxCollectionWorkersPerProfile: COLLECTION_WORKER_LIMIT_BOUNDS.total,
       idleTimeoutMs: 120_000,
       navigationDelayMs: { min: 1_500, max: 4_500 },
       navigationDelayScale: 1,
@@ -194,14 +196,15 @@ export class WorkerScheduler {
       if (existing) return existing.busy ? null : this.claim(existing, request);
       return this.claim(this.create(request.profileId, 'api'), request);
     }
+    const limits = this.options.collectionLimits();
     const site = request.origin ? `${request.profileId}\0${request.origin}` : null;
-    if (site && (this.siteWorkers.get(site) ?? 0) >= this.options.maxCollectionWorkersPerSite) return null;
+    if (site && (this.siteWorkers.get(site) ?? 0) >= limits.perSite) return null;
     const idle = this.workers.find((worker) => worker.profileId === request.profileId && worker.kind === 'collection' && !worker.busy);
     if (idle) return this.claim(idle, request, site);
     const collectionWorkers = this.workers.filter((worker) => worker.kind === 'collection');
     const profileWorkers = collectionWorkers.filter((worker) => worker.profileId === request.profileId);
     if (profileWorkers.length >= this.options.maxCollectionWorkersPerProfile) return null;
-    if (collectionWorkers.length >= this.options.maxCollectionWorkersGlobal) return null;
+    if (collectionWorkers.length >= limits.total) return null;
     return this.claim(this.create(request.profileId, 'collection'), request, site);
   }
 

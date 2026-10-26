@@ -111,7 +111,7 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       const lookup = resolve(ctx);
       const base = collection(lookup, args);
       // Scripts choose among the block's start pages by address; new sites go through the block and its review. Without a
-      // choice, every place included in collecting runs.
+      // choice, every start page included in collecting runs.
       const approved = base.startPages.map((page) => page.url);
       const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => page.included !== false).map((page) => page.url);
       const unapproved = startUrls.filter((url) => !approved.includes(url));

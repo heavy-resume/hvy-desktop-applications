@@ -5,7 +5,7 @@ import type { HvyMode, VisualDocument } from './hvy';
 import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 import { normalizeIntegrationWebMcpApprovals } from './integrationWebMcp';
-import { normalizeCapabilityAuthorizations } from './webAutomation/settings';
+import { normalizeCapabilityAuthorizations, normalizeCollectionWorkerLimits } from './webAutomation/settings';
 import { relocatedDocumentSettings } from './documentSettingsRelocation';
 import { relocateWebAutomationDocument } from './webAutomation/app';
 
@@ -452,6 +452,7 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings.webCapabilityAuthorizations),
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
     webServiceApprovals: normalizeCapabilityAuthorizations(settings.webServiceApprovals),
+    webCollectionLimits: normalizeCollectionWorkerLimits(settings.webCollectionLimits),
   };
 }
 

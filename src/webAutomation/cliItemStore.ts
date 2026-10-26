@@ -4,6 +4,7 @@ import { executeHvyCliCommandSync, writeHvyVirtualFileSync } from '../../../heav
 import { getComponentDefsFromMeta } from '../../../heavy-file-format/src/component-definition-helpers';
 import { extractReusableTemplateVariablesFromDefinition } from '../../../heavy-file-format/src/reusable-template-values';
 import { findSortValueAnnotations, formatSortValueAnnotation, replaceSortValueAnnotations } from '../../../heavy-file-format/src/sort-values';
+import { parseFormSpec, serializeFormSpec } from '../../../heavy-file-format/src/plugins/form';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import type { DocumentItem, DocumentItemStore } from './recordSink';
 
@@ -43,6 +44,15 @@ export type ItemFieldBinding =
       /** Renders the value as a Markdown link to the URL held in this field. */
       linkTo?: string;
       source?: ItemFieldSource;
+    }
+  | {
+      /**
+       * The value of a form's field: the field with this label in a form block inside the item (its `plugin.txt`). A
+       * hidden field tells the form's script which item it is in, such as its job's address.
+       */
+      kind: 'form-field';
+      path: string;
+      label: string;
     };
 
 export interface CliItemStoreConfig {
@@ -127,7 +137,7 @@ function writeAnnotated(content: string, binding: Extract<ItemFieldBinding, { ki
     return formatted;
   }, binding.annotation.kind);
   // A line may hold the value only once something sets it (a status line the document's scripts write whole): an empty
-  // value with no place in the line is nothing to write.
+  // value with no start page in the line is nothing to write.
   if (written === null) {
     if (body) throw new Error(`${binding.path} has no ${binding.annotation.kind} value "${binding.annotation.key}" to fill.`);
     return content;
@@ -168,6 +178,10 @@ export function createCliItemStore(document: VisualDocument, config: CliItemStor
     if (content === null) return undefined;
     if (binding.kind === 'text') return content;
     if (binding.kind === 'annotated') return readAnnotated(content, binding.annotation);
+    if (binding.kind === 'form-field') {
+      const value = parseFormSpec(content).spec.fields.find((field) => field.label === binding.label)?.value;
+      return typeof value === 'string' ? value : undefined;
+    }
     const rows = JSON.parse(content) as Array<{ cells: string[] }>;
     const cell = rows[binding.row]?.cells[binding.column];
     return cell === undefined ? undefined : decodeCell(cell);
@@ -182,6 +196,11 @@ export function createCliItemStore(document: VisualDocument, config: CliItemStor
     }
     if (binding.kind === 'annotated') {
       write(document, path, writeAnnotated(cat(document, path) ?? '', binding, text, item.fields, item.url));
+      return;
+    }
+    if (binding.kind === 'form-field') {
+      const { spec } = parseFormSpec(cat(document, path) ?? '');
+      write(document, path, serializeFormSpec({ ...spec, fields: spec.fields.map((field) => (field.label === binding.label ? { ...field, value: text } : field)) }));
       return;
     }
     const rows = JSON.parse(cat(document, path) ?? '[]') as Array<{ cells: string[] }>;
@@ -230,7 +249,7 @@ export function createCliItemStore(document: VisualDocument, config: CliItemStor
       const existing = itemIds().includes(id) ? read(id) : null;
       if (!existing) create(id);
       for (const [name, binding] of Object.entries(config.fields)) {
-        const sourced = binding.kind !== 'cell' && binding.source === 'collected' ? readableTime(item.provenance.collectedAt) : undefined;
+        const sourced = 'source' in binding && binding.source === 'collected' ? readableTime(item.provenance.collectedAt) : undefined;
         // When an item was found is when it was first found: a later run does not move it.
         if (sourced !== undefined && existing?.fields[name]) continue;
         const value = sourced ?? (name === 'url' && item.fields.url === undefined ? item.url : item.fields[name]);
@@ -271,7 +290,7 @@ export function validateCliItemStore(document: VisualDocument, config: CliItemSt
       errors.push(`Field "${name}" points at ${binding.path}, which the template does not have.`);
       continue;
     }
-    const annotation = binding.kind === 'text' ? undefined : binding.annotation;
+    const annotation = 'annotation' in binding ? binding.annotation : undefined;
     if (annotation) {
       const definition = getComponentDefsFromMeta(document.meta).find((candidate) => candidate.name === config.componentName);
       const defs = annotation.kind === 'sort' ? definition?.sortValueDefs : definition?.groupValueDefs;

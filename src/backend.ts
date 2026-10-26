@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
 import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
 import type { CapabilityAuthorizations } from './webAutomation/authorization';
+import { DEFAULT_COLLECTION_WORKER_LIMITS, normalizeCollectionWorkerLimits, type CollectionWorkerLimits } from './webAutomation/settings';
 import { normalizeIntegrationWebMcpApprovals, type IntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
 
@@ -538,6 +539,8 @@ export interface AppSettings {
   integrationWebMcpApprovals: IntegrationWebMcpApprovals;
   /** Web API service approvals by document path (galaxy.web-api, approved at sign-in). */
   webServiceApprovals: CapabilityAuthorizations;
+  /** How many pages web collection reads at once: on one site, and in all. */
+  webCollectionLimits: CollectionWorkerLimits;
 }
 
 export interface InstalledPluginPackageFile {
@@ -671,6 +674,8 @@ export function loadAppSettings(): Promise<AppSettings> {
   return invokeDesktop<AppSettings>('load_app_settings').then((settings) => ({
     ...settings,
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
+    // Stored as given (Tauri keeps it as plain JSON, null until first saved): validated here.
+    webCollectionLimits: normalizeCollectionWorkerLimits(settings.webCollectionLimits),
   }));
 }
 
@@ -679,6 +684,7 @@ export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
   return invokeDesktop<AppSettings>('save_app_settings', { settings: normalized }).then((saved) => ({
     ...saved,
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(saved.integrationWebMcpApprovals),
+    webCollectionLimits: normalizeCollectionWorkerLimits(saved.webCollectionLimits),
   }));
 }
 
@@ -878,6 +884,7 @@ export function defaultAppSettings(): AppSettings {
     webCapabilityAuthorizations: {},
     integrationWebMcpApprovals: {},
     webServiceApprovals: {},
+    webCollectionLimits: DEFAULT_COLLECTION_WORKER_LIMITS,
   };
 }
 

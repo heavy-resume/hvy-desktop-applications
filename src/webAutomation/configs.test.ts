@@ -12,7 +12,7 @@ const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
 
 const errorsOf = (result: { ok: boolean; errors?: string[] }) => (result.ok ? [] : result.errors ?? []);
 
-describe('a place left out of collecting all', () => {
+describe('a start page left out of collecting all', () => {
   it('keeps the flag through the configuration reader, and only when it is false', () => {
     const block = (startPages: unknown[]) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages });
     const read = block([{ id: 'a', url: 'https://jobs.test/a', included: false }, { id: 'b', url: 'https://jobs.test/b', included: true }]);

@@ -2,17 +2,18 @@ import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
 import type { HvyPluginContext, HvyPluginFactory, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
 import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
-import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, PlaceProgress, StartPage } from '../webAutomation/collection';
+import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
-import { LIMIT_BOUNDS, readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig } from '../webAutomation/configs';
+import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, WEB_AUTOMATION_SCHEMA_VERSION } from '../webAutomation/configs';
 import { createWebAutomationPlugins, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
-import { documentProfileName, withDocumentProfile } from '../webAutomation/profiles';
+import { isIgnoredProfileContext, profileContextFor } from '../webAutomation/profileContexts';
+import { documentProfileName, resolveProfile, withDocumentProfile, type BrowserProfile } from '../webAutomation/profiles';
 import type { QueueEntry } from '../webAutomation/queue';
 import type { DocumentAutomationLookup } from '../webAutomation/scripting';
 import { canSetUpSites, setUpSite } from '../webAutomation/siteSetupOpener';
 import {
-  fieldsNotRead, newSiteId, patternsOf, placesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup,
+  fieldsNotRead, newSiteId, patternsOf, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup,
   type SiteSetup, type SiteSetupPaste,
 } from '../webAutomation/siteSetups';
 import { capabilityOrigin, type WebApiCapability } from '../webAutomation/webApi';
@@ -128,59 +129,24 @@ function profileSelect(current: string | null): HTMLSelectElement {
   return select;
 }
 
-/** The browser profile this instance names for itself, when it uses another than the file's. */
-function ownProfile(ctx: HvyPluginContext): string {
-  const profile = ctx.block.schema.pluginConfig.profile;
-  return typeof profile === 'string' ? profile.trim() : '';
+/** This machine's browser profiles, as the document's names resolve against them. */
+function localProfiles(): BrowserProfile[] {
+  return state.integrationRegistry.profiles.map(({ id, name }) => ({ id, name }));
 }
 
 /**
- * Saves a browser profile into the document, by name: as this instance's own, or as the file's, which every web
- * plugin instance without its own uses (this one then follows it too).
+ * The one dialog where a browser profile is chosen: the file's, or a web profile context's. The choice is saved in
+ * the document by name; a site is asked about again before it is used with another profile.
  */
-function chooseProfile(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capabilityId: string, name: string, forInstance: boolean): void {
-  if (forInstance) {
-    ctx.setConfig({ profile: name });
-  } else {
-    ctx.header.set('metadata', withDocumentProfile(ctx.header.get('metadata'), name));
-    if (ownProfile(ctx)) ctx.setConfig({ profile: '' });
-  }
-  lookup.automation.profileChosen(name, forInstance ? capabilityId : null);
-}
-
-/**
- * "Change profile…": the browser profile for every web plugin in this file, or for this instance only (a home page
- * reading personal and work mail at once). Saved in the document. A site is approved again for a new profile.
- */
-function openProfileDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capabilityId: string, instanceName: string): void {
-  const current = lookup.automation.profileOf(capabilityId);
+function openProfileDialog(options: { current: string | null; note: string; onChosen(name: string): void }): void {
   const { form, body, row, close } = openModal('Browser profile', 'hvy-web-profile-dialog');
-  const select = profileSelect(current?.name ?? (ownProfile(ctx) || documentProfileName(ctx.rawDocument.meta)));
-  const selectLabel = document.createElement('label');
-  selectLabel.className = 'hvy-web-profile';
-  const selectName = document.createElement('span');
-  selectName.textContent = 'Browser profile';
-  selectLabel.append(selectName, select);
-  const scope = (value: 'file' | 'instance', text: string) => {
-    const label = document.createElement('label');
-    label.className = 'checkbox-row hvy-web-profile-scope';
-    const input = document.createElement('input');
-    input.className = 'hvy-galaxy-input';
-    input.type = 'radio';
-    input.name = 'scope';
-    input.value = value;
-    input.checked = (value === 'instance') === Boolean(ownProfile(ctx));
-    const span = document.createElement('span');
-    span.textContent = text;
-    label.append(input, span);
-    return label;
-  };
-  body.append(
-    selectLabel,
-    scope('file', 'Every web plugin in this file'),
-    scope('instance', `Only ${instanceName}`),
-    paragraph('Saved in this file by name. A site is asked about again before it is used with another profile.', 'hvy-web-place-hint'),
-  );
+  const select = profileSelect(options.current);
+  const label = document.createElement('label');
+  label.className = 'hvy-web-profile';
+  const name = document.createElement('span');
+  name.textContent = 'Browser profile';
+  label.append(name, select);
+  body.append(label, paragraph(options.note, 'hvy-web-page-hint'));
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
   const save = button('Save', true);
@@ -188,48 +154,59 @@ function openProfileDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLook
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!select.value) return;
-    chooseProfile(ctx, lookup, capabilityId, select.value, new FormData(form).get('scope') === 'instance');
     close();
+    options.onChosen(select.value);
   });
   row.append(cancel, save);
   select.focus();
 }
 
+const SAVED_BY_NAME = 'Saved in the file by name. A site is asked about again before it is used with another profile.';
+
+/** The file's profile, for the web plugins outside any web profile context, saved in the front matter. */
+function chooseFileProfile(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, then: () => void = () => {}): void {
+  openProfileDialog({
+    current: documentProfileName(ctx.rawDocument.meta),
+    note: `For the web plugins in this file outside a web profile context. ${SAVED_BY_NAME}`,
+    onChosen: (name) => {
+      ctx.header.set('metadata', withDocumentProfile(ctx.header.get('metadata'), name));
+      lookup.automation.profileChosen(name, 'this file');
+      then();
+    },
+  });
+}
+
+const WAITING_FOR_CONTEXT = 'Waiting for a browser profile from the web profile context of this section or container.';
+
 /**
- * Which browser profile a web plugin instance uses, where that is a choice: with several profiles on this machine, or
- * before the file names one this machine has.
+ * Which browser profile a web plugin uses, where that is a choice: with several profiles on this machine, or before
+ * one is chosen. Inside a web profile context, the context is where it is chosen.
  */
-function profileLine(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capabilityId: string, instanceName: string): HTMLElement[] {
+function profileLine(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capabilityId: string): HTMLElement[] {
   const current = lookup.automation.profileOf(capabilityId);
-  if (current && state.integrationRegistry.profiles.length <= 1) return [];
+  const several = state.integrationRegistry.profiles.length > 1;
+  if (profileContextFor(ctx.rawDocument, ctx.block)) {
+    if (!current) return [status(WAITING_FOR_CONTEXT)];
+    return several ? [paragraph(`Browser profile: ${current.name}, from the web profile context here`, 'hvy-web-page-hint')] : [];
+  }
+  if (current && !several) return [];
   const change = button(current ? 'Change profile…' : 'Choose a browser profile…', !current);
-  change.addEventListener('click', () => openProfileDialog(ctx, lookup, capabilityId, instanceName));
-  return [paragraph(current ? `Browser profile: ${current.name}` : 'No browser profile chosen yet.', 'hvy-web-place-hint'), actions(change)];
+  change.addEventListener('click', () => chooseFileProfile(ctx, lookup));
+  return [paragraph(current ? `Browser profile: ${current.name}` : 'No browser profile chosen yet.', 'hvy-web-page-hint'), actions(change)];
 }
 
 /**
- * Allow this file to use a web API's site, in the browser profile the document names, shown so it can be checked.
- * When the document names none this machine has, the dialog asks and saves the choice into the document. A block with
- * a sign-in then signs in, if the profile is not signed in already. Explicit modal, as for Galaxy's other web
- * capabilities; it asks again when the profile or what the block does changes.
+ * Allow this file to use a web API's site, in the browser profile the document names for it, shown so it can be
+ * checked. A block with a sign-in then signs in, if the profile is not signed in already. Explicit modal, as for
+ * Galaxy's other web capabilities; it asks again when the profile or what the block does changes.
  */
-function openApprovalDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capability: WebApiCapability, onOutcome: (problem: string) => void): void {
+function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApiCapability, profile: BrowserProfile, onOutcome: (problem: string) => void): void {
   if (!state.document) return;
-  const current = lookup.automation.profileOf(capability.capabilityId);
   const { form, body, row, close } = openModal(`Use ${capability.name} in this file?`, 'hvy-web-authorization-dialog wide-dialog');
-  const select = current ? null : profileSelect(ownProfile(ctx) || documentProfileName(ctx.rawDocument.meta));
-  if (select) {
-    const profileLabel = document.createElement('label');
-    profileLabel.className = 'hvy-web-profile';
-    const profileName = document.createElement('span');
-    profileName.textContent = 'Browser profile';
-    profileLabel.append(profileName, select, paragraph(`Saved in this file. ${capability.session ? 'Your sign-in stays in this browser profile.' : 'Calls use this browser profile’s cookies.'}`, 'hvy-web-place-hint'));
-    body.append(profileLabel);
-  }
   const details = document.createElement('dl');
   const rows: Array<[string, string]> = [
     ['Document', state.document.source.name],
-    ...(current ? [['Browser profile', current.name] as [string, string]] : []),
+    ['Browser profile', profile.name],
     // The page you are sent to, in full, so its address can be checked before signing in.
     capability.session ? ['Sign-in page', capability.session.loginUrl] : ['Website', capability.pageUrl],
     ['Calls', capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
@@ -242,32 +219,18 @@ function openApprovalDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
     dd.textContent = description;
     details.append(dt, dd);
   }
-  // With no profile for this file yet, it is a first use.
-  const review = current ? lookup.automation.reviewWebApi(capability) : { capabilityId: capability.capabilityId, reason: 'first-use' as const, changedCategories: [] };
   body.append(
     details,
-    paragraph(reviewReason(review, capability.name), 'hvy-web-authorization-reason'),
+    paragraph(reviewReason(lookup.automation.reviewWebApi(capability), capability.name), 'hvy-web-authorization-reason'),
     paragraph(`${capability.session ? 'Calls are made as your signed-in account.' : 'Calls are made in your browser profile.'} What this file sends and stores is in the document.`),
   );
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
+  // Allowing checks the account first: the sign-in window opens only when the profile is not signed in there.
   const allow = button('Allow', true);
   allow.type = 'submit';
-  // Signing in follows only for a block with a sign-in, in a profile not known to be signed in there.
-  const profile = () => current ?? state.integrationRegistry.profiles.find((candidate) => candidate.name === select?.value) ?? null;
-  const signedIn = (profileId: string) => lookup.automation.getState().sessions.some((session) => session.origin === capabilityOrigin(capability) && session.profileId === profileId && session.status === 'signed-in');
-  const showProfile = () => {
-    const chosen = profile();
-    allow.disabled = !chosen;
-    allow.textContent = capability.session && !(chosen && signedIn(chosen.id)) ? 'Allow and sign in' : 'Allow';
-  };
-  select?.addEventListener('change', showProfile);
-  showProfile();
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!profile()) return;
-    // A profile chosen here goes where the document's name for it was: this instance's own, or the file's.
-    if (select) chooseProfile(ctx, lookup, capability.capabilityId, select.value, Boolean(ownProfile(ctx)));
     lookup.automation.authorizeWebApi(capability);
     close();
     if (capability.session) signInTo(lookup, capability).catch((error: unknown) => onOutcome(errorMessage(error)));
@@ -275,8 +238,41 @@ function openApprovalDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
     else onOutcome('');
   });
   row.append(cancel, allow);
-  (select ?? allow).focus();
+  allow.focus();
 }
+
+/**
+ * A web profile context: the browser profile for the web plugins in its section or container, and anything nested
+ * there. Chosen here; the document keeps it by name.
+ */
+const profileContextReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup) => {
+  const result = readProfileContextBlockConfig(ctx.block.schema.pluginConfig);
+  if (!result.ok) {
+    root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
+    return;
+  }
+  const name = result.value.profile ?? null;
+  const profile = resolveProfile(name, localProfiles());
+  const choose = button(profile ? 'Change profile…' : 'Choose a browser profile…', !profile);
+  choose.addEventListener('click', () => openProfileDialog({
+    current: profile?.name ?? name,
+    note: `For the web plugins in this section or container. ${SAVED_BY_NAME}`,
+    onChosen: (chosen) => {
+      ctx.setConfig({ schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION, profile: chosen });
+      lookup.automation.profileChosen(chosen, 'a web profile context');
+    },
+  }));
+  const ignored = isIgnoredProfileContext(ctx.rawDocument, ctx.block);
+  root.append(
+    heading('Browser profile'),
+    status(ignored
+      ? 'Another web profile context comes first in this section or container, so this one sets nothing.'
+      : profile
+        ? `${profile.name}, for the web plugins in this section or container.`
+        : name ? `No browser profile here is called “${name}”.` : 'No browser profile chosen yet.'),
+    actions(choose),
+  );
+});
 
 const webApiReader: HvyPluginFactory = (ctx) => {
   // A probe or sign-in failure is shown until the user acts again.
@@ -293,21 +289,24 @@ const webApiReader: HvyPluginFactory = (ctx) => {
       problem = message;
       sync();
     };
-    // One step: the modal shows the profile (or asks for one) and takes the approval, then signs in if the block has a
-    // sign-in.
+    const inContext = Boolean(profileContextFor(ctx.rawDocument, ctx.block));
+    // The approval, in the profile the document names: without one yet, the file's profile is chosen first. (A block in
+    // a web profile context without one waits for it, with no Sign in.)
     const openApproval = (label: string, primary: boolean) => {
       const open = button(label, primary);
       open.addEventListener('click', () => {
         problem = '';
-        openApprovalDialog(ctx, lookup, capability, showProblem);
+        const profile = lookup.automation.profileOf(capability.capabilityId);
+        if (profile) openApprovalDialog(lookup, capability, profile, showProblem);
+        else chooseFileProfile(ctx, lookup, () => openApprovalDialog(lookup, capability, lookup.automation.profileOf(capability.capabilityId)!, showProblem));
       });
       return open;
     };
-    // With several browser profiles here, the profile can change, for the file or for this instance alone.
+    // With several browser profiles here, the file's profile can change from here; a context changes it itself.
     const changeProfile = (): HTMLButtonElement[] => {
-      if (state.integrationRegistry.profiles.length <= 1) return [];
+      if (inContext || state.integrationRegistry.profiles.length <= 1) return [];
       const change = button('Change profile…');
-      change.addEventListener('click', () => openProfileDialog(ctx, lookup, capability.capabilityId, capability.name));
+      change.addEventListener('click', () => chooseFileProfile(ctx, lookup));
       return [change];
     };
     root.append(heading(capability.name));
@@ -315,10 +314,15 @@ const webApiReader: HvyPluginFactory = (ctx) => {
     const finish = () => {
       if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     };
+    // Inside a web profile context that has no profile here yet, the block waits for it.
+    if (!profile && inContext) {
+      root.append(status(WAITING_FOR_CONTEXT));
+      finish();
+      return;
+    }
     if (!profile || lookup.automation.reviewWebApi(capability).reason !== 'authorized') {
-      root.append(capability.session
-        ? status('Not signed in.')
-        : status('Not allowed in this file yet.'), actions(openApproval(capability.session ? `Sign in to ${capability.name}` : `Allow ${capability.name}`, true)));
+      // Whether the profile is signed in there is not checked before the file may use the site.
+      root.append(status(profile ? 'Not allowed in this file yet.' : 'No browser profile chosen yet.'), actions(openApproval(`Allow ${capability.name}…`, true)));
       finish();
       return;
     }
@@ -382,8 +386,8 @@ function shortAddress(value: string): string {
   return `${url.host}${path}${url.search}`;
 }
 
-/** What a place is called: its first fixed value (a careers page's company), or its address. */
-function placeName(collection: CollectionDefinition, page: StartPage): string {
+/** What a start page is called: its first fixed value (a careers page's company), or its address. */
+function pageName(collection: CollectionDefinition, page: StartPage): string {
   const named = collection.fields.find((field) => page.values?.[field.id]);
   return named ? page.values![named.id] : shortAddress(page.url);
 }
@@ -402,7 +406,7 @@ function readsWith(collection: CollectionDefinition, url: string): string | null
   return recognized ? (recognized.site ? setupName(recognized.site) : recognized.pattern.name) : null;
 }
 
-type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems'>>;
+type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage'>>;
 
 /** Why the block would refuse a change, checked over the whole configuration as the loader and lint do. */
 function checkCollection(ctx: HvyPluginContext, patch: CollectionPatch): string[] {
@@ -423,7 +427,7 @@ function currentCollection(ctx: HvyPluginContext, fallback: CollectionDefinition
   return current.ok ? current.value.collection : fallback;
 }
 
-/** An explicit modal: a title, a body to fill, a place for a refused change's reason, and its buttons' row. */
+/** An explicit modal: a title, a body to fill, a start page for a refused change's reason, and its buttons' row. */
 function openModal(title: string, className: string): { form: HTMLFormElement; body: HTMLElement; errors: HTMLElement; row: HTMLElement; close(): void } {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
@@ -468,7 +472,7 @@ function labelled(text: string, input: HTMLInputElement, hint?: string): HTMLLab
   const name = document.createElement('span');
   name.textContent = text;
   label.append(name, input);
-  if (hint) label.append(paragraph(hint, 'hvy-web-place-hint'));
+  if (hint) label.append(paragraph(hint, 'hvy-web-page-hint'));
   return label;
 }
 
@@ -480,14 +484,14 @@ function textInput(name: string, value = ''): HTMLInputElement {
   return input;
 }
 
-/** Inputs for fixed values: what a place's pages don't show, the same for every item from it. */
+/** Inputs for fixed values: what a start page's pages don't show, the same for every item from it. */
 function valueInputs(fields: CollectionField[], values: Record<string, string> = {}): { element: HTMLElement; read(): Record<string, string> } {
   const inputs = fields.filter((field) => field.kind === 'text').map((field) => ({ field, input: textInput(`value-${field.id}`, values[field.id] ?? '') }));
   const fieldset = document.createElement('fieldset');
-  fieldset.className = 'hvy-web-place-values';
+  fieldset.className = 'hvy-web-page-values';
   const legend = document.createElement('legend');
   legend.textContent = 'Defaults';
-  fieldset.append(legend, paragraph('Used when the page doesn’t show one.', 'hvy-web-place-hint'));
+  fieldset.append(legend, paragraph('Used when the page doesn’t show one.', 'hvy-web-page-hint'));
   for (const { field, input } of inputs) fieldset.append(labelled(field.label, input));
   fieldset.hidden = !inputs.length;
   return {
@@ -496,23 +500,23 @@ function valueInputs(fields: CollectionField[], values: Record<string, string> =
   };
 }
 
-/** A new place's id from its address, unique in the block. */
+/** A new start page's id from its address, unique in the block. */
 function startPageId(collection: CollectionDefinition, url: string): string {
   const parsed = new URL(url);
-  const base = `${parsed.host}${parsed.pathname}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'place';
+  const base = `${parsed.host}${parsed.pathname}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'page';
   const taken = new Set(collection.startPages.map((page) => page.id));
   let id = base;
   for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
   return id;
 }
 
-function withPlace(collection: CollectionDefinition, url: string, values: Record<string, string>): StartPage[] {
+function withPage(collection: CollectionDefinition, url: string, values: Record<string, string>): StartPage[] {
   return [...collection.startPages, { id: startPageId(collection, url), url, ...(Object.keys(values).length ? { values } : {}) }];
 }
 
-/** The last step of adding a place set up just now: the fields its new setup doesn't read, then the place. */
-function openPlaceValuesDialog(url: string, fields: CollectionField[], save: (values: Record<string, string>) => string[]): void {
-  const { form, body, errors, row, close } = openModal(`Add ${shortAddress(url)}`, 'hvy-web-place-dialog wide-dialog');
+/** The last step of adding a start page set up just now: the fields its new setup doesn't read, then the start page. */
+function openPageValuesDialog(url: string, fields: CollectionField[], save: (values: Record<string, string>) => string[]): void {
+  const { form, body, errors, row, close } = openModal(`Add ${shortAddress(url)}`, 'hvy-web-page-dialog wide-dialog');
   const values = valueInputs(fields);
   body.append(values.element);
   const cancel = button('Cancel');
@@ -545,18 +549,18 @@ function setUpSiteFor(ctx: HvyPluginContext, collection: CollectionDefinition, u
   });
 }
 
-/** Adding a place nothing reads: set its site up, then the fields the setup doesn't read, then the place. Cancelling adds nothing. */
-function addPlaceBySettingUp(ctx: HvyPluginContext, collection: CollectionDefinition, url: string): void {
+/** Adding a start page nothing reads: set its site up, then the fields the setup doesn't read, then the start page. Cancelling adds nothing. */
+function addPageBySettingUp(ctx: HvyPluginContext, collection: CollectionDefinition, url: string): void {
   setUpSiteFor(ctx, collection, url, null, (setup) => {
     const now = currentCollection(ctx, collection);
     const withSetup = { ...now, ...withSiteSetups(now, [setup]) };
     const unread = fieldsNotRead(withSetup, setup.patterns).filter((field) => field.kind === 'text');
-    if (!unread.length) return saveCollection(ctx, { ...withSiteSetups(now, [setup]), startPages: withPlace(now, url, {}) });
+    if (!unread.length) return saveCollection(ctx, { ...withSiteSetups(now, [setup]), startPages: withPage(now, url, {}) });
     const problems = checkCollection(ctx, withSiteSetups(now, [setup]));
     if (problems.length) return problems;
-    openPlaceValuesDialog(url, unread, (values) => {
+    openPageValuesDialog(url, unread, (values) => {
       const latest = currentCollection(ctx, collection);
-      return saveCollection(ctx, { ...withSiteSetups(latest, [setup]), startPages: withPlace(latest, url, values) });
+      return saveCollection(ctx, { ...withSiteSetups(latest, [setup]), startPages: withPage(latest, url, values) });
     });
     return [];
   });
@@ -586,26 +590,26 @@ function setupPlanText(collection: CollectionDefinition, plan: SiteSetupPaste): 
           ? 'The one here is the same version; it is replaced.'
           : `The one here is newer (v${replaces.from.version}); it is replaced with this older one.`;
   const element = document.createElement('div');
-  element.className = 'hvy-web-place-setup';
+  element.className = 'hvy-web-page-setup';
   element.append(
-    paragraph(setupName(setup), 'hvy-web-place-name'),
-    paragraph(`Reads ${labels.join(', ') || 'nothing yet'}, on ${websitesOf(setup).join(', ')}.`, 'hvy-web-place-hint'),
-    paragraph(change, 'hvy-web-place-hint'),
+    paragraph(setupName(setup), 'hvy-web-page-name'),
+    paragraph(`Reads ${labels.join(', ') || 'nothing yet'}, on ${websitesOf(setup).join(', ')}.`, 'hvy-web-page-hint'),
+    paragraph(change, 'hvy-web-page-hint'),
   );
   return element;
 }
 
 /**
- * Add a place to look: an address, or a pasted site setup. An address a setup reads asks only for the fields that
+ * Add a page: an address, or a pasted site setup. An address a setup reads asks only for the fields that
  * setup doesn't read; one nothing reads goes on to setting its site up. Cancelling at any point adds nothing.
  */
-function openAddPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
-  const { form, body, errors, row, close } = openModal('Add a page', 'hvy-web-place-dialog wide-dialog');
-  const input = textInput('place');
+function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
+  const { form, body, errors, row, close } = openModal('Add a page', 'hvy-web-page-dialog wide-dialog');
+  const input = textInput('address');
   input.placeholder = 'https://';
   input.autocomplete = 'off';
   const result = document.createElement('div');
-  result.className = 'hvy-web-place-result';
+  result.className = 'hvy-web-page-result';
   result.setAttribute('role', 'status');
   let values = valueInputs([]);
   body.append(labelled('Address', input, `Paste the address of a list of ${items(collection)}: a careers page, or a search on a job board. Or paste a site setup you copied.`), result, values.element);
@@ -642,23 +646,23 @@ function openAddPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinit
       submit.textContent = plans.every((plan) => plan.replaces) ? 'Update' : setups.length === 1 ? 'Add site setup' : 'Add site setups';
       action = () => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), setups));
     } else if (entered && !url) {
-      if (!result.childElementCount) result.append(paragraph('That isn’t an address or a site setup.', 'hvy-web-place-hint'));
+      if (!result.childElementCount) result.append(paragraph('That isn’t an address or a site setup.', 'hvy-web-page-hint'));
     } else if (duplicate) {
-      result.append(paragraph('Already a place to look.', 'hvy-web-place-hint'));
+      result.append(paragraph('Already one of the pages.', 'hvy-web-page-hint'));
     } else if (url && recognized) {
-      result.append(paragraph(`Reads with: ${recognized}`, 'hvy-web-place-hint'));
-      action = () => saveCollection(ctx, { startPages: withPlace(currentCollection(ctx, collection), url, values.read()) });
+      result.append(paragraph(`Reads with: ${recognized}`, 'hvy-web-page-hint'));
+      action = () => saveCollection(ctx, { startPages: withPage(currentCollection(ctx, collection), url, values.read()) });
     } else if (url && canSetUpSites()) {
-      result.append(paragraph(`This site isn’t set up yet. Next, point at where the ${items(now)} are on its page.`, 'hvy-web-place-hint'));
+      result.append(paragraph(`This site isn’t set up yet. Next, point at where the ${items(now)} are on its page.`, 'hvy-web-page-hint'));
       submit.textContent = 'Set up this site';
       action = () => {
         close();
-        addPlaceBySettingUp(ctx, now, url);
+        addPageBySettingUp(ctx, now, url);
         return [];
       };
     } else if (url) {
-      result.append(paragraph('This site isn’t set up yet, so runs will skip it.', 'hvy-web-place-hint'));
-      action = () => saveCollection(ctx, { startPages: withPlace(currentCollection(ctx, collection), url, {}) });
+      result.append(paragraph('This site isn’t set up yet, so runs will skip it.', 'hvy-web-page-hint'));
+      action = () => saveCollection(ctx, { startPages: withPage(currentCollection(ctx, collection), url, {}) });
     }
     submit.disabled = !action;
   };
@@ -686,29 +690,29 @@ function copySetup(collection: CollectionDefinition, siteId: string, control: HT
 }
 
 /**
- * A place: its address and fixed values, and the site setup that reads it (set up again, copy, or remove). Saving
+ * A start page: its address and fixed values, and the site setup that reads it (set up again, copy, or remove). Saving
  * checks the whole block's configuration first, so a change that breaks a reference is refused here.
  */
-function openPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition, place: StartPage): void {
-  const { form, body, errors, row, close } = openModal(placeName(collection, place), 'hvy-web-place-dialog wide-dialog');
-  const address = textInput('url', place.url);
+function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition, startPage: StartPage): void {
+  const { form, body, errors, row, close } = openModal(pageName(collection, startPage), 'hvy-web-page-dialog wide-dialog');
+  const address = textInput('url', startPage.url);
   address.type = 'url';
   address.required = true;
-  const values = valueInputs(collection.fields, place.values);
+  const values = valueInputs(collection.fields, startPage.values);
   body.append(labelled('Address', address), values.element);
-  const site = recognizeAddress(collection, place.url)?.site ?? null;
+  const site = recognizeAddress(collection, startPage.url)?.site ?? null;
   const setupBox = document.createElement('fieldset');
-  setupBox.className = 'hvy-web-place-values';
+  setupBox.className = 'hvy-web-page-values';
   const legend = document.createElement('legend');
   legend.textContent = 'Site setup';
-  const reads = readsWith(collection, place.url);
-  setupBox.append(legend, paragraph(reads ? `Reads with: ${reads}` : 'Not set up: runs skip this page.', 'hvy-web-place-hint'));
+  const reads = readsWith(collection, startPage.url);
+  setupBox.append(legend, paragraph(reads ? `Reads with: ${reads}` : 'Not set up: runs skip this page.', 'hvy-web-page-hint'));
   const setupActions = actions();
   if (canSetUpSites() && (site || !reads)) {
     const again = button(site ? 'Set up again' : 'Set up this site');
     again.addEventListener('click', () => {
       close();
-      setUpSiteFor(ctx, collection, place.url, site, (setup) => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [setup])));
+      setUpSiteFor(ctx, collection, startPage.url, site, (setup) => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [setup])));
     });
     setupActions.append(again);
   }
@@ -718,10 +722,10 @@ function openPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition
     const remove = button('Remove site setup');
     remove.addEventListener('click', () => {
       close();
-      const others = placesReadBy(collection, site.id).filter((page) => page.id !== place.id);
+      const others = startPagesReadBy(collection, site.id).filter((page) => page.id !== startPage.id);
       openConfirmDialog({
         title: 'Remove this site setup?',
-        message: `${setupName(site)} is removed from this document. ${others.length ? `It also reads ${others.map((page) => placeName(collection, page)).join(', ')}. ` : ''}The pages stay, and runs skip them until a setup reads them.`,
+        message: `${setupName(site)} is removed from this document. ${others.length ? `It also reads ${others.map((page) => pageName(collection, page)).join(', ')}. ` : ''}The pages stay, and runs skip them until a setup reads them.`,
         confirm: 'Remove',
         onConfirm: () => saveCollection(ctx, withoutSiteSetup(currentCollection(ctx, collection), site.id)),
       });
@@ -731,15 +735,15 @@ function openPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition
   if (setupActions.childElementCount) setupBox.append(setupActions);
   // This page's own limits; blank fields use the default limits.
   const limitsBox = document.createElement('fieldset');
-  limitsBox.className = 'hvy-web-place-values';
+  limitsBox.className = 'hvy-web-page-values';
   const limitsLegend = document.createElement('legend');
   limitsLegend.textContent = 'Limits';
-  const limits = limitFields(collection, place, false);
-  limitsBox.append(limitsLegend, paragraph('Leave blank to use the default limits.', 'hvy-web-place-hint'), ...limits.elements);
+  const limits = limitFields(collection, startPage, false);
+  limitsBox.append(limitsLegend, paragraph('Leave blank to use the default limits.', 'hvy-web-page-hint'), ...limits.elements);
   body.append(setupBox, limitsBox);
-  const removePlace = button('Remove page');
-  removePlace.addEventListener('click', () => {
-    const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.filter((page) => page.id !== place.id) });
+  const removePage = button('Remove page');
+  removePage.addEventListener('click', () => {
+    const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.filter((page) => page.id !== startPage.id) });
     if (problems.length) errors.textContent = problems.join(' ');
     else close();
   });
@@ -747,23 +751,23 @@ function openPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition
   cancel.addEventListener('click', close);
   const submit = button('Save', true);
   submit.type = 'submit';
-  row.append(removePlace, cancel, submit);
+  row.append(removePage, cancel, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const { maxPages: _maxPages, maxItems: _maxItems, ...rest } = place;
+    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, ...rest } = startPage;
     const next: StartPage = { ...rest, url: address.value.trim(), values: values.read(), ...limits.read() };
     if (!Object.keys(next.values!).length) delete next.values;
-    const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => (page.id === place.id ? next : page)) });
+    const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => (page.id === startPage.id ? next : page)) });
     if (problems.length) errors.textContent = problems.join(' ');
     else close();
   });
   address.focus();
 }
 
-/** A place's part of a run, in a line: what it is doing while the run goes, and how it went afterwards. */
-function placeProgressText(progress: PlaceProgress, items: string, needsYou: boolean): string {
+/** A start page's part of a run, in a line: what it is doing while the run goes, and how it went afterwards. */
+function pageProgressText(progress: StartPageProgress, items: string, needsYou: boolean): string {
   const listed = `${progress.found} found, ${progress.known} already listed`;
-  // The place the run is on when it waits for the user: the card below, and the toolbar, say why.
+  // The start page the run is on when it waits for the user: the card below, and the toolbar, say why.
   if (needsYou && (progress.status === 'reading' || progress.status === 'collecting')) return 'Needs you: a page here doesn’t look as expected. Show it from below.';
   switch (progress.status) {
     case 'waiting': return 'Waiting for its turn…';
@@ -775,23 +779,24 @@ function placeProgressText(progress: PlaceProgress, items: string, needsYou: boo
   }
 }
 
-/** Each place's progress in the latest run that included it. */
-function latestPlaceProgress(runs: CollectionRunState[]): Record<string, { progress: PlaceProgress; problem: string | null; running: boolean; needsYou: boolean }> {
-  const latest: Record<string, { progress: PlaceProgress; problem: string | null; running: boolean; needsYou: boolean }> = {};
+/** Each start page's progress in the latest run that included it. */
+function latestPageProgress(runs: CollectionRunState[]): Record<string, { progress: StartPageProgress; problem: string | null; running: boolean; needsYou: boolean }> {
+  const latest: Record<string, { progress: StartPageProgress; problem: string | null; running: boolean; needsYou: boolean }> = {};
   for (const run of runs) {
-    for (const [placeId, progress] of Object.entries(run.places)) {
-      latest[placeId] = { progress, problem: run.startPageProblems[placeId] ?? null, running: run.status === 'running' || run.status === 'needs-attention', needsYou: run.status === 'needs-attention' };
+    for (const [pageId, progress] of Object.entries(run.startPages)) {
+      latest[pageId] = { progress, problem: run.startPageProblems[pageId] ?? null, running: run.status === 'running' || run.status === 'needs-attention', needsYou: run.status === 'needs-attention' };
     }
   }
   return latest;
 }
 
 type Limit = 'maxPages' | 'maxItems';
-type Limits = Partial<Record<Limit, number>>;
+type Limits = Partial<Record<Limit, number>> & { stopAtKnownPage?: boolean };
 
 /**
- * How far a run goes at a page: list pages read, and new items. For the default limits both are required; for a page,
- * a blank field uses the default, which it shows.
+ * How far a run goes at a page: list pages read, new items, and whether a list page of items already listed ends it.
+ * For the default limits the numbers are required; for a page, a blank field (or "Default") uses the default, which
+ * it shows.
  */
 function limitFields(collection: CollectionDefinition, current: Limits, defaults: boolean): { elements: HTMLElement[]; read(): Limits } {
   const input = (limit: Limit) => {
@@ -807,13 +812,45 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
   const pages = input('maxPages');
   const newItems = input('maxItems');
   const capitalized = `${items(collection).charAt(0).toUpperCase()}${items(collection).slice(1)}`;
+  const stopText = `Stop at a list page of ${items(collection)} already listed`;
+  const stopHint = 'For lists with the newest first: the pages after it are older.';
+  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', newItems]] as const)
+    .flatMap(([limit, field]) => (field.value.trim() ? [[limit, Number(field.value)]] : [])));
+  const elements = [
+    labelled('Pages to read', pages, 'The page itself, then each Next.'),
+    labelled(`New ${items(collection)} to read`, newItems, `${capitalized} already in the list don’t count.`),
+  ];
+  if (defaults) {
+    const stop = document.createElement('input');
+    stop.type = 'checkbox';
+    stop.className = 'hvy-galaxy-input';
+    stop.name = 'stopAtKnownPage';
+    stop.checked = current.stopAtKnownPage === true;
+    const stopLabel = document.createElement('label');
+    stopLabel.className = 'checkbox-row';
+    const stopName = document.createElement('span');
+    stopName.textContent = stopText;
+    stopLabel.append(stop, stopName);
+    return { elements: [...elements, stopLabel, paragraph(stopHint, 'hvy-web-page-hint')], read: () => ({ ...numbers(), stopAtKnownPage: stop.checked }) };
+  }
+  // A page follows the default, or sets its own either way.
+  const choice = document.createElement('select');
+  choice.className = 'hvy-galaxy-select';
+  choice.name = 'stopAtKnownPage';
+  for (const [value, text] of [['', `Default (${collection.stopAtKnownPage ? 'stop' : 'keep going'})`], ['true', 'Stop'], ['false', 'Keep going']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    option.selected = value === (current.stopAtKnownPage === undefined ? '' : String(current.stopAtKnownPage));
+    choice.append(option);
+  }
+  const choiceLabel = document.createElement('label');
+  const choiceName = document.createElement('span');
+  choiceName.textContent = `At a list page of ${items(collection)} already listed`;
+  choiceLabel.append(choiceName, choice, paragraph(stopHint, 'hvy-web-page-hint'));
   return {
-    elements: [
-      labelled('Pages to read', pages, 'The page itself, then each Next.'),
-      labelled(`New ${items(collection)} to read`, newItems, `${capitalized} already in the list don’t count.`),
-    ],
-    read: () => Object.fromEntries(([['maxPages', pages], ['maxItems', newItems]] as const)
-      .flatMap(([limit, field]) => (field.value.trim() ? [[limit, Number(field.value)]] : []))),
+    elements: [...elements, choiceLabel],
+    read: () => ({ ...numbers(), ...(choice.value ? { stopAtKnownPage: choice.value === 'true' } : {}) }),
   };
 }
 
@@ -822,6 +859,7 @@ function ownLimitsText(collection: CollectionDefinition, page: StartPage): strin
   const parts = [
     ...(page.maxPages !== undefined ? [`${page.maxPages} ${page.maxPages === 1 ? 'page' : 'pages'}`] : []),
     ...(page.maxItems !== undefined ? [`${page.maxItems} new ${items(collection)}`] : []),
+    ...(page.stopAtKnownPage !== undefined ? [page.stopAtKnownPage ? 'stops at a page already listed' : 'keeps going past pages already listed'] : []),
   ];
   return parts.length ? `Limits: ${parts.join(', ')}` : null;
 }
@@ -830,7 +868,7 @@ function ownLimitsText(collection: CollectionDefinition, page: StartPage): strin
 function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
   const { form, body, errors, row, close } = openModal('Default limits', 'hvy-web-limits-dialog');
   const limits = limitFields(collection, collection, true);
-  body.append(paragraph('For each page that doesn’t set its own.', 'hvy-web-place-hint'), ...limits.elements);
+  body.append(paragraph('For each page that doesn’t set its own.', 'hvy-web-page-hint'), ...limits.elements);
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
   const save = button('Save', true);
@@ -846,34 +884,34 @@ function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDe
 }
 
 /**
- * Where a run looks: the block's places, each with what reads it, whether collecting everything includes it, its
+ * Where a run looks: the block's start pages, each with what reads it, whether collecting everything includes it, its
  * progress (or how its last run went), and collecting it alone; and adding another.
  */
-function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPlace: ((page: StartPage) => void) | null): HTMLElement {
-  const places = latestPlaceProgress(runs);
+function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPage: ((page: StartPage) => void) | null): HTMLElement {
+  const progressByPage = latestPageProgress(runs);
   const busy = runs.some((run) => run.status === 'running' || run.status === 'needs-attention');
   const section = document.createElement('section');
-  section.className = 'hvy-web-places';
+  section.className = 'hvy-web-pages';
   section.setAttribute('aria-label', 'Pages to look at');
   const title = document.createElement('h3');
-  title.className = 'hvy-web-places-title';
+  title.className = 'hvy-web-pages-title';
   title.textContent = 'Pages to look at';
   section.append(title);
   if (!collection.startPages.length) section.append(paragraph('No pages yet.'));
   // Not ul/li: the reader styles those inside a document block as prose lists.
   const list = document.createElement('div');
   list.setAttribute('role', 'list');
-  list.className = 'hvy-web-place-list';
+  list.className = 'hvy-web-page-list';
   for (const page of collection.startPages) {
     const item = document.createElement('div');
     item.setAttribute('role', 'listitem');
-    item.className = 'hvy-web-place';
+    item.className = 'hvy-web-page';
     const recognized = recognizeAddress(collection, page.url);
     const reads = readsWith(collection, page.url);
     const summary = document.createElement('div');
-    summary.className = 'hvy-web-place-summary';
-    const name = placeName(collection, page);
-    const place = places[page.id];
+    summary.className = 'hvy-web-page-summary';
+    const name = pageName(collection, page);
+    const latest = progressByPage[page.id];
     const include = document.createElement('input');
     include.type = 'checkbox';
     include.className = 'hvy-galaxy-input';
@@ -887,32 +925,32 @@ function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, 
       }) });
     });
     const includeLabel = document.createElement('label');
-    includeLabel.className = 'checkbox-row hvy-web-place-include';
+    includeLabel.className = 'checkbox-row hvy-web-page-include';
     const includeText = document.createElement('span');
     includeText.textContent = 'Include when collecting all';
     includeLabel.append(include, includeText);
     summary.append(
-      paragraph(name, 'hvy-web-automation-entry hvy-web-place-name'),
-      ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-place-hint')] : []),
-      paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-place-hint'),
-      ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-place-hint')] : []),
-      ...(place?.problem
+      paragraph(name, 'hvy-web-automation-entry hvy-web-page-name'),
+      ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-page-hint')] : []),
+      paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-page-hint'),
+      ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-page-hint')] : []),
+      ...(latest?.problem
         ? [paragraph('Last run: couldn’t read this page.', 'hvy-web-error')]
-        : place ? [paragraph(placeProgressText(place.progress, items(collection), place.needsYou), place.needsYou ? 'hvy-web-place-progress hvy-web-place-needs-you' : place.running ? 'hvy-web-place-progress' : 'hvy-web-place-hint')] : []),
+        : latest ? [paragraph(pageProgressText(latest.progress, items(collection), latest.needsYou), latest.needsYou ? 'hvy-web-page-progress hvy-web-page-needs-you' : latest.running ? 'hvy-web-page-progress' : 'hvy-web-page-hint')] : []),
       includeLabel,
     );
     const edit = button('Edit');
     edit.setAttribute('aria-label', `Edit ${name}`);
-    edit.addEventListener('click', () => openPlaceDialog(ctx, collection, page));
+    edit.addEventListener('click', () => openPageDialog(ctx, collection, page));
     const controls = actions(edit);
-    if (collectPlace && reads) {
+    if (collectPage && reads) {
       const collect = button('Collect');
       collect.setAttribute('aria-label', `Collect ${name}`);
       collect.disabled = busy;
-      collect.addEventListener('click', () => collectPlace(page));
+      collect.addEventListener('click', () => collectPage(page));
       controls.prepend(collect);
     }
-    if (canSetUpSites() && (!reads || (place?.problem && recognized?.site))) {
+    if (canSetUpSites() && (!reads || (latest?.problem && recognized?.site))) {
       const site = recognized?.site ?? null;
       const fix = button(site ? 'Fix' : 'Set up this site', true);
       fix.setAttribute('aria-label', `${site ? 'Fix' : 'Set up'} ${name}`);
@@ -924,19 +962,19 @@ function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, 
   }
   if (collection.startPages.length) section.append(list);
   const add = button('+ Add a page');
-  add.addEventListener('click', () => openAddPlaceDialog(ctx, collection));
+  add.addEventListener('click', () => openAddPageDialog(ctx, collection));
   // How far a run goes at each page that doesn't set its own limits.
   const limits = button('Default limits…');
   limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
   section.append(
-    paragraph(`Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} new ${items(collection)} from each page.`, 'hvy-web-place-hint'),
+    paragraph(`Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} new ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already listed' : ''}.`, 'hvy-web-page-hint'),
     actions(add, limits),
   );
   return section;
 }
 
 const collectionReader: HvyPluginFactory = (ctx) => {
-  // Why collecting one place could not start, shown until the next try.
+  // Why collecting one start page could not start, shown until the next try.
   let problem = '';
   return reader(ctx, (root, lookup, sync) => {
     const result = readCollectionBlockConfig(ctx.block.schema.pluginConfig);
@@ -947,9 +985,9 @@ const collectionReader: HvyPluginFactory = (ctx) => {
     const collection = result.value.collection;
     const runs = lookup.automation.getState().runs.filter((candidate) => candidate.capabilityId === collection.capabilityId);
     const run = runs.at(-1);
-    // One place on its own, into the block's output, as collecting everything does.
+    // One start page on its own, into the block's output, as collecting everything does.
     const sink = lookup.sink(collection.capabilityId);
-    const collectPlace = sink ? (page: StartPage) => {
+    const collectPage = sink ? (page: StartPage) => {
       problem = '';
       try {
         lookup.automation.startCollection(collection, sink, [page.url]);
@@ -958,7 +996,7 @@ const collectionReader: HvyPluginFactory = (ctx) => {
       }
       sync();
     } : null;
-    root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId, collection.name), placesSection(ctx, collection, runs, collectPlace));
+    root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPage));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
     const counts = `${run.collected} new, ${run.skipped} already listed, ${run.problems} with problems`;
@@ -1053,8 +1091,9 @@ const queueReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) 
   root.append(list);
 });
 
-export const [webApiPlugin, webCollectionPlugin, queuePlugin] = createWebAutomationPlugins({
+export const [webApiPlugin, webCollectionPlugin, queuePlugin, profileContextPlugin] = createWebAutomationPlugins({
   webApi: webApiReader,
   collection: collectionReader,
   queue: queueReader,
+  profileContext: profileContextReader,
 });

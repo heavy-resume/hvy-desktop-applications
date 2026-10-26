@@ -10,6 +10,8 @@ import type { SessionDefinition, WebApiCapability } from './webApi';
 export const WEB_API_PLUGIN_ID = 'galaxy.web-api';
 export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
 export const QUEUE_PLUGIN_ID = 'galaxy.queue';
+/** Sets the browser profile for the web plugins in its section or container (profileContexts.ts). */
+export const WEB_PROFILE_CONTEXT_PLUGIN_ID = 'galaxy.web-profile-context';
 /** The version a document's plugin authorization is recorded against; a new version asks again. */
 export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
 export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
@@ -19,22 +21,15 @@ export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500 } as const;
 
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
-/**
- * MCP exposure and the browser profile are stored beside the snapshot and are not part of what the user approves for
- * the document (the approval records the profile it was given for separately).
- */
+/** MCP exposure is stored beside the snapshot and is not part of what the user approves for the document. */
 export interface WebApiBlockConfig {
   capability: WebApiCapability;
   mcp: { endpointIds: string[] };
-  /** The browser profile this instance uses, by name, when not the file's (profiles.ts). */
-  profile?: string;
 }
 
 export interface CollectionBlockConfig {
   collection: CollectionDefinition;
   mcp: { collect: boolean };
-  /** The browser profile this instance uses, by name, when not the file's (profiles.ts). */
-  profile?: string;
   /** Where the collection's records go: a component-list in this document, and the record sink's policy. */
   output?: { store: CliItemStoreConfig; policy: RecordSinkConfig };
 }
@@ -46,8 +41,15 @@ function readFieldBinding(name: string, value: unknown, errors: string[]): ItemF
   }
   const source = value.source === 'collected' ? { source: 'collected' as const } : {};
   if (value.kind === 'text') return { kind: 'text', path: text(value.path), ...source };
+  if (value.kind === 'form-field') {
+    if (!text(value.label)) {
+      errors.push(`Output field "${name}" needs the label of the form field it fills.`);
+      return null;
+    }
+    return { kind: 'form-field', path: text(value.path), label: text(value.label) };
+  }
   if (value.kind !== 'cell' && value.kind !== 'annotated') {
-    errors.push(`Output field "${name}" must be a text, cell, or annotated binding.`);
+    errors.push(`Output field "${name}" must be a text, cell, annotated, or form-field binding.`);
     return null;
   }
   const annotationKind: 'sort' | 'group' | null = isRecord(value.annotation) && (value.annotation.kind === 'sort' || value.annotation.kind === 'group') ? value.annotation.kind : null;
@@ -306,7 +308,6 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
         ...(readOrigins.length ? { readOrigins: [...new Set(readOrigins)] } : {}),
       },
       mcp: { endpointIds: exposed },
-      ...(text(value.profile) ? { profile: text(value.profile) } : {}),
     },
   };
 }
@@ -393,7 +394,7 @@ function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[])
     }
     // Its own limits, where it has them; the collection's are its defaults.
     const limits = Object.fromEntries((['maxPages', 'maxItems'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
-    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits }] : [];
+    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}) }] : [];
   });
   const ids = pages.map((page) => page.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);
@@ -455,7 +456,7 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
   for (const field of keyFields.filter((id) => !fieldIds.has(id))) errors.push(`The record key uses "${field}", which is not one of the fields.`);
   const ignoredQueryParameters = Array.isArray(value.ignoredQueryParameters) ? strings(value.ignoredQueryParameters) : undefined;
   const output = readOutput(value.output, errors);
-  // The template has places other glue fills (results, notes); records may write only the fields they own.
+  // The template has start pages other glue fills (results, notes); records may write only the fields they own.
   for (const name of (output?.policy.ownedFields ?? []).filter((name) => name !== RECORD_URL_FIELD && !fieldIds.has(name))) {
     errors.push(`Records may write "${name}", which is not one of the fields.`);
   }
@@ -473,15 +474,29 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
         patterns,
         maxPages: number(value.maxPages, 5, 1, LIMIT_BOUNDS.maxPages),
         maxItems: number(value.maxItems, 50, 1, LIMIT_BOUNDS.maxItems),
+        ...(value.stopAtKnownPage === true ? { stopAtKnownPage: true } : {}),
         followLinksToOtherSites: value.followLinksToOtherSites === true,
         ...(key ? { key } : {}),
         ...(ignoredQueryParameters ? { ignoredQueryParameters } : {}),
       },
       mcp: { collect: isRecord(value.mcp) && value.mcp.collect === true },
-      ...(text(value.profile) ? { profile: text(value.profile) } : {}),
       ...(output ? { output } : {}),
     },
   };
+}
+
+/** A web profile context: the browser profile, by name, for the web plugins in its section or container. */
+export interface ProfileContextBlockConfig {
+  /** Not named yet until the user chooses one. */
+  profile?: string;
+}
+
+export function readProfileContextBlockConfig(value: unknown): ConfigResult<ProfileContextBlockConfig> {
+  // A context just inserted has an empty configuration: it names no profile yet, and its reader asks for one.
+  if (!isRecord(value) || (value.schemaVersion !== undefined && value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION)) {
+    return { ok: false, errors: ['Unsupported web profile context configuration.'] };
+  }
+  return { ok: true, value: text(value.profile) ? { profile: text(value.profile) } : {} };
 }
 
 export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockConfig> {

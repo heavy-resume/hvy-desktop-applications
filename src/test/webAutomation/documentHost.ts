@@ -90,6 +90,9 @@ function followClock(clock: Clock): void {
   scenarioClock = clock;
 }
 
+/** A form by its block id, or by its block. */
+type FormRef = string | VisualBlock;
+
 function findPluginBlock(document: VisualDocument, blockId: string, pluginId: string): VisualBlock {
   let found: VisualBlock | null = null;
   visitBlocks(document.sections, (block) => {
@@ -160,7 +163,8 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
   };
   activateStateRuntime(runtime);
   const loaded = runPluginDocumentHooks('load');
-  const forms = new Map<string, LiveFormState>();
+  // Each form's live state, by the form: its block id, or its block (a form in each item of a list shares one id).
+  const forms = new Map<string | VisualBlock, LiveFormState>();
 
   return {
     runtime,
@@ -180,27 +184,27 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
     },
 
     /** The form appears on screen: its initial script runs, as the form plugin runs it once per document. */
-    async mountForm(blockId: string): Promise<ScriptingRunResult | null> {
+    async mountForm(blockId: FormRef): Promise<ScriptingRunResult | null> {
       const { spec } = liveForm(blockId);
       return spec.initialScript ? runFormScript(blockId, spec.initialScript, 'initial') : null;
     },
 
     /** The user fills in fields and submits: the submit script runs with doc.form over the form's live state. */
-    submitForm(blockId: string, values: Record<string, FormFieldValue> = {}): Promise<ScriptingRunResult> {
+    submitForm(blockId: FormRef, values: Record<string, FormFieldValue> = {}): Promise<ScriptingRunResult> {
       const { spec, live } = liveForm(blockId);
       Object.assign(live.values, values);
       return runFormScript(blockId, spec.submitScript, 'submit');
     },
 
     /** What the form shows: field values, options, and errors. */
-    form(blockId: string): LiveFormState {
+    form(blockId: FormRef): LiveFormState {
       return structuredClone(liveForm(blockId).live);
     },
   };
 
   // The form's live state follows its definition in the document, as the form plugin reconciles it on each render.
-  function liveForm(blockId: string) {
-    const block = findPluginBlock(document, blockId, FORM_PLUGIN_ID);
+  function liveForm(blockId: FormRef) {
+    const block = typeof blockId === 'string' ? findPluginBlock(document, blockId, FORM_PLUGIN_ID) : blockId;
     const { spec } = parseFormSpec(block.text, block.schema.pluginConfig);
     const live = forms.get(blockId) ?? createLiveState(spec);
     forms.set(blockId, live);
@@ -209,12 +213,12 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
   }
 
   /** Runs one of a form's named scripts with the options the form plugin's runFormScript uses. */
-  function runFormScript(blockId: string, scriptName: string, reason: string): Promise<ScriptingRunResult> {
+  function runFormScript(blockId: FormRef, scriptName: string, reason: string): Promise<ScriptingRunResult> {
     const { block, spec, live } = liveForm(blockId);
     return runWithStateRuntimeAsync(runtime, () => runUserScript({
       document,
       source: spec.scripts[scriptName] ?? '',
-      componentId: `${blockId}:${scriptName}:${reason}`,
+      componentId: `${block.schema.id}:${scriptName}:${reason}`,
       pluginVersion: String(block.schema.pluginConfig.version ?? FORM_PLUGIN_VERSION),
       maxLines: spec.scriptStepBudget,
       form: createFormApi(live),

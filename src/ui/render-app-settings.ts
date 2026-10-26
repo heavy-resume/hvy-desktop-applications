@@ -7,6 +7,7 @@ import { debugLogMaxMegabytes, isRecord, MAX_IMAGE_ATTACHMENT_DIMENSION, MIN_IMA
 import { workspaceNodeName, workspaceNodeRelativePath } from './render-workspace-dialogs';
 import { displayDocumentName } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
+import { COLLECTION_WORKER_LIMIT_BOUNDS } from '../webAutomation/settings';
 
 export function renderDebugLogDialog(state: AppState): string {
   if (!state.debugLogDialogOpen) {
@@ -371,6 +372,7 @@ export function renderAppSettingsDialog(state: AppState): string {
           </div>
         </fieldset>
         ${renderWebServiceApprovals(state, settings)}
+        ${renderWebCollectionLimits(settings)}
         ${pluginManager ? '' : `<fieldset class="ai-action-config">
           <legend>Debug log</legend>
           <label class="inline-checkbox app-settings-checkbox">
@@ -531,6 +533,20 @@ function renderWebServiceApprovals(state: AppState, settings: AppState['appSetti
             <input class="hvy-galaxy-input" name="serviceApproved:${escapeAttr(approval.capabilityId)}" type="checkbox" checked>
             <span>${escapeHtml(approval.name ?? approval.capabilityId)} · profile ${escapeHtml(profileName(approval.profileId))} · approved ${escapeHtml(new Date(approval.authorizedAt).toLocaleDateString())}</span>
           </label>`).join('') || '<p class="dialog-note">No web services are approved for this file.</p>'}
+        </fieldset>`;
+}
+
+/** How many pages web collection reads at once: on one site (their requests there still take turns), and in all. */
+function renderWebCollectionLimits(settings: AppState['appSettings']): string {
+  const limit = (name: string, label: string, value: number, max: number) => `<label>
+            <span>${label}</span>
+            <input class="hvy-galaxy-input" name="${name}" type="number" min="1" max="${max}" step="1" required value="${escapeAttr(String(value))}">
+          </label>`;
+  return `<fieldset class="ai-action-config">
+          <legend>Web collection</legend>
+          <p class="dialog-note">Each page being read uses a hidden browser window. Pages on the same site take turns loading.</p>
+          ${limit('webCollectionPerSite', 'Pages read at once on one site', settings.webCollectionLimits.perSite, COLLECTION_WORKER_LIMIT_BOUNDS.perSite)}
+          ${limit('webCollectionTotal', 'Pages read at once in all', settings.webCollectionLimits.total, COLLECTION_WORKER_LIMIT_BOUNDS.total)}
         </fieldset>`;
 }
 

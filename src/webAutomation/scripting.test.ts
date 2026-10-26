@@ -86,6 +86,6 @@ describe('scripting methods', () => {
     const done: Array<Record<string, unknown>> = [];
     collection.collect({ capabilityId: 'listings', maxItems: 2, maxPages: 9, on_complete: (result: Record<string, unknown>) => done.push(result) }, ctx);
     await flow.clock.runUntil(() => done.length === 1);
-    expect(done[0]).toMatchObject({ status: 'completed', result: { status: 'done', collected: 2, places: { 'start-1': { pages: 1 } } } });
+    expect(done[0]).toMatchObject({ status: 'completed', result: { status: 'done', collected: 2, startPages: { 'start-1': { pages: 1 } } } });
   });
 });

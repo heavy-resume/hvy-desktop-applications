@@ -76,3 +76,25 @@ export function normalizeAutomationSettings(value: unknown): AutomationSettings 
     accounts,
   };
 }
+
+/** How many pages collection reads at once (App Settings, "Web collection"): on one site, and in all. */
+export interface CollectionWorkerLimits {
+  perSite: number;
+  total: number;
+}
+
+export const DEFAULT_COLLECTION_WORKER_LIMITS: CollectionWorkerLimits = { perSite: 2, total: 4 };
+/** Each worker is a webview: these bound what the settings accept. */
+export const COLLECTION_WORKER_LIMIT_BOUNDS: CollectionWorkerLimits = { perSite: 4, total: 8 };
+
+/** The stored limits, each a whole number within its bounds, or its default. */
+export function normalizeCollectionWorkerLimits(value: unknown): CollectionWorkerLimits {
+  const source = isRecord(value) ? value : {};
+  const limit = (key: keyof CollectionWorkerLimits) => {
+    const stored = source[key];
+    return typeof stored === 'number' && Number.isInteger(stored)
+      ? Math.min(COLLECTION_WORKER_LIMIT_BOUNDS[key], Math.max(1, stored))
+      : DEFAULT_COLLECTION_WORKER_LIMITS[key];
+  };
+  return { perSite: limit('perSite'), total: limit('total') };
+}

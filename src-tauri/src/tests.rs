@@ -1032,6 +1032,7 @@
             web_capability_authorizations: std::collections::BTreeMap::new(),
             integration_web_mcp_approvals: std::collections::BTreeMap::new(),
             web_service_approvals: std::collections::BTreeMap::new(),
+            web_collection_limits: serde_json::Value::Null,
         });
 
         assert_eq!(settings.image_attachment_max_dimensions.width, DEFAULT_IMAGE_ATTACHMENT_MAX_DIMENSION);

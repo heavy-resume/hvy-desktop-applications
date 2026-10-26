@@ -1,6 +1,7 @@
 import { registerHvyCliPluginCommands, type HvyCliPluginLintCheck } from '../../../heavy-file-format/src/cli-core/plugin-command-registry';
 import { findBlockForVirtualDirectory } from '../../../heavy-file-format/src/cli-core/virtual-file-system';
-import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
+import { QUEUE_PLUGIN_ID, readProfileContextBlockConfig, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
+import { isIgnoredProfileContext } from './profileContexts';
 import { findWebAutomationProblems } from './documentBlocks';
 
 /** `hvy lint` reports a web automation block's problems on that block: its own, and those it shares with others. */
@@ -51,4 +52,30 @@ registerHvyCliPluginCommands({
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.queue', description: 'Create a queue block. Edit plugin.json for its target, pacing, and retries.' }],
   operationCommands: [],
   lintChecks: [blockProblems],
+});
+
+/** A context's configuration, and whether another context in its section or container comes first. */
+const contextProblems: HvyCliPluginLintCheck = (context) => {
+  const block = findBlockForVirtualDirectory(context.document, context.path);
+  if (!block) return [];
+  const config = readProfileContextBlockConfig(block.schema.pluginConfig);
+  return [
+    ...(config.ok ? [] : config.errors.map((message) => ({ message }))),
+    ...(isIgnoredProfileContext(context.document, block)
+      ? [{ message: 'Another web profile context comes first in this section or container, so this one sets nothing.' }]
+      : []),
+  ];
+};
+
+registerHvyCliPluginCommands({
+  name: 'galaxy-web-profile-context',
+  pluginId: WEB_PROFILE_CONTEXT_PLUGIN_ID,
+  helpTopic: 'hvy plugin galaxy-web-profile-context',
+  componentHints: [
+    'This plugin sets the browser profile, by name, for the web plugins in its section or container and anything nested there: plugin.json pluginConfig.profile.',
+    'Web plugins outside any context use the file\'s profile (front matter metadata.galaxy.web_profile). One context per section or container.',
+  ],
+  addCommands: [{ command: 'hvy insert INDEX plugin PARENT_PATH [ID|--id ID] galaxy.web-profile-context', description: 'Create a web profile context. Set plugin.json pluginConfig.profile, or let the reader choose it.' }],
+  operationCommands: [],
+  lintChecks: [contextProblems],
 });

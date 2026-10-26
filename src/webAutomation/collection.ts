@@ -47,11 +47,12 @@ export interface StartPage {
   id: string;
   url: string;
   values?: Record<string, string>;
-  /** False when collecting everything skips this place; it can still be collected on its own. */
+  /** False when collecting everything skips this start page; it can still be collected on its own. */
   included?: false;
   /** This page's own limits; without them, the collection's (its default limits). */
   maxPages?: number;
   maxItems?: number;
+  stopAtKnownPage?: boolean;
 }
 
 /** The value every collected record has: its page's URL. It is not a configurable field. */
@@ -83,6 +84,11 @@ export interface CollectionDefinition {
   /** Default limits for each start page: list pages read, following Next, and new items read. */
   maxPages: number;
   maxItems: number;
+  /**
+   * Stop following Next at a list page whose items are all already in the document: on a list with the newest first,
+   * the rest are older. Off unless set.
+   */
+  stopAtKnownPage?: boolean;
   followLinksToOtherSites: boolean;
   /** Record identity. Defaults to the canonical URL of the record's page. */
   key?: RecordKeyStrategy;
@@ -93,10 +99,10 @@ export interface CollectionDefinition {
 export type CollectionRunStatus = 'running' | 'needs-attention' | 'done' | 'stopped' | 'failed';
 
 /**
- * One place's part of a run. A place's lists are read first (every page, with Next), so how much there is to collect
+ * One start page's part of a run. A start page's lists are read first (every page, with Next), so how much there is to collect
  * is known before any item's page is visited.
  */
-export interface PlaceProgress {
+export interface StartPageProgress {
   status: 'waiting' | 'reading' | 'collecting' | 'done' | 'stopped' | 'failed';
   /** List pages read. */
   pages: number;
@@ -125,8 +131,8 @@ export interface CollectionRunState {
   problems: number;
   /** Start pages this run could not read at all, by start page id: a site to set up, not an item. */
   startPageProblems: Record<string, string>;
-  /** Each place's progress, by start page id. */
-  places: Record<string, PlaceProgress>;
+  /** Each start page's progress, by start page id. */
+  startPages: Record<string, StartPageProgress>;
   attention: { workerId: string; url: string; reason: string } | null;
   error: string | null;
 }
@@ -211,7 +217,7 @@ export class CollectionService {
   start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
     for (const startPage of startPages) {
-      run.state.places[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, read: 0, collected: 0, problems: 0, current: null };
+      run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, read: 0, collected: 0, problems: 0, current: null };
     }
     const done = Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
       { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
@@ -257,7 +263,7 @@ export class CollectionService {
       resumeAttention: null,
       attentionTurn: Promise.resolve(),
       consumer,
-      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, places: {}, attention: null, error: null },
+      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
     this.deps.emit('collection', `${runId} started: ${definition.name}`, { profileId });
@@ -266,8 +272,8 @@ export class CollectionService {
 
   private finish(run: ActiveRun, results: PromiseSettledResult<unknown>[]): CollectionRunState {
     const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-    // A place still waiting for a worker when the run ended never started.
-    for (const progress of Object.values(run.state.places)) if (progress.status === 'waiting') progress.status = 'stopped';
+    // A start page still waiting for a worker when the run ended never started.
+    for (const progress of Object.values(run.state.startPages)) if (progress.status === 'waiting') progress.status = 'stopped';
     if (run.controller.signal.aborted) run.state.status = 'stopped';
     else if (failure) {
       run.state.status = 'failed';
@@ -288,14 +294,14 @@ export class CollectionService {
   }
 
   /**
-   * Collects from one place: its lists first, every page with Next, noting each item's link and what the list shows of
+   * Collects from one start page: its lists first, every page with Next, noting each item's link and what the list shows of
    * it (and skipping items already in the document); then each item's own page. A side-pane board's items open beside
    * the list, so they are read as the list is.
    */
   private async collectFrom(run: ActiveRun, lease: WorkerLease, startPage: StartPage): Promise<void> {
-    const progress = run.state.places[startPage.id];
+    const progress = run.state.startPages[startPage.id];
     try {
-      await this.readPlace(run, lease, startPage, progress);
+      await this.readStartPage(run, lease, startPage, progress);
       progress.status = 'done';
     } catch (error) {
       progress.status = run.controller.signal.aborted ? 'stopped' : 'failed';
@@ -306,7 +312,7 @@ export class CollectionService {
     }
   }
 
-  private async readPlace(run: ActiveRun, lease: WorkerLease, startPage: StartPage, progress: PlaceProgress): Promise<void> {
+  private async readStartPage(run: ActiveRun, lease: WorkerLease, startPage: StartPage, progress: StartPageProgress): Promise<void> {
     const { host, emit } = this.deps;
     const startUrl = startPage.url;
     // The start page's fixed values, for what its pages do not show. Values read from a page win.
@@ -337,12 +343,12 @@ export class CollectionService {
     }
   }
 
-  /** Reads every list page of a place, with Next: the items to visit, in order. Items already known are skipped. */
+  /** Reads every list page of a start page, with Next: the items to visit, in order. Items already known are skipped. */
   private async readLists(
     run: ActiveRun,
     lease: WorkerLease,
     startPage: StartPage,
-    progress: PlaceProgress,
+    progress: StartPageProgress,
     fixed: Record<string, unknown>,
     start: { pattern: SitePatternDefinition; match: PatternMatch; inspection: PageInspection },
   ): Promise<Array<{ link: string; title: string; values: Record<string, unknown> }>> {
@@ -352,6 +358,7 @@ export class CollectionService {
     // This page's limits, or the collection's defaults: new items to read from it, and list pages to walk.
     const maxItems = startPage.maxItems ?? run.definition.maxItems;
     const maxPages = startPage.maxPages ?? run.definition.maxPages;
+    const stopAtKnown = startPage.stopAtKnownPage ?? run.definition.stopAtKnownPage ?? false;
     let inspection = start.inspection;
     let listing: ListingResolution = { pattern: start.pattern, match: start.match };
     for (let page = 1; ; page += 1) {
@@ -360,6 +367,7 @@ export class CollectionService {
       const listingUrl = inspection.url;
       const pattern: SitePatternDefinition = listing.pattern;
       let newLinks = 0;
+      let knownOnPage = 0;
       for (const record of listing.match.records) {
         this.checkStopped(run);
         const link = typeof record.values[pattern.linkFieldId ?? ''] === 'string' ? new URL(String(record.values[pattern.linkFieldId ?? '']), listingUrl).href : null;
@@ -376,6 +384,7 @@ export class CollectionService {
         if (knownKey && run.consumer.isKnown?.(knownKey)) {
           run.state.skipped += 1;
           progress.known += 1;
+          knownOnPage += 1;
           emit('collection', `skip known ${knownKey}`);
           continue;
         }
@@ -403,11 +412,15 @@ export class CollectionService {
         queue.push({ link, title, values: listingValues });
         progress.toCollect += 1;
       }
-      // A page that adds nothing (Next on the last page often shows it again) is not one of the place's pages.
+      // A page that adds nothing (Next on the last page often shows it again) is not one of the start page's pages.
       if (newLinks === 0 && page > 1) progress.pages = page - 1;
       emit('collection', `${startPage.id}: page ${progress.pages}, ${progress.found} found, ${progress.known} already listed`);
       const paginationCommandId = pattern.paginationCommandId;
       if (page >= maxPages || !paginationCommandId || newLinks === 0) return queue;
+      if (stopAtKnown && knownOnPage === newLinks) {
+        emit('collection', `${startPage.id}: every item on page ${page} is already listed, so the rest are too`);
+        return queue;
+      }
       this.checkStopped(run);
       const result = await lease.paced(listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: paginationCommandId }));
       if (result.status !== 'executed') {
@@ -421,8 +434,8 @@ export class CollectionService {
     }
   }
 
-  /** Reads one item (or reports its problem), counting it for its place. */
-  private async tracked(run: ActiveRun, progress: PlaceProgress, read: () => Promise<void>): Promise<void> {
+  /** Reads one item (or reports its problem), counting it for its start page. */
+  private async tracked(run: ActiveRun, progress: StartPageProgress, read: () => Promise<void>): Promise<void> {
     const before = { collected: run.state.collected, problems: run.state.problems };
     try {
       await read();

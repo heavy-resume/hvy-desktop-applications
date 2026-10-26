@@ -67,7 +67,8 @@ function appRuntime(): WebAutomationRuntime {
     profiles: () => state.integrationRegistry.profiles.map(({ id, name }) => ({ id, name })),
     createId: () => crypto.randomUUID(),
     // Development only: VITE_WEB_AUTOMATION_DELAY_SCALE shortens (or lengthens) the delays between page loads.
-    scheduler: { navigationDelayScale: developmentDelayScale() },
+    // How many pages are collected at once (App Settings): read as each page's turn comes, so a change applies next.
+    scheduler: { navigationDelayScale: developmentDelayScale(), collectionLimits: () => state.appSettings.webCollectionLimits },
   });
   return runtime;
 }

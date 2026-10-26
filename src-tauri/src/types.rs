@@ -610,6 +610,9 @@ struct AppSettings {
     integration_web_mcp_approvals: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     web_service_approvals: std::collections::BTreeMap<String, serde_json::Value>,
+    // How many pages web collection reads at once; validated by the renderer's normalizeCollectionWorkerLimits.
+    #[serde(default)]
+    web_collection_limits: serde_json::Value,
 }
 
 impl Default for AppSettings {
@@ -628,6 +631,7 @@ impl Default for AppSettings {
             web_capability_authorizations: std::collections::BTreeMap::new(),
             integration_web_mcp_approvals: std::collections::BTreeMap::new(),
             web_service_approvals: std::collections::BTreeMap::new(),
+            web_collection_limits: serde_json::Value::Null,
         }
     }
 }

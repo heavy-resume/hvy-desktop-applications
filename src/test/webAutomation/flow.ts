@@ -1,19 +1,23 @@
 import { canonicalUrl } from '../../webAutomation/records';
 import { deserializeDocument, serializeDocument } from '../../../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
+import type { VisualBlock } from '../../../../heavy-file-format/src/editor/types';
 import { createCliItemStore, type CliItemStoreConfig } from '../../webAutomation/cliItemStore';
 import { createMemoryItemStore, createRecordSink, DEFAULT_RECORD_SINK_CONFIG, updateItemFields, type DocumentItem, type RecordSinkConfig } from '../../webAutomation/recordSink';
 import { seededRandom } from '../../webAutomation/clock';
 import type { CollectionDefinition, CollectionRunState } from '../../webAutomation/collection';
 import { createWebAutomationRuntime, type WebAutomation, type WebAutomationRuntimeDeps } from '../../webAutomation/entryPoints';
 import { openDocumentAutomation, registerWebAutomationPlugins, type DocumentAutomation } from '../../webAutomation/documentAutomation';
-import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from '../../webAutomation/configs';
+import { executeHvyCliCommandSync } from '../../../../heavy-file-format/src/cli-core';
+import { WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../../webAutomation/configs';
 import type { StateRuntime } from '../../../../heavy-file-format/src/state';
 import { createDocumentState } from './documentHost';
 import { pluginAcceptanceKey } from '../../pluginManager';
 import type { QueueResult } from '../../webAutomation/queue';
 import { readWebAutomationBlocks } from '../../webAutomation/documentBlocks';
+import { contextProfileName, isProfileContext } from '../../webAutomation/profileContexts';
 import { withDocumentProfile } from '../../webAutomation/profiles';
+import { visitBlocks } from '../../../../heavy-file-format/src/block-traversal';
 import { createMemorySettingsStore } from '../../webAutomation/settings';
 import type { SitePatternDefinition } from '../../webAutomation/sitePatterns';
 import { withSiteSetups, type SiteSetup } from '../../webAutomation/siteSetups';
@@ -201,15 +205,40 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     // (its own block, when the document has one, names no profile).
     bindProfiles(_collection: CollectionDefinition, capability: WebApiCapability = api.capability): void {
       document.meta.metadata = withDocumentProfile(document.meta.metadata, PROFILE_NAMES[BOARDS_PROFILE]);
-      const service = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capability.capabilityId)!;
-      service.block.schema.pluginConfig = { ...service.block.schema.pluginConfig, profile: PROFILE_NAMES[SERVICE_PROFILE] };
-      automation.profileChosen(PROFILE_NAMES[BOARDS_PROFILE], null);
-      automation.profileChosen(PROFILE_NAMES[SERVICE_PROFILE], capability.capabilityId);
+      automation.profileChosen(PROFILE_NAMES[BOARDS_PROFILE], 'this file');
+      // A web profile context the document ships without a profile (one at the top of a section) gets the same choice.
+      visitBlocks(document.sections, (block) => {
+        if (isProfileContext(block) && !contextProfileName(block)) {
+          block.schema.pluginConfig = { schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION, profile: PROFILE_NAMES[BOARDS_PROFILE] };
+          automation.profileChosen(PROFILE_NAMES[BOARDS_PROFILE], 'a web profile context');
+        }
+      });
+      // The service's block goes into a container of its own, with a web profile context naming Service.
+      const service = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capability.capabilityId)!.block;
+      const section = document.sections.find((candidate) => candidate.blocks.includes(service))!;
+      executeHvyCliCommandSync(document, `hvy insert -1 container /body/${section.customId} --id service-profile`);
+      executeHvyCliCommandSync(document, `hvy insert -1 plugin /body/${section.customId}/service-profile profile ${WEB_PROFILE_CONTEXT_PLUGIN_ID}`);
+      const container = section.blocks.find((block) => block.schema.id === 'service-profile')!;
+      const context = container.schema.containerBlocks!.find((block) => block.schema.id === 'profile')!;
+      context.schema.pluginConfig = { schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION, profile: PROFILE_NAMES[SERVICE_PROFILE] };
+      section.blocks.splice(section.blocks.indexOf(service), 1);
+      container.schema.containerBlocks!.push(service);
+      automation.profileChosen(PROFILE_NAMES[SERVICE_PROFILE], 'a web profile context');
       opened.saveQueues();
       savedText = serializeDocument(document);
     },
 
-    // UI: first use: "Allow in this file" on both web plugins, then the "Sign in" modal's "Allow and sign in with [profile]".
+    // UI: a web profile context's "Choose a browser profile…" (the first in the document): the web blocks around it use it.
+    chooseContextProfile(name: string): void {
+      let context: VisualBlock | null = null;
+      visitBlocks(document.sections, (block) => {
+        if (!context && isProfileContext(block)) context = block;
+      });
+      context!.schema.pluginConfig = { schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION, profile: name };
+      automation.profileChosen(name, 'a web profile context');
+    },
+
+    // UI: first use: "Allow in this file" on both web plugins, then "Allow [service]…" and its modal's "Allow".
     approve(capability: WebApiCapability = api.capability): void {
       opened.authorizePlugin(WEB_COLLECTION_PLUGIN_ID);
       opened.authorizePlugin(WEB_API_PLUGIN_ID);
@@ -292,7 +321,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     },
 
     // UI: galaxy.web-collection reader, "Collect".
-    // UI: "Collect jobs", or a place's own "Collect" (onlyUrls).
+    // UI: "Collect jobs", or a start page's own "Collect" (onlyUrls).
     async collect(collection: CollectionDefinition, onlyUrls?: string[]): Promise<CollectionRunState> {
       const run = automation.startCollection(collection, sink, onlyUrls);
       await settle();
