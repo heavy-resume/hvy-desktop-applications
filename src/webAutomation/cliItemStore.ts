@@ -3,6 +3,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { executeHvyCliCommandSync, writeHvyVirtualFileSync } from '../../../heavy-file-format/src/cli-core';
 import { getComponentDefsFromMeta } from '../../../heavy-file-format/src/component-definition-helpers';
 import { extractReusableTemplateVariablesFromDefinition } from '../../../heavy-file-format/src/reusable-template-values';
+import { findSortValueAnnotations, formatSortValueAnnotation, replaceSortValueAnnotations } from '../../../heavy-file-format/src/sort-values';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import type { DocumentItem, DocumentItemStore } from './recordSink';
 
@@ -10,8 +11,14 @@ import type { DocumentItem, DocumentItemStore } from './recordSink';
  * Where one item field lives inside an item, relative to the item's directory.
  * The same relative paths exist in the reusable template's `schema/`.
  */
+/**
+ * Where a field's value comes from, when not from the record's values: `collected` is when the item was found, as a
+ * readable local date and time ("October 24, 2026 at 10:15 PDT") a datetime sort key can read.
+ */
+export type ItemFieldSource = 'collected';
+
 export type ItemFieldBinding =
-  | { kind: 'text'; path: string }
+  | { kind: 'text'; path: string; source?: ItemFieldSource }
   | {
       kind: 'cell';
       /** A table's `tableRows.json`. */
@@ -22,6 +29,20 @@ export type ItemFieldBinding =
       annotation?: { kind: 'sort' | 'group'; key: string };
       /** Renders the cell as a Markdown link to the URL held in this field. */
       linkTo?: string;
+    }
+  | {
+      /**
+       * The body of the sort or group annotation with this key in a text file: a value within a line of text, such as
+       * a card's summary "Title · Company · Location". The value replaces the annotation's body, and the list sorts or
+       * groups by it. The template's text holds the annotations collection fills; a line the document's scripts write
+       * whole (a status line) may add its annotations later, and is read the same way.
+       */
+      kind: 'annotated';
+      path: string;
+      annotation: { kind: 'sort' | 'group'; key: string };
+      /** Renders the value as a Markdown link to the URL held in this field. */
+      linkTo?: string;
+      source?: ItemFieldSource;
     };
 
 export interface CliItemStoreConfig {
@@ -62,6 +83,13 @@ function write(document: VisualDocument, path: string, content: string): void {
   writeHvyVirtualFileSync(document, path, content);
 }
 
+/** A moment as a reader's local date and time: "October 24, 2026 at 10:15 PDT". */
+export function readableTime(at: number): string {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { month: 'long', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' })
+    .formatToParts(new Date(at)).map((part) => [part.type, part.value]));
+  return `${parts.month} ${parts.day}, ${parts.year} at ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
+}
+
 function escapeCell(value: string): string {
   return value.replace(/\r?\n/g, ' ');
 }
@@ -76,6 +104,43 @@ function encodeCell(binding: Extract<ItemFieldBinding, { kind: 'cell' }>, value:
     cell = `<!--hvy:${binding.annotation.kind}-value ${JSON.stringify({ key: binding.annotation.key })}-->${cell}<!--/hvy:${binding.annotation.kind}-value-->`;
   }
   return cell;
+}
+
+/** The body of the sort or group annotation with this key in a text, as the reference implementation finds it. */
+function readAnnotated(content: string, annotation: { kind: 'sort' | 'group'; key: string }): string | undefined {
+  const found = findSortValueAnnotations(content, annotation.kind).find((candidate) => candidate.key === annotation.key);
+  // A value within a line is one line; the saved text may wrap a long line inside it.
+  return found ? decodeCell(found.text.replace(/\s+/g, ' ').trim()) : undefined;
+}
+
+/**
+ * The text with this binding's annotation holding the value. A linked value is a Markdown link around the annotation,
+ * not inside it: readers show an annotation's body as plain text, and the list sorts and groups by the bare value.
+ */
+function writeAnnotated(content: string, binding: Extract<ItemFieldBinding, { kind: 'annotated' }>, value: string, fields: Record<string, unknown>, url: string): string {
+  const body = escapeCell(value);
+  let written: string | null = null;
+  const next = replaceSortValueAnnotations(content, (annotation) => {
+    const replace = written === null && annotation.key === binding.annotation.key;
+    const formatted = formatSortValueAnnotation(annotation.rawPayload, replace ? body : annotation.text, binding.annotation.kind);
+    if (replace) written = formatted;
+    return formatted;
+  }, binding.annotation.kind);
+  // A line may hold the value only once something sets it (a status line the document's scripts write whole): an empty
+  // value with no place in the line is nothing to write.
+  if (written === null) {
+    if (body) throw new Error(`${binding.path} has no ${binding.annotation.kind} value "${binding.annotation.key}" to fill.`);
+    return content;
+  }
+  if (!binding.linkTo) return next;
+  const target = binding.linkTo === 'url' ? url : String(fields[binding.linkTo] ?? '');
+  const at = next.indexOf(written);
+  const before = next.slice(0, at);
+  const after = next.slice(at + (written as string).length);
+  // Already linked: the address is replaced; otherwise the link is added (or left off without a value or address).
+  const linked = before.endsWith('[') && /^\]\([^)]*\)/.exec(after);
+  if (linked) return target && body ? `${before}${written}](${target})${after.slice(linked[0].length)}` : `${before.slice(0, -1)}${written}${after.slice(linked[0].length)}`;
+  return target && body ? `${before}[${written}](${target})${after}` : next;
 }
 
 function decodeCell(cell: string): string {
@@ -102,6 +167,7 @@ export function createCliItemStore(document: VisualDocument, config: CliItemStor
     const content = cat(document, `${itemPath(id)}/${binding.path}`);
     if (content === null) return undefined;
     if (binding.kind === 'text') return content;
+    if (binding.kind === 'annotated') return readAnnotated(content, binding.annotation);
     const rows = JSON.parse(content) as Array<{ cells: string[] }>;
     const cell = rows[binding.row]?.cells[binding.column];
     return cell === undefined ? undefined : decodeCell(cell);
@@ -112,6 +178,10 @@ export function createCliItemStore(document: VisualDocument, config: CliItemStor
     const path = `${itemPath(id)}/${binding.path}`;
     if (binding.kind === 'text') {
       write(document, path, text);
+      return;
+    }
+    if (binding.kind === 'annotated') {
+      write(document, path, writeAnnotated(cat(document, path) ?? '', binding, text, item.fields, item.url));
       return;
     }
     const rows = JSON.parse(cat(document, path) ?? '[]') as Array<{ cells: string[] }>;
@@ -160,8 +230,13 @@ export function createCliItemStore(document: VisualDocument, config: CliItemStor
       const existing = itemIds().includes(id) ? read(id) : null;
       if (!existing) create(id);
       for (const [name, binding] of Object.entries(config.fields)) {
-        const value = name === 'url' && item.fields.url === undefined ? item.url : item.fields[name];
+        const sourced = binding.kind !== 'cell' && binding.source === 'collected' ? readableTime(item.provenance.collectedAt) : undefined;
+        // When an item was found is when it was first found: a later run does not move it.
+        if (sourced !== undefined && existing?.fields[name]) continue;
+        const value = sourced ?? (name === 'url' && item.fields.url === undefined ? item.url : item.fields[name]);
         if (existing && existing.fields[name] === value) continue;
+        // A new item keeps what the template starts it with (a status line saying "Not evaluated") for fields it has no value for.
+        if (!existing && (value === undefined || value === null)) continue;
         writeField(id, binding, value, item);
       }
       const record: StoredRecord = {
@@ -196,10 +271,11 @@ export function validateCliItemStore(document: VisualDocument, config: CliItemSt
       errors.push(`Field "${name}" points at ${binding.path}, which the template does not have.`);
       continue;
     }
-    if (binding.kind === 'cell' && binding.annotation) {
+    const annotation = binding.kind === 'text' ? undefined : binding.annotation;
+    if (annotation) {
       const definition = getComponentDefsFromMeta(document.meta).find((candidate) => candidate.name === config.componentName);
-      const defs = binding.annotation.kind === 'sort' ? definition?.sortValueDefs : definition?.groupValueDefs;
-      if (!defs?.[binding.annotation.key]) errors.push(`Field "${name}" uses ${binding.annotation.kind} key "${binding.annotation.key}", which the template does not define.`);
+      const defs = annotation.kind === 'sort' ? definition?.sortValueDefs : definition?.groupValueDefs;
+      if (!defs?.[annotation.key]) errors.push(`Field "${name}" uses ${annotation.kind} key "${annotation.key}", which the template does not define.`);
     }
   }
   return errors;

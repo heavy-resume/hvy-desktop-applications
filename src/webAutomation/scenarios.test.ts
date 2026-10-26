@@ -59,7 +59,7 @@ describe('mock integration: job search flow', () => {
     expect(flow.host.isUserWindowVisible('service')).toBe(true);
     await flow.completeLogin();
     const session = flow.automation.getState().sessions[0];
-    expect(session).toMatchObject({ status: 'signed-in', accountName: 'Pat Example' });
+    expect(session).toMatchObject({ status: 'signed-in' });
     expect(flow.host.isUserWindowVisible('service')).toBe(false);
 
     const run = await flow.collect(boards);
@@ -68,14 +68,18 @@ describe('mock integration: job search flow', () => {
     expect(cards.map((card) => card.key).sort()).toEqual(['data-1', 'eng-1', 'eng-2', 'eng-3', 'pm-1'].map(acmeJob).sort());
     expect(flow.item(acmeJob('eng-1'))).toMatchObject({ state: 'ok', provenance: { patternId: 'ats-detail' }, fields: { company: 'Acme', title: 'Senior Engineer' } });
     expect(flow.print()).toMatch(/delay \d+\.\ds before boards\.mock-ats\.test/);
-    expect(flow.print()).toContain('← back to boards.mock-ats.test/acme/jobs');
+    // Both list pages are read before any job's page, and the run never goes back to a list.
+    const timeline = flow.print();
+    expect(timeline.indexOf('start-1: page 2, 5 found, 0 already listed')).toBeLessThan(timeline.indexOf('record ok'));
+    expect(timeline).not.toContain('← back');
+    expect(run.places['start-1']).toMatchObject({ status: 'done', pages: 2, found: 5, known: 0, toCollect: 5, read: 5, collected: 5, problems: 0, current: null });
 
     await flow.evaluate([acmeJob('eng-1'), acmeJob('eng-2'), acmeJob('pm-1')]);
     expect(flow.item(acmeJob('eng-1'))?.fields).toMatchObject({ evaluation: 'ready', rating: 'strong' });
     expect(flow.item(acmeJob('eng-2'))?.fields).toMatchObject({ evaluation: 'ready', rating: 'partial' });
     // The service's stored source document is opened when each call runs, and never copied into the queue.
     expect(flow.service.lastSourceText).toContain(SOURCE_DOCUMENT_PHRASE);
-    expect(flow.print()).toContain('download storage.mock-storage.test/bucket/source-1');
+    expect(flow.print()).toContain('fetch file storage.mock-storage.test/bucket/source-1');
     expect(flow.listQueue(EVALUATE_QUEUE).every((entry) => !('sourceText' in (entry.input as Record<string, unknown>)))).toBe(true);
     expect(flow.item(acmeJob('pm-1'))?.fields.resultUrl).toMatch(/\/analyses\/analysis-\d$/);
   });
@@ -128,12 +132,41 @@ describe('mock integration: job search flow', () => {
     expect(again.status).toBe('done');
   });
 
-  it('6. SPA listing: when back navigation does not restore the listing, the run reopens it', async () => {
+  it('5a. a sign-in screen or human check shown as an ordinary page: the run asks a person, then carries on', async () => {
+    const boards = listingCollection([`${ATS_ORIGIN}/wonka/jobs`]);
+    await signedInFlow(boards);
+    const paused = await flow!.collect(boards);
+    expect(paused).toMatchObject({ status: 'needs-attention', attention: { reason: 'unexpected-page', url: `${ATS_ORIGIN}/wonka/jobs/eng-1?utm_source=board` } });
+    expect(paused.places['start-1']).toMatchObject({ status: 'collecting', read: 0, toCollect: 2 });
+
+    flow!.solveChallenge(ATS_ORIGIN);
+    const resumed = await flow!.resumeAttention(paused.runId);
+    // Signed in once, the profile's session reads the other job too.
+    expect(resumed).toMatchObject({ status: 'done', collected: 2, problems: 0, attention: null });
+  });
+
+  it('5b. places: one left out of collecting all is skipped, and still collects on its own', async () => {
+    const globex = `${ATS_ORIGIN}/globex/jobs`;
+    const base = listingCollection([ACME, globex]);
+    const boards = { ...base, startPages: base.startPages.map((page) => (page.url === globex ? { ...page, included: false as const } : page)) };
+    await signedInFlow(boards);
+    const all = await flow!.collect(boards);
+    expect(Object.keys(all.places)).toEqual(['start-1']);
+    expect(all.places['start-1']).toMatchObject({ status: 'done', collected: 5 });
+    expect(flow!.item(`${globex}/eng-1`)).toBeNull();
+
+    const one = await flow!.collect(boards, [globex]);
+    expect(Object.keys(one.places)).toEqual(['start-2']);
+    expect(one.places['start-2']).toMatchObject({ status: 'done', pages: 1 });
+    expect(flow!.item(`${globex}/eng-1`)).toMatchObject({ fields: { company: 'Globex' } });
+  });
+
+  it('6. SPA listing: the list is read before its items, so a listing that going back would not restore is never needed again', async () => {
     const boards = listingCollection([`${ATS_ORIGIN}/hooli/jobs`]);
     await signedInFlow(boards);
     const run = await flow!.collect(boards);
     expect(run).toMatchObject({ status: 'done', collected: 2 });
-    expect(flow!.print()).toContain('listing not restored after back; reopening');
+    expect(flow!.print()).not.toContain('← back');
   });
 
   it('7. quota: a 429 retries with backoff and never creates a second report', async () => {
@@ -149,7 +182,7 @@ describe('mock integration: job search flow', () => {
     expect(flow!.print()).toMatch(/retry .*eng-1 in \d+s/);
   });
 
-  it('8. sign-out mid-queue: the queue pauses and resumes after signing in again', async () => {
+  it('8. sign-out mid-queue: the queue pauses, and signing in again resumes it', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
     await flow!.collect(boards);
@@ -162,7 +195,8 @@ describe('mock integration: job search flow', () => {
 
     await flow!.signIn();
     await flow!.completeLogin();
-    await flow!.resumeQueue(EVALUATE_QUEUE);
+    await flow!.settle();
+    expect(flow!.print()).toContain(`${EVALUATE_QUEUE}: signed in again, resuming`);
     expect(flow!.item(acmeJob('eng-1'))?.fields.evaluation).toBe('ready');
     expect(flow!.item(acmeJob('eng-2'))?.fields.evaluation).toBe('ready');
   });
@@ -300,7 +334,8 @@ describe('mock integration: job search flow', () => {
     await flow!.signOut();
     await flow!.signIn();
     await flow!.completeLogin(SECOND_ACCOUNT_SESSION);
-    expect(flow!.automation.getState().sessions[0]).toMatchObject({ status: 'signed-in', accountName: 'Sam Other' });
+    expect(flow!.automation.getState().sessions[0]).toMatchObject({ status: 'signed-in' });
+    expect((await flow!.callEndpoint('session')).body).toEqual({ account: { id: 'a-2', name: 'Sam Other' } });
     expect(flow!.reviewWebApi()).toMatchObject({ reason: 'authorized' });
     expect((await flow!.callEndpoint('profile')).status).toBe(200);
   });
@@ -465,11 +500,11 @@ describe('mock integration: job search flow', () => {
     expect(flow!.service.sourceOpens).toBe(1);
     expect(flow!.service.lastSourceText).toContain(SOURCE_DOCUMENT_PHRASE);
     expect(flow!.service.lastSourceRevision).toMatch(/^[0-9a-f]{64}$/);
-    expect(flow!.print()).toContain('download storage.mock-storage.test/bucket/source-1');
+    expect(flow!.print()).toContain('fetch file storage.mock-storage.test/bucket/source-1');
     expect(flow!.print()).toContain('(no credentials)');
   });
 
-  it('27. served source: a URL outside the storage origins is never fetched, and altered bytes are rejected', async () => {
+  it('27. served source: a URL outside the read origins is never fetched, and altered bytes are rejected', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
     await flow!.collect(boards);
@@ -479,8 +514,8 @@ describe('mock integration: job search flow', () => {
     expect(flow!.listQueue(EVALUATE_QUEUE)[0]).toMatchObject({ status: 'failed', lastError: expect.stringMatching(/not a secure origin/) });
     flow!.service.servedUrlOverride = 'https://elsewhere.test/bucket/source-1';
     await flow!.retryQueueEntry(EVALUATE_QUEUE, acmeJob('eng-1'));
-    expect(flow!.listQueue(EVALUATE_QUEUE)[0]).toMatchObject({ status: 'failed', lastError: expect.stringMatching(/does not list as a storage origin/) });
-    expect(flow!.print()).not.toContain('download ');
+    expect(flow!.listQueue(EVALUATE_QUEUE)[0]).toMatchObject({ status: 'failed', lastError: expect.stringMatching(/does not list as a read origin/) });
+    expect(flow!.print()).not.toContain('fetch file ');
 
     flow!.service.servedUrlOverride = null;
     flow!.service.corruptStoredSource = true;
@@ -528,18 +563,60 @@ describe('mock integration: job search flow', () => {
     const replaced: string[] = [];
     const heard: string[] = [];
     flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => replaced.push(state.status));
-    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => heard.push(`${state.status} ${state.accountName ?? ''}`.trim()));
+    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => heard.push(state.status));
 
     await flow.signIn();
     await flow.completeLogin();
     await flow.signOut();
-    expect(heard).toEqual(['pending-login', 'signed-in Pat Example', 'signed-out']);
+    expect(heard).toEqual(['pending-login', 'signed-in', 'signed-out']);
     expect(replaced).toEqual([]);
 
     // Closing the document drops its scripts' handlers.
     flow.closeDocument();
     await flow.signIn();
     expect(heard).toHaveLength(3);
+  });
+
+  it('31c. who is signed in is not part of the sign-in check: a script that shows it asks the service', async () => {
+    flow = createMockFlow();
+    flow.bindProfiles(listingCollection([ACME]));
+    flow.approve();
+    const heard: string[] = [];
+    flow.automation.onSessionChange(flow.api.capability, 'account-line', (state) => heard.push(state.status));
+    await flow.signIn();
+    await flow.completeLogin();
+    expect(heard).toEqual(['pending-login', 'signed-in']);
+    expect(flow.automation.getState().sessions[0]).not.toHaveProperty('accountName');
+    // A document script that shows the name, on hearing "signed-in", calls the service's own account endpoint.
+    expect((await flow.callEndpoint('session')).body).toEqual({ account: { id: 'a-1', name: 'Pat Example' } });
+  });
+
+  it('31a. a profile still signed in from an earlier run is heard on its first account check', async () => {
+    flow = createMockFlow();
+    flow.bindProfiles(listingCollection([ACME]));
+    flow.approve();
+    await flow.signIn();
+    await flow.completeLogin();
+    // The profile keeps its cookies across the restart (as a persistent browser profile does); the saved account
+    // summary is gone.
+    flow.restartApp();
+    flow.settings.update((settings) => ({ ...settings, accounts: {} }));
+    const heard: string[] = [];
+    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => heard.push(state.status));
+    expect(heard).toEqual([]);
+    await flow.probe();
+    expect(heard).toEqual(['signed-in']);
+  });
+
+  it('31b. a script that registers after the account check still hears that it is signed in', async () => {
+    flow = createMockFlow();
+    flow.bindProfiles(listingCollection([ACME]));
+    flow.approve();
+    await flow.signIn();
+    await flow.completeLogin();
+    const heard: string[] = [];
+    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => heard.push(state.status));
+    expect(heard).toEqual(['signed-in']);
   });
 
   it('32. a delayed entry waits its turn, and its context comes back with the result without reaching the service', async () => {

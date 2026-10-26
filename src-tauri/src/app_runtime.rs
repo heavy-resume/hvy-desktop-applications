@@ -49,6 +49,7 @@ pub fn run() {
             write_plugin_project_file,
             write_plugin_project_build,
             integration_browser_command,
+            web_automation_host,
             integration_browser_is_open,
             probe_integration_cookie_storage,
             load_integration_vault_status,

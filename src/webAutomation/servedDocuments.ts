@@ -34,11 +34,11 @@ function isTrustworthyOrigin(url: URL): boolean {
 }
 
 /**
- * Where a served document may be downloaded from: the capability's own origin
- * or a storage origin it lists. Anything else is never fetched, whatever the
+ * Where a served document may be read from: the capability's own origin or a
+ * read origin it lists. Anything else is never fetched, whatever the
  * service returns, so a bad response cannot point Galaxy at another host.
  */
-export function checkDownloadUrl(value: unknown, allowedOrigins: string[], name: string): URL {
+export function checkFileUrl(value: unknown, allowedOrigins: string[], name: string): URL {
   let url: URL;
   try {
     url = new URL(String(value ?? ''));
@@ -49,7 +49,7 @@ export function checkDownloadUrl(value: unknown, allowedOrigins: string[], name:
     throw new WebAutomationError('out_of_scope', `${name} offered a document from ${url.origin}, which is not a secure origin.`);
   }
   if (!allowedOrigins.includes(url.origin)) {
-    throw new WebAutomationError('out_of_scope', `${name} offered a document from ${url.origin}, which it does not list as a storage origin.`);
+    throw new WebAutomationError('out_of_scope', `${name} offered a document from ${url.origin}, which it does not list as a read origin.`);
   }
   return url;
 }
@@ -61,18 +61,18 @@ export interface ServedDocument {
 
 /**
  * Reads the document an endpoint's response serves, as the Heavy Resume
- * extension does: download from an allowed origin, check the announced size
+ * extension does: fetch the file from an allowed origin, check the announced size
  * and hash, then decrypt and parse with the reference implementation.
  */
 export async function readServedDocument(
-  deps: { download(url: string, options: { maxBytes: number }): Promise<Uint8Array> },
+  deps: { fetchFile(url: string, options: { maxBytes: number }): Promise<Uint8Array> },
   endpoint: ApiEndpointDefinition & { servesDocument: ServedDocumentDefinition },
   body: unknown,
   allowedOrigins: string[],
 ): Promise<ServedDocument> {
   const served = endpoint.servesDocument;
-  const url = checkDownloadUrl(readJsonPointer(body, served.urlPointer), allowedOrigins, `"${endpoint.name}"`);
-  const bytes = await deps.download(url.href, { maxBytes: MAX_SERVED_DOCUMENT_BYTES });
+  const url = checkFileUrl(readJsonPointer(body, served.urlPointer), allowedOrigins, `"${endpoint.name}"`);
+  const bytes = await deps.fetchFile(url.href, { maxBytes: MAX_SERVED_DOCUMENT_BYTES });
   if (bytes.byteLength > MAX_SERVED_DOCUMENT_BYTES) {
     throw new WebAutomationError('invalid_request', `The document from "${endpoint.name}" is larger than ${MAX_SERVED_DOCUMENT_BYTES} bytes.`);
   }

@@ -12,6 +12,14 @@ const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
 
 const errorsOf = (result: { ok: boolean; errors?: string[] }) => (result.ok ? [] : result.errors ?? []);
 
+describe('a place left out of collecting all', () => {
+  it('keeps the flag through the configuration reader, and only when it is false', () => {
+    const block = (startPages: unknown[]) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages });
+    const read = block([{ id: 'a', url: 'https://jobs.test/a', included: false }, { id: 'b', url: 'https://jobs.test/b', included: true }]);
+    expect(read.ok && read.value.collection.startPages).toEqual([{ id: 'a', url: 'https://jobs.test/a', included: false }, { id: 'b', url: 'https://jobs.test/b' }]);
+  });
+});
+
 describe('block configuration readers', () => {
   it('round-trips the web API snapshot and its MCP exposure', () => {
     const result = readWebApiBlockConfig(rawWebApi());
@@ -33,8 +41,8 @@ describe('block configuration readers', () => {
     undeclared[getAnalysis] = { ...undeclared[getAnalysis], inputSchema: { type: 'object', properties: {} } };
     expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints: undeclared })))).toContain('Endpoint "get-analysis" uses {id} but does not declare it as an input.');
     expect(errorsOf(readWebApiBlockConfig(rawWebApi({ mcp: { endpointIds: ['nope'] } })))).toContain('MCP exposes an endpoint that is not defined.');
-    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ storageOrigins: ['http://storage.example.test'] }))))
-      .toContain('Storage origin "http://storage.example.test" must use HTTPS (or HTTP on a loopback host).');
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ readOrigins: ['http://storage.example.test'] }))))
+      .toContain('Read origin "http://storage.example.test" must use HTTPS (or HTTP on a loopback host).');
     const served = structuredClone(analysisServiceCapability.endpoints).map((endpoint) => (endpoint.id === 'open-source'
       ? { ...endpoint, inputSchema: { type: 'object', properties: { id: {}, extra: {} } }, servesDocument: { urlPointer: 'readUrl' } }
       : endpoint));

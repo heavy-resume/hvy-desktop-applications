@@ -53,6 +53,8 @@ export interface WebAutomationDocumentDeps {
   callPlugin: PluginCall;
   /** Whether a plugin is allowed in this file (the reference implementation's per-file plugin authorization). */
   isPluginAuthorized(pluginId: string): boolean;
+  /** The origin of the document's web API block with this capability id, as its block is now. */
+  webApiOrigin(capabilityId: string): string | null;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -69,7 +71,7 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     sessions,
     settings: deps.settings,
     createId: deps.createId,
-    download: (url, options) => deps.host.download(url, options),
+    fetchFile: (url, options) => deps.host.fetchFile(url, options),
     exportDocumentText: documentText,
   });
   const documentQueues = new Map<string, DurableQueue>();
@@ -145,6 +147,27 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     return profileId;
   }
 
+  /**
+   * A queue that calls a web API, paused because its account was signed out, resumes once that account (the site, in
+   * the profile this document uses there) is signed in again: the sign-in was the user's answer. Other pauses wait
+   * for Resume.
+   */
+  function resumeAfterSignIn(queueId: string, target: PluginCallTarget): void {
+    const capabilityId = target.pluginId === WEB_API_PLUGIN_ID && typeof target.args.capabilityId === 'string' ? target.args.capabilityId : null;
+    if (!capabilityId) return;
+    const watcherKey = `queue\0${queueId}`;
+    sessionWatchers.get(watcherKey)?.();
+    sessionWatchers.set(watcherKey, sessions.onChange((state) => {
+      const item = queues.get(queueId);
+      const paused = item?.getState();
+      if (!item || state.status !== 'signed-in' || !paused?.paused || paused.pauseReason !== 'not_authenticated') return;
+      const profileId = deps.settings.get().profileBindings[deps.documentPath()]?.[capabilityId];
+      if (state.origin !== deps.webApiOrigin(capabilityId) || state.profileId !== profileId) return;
+      emit('queue', `${queueId}: signed in again, resuming`);
+      item.resume();
+    }));
+  }
+
   function queue(queueId: string): DurableQueue {
     const existing = queues.get(queueId);
     if (!existing) throw new WebAutomationError('invalid_request', `Queue "${queueId}" is not open.`);
@@ -209,14 +232,18 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: scripting doc.plugins.call("galaxy.web-api", "on_session", { key, handler }), registered by a form's initial
-    // script, such as a resume list that fills in once you sign in. The same key replaces an earlier handler.
+    // script, such as a resume list that fills in once you sign in. The same key replaces an earlier handler. A known
+    // state is handed over at once: the script may register after the account check that signed it in.
     onSessionChange(capability: WebApiCapability, key: string, handler: (state: SessionState) => void): void {
       const watcherKey = `${capability.capabilityId}\0${key}`;
+      const boundProfile = () => deps.settings.get().profileBindings[deps.documentPath()]?.[capability.capabilityId];
       sessionWatchers.get(watcherKey)?.();
       sessionWatchers.set(watcherKey, sessions.onChange((state) => {
-        const profileId = deps.settings.get().profileBindings[deps.documentPath()]?.[capability.capabilityId];
-        if (state.origin === capabilityOrigin(capability) && state.profileId === profileId) handler(state);
+        if (state.origin === capabilityOrigin(capability) && state.profileId === boundProfile()) handler(state);
       }));
+      const profileId = boundProfile();
+      const current = profileId ? sessions.stateFor(capability, profileId) : null;
+      if (current && current.status !== 'unknown') handler(current);
     },
 
     // UI: galaxy.web-api reader, "Sign out" button.
@@ -234,7 +261,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[]): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
-      const startPages = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages;
+      // Collecting everything skips the places left out of it; naming a place collects it either way.
+      const startPages = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages.filter((page) => page.included !== false);
       if (onlyStartUrls?.some((url) => !definition.startPages.some((page) => page.url === url))) {
         throw new WebAutomationError('invalid_request', "Only the block's own start pages can be collected.");
       }
@@ -273,6 +301,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       if (existing) {
         existing.attach(call);
         queues.set(queueId, existing);
+        resumeAfterSignIn(queueId, target);
         return;
       }
       const item = new DurableQueue({
@@ -287,6 +316,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       if (saved) item.restore(saved);
       runtime.queues.set(registryKey, item);
       queues.set(queueId, item);
+      resumeAfterSignIn(queueId, target);
     },
 
     // Document save: what the queue block keeps (DocumentAutomation.saveQueues writes it before serializing).

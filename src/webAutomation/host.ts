@@ -22,12 +22,12 @@ export interface BrowserHost {
   request(workerId: string, request: HostRequest): Promise<HostResponse>;
 
   /**
-   * Downloads a served document from the host process, outside any page: a
-   * GET with no credentials or cookies, no redirects (a redirect is an error),
-   * no referrer, and no cache. Fails if more than `maxBytes` arrive. The caller
-   * checks the URL's origin first.
+   * Reads a file (a served document) from the host process into memory,
+   * outside any page: a GET with no credentials or cookies, no redirects (a
+   * redirect is an error), no referrer, and no cache. Nothing is saved. Fails
+   * if more than `maxBytes` arrive. The caller checks the URL's origin first.
    */
-  download(url: string, options: { maxBytes: number }): Promise<Uint8Array>;
+  fetchFile(url: string, options: { maxBytes: number }): Promise<Uint8Array>;
 
   openUserWindow(profileId: string, url: string): Promise<void>;
   hideUserWindow(profileId: string): Promise<void>;

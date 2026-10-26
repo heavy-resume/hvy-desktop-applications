@@ -770,6 +770,7 @@ const INTEGRATION_TOOLBAR_HEIGHT = 52;
 // Web automation's browser host: workers, the sign-in window, and inspection (web-automation-host.cjs).
 const webAutomationHost = createWebAutomationHost({
   inspectorSource: INTEGRATION_INSPECTOR,
+  pageSource: fs.readFileSync(path.join(__dirname, '..', 'src', 'web-automation-page.js'), 'utf8'),
   sendEvent: (event) => mainWindow?.webContents.send('hvy:web-automation-navigation', event),
 });
 

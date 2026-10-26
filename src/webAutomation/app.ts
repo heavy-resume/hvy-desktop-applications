@@ -1,4 +1,4 @@
-import { getActiveStateRuntime, getRenderApp, runWithStateRuntime } from '../../../heavy-file-format/src/state';
+import { getActiveStateRuntime, getRefreshReaderBlock, getRenderApp, runWithStateRuntime } from '../../../heavy-file-format/src/state';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { saveAppSettings } from '../backend';
 import { state } from '../state';
@@ -52,6 +52,12 @@ export function hasWebAutomationHost(): boolean {
   return host !== null;
 }
 
+/** The delay scale a development build sets (VITE_WEB_AUTOMATION_DELAY_SCALE); production always paces fully. */
+function developmentDelayScale(): number {
+  const scale = import.meta.env.DEV ? Number(import.meta.env.VITE_WEB_AUTOMATION_DELAY_SCALE ?? 1) : 1;
+  return Number.isFinite(scale) && scale >= 0 ? scale : 1;
+}
+
 function appRuntime(): WebAutomationRuntime {
   if (!host) throw new WebAutomationError('invalid_request', 'Web automation needs a browser host.');
   runtime ??= createWebAutomationRuntime({
@@ -60,8 +66,19 @@ function appRuntime(): WebAutomationRuntime {
     random: Math.random,
     settings,
     createId: () => crypto.randomUUID(),
+    // Development only: VITE_WEB_AUTOMATION_DELAY_SCALE shortens (or lengthens) the delays between page loads.
+    scheduler: { navigationDelayScale: developmentDelayScale() },
   });
   return runtime;
+}
+
+/** The section and block of the component-list a CLI path such as /body/jobs/job-list names (top-level sections). */
+function componentListAt(document: VisualDocument, listPath: string): { sectionKey: string; blockId: string } | null {
+  const [root, sectionId, blockId] = listPath.split('/').filter(Boolean);
+  if (root !== 'body' || !sectionId || !blockId) return null;
+  const section = document.sections.find((candidate) => candidate.customId === sectionId);
+  const block = section?.blocks.find((candidate) => candidate.schema.id === blockId);
+  return section && block ? { sectionKey: section.key, blockId: block.id } : null;
 }
 
 /** Readers rerender on every automation event (sessions, runs, queues). */
@@ -77,8 +94,13 @@ setDocumentAutomationOpener((rawDocument) => {
     documentPath: () => documentPaths.get(document) ?? '',
     document,
     stateRuntime,
-    // A record sink wrote items outside any script: rerender, as a plugin hook's requestRerender does.
-    onDocumentChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
+    // A record sink wrote items outside any script: redraw just the list it wrote to, as the reader's own controls do,
+    // so the rest of the document (and where you are in it) stays as it is. The whole document is redrawn when the
+    // list is not on screen to refresh (another view, or not shown).
+    onDocumentChange: (current, listPath) => runWithStateRuntime(current, () => {
+      const list = componentListAt(document, listPath);
+      if (!list || !getRefreshReaderBlock()(window.document, list.sectionKey, list.blockId)) getRenderApp()();
+    }),
   });
   openedByDocument.set(document, opened);
   return opened.lookup;
@@ -118,4 +140,25 @@ export function relocateWebAutomationDocument(previousPath: string, nextPath: st
     if (path === previousPath) documentPaths.set(document, nextPath);
   }
   runtime?.relocateDocument(previousPath, nextPath);
+}
+
+const UNATTENDED_PAUSES = new Set(['not_authenticated', 'not_authorized']);
+
+/**
+ * The open documents with background work waiting for the user: a collection run that needs them (a page to deal
+ * with), or a queue paused until they sign in, allow it, or resume it after reopening. The document's own blocks say
+ * what and offer the actions; the app marks the document's tab.
+ */
+export function documentsNeedingYou(): string[] {
+  if (!host) return [];
+  const paths: string[] = [];
+  for (const [document, documentPath] of documentPaths) {
+    const state = openedByDocument.get(document)?.lookup.automation.getState();
+    if (!state) continue;
+    const runWaits = state.runs.some((run) => run.status === 'needs-attention');
+    const queueWaits = Object.values(state.queues).some((queue) => queue.entries.some((entry) => entry.status === 'queued' || entry.status === 'running' || entry.status === 'waiting-retry')
+      && (queue.awaitingResume || (queue.paused && UNATTENDED_PAUSES.has(queue.pauseReason ?? ''))));
+    if (runWaits || queueWaits) paths.push(documentPath);
+  }
+  return paths;
 }

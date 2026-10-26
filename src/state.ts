@@ -224,6 +224,8 @@ export interface AppState {
   integrationWebMcpRecordBuilderPath: string;
   integrationWebMcpConfigureAfterReview: boolean;
   /** Setting up a site for a document's collection: what the Integrations manager shows while it does. */
+  /** Paths of open documents whose background work waits for the user: their tabs are marked (backgroundActivity.ts). */
+  documentsNeedingYou: string[];
   siteSetup: {
     collectionName: string;
     documentName: string;
@@ -596,6 +598,7 @@ export const state: AppState = {
   integrationWebMcpConfigureAfterReview: false,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
+  documentsNeedingYou: [],
   siteSetup: null,
   integrationCommandDraftIntegrationId: null,
   integrationCommandDraftActionId: null,

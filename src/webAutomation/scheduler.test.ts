@@ -4,7 +4,7 @@ import { MockHost } from '../test/webAutomation/mockHost';
 import { VirtualClock } from '../test/webAutomation/virtualClock';
 import { WorkerScheduler } from './scheduler';
 
-function setup(options: { perProfile?: number; global?: number } = {}) {
+function setup(options: { perProfile?: number; global?: number; delayScale?: number } = {}) {
   const clock = new VirtualClock();
   const host = new MockHost([]);
   const log: string[] = [];
@@ -16,6 +16,7 @@ function setup(options: { perProfile?: number; global?: number } = {}) {
     maxCollectionWorkersPerProfile: options.perProfile ?? 2,
     maxCollectionWorkersGlobal: options.global ?? 4,
     idleTimeoutMs: 60_000,
+    ...(options.delayScale !== undefined ? { navigationDelayScale: options.delayScale } : {}),
   });
   return { clock, host, scheduler, log };
 }
@@ -69,5 +70,27 @@ describe('worker scheduler', () => {
     const gaps = times.slice(1).map((time, index) => time - times[index]);
     expect(gaps.every((gap) => gap >= 1_500 && gap <= 4_500)).toBe(true);
     expect(new Set(gaps).size).toBeGreaterThan(1);
+  });
+
+  it('scales the delays for development, and says how long each would be at full pacing', async () => {
+    const { clock, scheduler, log } = setup({ delayScale: 0.25 });
+    const times: number[] = [];
+    const done = scheduler.run({ profileId: 'p1', kind: 'collection', label: 'pace' }, async (lease) => {
+      for (let index = 0; index < 4; index += 1) {
+        await lease.pace('https://same.test/page');
+        times.push(clock.now());
+      }
+    });
+    await clock.runUntil(() => times.length === 4);
+    await done;
+    const gaps = times.slice(1).map((time, index) => time - times[index]);
+    expect(gaps.every((gap) => gap >= 375 && gap <= 1_125)).toBe(true);
+    const delays = log.filter((line) => line.startsWith('delay '));
+    expect(delays).toHaveLength(3);
+    for (const [index, line] of delays.entries()) {
+      const [, scaled, full] = line.match(/^delay ([\d.]+)s before same\.test \(([\d.]+)s at full pacing\)$/)!;
+      expect(Number(scaled)).toBeCloseTo(gaps[index] / 1000, 1);
+      expect(Number(full)).toBeCloseTo(Number(scaled) * 4, 0);
+    }
   });
 });

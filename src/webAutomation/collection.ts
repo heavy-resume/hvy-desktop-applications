@@ -47,6 +47,8 @@ export interface StartPage {
   id: string;
   url: string;
   values?: Record<string, string>;
+  /** False when collecting everything skips this place; it can still be collected on its own. */
+  included?: false;
 }
 
 /** The value every collected record has: its page's URL. It is not a configurable field. */
@@ -86,6 +88,28 @@ export interface CollectionDefinition {
 
 export type CollectionRunStatus = 'running' | 'needs-attention' | 'done' | 'stopped' | 'failed';
 
+/**
+ * One place's part of a run. A place's lists are read first (every page, with Next), so how much there is to collect
+ * is known before any item's page is visited.
+ */
+export interface PlaceProgress {
+  status: 'waiting' | 'reading' | 'collecting' | 'done' | 'stopped' | 'failed';
+  /** List pages read. */
+  pages: number;
+  /** Items found on them. */
+  found: number;
+  /** Of those, already in the document: skipped. */
+  known: number;
+  /** Of those, to be read. */
+  toCollect: number;
+  /** Read so far: collected or with a problem. */
+  read: number;
+  collected: number;
+  problems: number;
+  /** The item being read now: its title from the list, or its address. */
+  current: string | null;
+}
+
 export interface CollectionRunState {
   runId: string;
   capabilityId: string;
@@ -97,6 +121,8 @@ export interface CollectionRunState {
   problems: number;
   /** Start pages this run could not read at all, by start page id: a site to set up, not an item. */
   startPageProblems: Record<string, string>;
+  /** Each place's progress, by start page id. */
+  places: Record<string, PlaceProgress>;
   attention: { workerId: string; url: string; reason: string } | null;
   error: string | null;
 }
@@ -154,6 +180,8 @@ export async function testSitePattern(
 
 interface ActiveRun {
   state: CollectionRunState;
+  /** Items listed to read, across the run's places, not read yet: they count toward maxItems. */
+  queued: number;
   definition: CollectionDefinition;
   controller: AbortController;
   resumeAttention: (() => void) | null;
@@ -179,6 +207,9 @@ export class CollectionService {
 
   start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
+    for (const startPage of startPages) {
+      run.state.places[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, read: 0, collected: 0, problems: 0, current: null };
+    }
     const done = Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
       { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
       (lease) => this.collectFrom(run, lease, startPage),
@@ -219,11 +250,12 @@ export class CollectionService {
   private createRun(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer): ActiveRun {
     const runId = `run-${this.nextRunId++}`;
     const run: ActiveRun = {
+      queued: 0,
       definition,
       controller: new AbortController(),
       resumeAttention: null,
       consumer,
-      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, attention: null, error: null },
+      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, places: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
     this.deps.emit('collection', `${runId} started: ${definition.name}`, { profileId });
@@ -232,6 +264,8 @@ export class CollectionService {
 
   private finish(run: ActiveRun, results: PromiseSettledResult<unknown>[]): CollectionRunState {
     const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    // A place still waiting for a worker when the run ended never started.
+    for (const progress of Object.values(run.state.places)) if (progress.status === 'waiting') progress.status = 'stopped';
     if (run.controller.signal.aborted) run.state.status = 'stopped';
     else if (failure) {
       run.state.status = 'failed';
@@ -251,109 +285,167 @@ export class CollectionService {
     }
   }
 
+  /**
+   * Collects from one place: its lists first, every page with Next, noting each item's link and what the list shows of
+   * it (and skipping items already in the document); then each item's own page. A side-pane board's items open beside
+   * the list, so they are read as the list is.
+   */
   private async collectFrom(run: ActiveRun, lease: WorkerLease, startPage: StartPage): Promise<void> {
+    const progress = run.state.places[startPage.id];
+    try {
+      await this.readPlace(run, lease, startPage, progress);
+      progress.status = 'done';
+    } catch (error) {
+      progress.status = run.controller.signal.aborted ? 'stopped' : 'failed';
+      throw error;
+    } finally {
+      progress.current = null;
+      this.deps.emit('collection', `${startPage.id}: ${progress.status}`);
+    }
+  }
+
+  private async readPlace(run: ActiveRun, lease: WorkerLease, startPage: StartPage, progress: PlaceProgress): Promise<void> {
     const { host, emit } = this.deps;
     const startUrl = startPage.url;
     // The start page's fixed values, for what its pages do not show. Values read from a page win.
     const fixed: Record<string, unknown> = { ...(startPage.values ?? {}) };
+    progress.status = 'reading';
     this.assertAllowed(run, startUrl, false);
     await lease.pace(startUrl);
     await host.navigate(lease.workerId, startUrl);
-    const start = await this.resolveRole(run, lease, await this.inspectAt(run, lease), 'listing');
+    const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease), 'listing');
     if (start.kind !== 'match') {
       // Not a listing we know: the start page may be one item's own page. If nothing applies, the site needs setting
       // up; that is the start page's problem, not an item.
-      await this.writeDetail(run, lease, startUrl, start.inspection, fixed, (problem) => {
+      await this.tracked(run, progress, () => this.writeDetail(run, lease, startUrl, start.inspection, fixed, (problem) => {
         run.state.problems += 1;
         run.state.startPageProblems[startPage.id] = problem;
         emit('collection', `start page ${startPage.id}: ${problem}`);
-      });
+      }));
       return;
     }
+    const queue = await this.readLists(run, lease, startPage, progress, fixed, start);
+    progress.status = 'collecting';
+    emit('collection', `${startPage.id}: ${queue.length} to collect`);
+    for (const item of queue) {
+      this.checkStopped(run);
+      progress.current = item.title;
+      emit('collection', `${startPage.id}: reading ${item.title}`);
+      await lease.pace(item.link);
+      await host.navigate(lease.workerId, item.link);
+      await this.tracked(run, progress, async () => this.writeDetail(run, lease, item.link, await this.inspectAt(run, lease), item.values));
+    }
+  }
+
+  /** Reads every list page of a place, with Next: the items to visit, in order. Items already known are skipped. */
+  private async readLists(
+    run: ActiveRun,
+    lease: WorkerLease,
+    startPage: StartPage,
+    progress: PlaceProgress,
+    fixed: Record<string, unknown>,
+    start: { pattern: SitePatternDefinition; match: PatternMatch; inspection: PageInspection },
+  ): Promise<Array<{ link: string; title: string; values: Record<string, unknown> }>> {
+    const { host, emit } = this.deps;
+    const queue: Array<{ link: string; title: string; values: Record<string, unknown> }> = [];
+    const seen = new Set<string>();
+    // Items to read in this run, across its places, may not exceed the collection's limit.
+    const room = () => run.definition.maxItems - run.state.collected - run.state.problems - run.queued;
     let inspection = start.inspection;
     let listing: ListingResolution = { pattern: start.pattern, match: start.match };
-    const seen = new Set<string>();
     for (let page = 1; ; page += 1) {
       run.state.page = page;
+      progress.pages = page;
       const listingUrl = inspection.url;
       const pattern: SitePatternDefinition = listing.pattern;
       let newLinks = 0;
       for (const record of listing.match.records) {
         this.checkStopped(run);
-        if (run.state.collected + run.state.problems >= run.definition.maxItems) {
-          emit('collection', `${run.state.runId} reached maxItems (${run.definition.maxItems})`);
-          return;
-        }
         const link = typeof record.values[pattern.linkFieldId ?? ''] === 'string' ? new URL(String(record.values[pattern.linkFieldId ?? '']), listingUrl).href : null;
         if (!link) continue;
         const linkKey = canonicalUrl(link, run.definition.ignoredQueryParameters);
         if (seen.has(linkKey)) continue;
         seen.add(linkKey);
         newLinks += 1;
+        progress.found += 1;
         const listingValues = { ...fixed, ...this.mapFields(pattern, record.values) };
         // A key from listing values alone lets the consumer skip the page; field keys
         // that only appear on the detail page are checked by the consumer when it receives the record.
         const knownKey = this.keyFor(run, link, listingValues);
         if (knownKey && run.consumer.isKnown?.(knownKey)) {
           run.state.skipped += 1;
+          progress.known += 1;
           emit('collection', `skip known ${knownKey}`);
           continue;
         }
+        if (room() <= 0) {
+          emit('collection', `${run.state.runId} reached maxItems (${run.definition.maxItems})`);
+          return queue;
+        }
+        const title = typeof listingValues.title === 'string' && listingValues.title ? listingValues.title : link;
         if (pattern.itemCommandId) {
           // Side-pane board: the item opens beside the listing; there is no navigation to undo.
+          progress.toCollect += 1;
+          progress.current = title;
           await lease.pace(listingUrl);
           const opened = await host.runCommand(lease.workerId, { pattern, commandId: pattern.itemCommandId, recordRef: record.ref });
-          if (opened.status !== 'executed') {
-            this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
-            continue;
-          }
-          await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
+          await this.tracked(run, progress, async () => {
+            if (opened.status !== 'executed') this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
+            else await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
+          });
           continue;
         }
         if (!isNavigationAllowed(run.definition, link, true)) {
           emit('collection', `skip out of scope ${link}`);
           continue;
         }
-        await lease.pace(link);
-        await host.navigate(lease.workerId, link);
-        await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
-        await lease.pace(listingUrl);
-        await host.back(lease.workerId);
-        inspection = await this.inspectAt(run, lease);
-        listing = this.matchPattern(inspection, pattern);
-        if (!listing) {
-          emit('collection', `listing not restored after back; reopening ${listingUrl}`);
-          await lease.pace(listingUrl);
-          await host.navigate(lease.workerId, listingUrl);
-          inspection = await this.inspectAt(run, lease);
-          listing = this.matchPattern(inspection, pattern);
-        }
-        if (!listing) {
-          await this.waitForAttention(run, lease.workerId, listingUrl, 'listing-not-restored');
-          inspection = await this.inspectAt(run, lease);
-          listing = this.matchPattern(inspection, pattern);
-          if (!listing) throw new Error(`The listing at ${listingUrl} could not be restored.`);
-        }
+        queue.push({ link, title, values: listingValues });
+        run.queued += 1;
+        progress.toCollect += 1;
       }
-      if (page >= run.definition.maxPages || !pattern.paginationCommandId || newLinks === 0) return;
+      // A page that adds nothing (Next on the last page often shows it again) is not one of the place's pages.
+      if (newLinks === 0 && page > 1) progress.pages = page - 1;
+      emit('collection', `${startPage.id}: page ${progress.pages}, ${progress.found} found, ${progress.known} already listed`);
+      if (page >= run.definition.maxPages || !pattern.paginationCommandId || newLinks === 0) return queue;
       this.checkStopped(run);
       await lease.pace(listingUrl);
       const result = await host.runCommand(lease.workerId, { pattern, commandId: pattern.paginationCommandId });
       if (result.status !== 'executed') {
         emit('collection', `no next page (${result.status})`);
-        return;
+        return queue;
       }
       emit('collection', `page ${page + 1}`);
       inspection = await this.inspectAt(run, lease);
       listing = this.matchPattern(inspection, pattern);
-      if (!listing) return;
+      if (!listing) return queue;
     }
   }
 
+  /** Reads one item (or reports its problem), counting it for its place. */
+  private async tracked(run: ActiveRun, progress: PlaceProgress, read: () => Promise<void>): Promise<void> {
+    const before = { collected: run.state.collected, problems: run.state.problems };
+    try {
+      await read();
+    } finally {
+      const collected = run.state.collected - before.collected;
+      const problems = run.state.problems - before.problems;
+      progress.collected += collected;
+      progress.problems += problems;
+      progress.read += collected + problems;
+      run.queued = Math.max(0, run.queued - (collected + problems));
+    }
+  }
+
+  /**
+   * Inspects the page with the patterns that could apply there: those whose page rules cover its address, and every
+   * frame and fingerprint pattern (which only the page itself can rule out). Matching is the slow part of an
+   * inspection, so patterns for other sites are not run.
+   */
   private async inspectAt(run: ActiveRun, lease: WorkerLease): Promise<PageInspection> {
-    const patterns = run.definition.patterns;
     for (;;) {
       this.checkStopped(run);
+      const { url } = await this.deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} });
+      const patterns = run.definition.patterns.filter((pattern) => pattern.appliesTo.some((rule) => rule.target !== 'page' || urlMatchesRule(rule, url)));
       const inspection = await this.deps.host.inspect(lease.workerId, {
         patterns,
         fingerprints: patternFingerprints(patterns),
@@ -418,8 +510,26 @@ export class CollectionService {
       .map((field) => [field.id, values[field.id]]));
   }
 
+  /** Whether a site setup reads this address for a role: one of its patterns' page rules covers it. */
+  private covers(run: ActiveRun, url: string, role: SitePatternDefinition['role']): boolean {
+    return run.definition.patterns.some((pattern) => pattern.role === role && pattern.appliesTo.some((rule) => rule.target === 'page' && urlMatchesRule(rule, url)));
+  }
+
+  /**
+   * Resolves a role on a page, asking a person first when the page is one a site setup covers but does not look as it
+   * expects: usually a sign-in screen, a check to prove you're human, or a cookie wall, which only a person should
+   * deal with. The run waits with Needs attention (Show, Resume), then looks again once; a page that still does not
+   * match (the site changed) is reported as before.
+   */
+  private async resolveExpected(run: ActiveRun, lease: WorkerLease, inspection: PageInspection, role: SitePatternDefinition['role']): ReturnType<CollectionService['resolveRole']> {
+    const resolved = await this.resolveRole(run, lease, inspection, role);
+    if (resolved.kind !== 'none' || !this.covers(run, resolved.inspection.url, role)) return resolved;
+    await this.waitForAttention(run, lease.workerId, resolved.inspection.url, 'unexpected-page');
+    return this.resolveRole(run, lease, await this.inspectAt(run, lease), role);
+  }
+
   private async writeDetail(run: ActiveRun, lease: WorkerLease, url: string, inspection: PageInspection, listingValues: Record<string, unknown>, noPattern?: (problem: string) => void): Promise<void> {
-    const resolved = await this.resolveRole(run, lease, inspection, 'detail');
+    const resolved = await this.resolveExpected(run, lease, inspection, 'detail');
     if (resolved.kind === 'ambiguous') {
       this.writeProblem(run, url, listingValues, `Several patterns could apply: ${resolved.names.join(', ')}.`);
       return;

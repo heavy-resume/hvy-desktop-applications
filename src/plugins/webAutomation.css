@@ -104,3 +104,56 @@
 .hvy-web-place-values[hidden] {
   display: none;
 }
+
+/* A reader with nothing to show (an idle queue) hides; its card's display would otherwise keep an empty box. */
+.hvy-web-automation[hidden] {
+  display: none;
+}
+
+/* A place's progress while a run goes: it changes, so it stands out from the place's other details. */
+.hvy-web-place-progress {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.hvy-web-place-include {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.hvy-web-place-needs-you {
+  color: var(--hvy-warning-text, #8a4d00);
+}
+
+/* Something here waits for the user (a page to deal with, a sign-in): highlighted beside the block that needs them. */
+.hvy-web-needs-you {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--hvy-warning-border, var(--hvy-warning, #d47a00));
+  border-radius: 0.5rem;
+  background: var(--hvy-warning-bg, #fff4e0);
+  color: var(--hvy-warning-text, #8a4d00);
+}
+
+/* A few soft rings when the notice first appears; then it stays still. */
+.hvy-web-needs-you.is-pulsing {
+  animation: hvy-web-needs-you-pulse 1.2s ease-out 3;
+}
+
+@keyframes hvy-web-needs-you-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--hvy-warning, #d47a00);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hvy-web-needs-you.is-pulsing {
+    animation: none;
+  }
+}

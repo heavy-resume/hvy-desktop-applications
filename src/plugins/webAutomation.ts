@@ -2,7 +2,7 @@ import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
 import type { HvyPluginContext, HvyPluginFactory, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
 import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
-import type { CollectionDefinition, CollectionField, CollectionSite, StartPage } from '../webAutomation/collection';
+import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, PlaceProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
 import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig } from '../webAutomation/configs';
 import { createWebAutomationPlugins, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
@@ -39,6 +39,33 @@ function status(text: string): HTMLElement {
   return element;
 }
 
+/** How long a "needs you" notice pulses when it first appears: a few soft rings, then it stays still. */
+const NEEDS_YOU_PULSE_MS = 3_600;
+/** When each notice first appeared, by document (its automation), so a reader redrawing does not restart its pulse. */
+const needsYouSince = new WeakMap<object, Map<string, number>>();
+
+/**
+ * Something here waits for the user: a highlighted box beside the thing that needs them, which pulses briefly when it
+ * first appears (not with reduced motion). `key` names the occurrence; a new one pulses again.
+ */
+function needsYouNotice(lookup: DocumentAutomationLookup, key: string, ...children: HTMLElement[]): HTMLElement {
+  const box = document.createElement('div');
+  box.className = 'hvy-web-needs-you';
+  box.setAttribute('role', 'alert');
+  const seen = needsYouSince.get(lookup.automation) ?? new Map<string, number>();
+  needsYouSince.set(lookup.automation, seen);
+  const since = seen.get(key) ?? Date.now();
+  seen.set(key, since);
+  const elapsed = Date.now() - since;
+  if (elapsed < NEEDS_YOU_PULSE_MS) {
+    box.classList.add('is-pulsing');
+    // Continues the pulse where the last drawing left it.
+    box.style.animationDelay = `-${elapsed}ms`;
+  }
+  box.append(...children);
+  return box;
+}
+
 function actions(...buttons: HTMLButtonElement[]): HTMLElement {
   const row = document.createElement('div');
   row.className = 'hvy-web-automation-actions';
@@ -70,24 +97,25 @@ function reader(ctx: HvyPluginContext, render: (root: HTMLElement, lookup: Docum
   return { element: root, refresh: sync, unmount: unsubscribe };
 }
 
-function reviewReason(review: AuthorizationReview): string {
+function reviewReason(review: AuthorizationReview, name: string): string {
   if (review.reason === 'profile-changed') return 'You’re seeing this again because a different browser profile is selected.';
-  if (review.reason === 'capability-changed') return `You’re seeing this again because what this file does with the service changed (${review.changedCategories.join(', ')}).`;
-  return 'You’re seeing this because this file has not used this service with this browser profile before.';
+  if (review.reason === 'capability-changed') return `You’re seeing this again because what this file does with ${name} changed (${review.changedCategories.join(', ')}).`;
+  return `You’re seeing this because this file has not used ${name} with this browser profile before.`;
 }
 
-/** Signs in: checks for a session in the profile first, and opens the service's login window only without one. */
+/** Signs in: checks for a session in the profile first, and opens the site's sign-in window only without one. */
 async function signInTo(lookup: DocumentAutomationLookup, capability: WebApiCapability): Promise<void> {
   const session = await lookup.automation.probeSession(capability);
   if (session.status !== 'signed-in') await lookup.automation.beginSignIn(capability);
 }
 
 /**
- * Sign in to a web API service, with its approval: which browser profile to use, and what this file does with your
- * account there. Allowing records both, gives the document's collections without a profile the same one, and signs
- * in. Explicit modal, as for Galaxy's other web capabilities; it asks again when the profile or the service changes.
+ * Allow this file to use a web API's site: which browser profile to use, and what this file does there. Allowing
+ * records both and gives the document's collections without a profile the same one; a block with a sign-in then
+ * signs in, if the profile is not signed in already. Explicit modal, as for Galaxy's other web capabilities; it asks
+ * again when the profile or what the block does changes.
  */
-function openSignInDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capability: WebApiCapability, onError: (message: string) => void): void {
+function openApprovalDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, capability: WebApiCapability, onOutcome: (problem: string) => void): void {
   if (!state.document) return;
   const profiles = state.integrationRegistry.profiles;
   const current = selectedProfile(capability) ?? (profiles.length === 1 ? profiles[0] : null);
@@ -98,9 +126,9 @@ function openSignInDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLooku
   dialog.className = 'dialog hvy-web-authorization-dialog';
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
-  dialog.setAttribute('aria-label', `Sign in to ${capability.name}`);
+  dialog.setAttribute('aria-label', `Use ${capability.name} in this file?`);
   const title = document.createElement('h2');
-  title.textContent = `Sign in to ${capability.name}`;
+  title.textContent = `Use ${capability.name} in this file?`;
   const profileLabel = document.createElement('label');
   const profileName = document.createElement('span');
   profileName.textContent = 'Browser profile';
@@ -118,13 +146,14 @@ function openSignInDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLooku
     option.selected = profile.id === current?.id;
     return option;
   }));
-  profileLabel.append(profileName, profileSelect, paragraph('Your sign-in stays in this browser profile.', 'hvy-web-place-hint'));
+  profileLabel.append(profileName, profileSelect, paragraph(capability.session ? 'Your sign-in stays in this browser profile.' : 'Calls use this browser profile’s cookies.', 'hvy-web-place-hint'));
   const details = document.createElement('dl');
   const rows: Array<[string, string]> = [
     ['Document', state.document.source.name],
-    ['Service', new URL(capability.pageUrl).host],
+    // The page you are sent to, in full, so its address can be checked before signing in.
+    capability.session ? ['Sign-in page', capability.session.loginUrl] : ['Website', capability.pageUrl],
     ['Calls', capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
-    ...(capability.storageOrigins?.length ? [['Downloads files from', capability.storageOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
+    ...(capability.readOrigins?.length ? [['Also reads from', capability.readOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
   ];
   for (const [term, description] of rows) {
     const dt = document.createElement('dt');
@@ -135,17 +164,23 @@ function openSignInDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLooku
   }
   // With no profile chosen for this file yet, it is a first use.
   const review = selectedProfile(capability) ? lookup.automation.reviewWebApi(capability) : { capabilityId: capability.capabilityId, reason: 'first-use' as const, changedCategories: [] };
-  const reason = paragraph(reviewReason(review), 'hvy-web-authorization-reason');
-  const note = paragraph('Calls are made as your signed-in account. What this file sends and stores is in the document.');
+  const reason = paragraph(reviewReason(review, capability.name), 'hvy-web-authorization-reason');
+  const note = paragraph(`${capability.session ? 'Calls are made as your signed-in account.' : 'Calls are made in your browser profile.'} What this file sends and stores is in the document.`);
   const row = document.createElement('div');
   row.className = 'dialog-actions';
   const close = () => backdrop.remove();
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
-  const allow = button('Allow and sign in', true);
+  const allow = button('Allow', true);
   allow.type = 'submit';
-  allow.disabled = !profileSelect.value;
-  profileSelect.addEventListener('change', () => { allow.disabled = !profileSelect.value; });
+  // Signing in follows only for a block with a sign-in, in a profile not known to be signed in there.
+  const signedIn = (profileId: string) => lookup.automation.getState().sessions.some((session) => session.origin === capabilityOrigin(capability) && session.profileId === profileId && session.status === 'signed-in');
+  const showProfile = () => {
+    allow.disabled = !profileSelect.value;
+    allow.textContent = capability.session && !signedIn(profileSelect.value) ? 'Allow and sign in' : 'Allow';
+  };
+  profileSelect.addEventListener('change', showProfile);
+  showProfile();
   dialog.addEventListener('submit', (event) => {
     event.preventDefault();
     const profileId = profileSelect.value;
@@ -157,7 +192,9 @@ function openSignInDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLooku
       if (!selectedProfile(config.collection)) lookup.automation.bindProfile(config.collection.capabilityId, profileId);
     }
     close();
-    signInTo(lookup, capability).catch((error: unknown) => onError(errorMessage(error)));
+    if (capability.session) signInTo(lookup, capability).catch((error: unknown) => onOutcome(errorMessage(error)));
+    // Nothing follows: the reader shows the block as ready.
+    else onOutcome('');
   });
   row.append(cancel, allow);
   dialog.append(title, profileLabel, details, reason, note, row);
@@ -181,12 +218,12 @@ const webApiReader: HvyPluginFactory = (ctx) => {
       problem = message;
       sync();
     };
-    // One step to sign in: the modal takes the profile and the approval, then signs in.
-    const openSignIn = (label: string, primary: boolean) => {
+    // One step: the modal takes the profile and the approval, then signs in if the block has a sign-in.
+    const openApproval = (label: string, primary: boolean) => {
       const open = button(label, primary);
       open.addEventListener('click', () => {
         problem = '';
-        openSignInDialog(ctx, lookup, capability, showProblem);
+        openApprovalDialog(ctx, lookup, capability, showProblem);
       });
       return open;
     };
@@ -196,7 +233,15 @@ const webApiReader: HvyPluginFactory = (ctx) => {
       if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     };
     if (!profile || lookup.automation.reviewWebApi(capability).reason !== 'authorized') {
-      root.append(status('Not signed in.'), actions(openSignIn(`Sign in to ${capability.name}`, true)));
+      root.append(capability.session
+        ? status('Not signed in.')
+        : status('Not allowed in this file yet.'), actions(openApproval(capability.session ? `Sign in to ${capability.name}` : `Allow ${capability.name}`, true)));
+      finish();
+      return;
+    }
+    // Without a sign-in there is no account to check: allowed is ready.
+    if (!capability.session) {
+      root.append(status(`Ready · ${profile.name}`), actions(openApproval('Change profile…', false)));
       finish();
       return;
     }
@@ -213,11 +258,11 @@ const webApiReader: HvyPluginFactory = (ctx) => {
       return;
     }
     probing.delete(key);
-    const changeProfile = openSignIn('Change profile…', false);
+    const changeProfile = openApproval('Change profile…', false);
     if (session.status === 'signed-in') {
       const signOut = button('Sign out');
       signOut.addEventListener('click', () => void lookup.automation.signOut(capability).finally(sync));
-      root.append(status(`Signed in as ${session.accountName ?? 'your account'} · ${profile.name}`), actions(signOut, changeProfile));
+      root.append(status(`Signed in · ${profile.name}`), actions(signOut, changeProfile));
     } else {
       const signIn = button(`Sign in to ${capability.name}`, true);
       signIn.addEventListener('click', () => {
@@ -229,6 +274,14 @@ const webApiReader: HvyPluginFactory = (ctx) => {
     const message = problem || session.error;
     if (message) root.append(paragraph(message, 'hvy-web-error'));
   });
+};
+
+/** Why a run waits for a person, by the reason it records. */
+const ATTENTION_REASONS: Record<string, string> = {
+  'unexpected-page': 'A page doesn’t look as its site setup expects. It may want you to sign in or prove you’re human.',
+  challenge: 'The site wants you to prove you’re human.',
+  'sign-in-wall': 'The site wants you to sign in.',
+  'page-not-ready': 'A page didn’t finish loading.',
 };
 
 const RUN_STATUS: Record<string, string> = {
@@ -608,7 +661,8 @@ function openPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition
   row.append(removePlace, cancel, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const next: StartPage = { id: place.id, url: address.value.trim(), ...(Object.keys(values.read()).length ? { values: values.read() } : {}) };
+    const next: StartPage = { ...place, url: address.value.trim(), values: values.read() };
+    if (!Object.keys(next.values!).length) delete next.values;
     const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => (page.id === place.id ? next : page)) });
     if (problems.length) errors.textContent = problems.join(' ');
     else close();
@@ -616,8 +670,39 @@ function openPlaceDialog(ctx: HvyPluginContext, collection: CollectionDefinition
   address.focus();
 }
 
-/** Where a run looks: the block's places, each with what reads it, and adding another. */
-function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, problems: Record<string, string>): HTMLElement {
+/** A place's part of a run, in a line: what it is doing while the run goes, and how it went afterwards. */
+function placeProgressText(progress: PlaceProgress, items: string, needsYou: boolean): string {
+  const listed = `${progress.found} found, ${progress.known} already listed`;
+  // The place the run is on when it waits for the user: the card below, and the toolbar, say why.
+  if (needsYou && (progress.status === 'reading' || progress.status === 'collecting')) return 'Needs you: a page here doesn’t look as expected. Show it from below.';
+  switch (progress.status) {
+    case 'waiting': return 'Waiting for its turn…';
+    case 'reading': return progress.pages ? `Reading the list: page ${progress.pages}, ${listed}${progress.current ? ` · ${progress.current}` : ''}` : 'Opening the list…';
+    case 'collecting': return `Collecting ${progress.read + 1} of ${progress.toCollect}${progress.current ? `: ${progress.current}` : ''} (${listed})`;
+    case 'done': return `Last run: ${progress.collected} new, ${progress.known} already listed, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
+    case 'stopped': return `Last run stopped after ${progress.read} of ${progress.toCollect}.`;
+    case 'failed': return `Last run failed after ${progress.read} of ${progress.toCollect}.`;
+  }
+}
+
+/** Each place's progress in the latest run that included it. */
+function latestPlaceProgress(runs: CollectionRunState[]): Record<string, { progress: PlaceProgress; problem: string | null; running: boolean; needsYou: boolean }> {
+  const latest: Record<string, { progress: PlaceProgress; problem: string | null; running: boolean; needsYou: boolean }> = {};
+  for (const run of runs) {
+    for (const [placeId, progress] of Object.entries(run.places)) {
+      latest[placeId] = { progress, problem: run.startPageProblems[placeId] ?? null, running: run.status === 'running' || run.status === 'needs-attention', needsYou: run.status === 'needs-attention' };
+    }
+  }
+  return latest;
+}
+
+/**
+ * Where a run looks: the block's places, each with what reads it, whether collecting everything includes it, its
+ * progress (or how its last run went), and collecting it alone; and adding another.
+ */
+function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPlace: ((page: StartPage) => void) | null): HTMLElement {
+  const places = latestPlaceProgress(runs);
+  const busy = runs.some((run) => run.status === 'running' || run.status === 'needs-attention');
   const section = document.createElement('section');
   section.className = 'hvy-web-places';
   section.setAttribute('aria-label', 'Places to look');
@@ -639,17 +724,45 @@ function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, 
     const summary = document.createElement('div');
     summary.className = 'hvy-web-place-summary';
     const name = placeName(collection, page);
+    const place = places[page.id];
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.className = 'hvy-galaxy-input';
+    include.checked = page.included !== false;
+    include.addEventListener('change', () => {
+      const latest = currentCollection(ctx, collection);
+      saveCollection(ctx, { startPages: latest.startPages.map((candidate) => {
+        if (candidate.id !== page.id) return candidate;
+        const { included: _included, ...rest } = candidate;
+        return include.checked ? rest : { ...rest, included: false as const };
+      }) });
+    });
+    const includeLabel = document.createElement('label');
+    includeLabel.className = 'checkbox-row hvy-web-place-include';
+    const includeText = document.createElement('span');
+    includeText.textContent = 'Include when collecting all';
+    includeLabel.append(include, includeText);
     summary.append(
       paragraph(name, 'hvy-web-automation-entry hvy-web-place-name'),
       ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-place-hint')] : []),
       paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-place-hint'),
-      ...(problems[page.id] ? [paragraph('Last run: couldn’t read this page.', 'hvy-web-error')] : []),
+      ...(place?.problem
+        ? [paragraph('Last run: couldn’t read this page.', 'hvy-web-error')]
+        : place ? [paragraph(placeProgressText(place.progress, items(collection), place.needsYou), place.needsYou ? 'hvy-web-place-progress hvy-web-place-needs-you' : place.running ? 'hvy-web-place-progress' : 'hvy-web-place-hint')] : []),
+      includeLabel,
     );
     const edit = button('Edit');
     edit.setAttribute('aria-label', `Edit ${name}`);
     edit.addEventListener('click', () => openPlaceDialog(ctx, collection, page));
     const controls = actions(edit);
-    if (canSetUpSites() && (!reads || (problems[page.id] && recognized?.site))) {
+    if (collectPlace && reads) {
+      const collect = button('Collect');
+      collect.setAttribute('aria-label', `Collect ${name}`);
+      collect.disabled = busy;
+      collect.addEventListener('click', () => collectPlace(page));
+      controls.prepend(collect);
+    }
+    if (canSetUpSites() && (!reads || (place?.problem && recognized?.site))) {
       const site = recognized?.site ?? null;
       const fix = button(site ? 'Fix' : 'Set up this site', true);
       fix.setAttribute('aria-label', `${site ? 'Fix' : 'Set up'} ${name}`);
@@ -666,34 +779,55 @@ function placesSection(ctx: HvyPluginContext, collection: CollectionDefinition, 
   return section;
 }
 
-const collectionReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) => {
-  const result = readCollectionBlockConfig(ctx.block.schema.pluginConfig);
-  if (!result.ok) {
-    root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
-    return;
-  }
-  const collection = result.value.collection;
-  const run = lookup.automation.getState().runs.filter((candidate) => candidate.capabilityId === collection.capabilityId).at(-1);
-  root.append(heading(collection.name), buildProfileControls(collection, sync), placesSection(ctx, collection, run?.startPageProblems ?? {}));
-  if (!run) return;
-  const counts = `${run.collected} new, ${run.skipped} already listed, ${run.problems} with problems`;
-  root.append(status(`${RUN_STATUS[run.status]}: ${counts}${run.status === 'running' ? ` (page ${run.page})` : ''}.`));
-  if (run.status === 'running') {
-    const stop = button('Stop');
-    stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
-    root.append(actions(stop));
-  } else if (run.status === 'needs-attention' && run.attention) {
-    root.append(paragraph(`${run.attention.reason} at ${new URL(run.attention.url).host}.`));
-    const show = button('Show', true);
-    show.addEventListener('click', () => void lookup.automation.showAttention(run.runId));
-    const resume = button('Resume');
-    resume.addEventListener('click', () => lookup.automation.resumeAttention(run.runId));
-    const stop = button('Stop');
-    stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
-    root.append(actions(show, resume, stop));
-  }
-  if (run.error) root.append(paragraph(run.error, 'hvy-web-error'));
-});
+const collectionReader: HvyPluginFactory = (ctx) => {
+  // Why collecting one place could not start, shown until the next try.
+  let problem = '';
+  return reader(ctx, (root, lookup, sync) => {
+    const result = readCollectionBlockConfig(ctx.block.schema.pluginConfig);
+    if (!result.ok) {
+      root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
+      return;
+    }
+    const collection = result.value.collection;
+    const runs = lookup.automation.getState().runs.filter((candidate) => candidate.capabilityId === collection.capabilityId);
+    const run = runs.at(-1);
+    // One place on its own, into the block's output, as collecting everything does.
+    const sink = lookup.sink(collection.capabilityId);
+    const collectPlace = sink ? (page: StartPage) => {
+      problem = '';
+      try {
+        lookup.automation.startCollection(collection, sink, [page.url]);
+      } catch (error) {
+        problem = errorMessage(error);
+      }
+      sync();
+    } : null;
+    root.append(heading(collection.name), buildProfileControls(collection, sync), placesSection(ctx, collection, runs, collectPlace));
+    if (problem) root.append(paragraph(problem, 'hvy-web-error'));
+    if (!run) return;
+    const counts = `${run.collected} new, ${run.skipped} already listed, ${run.problems} with problems`;
+    root.append(status(`${RUN_STATUS[run.status]}: ${counts}.`));
+    if (run.status === 'running') {
+      const stop = button('Stop');
+      stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
+      root.append(actions(stop));
+    } else if (run.status === 'needs-attention' && run.attention) {
+      const show = button('Show', true);
+      show.addEventListener('click', () => void lookup.automation.showAttention(run.runId));
+      const resume = button('Resume');
+      resume.addEventListener('click', () => lookup.automation.resumeAttention(run.runId));
+      const stop = button('Stop');
+      stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
+      root.append(needsYouNotice(
+        lookup,
+        `${run.runId}\0${run.attention.workerId}\0${run.attention.url}`,
+        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'} (${new URL(run.attention.url).host}) Show it, deal with it there, then Resume.`),
+        actions(show, resume, stop),
+      ));
+    }
+    if (run.error) root.append(paragraph(run.error, 'hvy-web-error'));
+  });
+};
 
 const PAUSE_REASONS: Record<string, string> = {
   not_authenticated: 'Paused until you sign in again.',
@@ -723,10 +857,13 @@ const queueReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) 
     lookup.automation.resumeQueue(queueId);
     sync();
   });
-  if (queue.paused) {
+  // Paused for something only the user can do (sign in, allow, or resume after reopening): a notice here, by the queue.
+  if (queue.paused && (queue.pauseReason === 'not_authenticated' || queue.pauseReason === 'not_authorized')) {
+    root.append(needsYouNotice(lookup, `queue\0${queueId}\0${queue.pauseReason}`, paragraph(PAUSE_REASONS[queue.pauseReason] ?? `Paused (${queue.pauseReason}).`), actions(resume)));
+  } else if (queue.paused) {
     root.append(paragraph(PAUSE_REASONS[queue.pauseReason ?? 'paused'] ?? `Paused (${queue.pauseReason}).`), actions(resume));
   } else if (queue.awaitingResume) {
-    root.append(paragraph('Work from before this file was opened waits until you resume it.'), actions(resume));
+    root.append(needsYouNotice(lookup, `queue\0${queueId}\0reopened`, paragraph('Work from before this file was opened waits until you resume it.'), actions(resume)));
   } else if (waiting + running > 0) {
     const pause = button('Pause');
     pause.addEventListener('click', () => {

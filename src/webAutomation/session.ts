@@ -1,5 +1,4 @@
 import type { Clock } from './clock';
-import { readJsonPointer } from './endpoints';
 import { errorMessage, WebAutomationError } from './errors';
 import type { AutomationEmit } from './events';
 import type { BrowserHost, NavigationEvent } from './host';
@@ -12,7 +11,6 @@ export interface SessionState {
   origin: string;
   profileId: string;
   status: SessionStatus;
-  accountName: string | null;
   error: string | null;
 }
 
@@ -57,7 +55,6 @@ export class SessionService {
       origin,
       profileId,
       status: account ? 'signed-in' : 'unknown',
-      accountName: account?.accountName ?? null,
       error: null,
     };
   }
@@ -70,18 +67,17 @@ export class SessionService {
       if (signedOutStatuses(capability).includes(response.status)) {
         this.markSignedOut(capability, profileId);
       } else if (response.status >= 200 && response.status < 300) {
-        const accountId = String(readJsonPointer(response.body, session.probe.accountIdPointer ?? '') ?? '');
-        const accountName = String(readJsonPointer(response.body, session.probe.accountNamePointer ?? '') ?? accountId);
+        // Only access is checked here. Who is signed in, if the service says, is for the document's scripts to ask it.
         const origin = capabilityOrigin(capability);
         this.deps.settings.update((settings) => ({
           ...settings,
           accounts: {
             ...settings.accounts,
-            [accountKey(origin, profileId)]: { origin, profileId, accountId, accountName, checkedAt: this.deps.clock.now() },
+            [accountKey(origin, profileId)]: { origin, profileId, checkedAt: this.deps.clock.now() },
           },
         }));
-        this.setState(capability, profileId, { status: 'signed-in', accountName, error: null });
-        this.deps.emit('session', `signed in as ${accountName}`, { origin, profileId });
+        this.setState(capability, profileId, { status: 'signed-in', error: null });
+        this.deps.emit('session', 'signed in', { origin, profileId });
       } else {
         this.setState(capability, profileId, { error: `The session check returned ${response.status}.` });
       }
@@ -115,7 +111,7 @@ export class SessionService {
       return { ...settings, accounts };
     });
     if (this.stateFor(capability, profileId).status !== 'signed-out') this.deps.emit('session', 'signed out', { origin, profileId });
-    this.setState(capability, profileId, { status: 'signed-out', accountName: null });
+    this.setState(capability, profileId, { status: 'signed-out' });
   }
 
   private async handleNavigation(event: NavigationEvent): Promise<void> {
@@ -139,10 +135,16 @@ export class SessionService {
     return capability.session;
   }
 
+  /**
+   * Records an account's state and tells listeners when its status changes. The first state recorded in a run is
+   * always told: until then listeners have heard nothing, even when a saved account already said "signed in" (a probe
+   * saves the account before it records the state).
+   */
   private setState(capability: WebApiCapability, profileId: string, patch: Partial<Omit<SessionState, 'origin' | 'profileId'>>): void {
-    const current = this.stateFor(capability, profileId);
-    const next = { ...current, ...patch };
-    this.states.set(accountKey(current.origin, profileId), next);
-    if (next.status !== current.status) for (const listener of this.listeners) listener({ ...next });
+    const key = accountKey(capabilityOrigin(capability), profileId);
+    const recorded = this.states.get(key);
+    const next = { ...this.stateFor(capability, profileId), ...patch };
+    this.states.set(key, next);
+    if (!recorded || next.status !== recorded.status) for (const listener of this.listeners) listener({ ...next });
   }
 }

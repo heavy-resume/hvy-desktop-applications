@@ -18,7 +18,7 @@ function stateWith(blockedPlugins: typeof blocked, dialogOpen = false): AppState
 
 describe('plugin approval for the open file', () => {
   it('shows a bar naming the plugins the file is waiting on, and nothing once none are', () => {
-    expect(renderPluginApprovalBar(stateWith(blocked))).toContain('This file uses 2 plugins that can run code: Web API, Web Collection.');
+    expect(renderPluginApprovalBar(stateWith(blocked))).toContain('This file uses 2 plugins that need your approval: Web API, Web Collection.');
     expect(renderPluginApprovalBar(stateWith([]))).toBe('');
   });
 
@@ -26,7 +26,7 @@ describe('plugin approval for the open file', () => {
     const dialog = renderPluginApprovalDialog(stateWith(blocked, true));
     expect(dialog).toMatch(/<input[^>]*data-plugin-acceptance-key="[^"]*"[^>]*checked>\s*<span class="plugin-approval-option-text">\s*<strong>Web API<\/strong>/);
     expect(dialog).toContain(pluginAcceptanceKey(blocked[1]).replaceAll('"', '&quot;'));
-    expect(dialog).toContain('Used by 2 blocks in this file');
+    expect(dialog).toContain('2 instances in this file');
     expect(renderPluginApprovalDialog(stateWith(blocked, false))).toBe('');
   });
 

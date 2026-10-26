@@ -3,14 +3,16 @@
 // Electron side of web automation's BrowserHost (src/webAutomation/host.ts):
 // hidden worker windows that share a browser profile's session, the visible
 // sign-in window, page inspection through the integration inspector, page
-// commands, same-origin requests from inside a page, and cookie-free
-// downloads. The renderer's adapter (src/webAutomation/electronHost.ts)
-// turns site patterns into inspector patterns and back.
+// commands, same-origin requests from inside a page, and cookie-free file
+// reads. What runs inside a page is shared with Tauri
+// (src/web-automation-page.js). The renderer's adapter
+// (src/webAutomation/nativeHost.ts) turns site patterns into inspector
+// patterns and back.
 
 const { BrowserWindow, session } = require('electron');
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
-const DOWNLOAD_PARTITION = 'hvy-galaxy-web-automation-downloads';
+const FETCH_FILE_PARTITION = 'hvy-galaxy-web-automation-files';
 
 function createWebAutomationHost(deps) {
   const profileSessions = new Map();
@@ -81,8 +83,9 @@ function createWebAutomationHost(deps) {
     });
   }
 
-  function inspector(script) {
-    return `${deps.inspectorSource}\n${script}`;
+  // A call into the shared page script, after the inspector it uses.
+  function pageCall(contents, name, argument) {
+    return contents.executeJavaScript(`${deps.inspectorSource}\n${deps.pageSource}\nwindow.__hvyGalaxyAutomation.${name}(${JSON.stringify(argument)})`);
   }
 
   async function navigate(workerId, url) {
@@ -102,23 +105,8 @@ function createWebAutomationHost(deps) {
     return { url: window.webContents.getURL() };
   }
 
-  // Runs each pattern's inspector matcher on the page, and reads its frames.
   async function inspect(workerId, request) {
-    const { window } = worker(workerId);
-    return window.webContents.executeJavaScript(inspector(`(async () => {
-      const inspector = window.__hvyGalaxyInspector;
-      const matches = {};
-      for (const pattern of ${JSON.stringify(request.patterns)}) {
-        const extraction = await inspector.extractAcrossPage(pattern.matcher);
-        matches[pattern.id] = extraction.records || [];
-      }
-      return {
-        url: location.href,
-        ready: document.readyState !== 'loading',
-        matches,
-        frames: [...document.querySelectorAll('iframe[src]')].map((frame) => ({ src: frame.src })),
-      };
-    })()`));
+    return pageCall(worker(workerId).window.webContents, 'inspect', request);
   }
 
   // A page command (such as Next) or an item command; waits for the page it opens, if any.
@@ -130,36 +118,24 @@ function createWebAutomationHost(deps) {
       if (details.isMainFrame && !details.isSameDocument && !details.url.startsWith('hvy-integration://')) navigated = waitForLoad(contents);
     };
     contents.on('did-start-navigation', started);
-    // Commands run on pages other than the one they were taught on, so the page is only checked to be on its site.
-    const readyChecks = { urlMode: 'strict-domain', urlValue: new URL(contents.getURL()).hostname, elements: [] };
     try {
-      const result = await contents.executeJavaScript(inspector(`window.__hvyGalaxyInspector.executeCommand(${JSON.stringify({ ...payload, readyChecks })})`));
+      const result = await pageCall(contents, 'runCommand', payload);
       if (navigated) await navigated;
-      return { status: result?.status === 'executed' ? 'executed' : 'no_match' };
+      return result;
     } finally {
       contents.removeListener('did-start-navigation', started);
     }
   }
 
-  // Same-origin, credentialed request made from inside the page the worker is on.
   async function request(workerId, hostRequest) {
-    const { window } = worker(workerId);
-    return window.webContents.executeJavaScript(`(async () => {
-      const request = ${JSON.stringify(hostRequest)};
-      const response = await fetch(request.url, { method: request.method, headers: request.headers, body: request.body, credentials: 'include', redirect: 'manual' });
-      const contentType = response.headers.get('content-type') || '';
-      const text = await response.text();
-      let body = text;
-      if (contentType.includes('json')) { try { body = JSON.parse(text); } catch (_) {} }
-      return { status: response.status, contentType, body };
-    })()`);
+    return pageCall(worker(workerId).window.webContents, 'request', hostRequest);
   }
 
-  // A served document, fetched from the main process: no cookies, no redirects, no referrer, no cache.
-  async function download(url, maxBytes) {
-    const downloads = session.fromPartition(DOWNLOAD_PARTITION);
-    const response = await downloads.fetch(url, { redirect: 'error', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
-    if (!response.ok) throw new Error(`The download returned ${response.status}.`);
+  // A served document's file, read into memory from the main process: no cookies, no redirects, no referrer, no cache.
+  async function fetchFile(url, maxBytes) {
+    const files = session.fromPartition(FETCH_FILE_PARTITION);
+    const response = await files.fetch(url, { redirect: 'error', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+    if (!response.ok) throw new Error(`Reading the file returned ${response.status}.`);
     const reader = response.body.getReader();
     const chunks = [];
     let total = 0;
@@ -169,7 +145,7 @@ function createWebAutomationHost(deps) {
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel();
-        throw new Error(`The download is larger than ${maxBytes} bytes.`);
+        throw new Error(`The file is larger than ${maxBytes} bytes.`);
       }
       chunks.push(value);
     }
@@ -219,7 +195,7 @@ function createWebAutomationHost(deps) {
       case 'inspect': return inspect(args.workerId, args.request);
       case 'run-command': return runCommand(args.workerId, args.payload);
       case 'request': return request(args.workerId, args.request);
-      case 'download': return download(args.url, args.maxBytes);
+      case 'fetch-file': return fetchFile(args.url, args.maxBytes);
       case 'open-user-window': return openUserWindow(args.profileId, args.url);
       case 'hide-user-window': return hideUserWindow(args.profileId);
       default: throw new Error(`Unknown web automation host command ${name}.`);

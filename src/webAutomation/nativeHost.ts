@@ -1,13 +1,23 @@
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { BrowserHost, ExtractedRecord, HostResponse, NavigationEvent, PageInspection, PatternMatch } from './host';
 import { LINK_FIELD_ID, type IntegrationPatternMatcher } from './integrationPatterns';
 import type { SitePatternDefinition } from './sitePatterns';
 
 /**
- * Web automation's BrowserHost in Electron: hidden worker windows that share
- * a browser profile's session, inspected with the integration inspector
- * (src-electron/web-automation-host.cjs). Site patterns made from picked
- * integrations carry the inspector's pattern and their commands.
+ * Web automation's BrowserHost in the desktop apps: hidden worker windows
+ * that share a browser profile's session, inspected with the integration
+ * inspector. Electron (src-electron/web-automation-host.cjs) and Tauri
+ * (src-tauri/src/web_automation.rs) take the same commands; only how a
+ * command reaches them differs. Site patterns made from picked integrations
+ * carry the inspector's pattern and their commands.
  */
+
+/** How the host's commands and navigation events reach the native side. */
+interface HostTransport {
+  call<T>(command: string, args: Record<string, unknown>): Promise<T>;
+  onNavigation(listener: (event: NavigationEvent) => void): () => void;
+}
 
 interface ElectronBridge {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -28,13 +38,6 @@ interface RawInspection {
   frames: Array<{ src: string }>;
 }
 
-function bridge(): ElectronBridge {
-  return (window as unknown as { hvyElectron: ElectronBridge }).hvyElectron;
-}
-
-function call<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
-  return bridge().invoke<T>('web_automation_host', { command, ...args });
-}
 
 function matcherOf(pattern: SitePatternDefinition): IntegrationPatternMatcher | null {
   return (pattern.matcher as IntegrationPatternMatcher | undefined) ?? null;
@@ -56,7 +59,34 @@ function patternMatch(records: InspectorRecord[]): PatternMatch {
   return { confidence: records.length ? Math.max(...records.map((record) => record.score)) : 0, records: extracted };
 }
 
+function electronTransport(): HostTransport {
+  const bridge = (window as unknown as { hvyElectron: ElectronBridge }).hvyElectron;
+  return {
+    call: (command, args) => bridge.invoke('web_automation_host', { command, ...args }),
+    onNavigation: (listener) => bridge.onWebAutomationNavigation(listener),
+  };
+}
+
+function tauriTransport(): HostTransport {
+  return {
+    call: (command, args) => invoke('web_automation_host', { command, args }),
+    onNavigation(listener) {
+      const unlisten = listen<NavigationEvent>('web-automation-navigation', (event) => listener(event.payload));
+      return () => void unlisten.then((stop) => stop());
+    },
+  };
+}
+
 export function createElectronBrowserHost(): BrowserHost {
+  return createNativeBrowserHost(electronTransport());
+}
+
+export function createTauriBrowserHost(): BrowserHost {
+  return createNativeBrowserHost(tauriTransport());
+}
+
+function createNativeBrowserHost(transport: HostTransport): BrowserHost {
+  const call = <T>(command: string, args: Record<string, unknown> = {}) => transport.call<T>(command, args);
   return {
     createWorker: (profileId) => call<string>('create-worker', { profileId }),
     resetWorker: async (workerId) => {
@@ -105,13 +135,13 @@ export function createElectronBrowserHost(): BrowserHost {
     },
 
     request: (workerId, hostRequest) => call<HostResponse>('request', { workerId, request: hostRequest }),
-    download: async (url, options) => new Uint8Array(await call<ArrayBuffer | Uint8Array>('download', { url, maxBytes: options.maxBytes })),
+    fetchFile: async (url, options) => new Uint8Array(await call<ArrayBuffer | Uint8Array>('fetch-file', { url, maxBytes: options.maxBytes })),
     openUserWindow: async (profileId, url) => {
       await call('open-user-window', { profileId, url });
     },
     hideUserWindow: async (profileId) => {
       await call('hide-user-window', { profileId });
     },
-    onNavigation: (listener) => bridge().onWebAutomationNavigation(listener),
+    onNavigation: (listener) => transport.onNavigation(listener),
   };
 }

@@ -60,11 +60,11 @@ export const analysisServiceCapability: WebApiCapability = {
   name: 'Mock Analysis',
   pageUrl: `${ANALYSIS_ORIGIN}/`,
   allowedOrigins: [ANALYSIS_ORIGIN],
-  storageOrigins: [STORAGE_ORIGIN],
+  readOrigins: [STORAGE_ORIGIN],
   session: {
     loginUrl: `${ANALYSIS_ORIGIN}/login`,
     completeUrl: `${ANALYSIS_ORIGIN}/login/done`,
-    probe: { endpointId: 'session', accountNamePointer: '/account/name', accountIdPointer: '/account/id' },
+    probe: { endpointId: 'session' },
     logoutEndpointId: 'logout',
   },
   endpoints: [

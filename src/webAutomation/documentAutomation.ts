@@ -12,6 +12,7 @@ import { readWebAutomationBlocks } from './documentBlocks';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
 import { createRecordSink } from './recordSink';
+import { capabilityOrigin } from './webApi';
 // Registers the blocks' checks with hvy lint.
 import './lint';
 import {
@@ -118,8 +119,11 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   documentPath(): string;
   document: VisualDocument;
   stateRuntime: StateRuntime;
-  /** The document changed outside a script (a record sink wrote items); the host rerenders in the document's state runtime. */
-  onDocumentChange?(stateRuntime: StateRuntime): void;
+  /**
+   * The document changed outside a script: a record sink wrote items into the component-list at `listPath`. The host
+   * redraws that list in the document's state runtime.
+   */
+  onDocumentChange?(stateRuntime: StateRuntime, listPath: string): void;
 }) {
   const { document } = options;
   let stateRuntime = options.stateRuntime;
@@ -129,6 +133,10 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   const automation = createWebAutomation(runtime, {
     documentPath: options.documentPath,
     isPluginAuthorized,
+    webApiOrigin: (capabilityId) => {
+      const capability = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability;
+      return capability ? capabilityOrigin(capability) : null;
+    },
     callPlugin: (pluginId, method, args) => {
       // A queue's target plugin not allowed in this file pauses the queue for review rather than failing entries.
       if (pluginId !== QUEUE_PLUGIN_ID && !isPluginAuthorized(pluginId)) {
@@ -151,7 +159,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       return {
         onRecord: (record) => {
           sink.onRecord(record);
-          options.onDocumentChange?.(stateRuntime);
+          options.onDocumentChange?.(stateRuntime, output.store.listPath);
         },
         isKnown: sink.isKnown,
       };

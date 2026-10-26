@@ -11,6 +11,11 @@ export interface SchedulerOptions {
   maxCollectionWorkersGlobal?: number;
   idleTimeoutMs?: number;
   navigationDelayMs?: { min: number; max: number };
+  /**
+   * Multiplies the delays between page loads: 1 in production. Development can shorten them (0.25 waits a quarter as
+   * long) while the log still says how long each delay would be at full pacing.
+   */
+  navigationDelayScale?: number;
 }
 
 export interface JobRequest {
@@ -67,6 +72,7 @@ export class WorkerScheduler {
       maxCollectionWorkersGlobal: 4,
       idleTimeoutMs: 120_000,
       navigationDelayMs: { min: 1_500, max: 4_500 },
+      navigationDelayScale: 1,
       ...options,
     };
   }
@@ -123,10 +129,12 @@ export class WorkerScheduler {
         const last = this.lastNavigation.get(key);
         if (last !== undefined) {
           const { min, max } = this.options.navigationDelayMs;
-          const waitUntil = last + randomBetween(this.options.random, min, max);
-          const wait = waitUntil - this.options.clock.now();
+          const scale = this.options.navigationDelayScale;
+          const full = randomBetween(this.options.random, min, max);
+          const wait = last + full * scale - this.options.clock.now();
           if (wait > 0) {
-            this.options.emit('scheduler', `delay ${(wait / 1000).toFixed(1)}s before ${new URL(url).host}`, { workerId: record.id });
+            const atFullPacing = scale === 1 ? '' : ` (${(full / 1000).toFixed(1)}s at full pacing)`;
+            this.options.emit('scheduler', `delay ${(wait / 1000).toFixed(1)}s before ${new URL(url).host}${atFullPacing}`, { workerId: record.id });
             await this.options.clock.sleep(wait);
           }
         }

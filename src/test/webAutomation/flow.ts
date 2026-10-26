@@ -161,7 +161,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   /** Runs virtual time until no collection is running and the queues are idle, paused, or waiting for resume. */
   async function settle(): Promise<void> {
     await pluginsReady;
-    // Downloads, decryption, and loading the document reader are real asynchronous work the virtual clock cannot
+    // Fetching files, decryption, and loading the document reader are real asynchronous work the virtual clock cannot
     // see: when only such work is left, give it real time, then run virtual time again.
     for (let waits = 0; waits < 400; waits += 1) {
       await clock.runUntil(() => !busy());
@@ -280,8 +280,9 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     },
 
     // UI: galaxy.web-collection reader, "Collect".
-    async collect(collection: CollectionDefinition): Promise<CollectionRunState> {
-      const run = automation.startCollection(collection, sink);
+    // UI: "Collect jobs", or a place's own "Collect" (onlyUrls).
+    async collect(collection: CollectionDefinition, onlyUrls?: string[]): Promise<CollectionRunState> {
+      const run = automation.startCollection(collection, sink, onlyUrls);
       await settle();
       return automation.getState().runs.find((candidate) => candidate.runId === run.runId)!;
     },

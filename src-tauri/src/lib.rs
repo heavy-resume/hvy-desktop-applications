@@ -209,6 +209,7 @@ include!("app_runtime.rs");
 include!("workspace_files.rs");
 include!("state_settings.rs");
 include!("utils.rs");
+include!("web_automation.rs");
 
 #[cfg(test)]
 mod tests {

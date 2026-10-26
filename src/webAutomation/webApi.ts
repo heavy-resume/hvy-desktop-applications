@@ -20,8 +20,6 @@ export interface SessionDefinition {
   probe: {
     endpointId: string;
     signedOutStatuses?: number[];
-    accountNamePointer?: string;
-    accountIdPointer?: string;
   };
   logoutEndpointId?: string;
   loginAllowedOrigins?: string[];
@@ -37,8 +35,8 @@ export interface WebApiCapability {
   apiPageUrl?: string;
   session?: SessionDefinition;
   endpoints: ApiEndpointDefinition[];
-  /** Origins served documents may be downloaded from (for example, a storage bucket), besides the page's own. */
-  storageOrigins?: string[];
+  /** Origins a served document may be read from (for example, a storage bucket), besides the page's own. */
+  readOrigins?: string[];
 }
 
 /** A stable key for the call (a queue entry's), sent in the endpoint's idempotency header. */
@@ -64,7 +62,7 @@ export function webApiAuthorizationParts(capability: WebApiCapability): Record<s
     endpoints: capability.endpoints
       .map((endpoint) => ({ id: endpoint.id, method: endpoint.method, path: endpoint.path, inputSchema: endpoint.inputSchema, idempotency: endpoint.idempotency ?? null, servesDocument: endpoint.servesDocument ?? null }))
       .sort((left, right) => left.id.localeCompare(right.id)),
-    storage: [...(capability.storageOrigins ?? [])].sort(),
+    reads: [...(capability.readOrigins ?? [])].sort(),
   };
 }
 
@@ -123,8 +121,8 @@ export class WebApiService {
     sessions: SessionService;
     settings: AutomationSettingsStore;
     createId(): string;
-    /** Downloads a served document (host.download). */
-    download(url: string, options: { maxBytes: number }): Promise<Uint8Array>;
+    /** Reads a served document's file (host.fetchFile). */
+    fetchFile(url: string, options: { maxBytes: number }): Promise<Uint8Array>;
     /** The text a document contributes to an input: the reference Markdown export. */
     exportDocumentText(document: VisualDocument): string;
   }) {}
@@ -170,10 +168,10 @@ export class WebApiService {
       if (!serving.servesDocument) throw new WebAutomationError('invalid_request', `"${serving.name}" does not serve a document.`);
       const response = await this.send(capability, profileId, serving, { [onlyInput(serving)]: documentId });
       const served = await readServedDocument(
-        { download: (url, options) => this.deps.download(url, options) },
+        { fetchFile: (url, options) => this.deps.fetchFile(url, options) },
         serving as ApiEndpointDefinition & { servesDocument: ServedDocumentDefinition },
         response.body,
-        [capabilityOrigin(capability), ...(capability.storageOrigins ?? [])],
+        [capabilityOrigin(capability), ...(capability.readOrigins ?? [])],
       );
       filled[name] = this.deps.exportDocumentText(served.document);
       if (revisionInput && served.revision !== null) filled[revisionInput] = served.revision;

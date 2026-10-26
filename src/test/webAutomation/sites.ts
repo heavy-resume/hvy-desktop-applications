@@ -24,7 +24,7 @@ function job(slug: string, title: string, skills: string): MockJob {
 }
 
 /** One company's board on a mock ATS: listing pages plus one detail page per job, all with the same markup. */
-export function atsCompany(company: string, displayName: string, pages: MockJob[][], options: { challenge?: boolean; restoresOnBack?: boolean } = {}): Record<string, MockPage> {
+export function atsCompany(company: string, displayName: string, pages: MockJob[][], options: { challenge?: boolean; restoresOnBack?: boolean; jobPageWall?: boolean } = {}): Record<string, MockPage> {
   const result: Record<string, MockPage> = {};
   pages.forEach((jobs, index) => {
     const path = index === 0 ? `/${company}/jobs` : `/${company}/jobs?page=${index + 1}`;
@@ -41,6 +41,7 @@ export function atsCompany(company: string, displayName: string, pages: MockJob[
     };
     for (const item of jobs) {
       result[`/${company}/jobs/${item.slug}`] = {
+        ...(options.jobPageWall ? { wall: true } : {}),
         matches: {
           'ats-detail': {
             confidence: 0.9,
@@ -90,6 +91,7 @@ export function mockAtsSite(): MockSite {
       ]),
       ...atsCompany('globex', 'Globex', [[job('eng-1', 'Backend Engineer', 'TypeScript'), job('ops-1', 'SRE', 'Kubernetes')]]),
       ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
+      ...atsCompany('wonka', 'Wonka', [[job('eng-1', 'Engineer', 'Rust'), job('eng-2', 'Senior Engineer', 'Rust')]], { jobPageWall: true }),
       ...atsCompany('hooli', 'Hooli', [[job('eng-1', 'Engineer I', 'Python'), job('eng-2', 'Engineer II', 'Python')]], { restoresOnBack: false }),
     },
   };

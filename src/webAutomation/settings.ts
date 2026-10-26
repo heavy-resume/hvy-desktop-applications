@@ -4,8 +4,6 @@ import type { CapabilityAuthorizations } from './authorization';
 export interface AccountSummary {
   origin: string;
   profileId: string;
-  accountId: string;
-  accountName: string;
   checkedAt: number;
 }
 
@@ -77,13 +75,11 @@ export function normalizeAutomationSettings(value: unknown): AutomationSettings 
   const source = isRecord(value) ? value : {};
   const authorizations = normalizeCapabilityAuthorizations(source.authorizations);
   const accounts = Object.fromEntries(Object.entries(isRecord(source.accounts) ? source.accounts : {}).flatMap(([key, raw]) => {
-    if (!isRecord(raw) || typeof raw.origin !== 'string' || typeof raw.profileId !== 'string' || typeof raw.accountId !== 'string') return [];
+    if (!isRecord(raw) || typeof raw.origin !== 'string' || typeof raw.profileId !== 'string') return [];
     if (key !== accountKey(raw.origin, raw.profileId)) return [];
     return [[key, {
       origin: raw.origin,
       profileId: raw.profileId,
-      accountId: raw.accountId,
-      accountName: typeof raw.accountName === 'string' ? raw.accountName : raw.accountId,
       checkedAt: typeof raw.checkedAt === 'number' ? raw.checkedAt : 0,
     }]];
   }));

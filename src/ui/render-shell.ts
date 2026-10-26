@@ -5,14 +5,16 @@ import { getDocumentColorsEnabled } from './render-theme';
 import { escapeAttr, escapeHtml } from './shared';
 
 export function renderDocumentTabs(state: AppState): string {
+  const needsYou = new Set(state.documentsNeedingYou);
   return `
     <nav class="document-tabs" aria-label="Open documents">
       <button type="button" class="hvy-galaxy-button icon-button document-tab-new" data-action="create-file" title="New HVY document" aria-label="New HVY document">+</button>
       ${state.documentTabs.map((tab) => `
-        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}">
+        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}${needsYou.has(tab.sourcePath) ? ' needs-you' : ''}">
           <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">
             <span class="document-tab-dirty" aria-hidden="true"></span>
             <span class="document-tab-name">${escapeHtml(tab.name)}</span>
+            ${needsYou.has(tab.sourcePath) ? '<span class="document-tab-needs-you" title="Background work in this document needs you" aria-label="needs you">!</span>' : ''}
           </button>
           <button type="button" class="hvy-galaxy-button document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.versionId)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
         </div>

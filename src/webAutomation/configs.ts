@@ -34,15 +34,24 @@ function readFieldBinding(name: string, value: unknown, errors: string[]): ItemF
     errors.push(`Output field "${name}" needs a path.`);
     return null;
   }
-  if (value.kind === 'text') return { kind: 'text', path: text(value.path) };
-  if (value.kind !== 'cell') {
-    errors.push(`Output field "${name}" must be a text or cell binding.`);
+  const source = value.source === 'collected' ? { source: 'collected' as const } : {};
+  if (value.kind === 'text') return { kind: 'text', path: text(value.path), ...source };
+  if (value.kind !== 'cell' && value.kind !== 'annotated') {
+    errors.push(`Output field "${name}" must be a text, cell, or annotated binding.`);
     return null;
   }
   const annotationKind: 'sort' | 'group' | null = isRecord(value.annotation) && (value.annotation.kind === 'sort' || value.annotation.kind === 'group') ? value.annotation.kind : null;
   const annotation: { kind: 'sort' | 'group'; key: string } | undefined = annotationKind && isRecord(value.annotation) && text(value.annotation.key)
     ? { kind: annotationKind, key: text(value.annotation.key) }
     : undefined;
+  if (value.kind === 'annotated') {
+    // A value inside a line of text: the sort or group annotation it fills is required.
+    if (!annotation) {
+      errors.push(`Output field "${name}" needs the sort or group value it fills.`);
+      return null;
+    }
+    return { kind: 'annotated', path: text(value.path), annotation, ...(text(value.linkTo) ? { linkTo: text(value.linkTo) } : {}), ...source };
+  }
   return {
     kind: 'cell',
     path: text(value.path),
@@ -237,8 +246,6 @@ function readSession(value: unknown, origin: string, endpoints: ApiEndpointDefin
     probe: {
       endpointId: probeId,
       ...(signedOutStatuses?.length ? { signedOutStatuses } : {}),
-      ...(text(value.probe.accountNamePointer) ? { accountNamePointer: text(value.probe.accountNamePointer) } : {}),
-      ...(text(value.probe.accountIdPointer) ? { accountIdPointer: text(value.probe.accountIdPointer) } : {}),
     },
     ...(logoutEndpointId ? { logoutEndpointId } : {}),
     ...(loginAllowedOrigins.length ? { loginAllowedOrigins } : {}),
@@ -267,9 +274,9 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
       if (!idInput) errors.push(`Endpoint "${endpoint.id}" input "${name}" must name the input holding the document ID.`);
     }
   }
-  const storageOrigins = strings(value.storageOrigins).flatMap((origin) => {
+  const readOrigins = strings(value.readOrigins).flatMap((origin) => {
     const parsed = trustworthyUrl(origin);
-    if (!parsed) errors.push(`Storage origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
+    if (!parsed) errors.push(`Read origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
     return parsed ? [parsed.origin] : [];
   });
   const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
@@ -286,7 +293,7 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
         ...(apiPageUrl ? { apiPageUrl: apiPageUrl.href } : {}),
         ...(session ? { session } : {}),
         endpoints,
-        ...(storageOrigins.length ? { storageOrigins: [...new Set(storageOrigins)] } : {}),
+        ...(readOrigins.length ? { readOrigins: [...new Set(readOrigins)] } : {}),
       },
       mcp: { endpointIds: exposed },
     },
@@ -373,7 +380,7 @@ function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[])
     for (const field of Object.keys(values).filter((field) => !fieldIds.has(field))) {
       errors.push(`Start page "${text(page.url)}" fills "${field}", which is not one of the fields.`);
     }
-    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}) }] : [];
+    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}) }] : [];
   });
   const ids = pages.map((page) => page.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);

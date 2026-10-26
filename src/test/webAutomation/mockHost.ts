@@ -24,6 +24,11 @@ export interface MockPage {
   restoresOnBack?: boolean;
   /** Blocks the page until the profile holds the site's clearance cookie. */
   challenge?: boolean;
+  /**
+   * A sign-in screen or human check shown as an ordinary page, as a real browser host sees one: the page is ready and
+   * matches nothing, until the profile holds the site's clearance cookie.
+   */
+  wall?: boolean;
   frames?: Array<{ src: string }>;
   /** Side-pane boards: record ref → what the pane shows after the item command. */
   panes?: Record<string, Pick<MockPage, 'matches'>>;
@@ -48,7 +53,7 @@ export interface MockSite {
   /** Keyed by "METHOD /path/{param}". */
   api?: Record<string, MockRoute>;
   login?: { loginPath: string; completePath: string; cookie: { name: string; value: string } };
-  /** Files served for download (for example, a storage bucket), keyed by path; the query (a signature) is ignored. */
+  /** Files served to read (for example, a storage bucket), keyed by path; the query (a signature) is ignored. */
   files?: Record<string, { bytes(): Uint8Array | Promise<Uint8Array>; redirectTo?: string }>;
 }
 
@@ -135,6 +140,9 @@ export class MockHost implements BrowserHost {
     const page = this.page(url);
     if (page?.challenge && !this.cookies(worker.profileId, new URL(url).origin)[CLEARANCE_COOKIE]) {
       return { url, ready: false, attention: 'challenge', matches: {}, fingerprintMatches: {}, frames: [] };
+    }
+    if (page?.wall && !this.cookies(worker.profileId, new URL(url).origin)[CLEARANCE_COOKIE]) {
+      return { url, ready: true, matches: {}, fingerprintMatches: {}, frames: [] };
     }
     const pane = worker.pane ? page?.panes?.[worker.pane] : undefined;
     const visible = { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
@@ -226,14 +234,14 @@ export class MockHost implements BrowserHost {
     this.notify({ profileId, window: 'user', url });
   }
 
-  async download(url: string, options: { maxBytes: number }): Promise<Uint8Array> {
+  async fetchFile(url: string, options: { maxBytes: number }): Promise<Uint8Array> {
     const target = new URL(url);
     const file = this.sites.get(target.origin)?.files?.[target.pathname];
-    this.log(`download ${this.short(url)} (no credentials)`);
+    this.log(`fetch file ${this.short(url)} (no credentials)`);
     if (!file) throw new WebAutomationError('http_error', `${target.origin}${target.pathname} returned 404.`, 404);
     if (file.redirectTo) throw new WebAutomationError('http_error', `${target.origin}${target.pathname} redirected; redirects are not followed.`, 302);
     const bytes = await file.bytes();
-    if (bytes.byteLength > options.maxBytes) throw new WebAutomationError('invalid_request', `The download is larger than ${options.maxBytes} bytes.`);
+    if (bytes.byteLength > options.maxBytes) throw new WebAutomationError('invalid_request', `The file is larger than ${options.maxBytes} bytes.`);
     return new Uint8Array(bytes);
   }
 

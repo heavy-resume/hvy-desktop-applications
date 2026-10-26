@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand, executeHvyCliCommandSync } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createCliItemStore, itemComponentId, validateCliItemStore } from './cliItemStore';
-import { buildListingDocument, LISTING_LIST_PATH, LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
+import { buildListingDocument, LISTING_COMPONENT, LISTING_LIST_PATH, LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
+import { writeHvyVirtualFileSync } from '../../../heavy-file-format/src/cli-core';
 import { createRecordSink, updateItemFields } from './recordSink';
 
 const record = (key: string, values: Record<string, unknown>) => ({
@@ -57,6 +58,34 @@ describe('CLI item store', () => {
     const reloadedStore = createCliItemStore(reloaded, LISTING_STORE_CONFIG);
     expect(reloadedStore.list()).toEqual(store.list());
     expect(serializeDocument(reloaded)).toBe(serializeDocument(document));
+  });
+
+  it('fills values inside a line of text, keeps the sort and group keys in step, and reads them back after a save that wraps the line', () => {
+    const document = buildListingDocument();
+    // A line in the card's stub holding two values the list sorts and groups by, as a job card's status line does.
+    const line = `/templates/components/${LISTING_COMPONENT}/schema/expandable-stub/status`;
+    executeHvyCliCommandSync(document, `hvy insert -1 text /templates/components/${LISTING_COMPONENT}/schema/expandable-stub --id status`);
+    writeHvyVirtualFileSync(document, `${line}/text.txt`, '<!--hvy:group-value {"key":"Evaluation"}-->Not evaluated<!--/hvy:group-value--> · <!--hvy:sort-value {"key":"Rating"}--><!--/hvy:sort-value-->');
+    const config = {
+      ...LISTING_STORE_CONFIG,
+      fields: {
+        ...LISTING_STORE_CONFIG.fields,
+        rating: { kind: 'annotated' as const, path: 'expandable-stub/status/text.txt', annotation: { kind: 'sort' as const, key: 'Rating' } },
+        evaluation: { kind: 'annotated' as const, path: 'expandable-stub/status/text.txt', annotation: { kind: 'group' as const, key: 'Evaluation' } },
+      },
+    };
+    expect(validateCliItemStore(document, config)).toEqual([]);
+    const store = createCliItemStore(document, config);
+    // A new item keeps the line's starting text for values it does not have.
+    createRecordSink(store).onRecord(record('https://jobs.test/1', { title: 'Engineer', description: 'Build things.' }));
+    expect(store.get('https://jobs.test/1')?.fields).toMatchObject({ evaluation: 'Not evaluated' });
+
+    updateItemFields(store, 'https://jobs.test/1', { rating: 'strong', evaluation: 'A long evaluation status that will not fit on one line of the saved text' });
+    const item = JSON.parse(executeHvyCliCommandSync(document, `cat ${LISTING_LIST_PATH}/${itemComponentId('https://jobs.test/1')}/${LISTING_COMPONENT}.json`).output);
+    expect(item).toMatchObject({ sortKeys: { Rating: 'strong' }, groupKeys: { Evaluation: 'A long evaluation status that will not fit on one line of the saved text' } });
+
+    const reloaded = createCliItemStore(deserializeDocument(serializeDocument(document), '.hvy'), config);
+    expect(reloaded.get('https://jobs.test/1')?.fields).toMatchObject({ rating: 'strong', evaluation: 'A long evaluation status that will not fit on one line of the saved text' });
   });
 
   it('reports bindings the template cannot satisfy', () => {

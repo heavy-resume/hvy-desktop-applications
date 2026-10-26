@@ -64,14 +64,14 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
       return operation(args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey }));
     },
     /**
-     * Calls `handler` with `{ status, accountName }` whenever the account this
+     * Calls `handler` with `{ status }` whenever the account this
      * document uses there signs in or out. Registered by a form's initial
      * script; the same `key` replaces an earlier handler.
      */
     on_session: (args, ctx) => {
       const lookup = resolve(ctx);
       const handler = required(callback(args.handler), 'on_session needs a handler function.');
-      lookup.automation.onSessionChange(capability(lookup, args), String(args.key ?? 'default'), (state) => handler({ status: state.status, accountName: state.accountName }));
+      lookup.automation.onSessionChange(capability(lookup, args), String(args.key ?? 'default'), (state) => handler({ status: state.status }));
       return null;
     },
     /** Opens the site's login window. Scripts cannot complete a sign-in. */
@@ -110,9 +110,10 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
     collect: (args, ctx) => {
       const lookup = resolve(ctx);
       const base = collection(lookup, args);
-      // Scripts choose among the block's start pages by address; new sites go through the block and its review.
+      // Scripts choose among the block's start pages by address; new sites go through the block and its review. Without a
+      // choice, every place included in collecting runs.
       const approved = base.startPages.map((page) => page.url);
-      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : approved;
+      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => page.included !== false).map((page) => page.url);
       const unapproved = startUrls.filter((url) => !approved.includes(url));
       if (unapproved.length) throw new WebAutomationError('invalid_request', `Not an approved start URL: ${unapproved.join(', ')}.`);
       const definition: CollectionDefinition = {

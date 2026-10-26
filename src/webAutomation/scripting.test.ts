@@ -44,7 +44,7 @@ describe('scripting methods', () => {
       settled = value;
     });
     await flow.clock.runUntil(() => settled !== null);
-    expect(settled).toMatchObject({ status: 'signed-in', accountName: 'Pat Example' });
+    expect(settled).toMatchObject({ status: 'signed-in' });
   });
 
   it('collects with per-item callbacks and only from approved start URLs', async () => {
