@@ -112,6 +112,14 @@ export function saveWebAutomationQueues(document: object): void {
   openedByDocument.get(document)?.saveQueues();
 }
 
+/**
+ * A link clicked in a document: one to a site its web plugins use opens in Galaxy's browser window, in their profile.
+ * False when it is not one of theirs (or the document's automation is not open), so it opens in the default browser.
+ */
+export function openWebAutomationLink(document: object, url: string): boolean {
+  return openedByDocument.get(document)?.automation.openLink(url) ?? false;
+}
+
 let isDocumentOpen: (document: object) => boolean = () => false;
 
 /** How the app tells whether a document object is still open (in the document pane or a background tab). */

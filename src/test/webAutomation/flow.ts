@@ -335,6 +335,11 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       return automation.getState().runs.find((candidate) => candidate.runId === run.runId)!;
     },
 
+    // UI: a link clicked in the document. True when it opened in Galaxy's browser window, in a web plugin's profile.
+    openLink(url: string): boolean {
+      return automation.openLink(url);
+    },
+
     // UI: Needs attention item, "Show".
     showAttention(runId: string): Promise<void> {
       return automation.showAttention(runId);
@@ -382,7 +387,16 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       automation.pauseQueue(queueId);
     },
 
-    // UI: queue reader, entry "Cancel".
+    // UI: queue reader, entry "Run next" ("Run now" while the queue is paused).
+    async runQueueEntryNext(queueId: string, url: string): Promise<void> {
+      const key = canonicalUrl(url);
+      automation.runQueueEntryNext(queueId, key);
+      // A paused queue counts as settled, so the entry running on its own is waited for here.
+      await clock.runUntil(() => !['queued', 'running'].includes(automation.listQueue(queueId).find((entry) => entry.key === key)?.status ?? ''));
+      await settle();
+    },
+
+    // UI: queue reader, entry "Cancel" (or "Dismiss" for one that failed).
     cancelQueueEntry(queueId: string, url: string): void {
       automation.cancelQueueEntry(queueId, canonicalUrl(url));
     },
@@ -409,6 +423,8 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
      * it is unloaded. Script callbacks do not survive.
      */
     reload(): void {
+      // The same document stays open in the app, unsaved changes and all: its queues' state goes with it.
+      opened.saveQueues();
       opened.close();
       timeline.push(`${stamp()} [document] closed and reopened`);
       reopen();
@@ -431,7 +447,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     // UI: document opened again from its saved text.
     openDocument(): void {
       timeline.push(`${stamp()} [document] opened`);
-      reopen();
+      reopen(savedText);
     },
 
     /**

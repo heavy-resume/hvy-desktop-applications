@@ -7,6 +7,7 @@ import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRA
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, type MockFlow } from '../test/webAutomation/flow';
 import { ignoredProfileContexts } from './profileContexts';
+import { SESSION_CHECK_TIMEOUT_MS } from './session';
 import { readSiteSetupText, siteSetupText } from './siteSetups';
 import {
   ATS_ORIGIN,
@@ -449,7 +450,7 @@ describe('mock integration: job search flow', () => {
     expect((await flow!.probe()).status).toBe('signed-out');
   });
 
-  it('24. unloaded mid-call: the call finishes, its result waits, and arrives when the document opens again', async () => {
+  it('24. saved, then closed mid-call: the call finishes, its result waits, and arrives when the document opens again', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
     await flow!.collect(boards);
@@ -457,7 +458,8 @@ describe('mock integration: job search flow', () => {
     await flow!.evaluate([acmeJob('eng-1')], { settle: false });
     await flow!.clock.runUntil(() => flow!.listQueue(EVALUATE_QUEUE)[0]?.status === 'running');
 
-    // UI: document closed while the call is in flight. Nothing needed saving first.
+    // UI: File > Save, then the document closed while the call is in flight.
+    flow!.save();
     flow!.closeDocument();
     release();
     await flow!.settle();
@@ -742,5 +744,89 @@ describe('mock integration: job search flow', () => {
     const keepsGoing = { ...base, startPages: base.startPages.map((page) => ({ ...page, stopAtKnownPage: false })) };
     const read = await flow!.collect(keepsGoing);
     expect(read.startPages['start-1']).toMatchObject({ pages: 2, known: 3, collected: 2 });
+  });
+  it('37. the queue\'s entries: one runs now while the rest stay paused, and a failed one is dismissed', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    flow!.pauseQueue(EVALUATE_QUEUE);
+    await flow!.evaluate([acmeJob('eng-1'), acmeJob('eng-2'), acmeJob('eng-3')]);
+
+    // UI: "Run now" on the last: it runs on its own, and the queue stays paused.
+    await flow!.runQueueEntryNext(EVALUATE_QUEUE, acmeJob('eng-3'));
+    expect(flow!.item(acmeJob('eng-3'))?.fields.evaluation).toBe('ready');
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: true });
+    expect(flow!.listQueue(EVALUATE_QUEUE).filter((entry) => entry.status === 'queued').map((entry) => entry.key)).toEqual([acmeJob('eng-1'), acmeJob('eng-2')].map((url) => flow!.item(url)!.key));
+
+    // UI: "Resume". The service turns the first away every time, so it fails; UI: its "Dismiss".
+    flow!.service.rateLimitNextCreates = 99;
+    await flow!.resumeQueue(EVALUATE_QUEUE);
+    expect(flow!.listQueue(EVALUATE_QUEUE).find((entry) => entry.key === flow!.item(acmeJob('eng-1'))!.key)).toMatchObject({ status: 'failed' });
+    flow!.cancelQueueEntry(EVALUATE_QUEUE, acmeJob('eng-1'));
+    expect(flow!.listQueue(EVALUATE_QUEUE).find((entry) => entry.key === flow!.item(acmeJob('eng-1'))!.key)).toMatchObject({ status: 'cancelled' });
+  });
+  it('38. queued work for a service with no browser profile chosen waits for one instead of failing', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    // The service's context names a profile this machine has no profile called.
+    flow!.chooseContextProfile('Work');
+    await flow!.evaluate([acmeJob('eng-1')]);
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: true, pauseReason: 'no_profile' });
+    expect(flow!.listQueue(EVALUATE_QUEUE)[0]).toMatchObject({ status: 'queued', attempts: 0 });
+
+    // UI: the context's "Change profile…", then the queue's "Resume".
+    flow!.chooseContextProfile('Service');
+    await flow!.resumeQueue(EVALUATE_QUEUE);
+    expect(flow!.item(acmeJob('eng-1'))?.fields.evaluation).toBe('ready');
+  });
+  it('39. an account check that gets no answer ends in an error, never waiting past its deadline, and can be checked again', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    // After a restart nothing is known about the account; the service does not answer.
+    flow!.restartApp();
+    flow!.settings.update((settings) => ({ ...settings, accounts: {} }));
+    const release = flow!.host.holdRequests('/api/session');
+    const startedAt = flow!.clock.now();
+    let checked: { status: string; error: string | null } | null = null;
+    void flow!.probe().then((state) => {
+      checked = state;
+    });
+    await flow!.clock.runUntil(() => checked !== null);
+    expect(flow!.clock.now() - startedAt).toBeLessThanOrEqual(SESSION_CHECK_TIMEOUT_MS);
+    // The request's own limit answers first here; the deadline covers waits before it (its turn, the page loading).
+    expect(checked).toMatchObject({ status: 'unknown', error: '"Session" timed out after 15s.' });
+
+    // UI: "Check again", once the service answers.
+    release();
+    expect(await flow!.probe()).toMatchObject({ status: 'signed-in', error: null });
+  });
+  it('40. an account check stuck before its request (its worker never ready) ends in an error at its deadline', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    flow!.restartApp();
+    flow!.settings.update((settings) => ({ ...settings, accounts: {} }));
+    // The new app's first worker window never finishes opening.
+    flow!.host.createWorker = () => new Promise<string>(() => undefined);
+    const startedAt = flow!.clock.now();
+    let checked: { status: string; error: string | null } | null = null;
+    void flow!.probe().then((state) => {
+      checked = state;
+    });
+    await flow!.clock.runUntil(() => checked !== null);
+    expect(flow!.clock.now() - startedAt).toBe(SESSION_CHECK_TIMEOUT_MS);
+    expect(checked).toMatchObject({ status: 'unknown', error: 'Couldn’t reach Mock Analysis: no answer within 45s.' });
+  });
+  it('41. a link to a site the document\'s web plugins use opens in Galaxy\'s browser window, in their profile', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    // The flow's collection is not in the document; only its web API block is.
+    const report = `${new URL(flow!.api.capability.pageUrl).origin}/analyses/1`;
+    expect(flow!.openLink(report)).toBe(true);
+    await flow!.settle();
+    expect(flow!.host.isUserWindowVisible('service')).toBe(true);
+    expect(flow!.print()).toContain('user window (service) → ');
+    // Anywhere else opens in the default browser, as before.
+    expect(flow!.openLink('https://elsewhere.test/page')).toBe(false);
   });
 });

@@ -91,12 +91,14 @@ describe('web automation in the app', () => {
     state.appSettings = defaultAppSettings();
     state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
     const mounted = mountedDocument();
-    // Saved before the job is queued, so only the queue still in memory can hold it when the document is opened again.
-    const savedBeforeQueueing = serializeDocument(mounted.document);
     const { automation } = mounted.open();
     automation.authorizeWebApi(api.capability);
     automation.pauseQueue(EVALUATE_QUEUE);
     automation.enqueue(EVALUATE_QUEUE, 'job-1', { url: 'https://boards.example.test/1' });
+    // UI: File > Save.
+    saveWebAutomationQueues(mounted.document);
+    const saved = serializeDocument(mounted.document);
+    const { idempotencyKey } = automation.listQueue(EVALUATE_QUEUE)[0];
 
     // The rename, as Galaxy's rename handler applies it.
     state.appSettings = relocatedDocumentSettings(state.appSettings, DOCUMENT_PATH, renamed);
@@ -106,10 +108,23 @@ describe('web automation in the app', () => {
     expect(automation.reviewWebApi(api.capability)).toMatchObject({ reason: 'authorized' });
     await expect(automation.probeSession(api.capability)).resolves.toMatchObject({ profileId: 'service' });
 
-    // Closed and opened again under its new name: the queue still in memory is reattached.
+    // Closed and opened again under its new name: the queue still in memory is reattached to it.
     setOpenDocumentCheck(() => false);
     releaseWebAutomation(mounted.document);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mountedDocument(savedBeforeQueueing).open().automation.listQueue(EVALUATE_QUEUE)).toMatchObject([{ key: 'job-1' }]);
+    expect(mountedDocument(saved).open().automation.listQueue(EVALUATE_QUEUE)).toMatchObject([{ key: 'job-1', idempotencyKey }]);
+  });
+  it('drops queued work the file never saved when it is closed without saving and opened again', async () => {
+    const mounted = mountedDocument();
+    const { automation } = mounted.open();
+    automation.pauseQueue(EVALUATE_QUEUE);
+    automation.enqueue(EVALUATE_QUEUE, 'job-1', { url: 'https://boards.example.test/1' });
+
+    // UI: the tab closed, discarding the changes; the file opened again as it was saved.
+    setOpenDocumentCheck(() => false);
+    releaseWebAutomation(mounted.document);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reopened = mountedDocument(serializeDocument(mountedDocument().document)).open();
+    expect(reopened.automation.listQueue(EVALUATE_QUEUE)).toEqual([]);
   });
 });

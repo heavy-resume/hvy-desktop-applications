@@ -149,11 +149,17 @@ export function queueScriptingMethods(resolve: DocumentAutomationResolver): Reco
     enqueue: (args, ctx) => resolve(ctx).automation.enqueue(queueId(args), String(args.key ?? ''), args.input ?? null, {
       ...(typeof args.delay_ms === 'number' ? { delayMs: args.delay_ms } : {}),
       ...(args.context === undefined ? {} : { context: args.context }),
+      // What the entry is, for people (a job's title): the queue reader lists entries by it.
+      ...(typeof args.label === 'string' && args.label ? { label: args.label } : {}),
     }),
     status: (args, ctx) => resolve(ctx).automation.listQueue(queueId(args)).find((entry) => entry.key === String(args.key ?? '')) ?? null,
     list: (args, ctx) => resolve(ctx).automation.listQueue(queueId(args)),
     cancel: (args, ctx) => {
       resolve(ctx).automation.cancelQueueEntry(queueId(args), String(args.key ?? ''));
+      return null;
+    },
+    run_next: (args, ctx) => {
+      resolve(ctx).automation.runQueueEntryNext(queueId(args), String(args.key ?? ''));
       return null;
     },
     retry: (args, ctx) => {

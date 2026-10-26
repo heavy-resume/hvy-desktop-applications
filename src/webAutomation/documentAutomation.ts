@@ -154,6 +154,13 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       const context = block ? profileContextFor(document, block) : null;
       return context ? contextProfileName(context) : documentProfileName(document.meta);
     },
+    linkOwner: (url) => {
+      const origin = new URL(url).origin;
+      const { webApis, collections } = readWebAutomationBlocks(document);
+      return webApis.find(({ config }) => config.capability.allowedOrigins.includes(origin))?.config.capability.capabilityId
+        ?? collections.find(({ config }) => config.collection.startPages.some((page) => new URL(page.url).origin === origin))?.config.collection.capabilityId
+        ?? null;
+    },
     callPlugin: (pluginId, method, args) => {
       // A queue's target plugin not allowed in this file pauses the queue for review rather than failing entries.
       if (pluginId !== QUEUE_PLUGIN_ID && !isPluginAuthorized(pluginId)) {

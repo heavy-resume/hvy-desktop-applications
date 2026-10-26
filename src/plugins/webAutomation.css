@@ -12,12 +12,15 @@
   gap: 0.5rem;
 }
 
-.hvy-web-automation-failures {
+/* The queue's entries: long while a run of evaluations waits, so it scrolls. */
+.hvy-web-queue-entries {
   display: grid;
   gap: 0.5rem;
+  max-height: 24rem;
+  overflow: auto;
 }
 
-.hvy-web-automation-failure {
+.hvy-web-queue-entry {
   display: grid;
   gap: 0.35rem;
   padding: 0.6rem;

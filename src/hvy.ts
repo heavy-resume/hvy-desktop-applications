@@ -16,7 +16,7 @@ import { deserializeDocumentWithDiagnostics } from '../../heavy-file-format/src/
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
 import { blockedPlugins, enabledBuiltInPlugins, enabledDownloadedPlugins, pluginAcceptanceKey, setPluginAcceptances, type BlockedPlugin } from './pluginManager';
-import { hasWebAutomationHost, releaseWebAutomation, saveWebAutomationQueues, WEB_AUTOMATION_PLUGIN_IDS } from './webAutomation/app';
+import { hasWebAutomationHost, openWebAutomationLink, releaseWebAutomation, saveWebAutomationQueues, WEB_AUTOMATION_PLUGIN_IDS } from './webAutomation/app';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import type {
@@ -554,6 +554,8 @@ function withExternalLinkOpening(root: HTMLElement, mode: HvyMode, mount: HvyMou
     }
     event.preventDefault();
     event.stopPropagation();
+    // A site the document's web plugins use opens in Galaxy's browser window, signed in as they are there.
+    if (openWebAutomationLink(mount.getDocument(), url)) return;
     void openExternalUrl(url);
   }, { capture: true, signal: cleanup.signal });
   root.addEventListener('keydown', (event) => {

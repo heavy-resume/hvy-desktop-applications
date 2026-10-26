@@ -5,6 +5,13 @@ import type { BrowserHost, NavigationEvent } from './host';
 import { accountKey, type AutomationSettingsStore } from './settings';
 import { capabilityOrigin, findEndpoint, signedOutStatuses, type ApiTransport, type WebApiCapability } from './webApi';
 
+/**
+ * How long an account check may take in all, waiting for its turn included. Each step has its own limit (a page load,
+ * the request), but a check waits behind the profile's other calls first; past this it says the site could not be
+ * reached, and can be checked again.
+ */
+export const SESSION_CHECK_TIMEOUT_MS = 45_000;
+
 export type SessionStatus = 'unknown' | 'signed-out' | 'pending-login' | 'signed-in';
 
 export interface SessionState {
@@ -63,7 +70,13 @@ export class SessionService {
     const session = this.requireSession(capability);
     const endpoint = findEndpoint(capability, session.probe.endpointId);
     try {
-      const response = await this.deps.transport.call(capability, profileId, endpoint, {});
+      const controller = new AbortController();
+      const deadline = this.deps.clock.sleep(SESSION_CHECK_TIMEOUT_MS, controller.signal).then(() => {
+        throw new WebAutomationError('http_error', `Couldn’t reach ${capability.name}: no answer within ${SESSION_CHECK_TIMEOUT_MS / 1000}s.`, 0);
+      });
+      deadline.catch(() => undefined);
+      const response = await Promise.race([this.deps.transport.call(capability, profileId, endpoint, {}, { interactive: true }), deadline])
+        .finally(() => controller.abort());
       if (signedOutStatuses(capability).includes(response.status)) {
         this.markSignedOut(capability, profileId);
       } else if (response.status >= 200 && response.status < 300) {

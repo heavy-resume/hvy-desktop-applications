@@ -149,7 +149,7 @@ function openProfileDialog(options: { current: string | null; note: string; onCh
   body.append(label, paragraph(options.note, 'hvy-web-page-hint'));
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
-  const save = button('Save', true);
+  const save = button('Confirm', true);
   save.type = 'submit';
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -161,13 +161,13 @@ function openProfileDialog(options: { current: string | null; note: string; onCh
   select.focus();
 }
 
-const SAVED_BY_NAME = 'Saved in the file by name. A site is asked about again before it is used with another profile.';
+const KEPT_BY_NAME = 'The document keeps it by name. A site is asked about again before it is used with another profile.';
 
 /** The file's profile, for the web plugins outside any web profile context, saved in the front matter. */
 function chooseFileProfile(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, then: () => void = () => {}): void {
   openProfileDialog({
     current: documentProfileName(ctx.rawDocument.meta),
-    note: `For the web plugins in this file outside a web profile context. ${SAVED_BY_NAME}`,
+    note: `For the web plugins in this file outside a web profile context. ${KEPT_BY_NAME}`,
     onChosen: (name) => {
       ctx.header.set('metadata', withDocumentProfile(ctx.header.get('metadata'), name));
       lookup.automation.profileChosen(name, 'this file');
@@ -202,15 +202,15 @@ function profileLine(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, ca
  */
 function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApiCapability, profile: BrowserProfile, onOutcome: (problem: string) => void): void {
   if (!state.document) return;
-  const { form, body, row, close } = openModal(`Use ${capability.name} in this file?`, 'hvy-web-authorization-dialog wide-dialog');
+  const { form, body, row, close } = openModal(capability.session ? `Let this file use your ${capability.name} account?` : `Let this file use ${capability.name}?`, 'hvy-web-authorization-dialog wide-dialog');
   const details = document.createElement('dl');
   const rows: Array<[string, string]> = [
     ['Document', state.document.source.name],
     ['Browser profile', profile.name],
     // The page you are sent to, in full, so its address can be checked before signing in.
     capability.session ? ['Sign-in page', capability.session.loginUrl] : ['Website', capability.pageUrl],
-    ['Calls', capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
-    ...(capability.readOrigins?.length ? [['Also reads from', capability.readOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
+    ['What it can do', capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
+    ...(capability.readOrigins?.length ? [['Also reads files from', capability.readOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
   ];
   for (const [term, description] of rows) {
     const dt = document.createElement('dt');
@@ -220,9 +220,11 @@ function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApi
     details.append(dt, dd);
   }
   body.append(
+    paragraph(capability.session
+      ? `This file asks to call ${capability.name} as you, with your sign-in in the ${profile.name} browser profile. Nothing is called until you allow it.`
+      : `This file asks to call ${capability.name} from the ${profile.name} browser profile. Nothing is called until you allow it.`, 'hvy-web-authorization-reason'),
     details,
-    paragraph(reviewReason(lookup.automation.reviewWebApi(capability), capability.name), 'hvy-web-authorization-reason'),
-    paragraph(`${capability.session ? 'Calls are made as your signed-in account.' : 'Calls are made in your browser profile.'} What this file sends and stores is in the document.`),
+    paragraph(`${reviewReason(lookup.automation.reviewWebApi(capability), capability.name)} What the file sends and keeps is in the document.`, 'hvy-web-page-hint'),
   );
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
@@ -256,7 +258,7 @@ const profileContextReader: HvyPluginFactory = (ctx) => reader(ctx, (root, looku
   const choose = button(profile ? 'Change profile…' : 'Choose a browser profile…', !profile);
   choose.addEventListener('click', () => openProfileDialog({
     current: profile?.name ?? name,
-    note: `For the web plugins in this section or container. ${SAVED_BY_NAME}`,
+    note: `For the web plugins in this section or container. ${KEPT_BY_NAME}`,
     onChosen: (chosen) => {
       ctx.setConfig({ schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION, profile: chosen });
       lookup.automation.profileChosen(chosen, 'a web profile context');
@@ -340,8 +342,23 @@ const webApiReader: HvyPluginFactory = (ctx) => {
         lookup.automation.probeSession(capability).catch((error: unknown) => {
           problem = errorMessage(error);
         }).finally(sync);
+        root.append(status('Checking your account…'));
+        return;
       }
-      root.append(status(problem || 'Checking your account…'));
+      // The check finished without an answer (the page did not load, or the site answered with an error, which the
+      // session keeps): say why, and let the user check again.
+      const failure = problem || session?.error;
+      if (failure) {
+        const again = button('Check again', true);
+        again.addEventListener('click', () => {
+          problem = '';
+          probing.delete(key);
+          sync();
+        });
+        root.append(status('Couldn’t check your account.'), paragraph(failure, 'hvy-web-error'), actions(again, ...changeProfile()));
+        return;
+      }
+      root.append(status('Checking your account…'));
       return;
     }
     probing.delete(key);
@@ -749,7 +766,7 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   });
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
-  const submit = button('Save', true);
+  const submit = button('Confirm', true);
   submit.type = 'submit';
   row.append(removePage, cancel, submit);
   form.addEventListener('submit', (event) => {
@@ -871,7 +888,7 @@ function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDe
   body.append(paragraph('For each page that doesn’t set its own.', 'hvy-web-page-hint'), ...limits.elements);
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
-  const save = button('Save', true);
+  const save = button('Confirm', true);
   save.type = 'submit';
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1026,6 +1043,7 @@ const collectionReader: HvyPluginFactory = (ctx) => {
 const PAUSE_REASONS: Record<string, string> = {
   not_authenticated: 'Paused until you sign in again.',
   not_authorized: 'Paused until the service is allowed in this file.',
+  no_profile: 'Paused until a browser profile is chosen for this file.',
   paused: 'Paused.',
 };
 
@@ -1052,7 +1070,7 @@ const queueReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) 
     sync();
   });
   // Paused for something only the user can do (sign in, allow, or resume after reopening): a notice here, by the queue.
-  if (queue.paused && (queue.pauseReason === 'not_authenticated' || queue.pauseReason === 'not_authorized')) {
+  if (queue.paused && (queue.pauseReason === 'not_authenticated' || queue.pauseReason === 'not_authorized' || queue.pauseReason === 'no_profile')) {
     root.append(needsYouNotice(lookup, `queue\0${queueId}\0${queue.pauseReason}`, paragraph(PAUSE_REASONS[queue.pauseReason] ?? `Paused (${queue.pauseReason}).`), actions(resume)));
   } else if (queue.paused) {
     root.append(paragraph(PAUSE_REASONS[queue.pauseReason ?? 'paused'] ?? `Paused (${queue.pauseReason}).`), actions(resume));
@@ -1066,30 +1084,57 @@ const queueReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) 
     });
     root.append(actions(pause));
   }
-  if (!failed.length) return;
+  // Every entry not finished, in the order they run, then those that failed: each can be run next (on its own, while
+  // the queue is paused), cancelled, or retried.
+  const listed = [
+    ...queue.entries.filter((entry) => entry.status === 'running'),
+    ...queue.entries.filter((entry) => entry.status === 'queued' || entry.status === 'waiting-retry'),
+    ...failed,
+  ];
+  if (!listed.length) return;
+  const held = queue.paused || queue.awaitingResume;
   // Not ul/li: the reader styles those inside a document block as prose lists.
   const list = document.createElement('div');
   list.setAttribute('role', 'list');
-  list.className = 'hvy-web-automation-failures';
-  for (const entry of failed) {
+  list.className = 'hvy-web-queue-entries';
+  for (const entry of listed) {
     const item = document.createElement('div');
     item.setAttribute('role', 'listitem');
-    item.className = 'hvy-web-automation-failure';
-    const retry = button('Retry');
-    retry.addEventListener('click', () => {
-      lookup.automation.retryQueueEntry(queueId, entry.key);
-      sync();
-    });
-    const cancel = button('Cancel');
-    cancel.addEventListener('click', () => {
-      lookup.automation.cancelQueueEntry(queueId, entry.key);
-      sync();
-    });
-    item.append(paragraph(entry.key, 'hvy-web-automation-entry'), paragraph(entry.lastError ?? 'Failed.', 'hvy-web-error'), actions(retry, cancel));
+    item.className = 'hvy-web-queue-entry';
+    const act = (label: string, run: () => void, primary = false) => {
+      const control = button(label, primary);
+      control.setAttribute('aria-label', `${label}: ${entry.label ?? entry.key}`);
+      control.addEventListener('click', () => {
+        run();
+        sync();
+      });
+      return control;
+    };
+    const controls = entry.status === 'running'
+      ? []
+      : entry.status === 'failed'
+        ? [act('Retry', () => lookup.automation.retryQueueEntry(queueId, entry.key)), act('Dismiss', () => lookup.automation.cancelQueueEntry(queueId, entry.key))]
+        : [act(held ? 'Run now' : 'Run next', () => lookup.automation.runQueueEntryNext(queueId, entry.key)), act('Cancel', () => lookup.automation.cancelQueueEntry(queueId, entry.key))];
+    item.append(
+      paragraph(entry.label ?? entry.key, 'hvy-web-automation-entry'),
+      paragraph(QUEUE_ENTRY_STATUS[entry.status], 'hvy-web-page-hint'),
+      ...(entry.lastError ? [paragraph(entry.lastError, entry.status === 'failed' ? 'hvy-web-error' : 'hvy-web-page-hint')] : []),
+      ...(controls.length ? [actions(...controls)] : []),
+    );
     list.append(item);
   }
   root.append(list);
 });
+
+/** Where an entry in the queue reader's list is. */
+const QUEUE_ENTRY_STATUS: Record<QueueEntry['status'], string> = {
+  running: 'Running…',
+  queued: 'Waiting its turn',
+  'waiting-retry': 'Waiting to try again',
+  failed: 'Failed',
+  done: 'Done',
+  cancelled: 'Cancelled',
+};
 
 export const [webApiPlugin, webCollectionPlugin, queuePlugin, profileContextPlugin] = createWebAutomationPlugins({
   webApi: webApiReader,

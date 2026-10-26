@@ -108,6 +108,9 @@ fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, visible
     let builder = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::External(blank))
         .title("HVY Galaxy")
         .visible(visible)
+        // A hidden worker never takes focus: workers are made for each job (a fresh window clears its history), and
+        // taking focus would bring Galaxy to the front while the user works elsewhere. Showing one focuses it then.
+        .focused(visible)
         .inner_size(1180.0, 820.0)
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         // The inspector reports some results by navigating to hvy-integration:// URLs; workers read return values instead.

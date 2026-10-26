@@ -6,6 +6,8 @@ export type QueueEntryStatus = 'queued' | 'running' | 'waiting-retry' | 'done' |
 
 export interface QueueEntry {
   key: string;
+  /** What the entry is, for people (a job's title): the queue reader shows it in place of the key. */
+  label?: string;
   input: unknown;
   /** The caller's own bookkeeping, such as a status check's poll count: saved with the entry and handed back with its
    * result, never sent to the target. */
@@ -105,12 +107,24 @@ export class DurableQueue {
     this.state = { entries, paused: state.paused, pauseReason: state.pauseReason, awaitingResume: pending };
   }
 
+  /**
+   * The document was opened again from its file while this queue was still in memory: the queue is what the file
+   * saved. A saved entry this queue still holds (same idempotency key) keeps how far it got, such as a call that
+   * finished while the file was closed; entries the file never saved go, with the rest of the changes not saved.
+   */
+  reopen(saved: QueueState | null): void {
+    const progressed = new Map(this.state.entries.map((entry) => [entry.idempotencyKey, entry]));
+    this.restore(saved ?? { entries: [], paused: false, pauseReason: null, awaitingResume: false });
+    this.state.entries = this.state.entries.map((entry) => progressed.get(entry.idempotencyKey) ?? entry);
+  }
+
   /** `delayMs` holds the entry back, such as a status check that backs off while a report is still pending. */
-  enqueue(key: string, input: unknown, options: { delayMs?: number; context?: unknown } = {}): { added: boolean } {
+  enqueue(key: string, input: unknown, options: { delayMs?: number; context?: unknown; label?: string } = {}): { added: boolean } {
     const existing = this.state.entries.find((entry) => entry.key === key);
     if (existing && ['queued', 'running', 'waiting-retry'].includes(existing.status)) return { added: false };
     const entry: QueueEntry = {
       ...(options.context === undefined ? {} : { context: options.context }),
+      ...(options.label ? { label: options.label } : {}),
       key, input, idempotencyKey: this.deps.createId(), status: 'queued', attempts: 0, lastError: null, result: null, nextAttemptAt: options.delayMs ? this.deps.clock.now() + options.delayMs : null, delivered: false, updatedAt: this.deps.clock.now(),
     };
     this.state.entries = [...this.state.entries.filter((candidate) => candidate.key !== key), entry];
@@ -128,8 +142,22 @@ export class DurableQueue {
     return structuredClone(this.state.entries);
   }
 
+  /** Cancels an entry waiting its turn, or dismisses a failed one. */
   cancel(key: string): void {
-    this.update(key, (entry) => (['queued', 'waiting-retry'].includes(entry.status) ? { ...entry, status: 'cancelled' } : entry));
+    this.update(key, (entry) => (['queued', 'waiting-retry', 'failed'].includes(entry.status) ? { ...entry, status: 'cancelled' } : entry));
+  }
+
+  /**
+   * Runs an entry next: first in line, ready now. While the queue is paused (or waits to be resumed), it runs on its
+   * own now, and the rest stay paused.
+   */
+  runNext(key: string): void {
+    const entry = this.state.entries.find((candidate) => candidate.key === key);
+    if (!entry || (entry.status !== 'queued' && entry.status !== 'waiting-retry')) return;
+    this.state.entries = [{ ...entry, status: 'queued', nextAttemptAt: null }, ...this.state.entries.filter((candidate) => candidate !== entry)];
+    this.deps.emit('queue', `${this.deps.id}: ${key} runs next`);
+    if (this.blocked() && !this.detached) void this.attempt(key);
+    else this.pump();
   }
 
   retry(key: string): void {
@@ -235,8 +263,9 @@ export class DurableQueue {
     } catch (error) {
       const code = errorCode(error);
       const status = errorStatus(error);
-      if (code === 'not_authenticated' || code === 'not_authorized') {
-        // Needs the user (sign in again, or review the document's access); keep the entry and wait.
+      if (code === 'not_authenticated' || code === 'not_authorized' || code === 'no_profile') {
+        // Needs the user (sign in again, review the document's access, or choose a browser profile); keep the entry and
+        // wait.
         this.update(key, (current) => ({ ...current, status: 'queued', attempts: current.attempts - 1, lastError: errorMessage(error) }));
         this.pause(code);
         return;

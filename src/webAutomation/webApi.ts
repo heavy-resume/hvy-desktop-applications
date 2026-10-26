@@ -41,6 +41,8 @@ export interface WebApiCapability {
 /** A stable key for the call (a queue entry's), sent in the endpoint's idempotency header. */
 export interface CallOptions {
   idempotencyKey?: string;
+  /** Someone is waiting on the answer (an account check): it goes ahead of queued background calls. */
+  interactive?: boolean;
 }
 
 
@@ -88,7 +90,7 @@ export class ApiTransport {
   call(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>, options: CallOptions = {}): Promise<HostResponse> {
     const pageUrl = capability.apiPageUrl ?? capability.pageUrl;
     const request = resolveEndpointRequest(pageUrl, endpoint, input, options);
-    return this.deps.scheduler.run({ profileId, kind: 'api', label: `${capability.name}: ${endpoint.name}` }, async (lease) => {
+    return this.deps.scheduler.run({ profileId, kind: 'api', label: `${capability.name}: ${endpoint.name}`, interactive: options.interactive }, async (lease) => {
       const origin = new URL(pageUrl).origin;
       const current = this.locations.get(lease.workerId);
       if (!current || new URL(current).origin !== origin) {

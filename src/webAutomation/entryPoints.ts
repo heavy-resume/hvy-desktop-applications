@@ -59,6 +59,8 @@ export interface WebAutomationDocumentDeps {
   webApiOrigin(capabilityId: string): string | null;
   /** The browser profile the document names for its web plugin instance with this capability id (its own, or the file's). */
   profileName(capabilityId: string): string | null;
+  /** The capability id of the web plugin instance whose site a URL is on (a web API's origins, a collection's start pages), if any. */
+  linkOwner(url: string): string | null;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -294,6 +296,18 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return collections.extract(definition, profileId, url, consumer);
     },
 
+    // UI: a link clicked in the document. One to a site a web plugin instance here uses (a report, a job posting) opens in
+    // Galaxy's browser window, in that instance's profile, signed in as the user is there. False for any other link, or
+    // before the instance has a profile: it opens in the default browser.
+    openLink(url: string): boolean {
+      const owner = deps.linkOwner(url);
+      const profile = owner ? profileOf(owner) : null;
+      if (!profile) return false;
+      emit('user', `opens ${new URL(url).host} in the browser window`, { profileId: profile.id });
+      void deps.host.openUserWindow(profile.id, url);
+      return true;
+    },
+
     // UI: Needs attention item, "Show".
     showAttention(runId: string): Promise<void> {
       return collections.show(runId);
@@ -309,14 +323,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       collections.stop(runId);
     },
 
-    // Document load: openDocumentAutomation opens each queue block. A queue still in memory from an earlier open of
-    // this document (switched away and back) is reattached, since it is newer; otherwise it starts from the state
-    // saved in its block.
+    // Document load: openDocumentAutomation opens each queue block, from the state saved in it. A queue still in
+    // memory from an earlier open of this file is reattached with that state: what it did since for the saved entries
+    // stays (a call that finished while the file was closed), and entries never saved go with the unsaved changes.
     openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG, saved: QueueState | null = null): void {
       const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey });
       const registryKey = `${deps.documentPath()}\u0000${queueId}`;
       const existing = runtime.queues.get(registryKey);
       if (existing) {
+        existing.reopen(saved);
         existing.attach(call);
         queues.set(queueId, existing);
         resumeAfterSignIn(queueId, target);
@@ -343,7 +358,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: scripting doc.plugins.call(queue, "enqueue", …), called from an item's Evaluate form.
-    enqueue(queueId: string, key: string, input: unknown, options: { delayMs?: number; context?: unknown } = {}): { added: boolean } {
+    enqueue(queueId: string, key: string, input: unknown, options: { delayMs?: number; context?: unknown; label?: string } = {}): { added: boolean } {
       return queue(queueId).enqueue(key, input, options);
     },
 
@@ -365,6 +380,11 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: queue reader, failed entry "Retry".
     retryQueueEntry(queueId: string, key: string): void {
       queue(queueId).retry(key);
+    },
+
+    // UI: queue reader, entry "Run next" ("Run now" while the queue is paused).
+    runQueueEntryNext(queueId: string, key: string): void {
+      queue(queueId).runNext(key);
     },
 
     // UI: queue reader, entry "Cancel".
