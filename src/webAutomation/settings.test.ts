@@ -18,11 +18,9 @@ describe('automation settings', () => {
   it('drops malformed entries instead of failing', () => {
     expect(normalizeAutomationSettings(null)).toEqual(emptyAutomationSettings());
     expect(normalizeAutomationSettings({
-      profileBindings: { '/doc.hvy': { good: 'p1', empty: '', bad: 3 }, '': { x: 'p' } },
       authorizations: { '/doc.hvy': { ok: { profileId: 'p1', partHashes: { page: 'h', bad: 1 }, authorizedAt: 5 }, broken: { profileId: 'p1' } } },
       accounts: { wrongKey: { origin: 'https://a.test', profileId: 'p1' } },
     })).toEqual({
-      profileBindings: { '/doc.hvy': { good: 'p1' } },
       authorizations: { '/doc.hvy': { ok: { capabilityId: 'ok', profileId: 'p1', partHashes: { page: 'h' }, authorizedAt: 5 } } },
       accounts: {},
     });

@@ -79,4 +79,13 @@ describe('scripting methods', () => {
     expect(queue.list({ queueId: EVALUATE_QUEUE }, ctx)).toEqual([expect.objectContaining({ key: 'eng-1', status: 'done' })]);
     expect(() => queue.on_result({ queueId: EVALUATE_QUEUE }, ctx)).toThrow(/handler/);
   });
+  it('lets a script lower the limits, a page\'s own included, but not raise them', async () => {
+    const { flow, boards, resolve, ctx } = await setup();
+    const limited = { ...boards, startPages: [{ id: 'start-1', url: `${ATS_ORIGIN}/acme/jobs`, maxPages: 2, maxItems: 4 }] };
+    const collection = collectionScriptingMethods((context) => ({ ...resolve(context), collection: () => limited }));
+    const done: Array<Record<string, unknown>> = [];
+    collection.collect({ capabilityId: 'listings', maxItems: 2, maxPages: 9, on_complete: (result: Record<string, unknown>) => done.push(result) }, ctx);
+    await flow.clock.runUntil(() => done.length === 1);
+    expect(done[0]).toMatchObject({ status: 'completed', result: { status: 'done', collected: 2, places: { 'start-1': { pages: 1 } } } });
+  });
 });

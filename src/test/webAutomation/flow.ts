@@ -12,6 +12,8 @@ import type { StateRuntime } from '../../../../heavy-file-format/src/state';
 import { createDocumentState } from './documentHost';
 import { pluginAcceptanceKey } from '../../pluginManager';
 import type { QueueResult } from '../../webAutomation/queue';
+import { readWebAutomationBlocks } from '../../webAutomation/documentBlocks';
+import { withDocumentProfile } from '../../webAutomation/profiles';
 import { createMemorySettingsStore } from '../../webAutomation/settings';
 import type { SitePatternDefinition } from '../../webAutomation/sitePatterns';
 import { withSiteSetups, type SiteSetup } from '../../webAutomation/siteSetups';
@@ -26,6 +28,8 @@ import { VirtualClock } from './virtualClock';
 export const DOCUMENT_PATH = '/workspace/Search.hvy';
 export const BOARDS_PROFILE = 'boards';
 export const SERVICE_PROFILE = 'service';
+/** The browser profiles on the flow's machine, by id, and the names a document uses for them. */
+const PROFILE_NAMES: Record<string, string> = { [BOARDS_PROFILE]: 'Boards', [SERVICE_PROFILE]: 'Service' };
 export const EVALUATE_QUEUE = 'evaluate';
 export const STATUS_QUEUE = 'status';
 
@@ -105,6 +109,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       clock,
       random,
       settings,
+      profiles: () => Object.entries(PROFILE_NAMES).map(([id, name]) => ({ id, name })),
       scheduler: options.scheduler,
     });
     runtime.events.subscribe((event) => timeline.push(`${stamp()} [${event.source}] ${event.message}`));
@@ -191,10 +196,17 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       return automation;
     },
 
-    // UI: block editor and reader, "Use profile" (both blocks).
-    bindProfiles(collection: CollectionDefinition, capability: WebApiCapability = api.capability): void {
-      automation.bindProfile(collection.capabilityId, BOARDS_PROFILE);
-      automation.bindProfile(capability.capabilityId, SERVICE_PROFILE);
+    // UI: "Change profile…": Boards for every web plugin in this file, then Service for the service's block only; then
+    // File > Save. The choices are written into the document, so they reopen with it. The collection is the file's
+    // (its own block, when the document has one, names no profile).
+    bindProfiles(_collection: CollectionDefinition, capability: WebApiCapability = api.capability): void {
+      document.meta.metadata = withDocumentProfile(document.meta.metadata, PROFILE_NAMES[BOARDS_PROFILE]);
+      const service = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capability.capabilityId)!;
+      service.block.schema.pluginConfig = { ...service.block.schema.pluginConfig, profile: PROFILE_NAMES[SERVICE_PROFILE] };
+      automation.profileChosen(PROFILE_NAMES[BOARDS_PROFILE], null);
+      automation.profileChosen(PROFILE_NAMES[SERVICE_PROFILE], capability.capabilityId);
+      opened.saveQueues();
+      savedText = serializeDocument(document);
     },
 
     // UI: first use: "Allow in this file" on both web plugins, then the "Sign in" modal's "Allow and sign in with [profile]".

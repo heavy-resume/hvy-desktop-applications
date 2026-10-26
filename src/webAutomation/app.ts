@@ -28,14 +28,13 @@ export const WEB_AUTOMATION_PLUGIN_IDS = new Set(WEB_AUTOMATION_PLUGINS.map((plu
 /** Web automation's settings, kept in the app settings beside Galaxy's other web capability settings. */
 const settings: AutomationSettingsStore = {
   get: (): AutomationSettings => ({
-    profileBindings: state.appSettings.webCapabilityProfileBindings,
     authorizations: state.appSettings.webServiceApprovals,
     accounts,
   }),
   update: (change) => {
     const next = change(settings.get());
     accounts = next.accounts;
-    state.appSettings = { ...state.appSettings, webCapabilityProfileBindings: next.profileBindings, webServiceApprovals: next.authorizations };
+    state.appSettings = { ...state.appSettings, webServiceApprovals: next.authorizations };
     void saveAppSettings(state.appSettings).then((saved) => {
       state.appSettings = saved;
     });
@@ -65,6 +64,7 @@ function appRuntime(): WebAutomationRuntime {
     clock: systemClock,
     random: Math.random,
     settings,
+    profiles: () => state.integrationRegistry.profiles.map(({ id, name }) => ({ id, name })),
     createId: () => crypto.randomUUID(),
     // Development only: VITE_WEB_AUTOMATION_DELAY_SCALE shortens (or lengthens) the delays between page loads.
     scheduler: { navigationDelayScale: developmentDelayScale() },

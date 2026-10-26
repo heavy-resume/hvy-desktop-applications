@@ -1,4 +1,3 @@
-import { getWebCapabilityProfileBinding } from '../webCapabilities';
 import { reviewAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock } from './clock';
 import { documentInputLinks, documentTextInputs, endpointTimeoutMs, onlyInput, readJsonPointer, resolveEndpointRequest, type ApiEndpointDefinition } from './endpoints';
@@ -127,18 +126,12 @@ export class WebApiService {
     exportDocumentText(document: VisualDocument): string;
   }) {}
 
-  profileFor(documentPath: string, capability: WebApiCapability): string {
-    const profileId = getWebCapabilityProfileBinding(this.deps.settings.get().profileBindings, documentPath, capability.capabilityId);
-    if (!profileId) throw new WebAutomationError('no_profile', `Choose a profile for "${capability.name}".`);
-    return profileId;
-  }
-
   authorizationParts(capability: WebApiCapability): Record<string, unknown> {
     return webApiAuthorizationParts(capability);
   }
 
-  review(documentPath: string, capability: WebApiCapability): AuthorizationReview {
-    const profileId = this.profileFor(documentPath, capability);
+  /** Whether the document may use the site in this profile (the document's, as it names it). */
+  review(documentPath: string, capability: WebApiCapability, profileId: string): AuthorizationReview {
     return reviewAuthorization(
       this.deps.settings.get().authorizations,
       documentPath,
@@ -179,9 +172,8 @@ export class WebApiService {
     return filled;
   }
 
-  async call(documentPath: string, capability: WebApiCapability, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
-    const profileId = this.profileFor(documentPath, capability);
-    const review = this.review(documentPath, capability);
+  async call(documentPath: string, capability: WebApiCapability, profileId: string, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
+    const review = this.review(documentPath, capability, profileId);
     if (review.reason !== 'authorized') {
       throw new WebAutomationError('not_authorized', `"${capability.name}" must be reviewed before it can run (${review.reason}).`);
     }

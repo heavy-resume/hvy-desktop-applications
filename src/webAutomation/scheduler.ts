@@ -7,6 +7,8 @@ export interface SchedulerOptions {
   clock: Clock;
   random: Random;
   emit: AutomationEmit;
+  /** Collection workers on one site (origin) at once, per profile. Their loads there still take turns. */
+  maxCollectionWorkersPerSite?: number;
   maxCollectionWorkersPerProfile?: number;
   maxCollectionWorkersGlobal?: number;
   idleTimeoutMs?: number;
@@ -21,7 +23,7 @@ export interface SchedulerOptions {
 export interface JobRequest {
   profileId: string;
   kind: 'collection' | 'api';
-  /** Collection jobs hold this origin exclusively for their profile while they run. */
+  /** The site a collection job works on: it counts toward that site's worker limit for its profile while it runs. */
   origin?: string;
   label: string;
   interactive?: boolean;
@@ -31,8 +33,12 @@ export interface JobRequest {
 export interface WorkerLease {
   workerId: string;
   profileId: string;
-  /** Waits a random delay since the profile's last navigation to the URL's origin. */
-  pace(url: string): Promise<void>;
+  /**
+   * Loads something from the URL's site (a navigation, or a command that loads the next page): waits for the site's
+   * turn, so loads there never overlap however many workers are on it, then a random delay since the last load there
+   * finished, then runs `load`.
+   */
+  paced<T>(url: string, load: () => Promise<T>): Promise<T>;
 }
 
 export interface SchedulerState {
@@ -46,7 +52,7 @@ interface WorkerRecord {
   kind: 'collection' | 'api';
   busy: boolean;
   label: string | null;
-  lockedOrigin: string | null;
+  site: string | null;
   creating: Promise<string> | null;
   idle: AbortController | null;
 }
@@ -62,13 +68,18 @@ export class WorkerScheduler {
   private readonly options: Required<Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>> & Pick<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>;
   private readonly workers: WorkerRecord[] = [];
   private readonly pending: PendingJob[] = [];
-  private readonly lockedOrigins = new Set<string>();
-  private readonly lastNavigation = new Map<string, number>();
+  /** Collection workers on each site, by profile and origin. */
+  private readonly siteWorkers = new Map<string, number>();
+  /** When the last load from each site finished, by profile and origin. */
+  private readonly lastLoad = new Map<string, number>();
+  /** Each site's turn: the load there now, and those waiting behind it, by profile and origin. */
+  private readonly siteTurns = new Map<string, Promise<void>>();
   private sequence = 0;
 
   constructor(options: SchedulerOptions) {
     this.options = {
-      maxCollectionWorkersPerProfile: 2,
+      maxCollectionWorkersPerSite: 2,
+      maxCollectionWorkersPerProfile: 4,
       maxCollectionWorkersGlobal: 4,
       idleTimeoutMs: 120_000,
       navigationDelayMs: { min: 1_500, max: 4_500 },
@@ -124,9 +135,17 @@ export class WorkerScheduler {
     return {
       workerId: record.id,
       profileId: record.profileId,
-      pace: async (url) => {
+      paced: async (url, load) => {
         const key = `${record.profileId}\0${new URL(url).origin}`;
-        const last = this.lastNavigation.get(key);
+        // The site's turn comes after whatever load is there now.
+        const previous = this.siteTurns.get(key) ?? Promise.resolve();
+        let finished = () => {};
+        const turn = previous.then(() => new Promise<void>((resolve) => {
+          finished = resolve;
+        }));
+        this.siteTurns.set(key, turn);
+        await previous;
+        const last = this.lastLoad.get(key);
         if (last !== undefined) {
           const { min, max } = this.options.navigationDelayMs;
           const scale = this.options.navigationDelayScale;
@@ -138,7 +157,13 @@ export class WorkerScheduler {
             await this.options.clock.sleep(wait);
           }
         }
-        this.lastNavigation.set(key, this.options.clock.now());
+        try {
+          return await load();
+        } finally {
+          this.lastLoad.set(key, this.options.clock.now());
+          finished();
+          if (this.siteTurns.get(key) === turn) this.siteTurns.delete(key);
+        }
       },
     };
   }
@@ -169,15 +194,15 @@ export class WorkerScheduler {
       if (existing) return existing.busy ? null : this.claim(existing, request);
       return this.claim(this.create(request.profileId, 'api'), request);
     }
-    const originKey = request.origin ? `${request.profileId}\0${request.origin}` : null;
-    if (originKey && this.lockedOrigins.has(originKey)) return null;
+    const site = request.origin ? `${request.profileId}\0${request.origin}` : null;
+    if (site && (this.siteWorkers.get(site) ?? 0) >= this.options.maxCollectionWorkersPerSite) return null;
     const idle = this.workers.find((worker) => worker.profileId === request.profileId && worker.kind === 'collection' && !worker.busy);
-    if (idle) return this.claim(idle, request, originKey);
+    if (idle) return this.claim(idle, request, site);
     const collectionWorkers = this.workers.filter((worker) => worker.kind === 'collection');
     const profileWorkers = collectionWorkers.filter((worker) => worker.profileId === request.profileId);
     if (profileWorkers.length >= this.options.maxCollectionWorkersPerProfile) return null;
     if (collectionWorkers.length >= this.options.maxCollectionWorkersGlobal) return null;
-    return this.claim(this.create(request.profileId, 'collection'), request, originKey);
+    return this.claim(this.create(request.profileId, 'collection'), request, site);
   }
 
   private create(profileId: string, kind: WorkerRecord['kind']): WorkerRecord {
@@ -187,7 +212,7 @@ export class WorkerScheduler {
       kind,
       busy: false,
       label: null,
-      lockedOrigin: null,
+      site: null,
       creating: this.options.host.createWorker(profileId),
       idle: null,
     };
@@ -195,14 +220,14 @@ export class WorkerScheduler {
     return record;
   }
 
-  private claim(record: WorkerRecord, request: JobRequest, originKey: string | null = null): WorkerRecord {
+  private claim(record: WorkerRecord, request: JobRequest, site: string | null = null): WorkerRecord {
     record.busy = true;
     record.label = request.label;
     record.idle?.abort();
     record.idle = null;
-    if (originKey) {
-      this.lockedOrigins.add(originKey);
-      record.lockedOrigin = originKey;
+    if (site) {
+      this.siteWorkers.set(site, (this.siteWorkers.get(site) ?? 0) + 1);
+      record.site = site;
     }
     return record;
   }
@@ -231,9 +256,11 @@ export class WorkerScheduler {
   private release(record: WorkerRecord): void {
     record.busy = false;
     record.label = null;
-    if (record.lockedOrigin) {
-      this.lockedOrigins.delete(record.lockedOrigin);
-      record.lockedOrigin = null;
+    if (record.site) {
+      const workers = (this.siteWorkers.get(record.site) ?? 1) - 1;
+      if (workers) this.siteWorkers.set(record.site, workers);
+      else this.siteWorkers.delete(record.site);
+      record.site = null;
     }
     if (this.workers.includes(record)) this.scheduleIdleClose(record);
     this.dispatch();

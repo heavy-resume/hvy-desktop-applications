@@ -116,10 +116,17 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => page.included !== false).map((page) => page.url);
       const unapproved = startUrls.filter((url) => !approved.includes(url));
       if (unapproved.length) throw new WebAutomationError('invalid_request', `Not an approved start URL: ${unapproved.join(', ')}.`);
+      // A script may only lower the limits: the defaults, and each page's own.
+      const lower = (limit: 'maxPages' | 'maxItems', value: number) => (typeof args[limit] === 'number' ? Math.min(args[limit], value) : value);
       const definition: CollectionDefinition = {
         ...base,
-        ...(typeof args.maxPages === 'number' ? { maxPages: Math.min(args.maxPages, base.maxPages) } : {}),
-        ...(typeof args.maxItems === 'number' ? { maxItems: Math.min(args.maxItems, base.maxItems) } : {}),
+        maxPages: lower('maxPages', base.maxPages),
+        maxItems: lower('maxItems', base.maxItems),
+        startPages: base.startPages.map((page) => ({
+          ...page,
+          ...(page.maxPages !== undefined ? { maxPages: lower('maxPages', page.maxPages) } : {}),
+          ...(page.maxItems !== undefined ? { maxItems: lower('maxItems', page.maxItems) } : {}),
+        })),
       };
       return operation(args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls).done);
     },

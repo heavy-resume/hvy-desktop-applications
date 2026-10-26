@@ -91,6 +91,7 @@ export function mockAtsSite(): MockSite {
       ]),
       ...atsCompany('globex', 'Globex', [[job('eng-1', 'Backend Engineer', 'TypeScript'), job('ops-1', 'SRE', 'Kubernetes')]]),
       ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
+      ...atsCompany('cyberdyne', 'Cyberdyne', [[job('eng-1', 'Engineer', 'C++')]], { challenge: true }),
       ...atsCompany('wonka', 'Wonka', [[job('eng-1', 'Engineer', 'Rust'), job('eng-2', 'Senior Engineer', 'Rust')]], { jobPageWall: true }),
       ...atsCompany('hooli', 'Hooli', [[job('eng-1', 'Engineer I', 'Python'), job('eng-2', 'Engineer II', 'Python')]], { restoresOnBack: false }),
     },

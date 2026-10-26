@@ -14,17 +14,27 @@ export const QUEUE_PLUGIN_ID = 'galaxy.queue';
 export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
 export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
 
+/** The most a collection reads from one start page: list pages, and new items. */
+export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500 } as const;
+
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
-/** MCP exposure is stored beside the snapshot and is not part of what the user approves for the document. */
+/**
+ * MCP exposure and the browser profile are stored beside the snapshot and are not part of what the user approves for
+ * the document (the approval records the profile it was given for separately).
+ */
 export interface WebApiBlockConfig {
   capability: WebApiCapability;
   mcp: { endpointIds: string[] };
+  /** The browser profile this instance uses, by name, when not the file's (profiles.ts). */
+  profile?: string;
 }
 
 export interface CollectionBlockConfig {
   collection: CollectionDefinition;
   mcp: { collect: boolean };
+  /** The browser profile this instance uses, by name, when not the file's (profiles.ts). */
+  profile?: string;
   /** Where the collection's records go: a component-list in this document, and the record sink's policy. */
   output?: { store: CliItemStoreConfig; policy: RecordSinkConfig };
 }
@@ -296,6 +306,7 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
         ...(readOrigins.length ? { readOrigins: [...new Set(readOrigins)] } : {}),
       },
       mcp: { endpointIds: exposed },
+      ...(text(value.profile) ? { profile: text(value.profile) } : {}),
     },
   };
 }
@@ -380,7 +391,9 @@ function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[])
     for (const field of Object.keys(values).filter((field) => !fieldIds.has(field))) {
       errors.push(`Start page "${text(page.url)}" fills "${field}", which is not one of the fields.`);
     }
-    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}) }] : [];
+    // Its own limits, where it has them; the collection's are its defaults.
+    const limits = Object.fromEntries((['maxPages', 'maxItems'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
+    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits }] : [];
   });
   const ids = pages.map((page) => page.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);
@@ -458,13 +471,14 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
         startPages,
         sites,
         patterns,
-        maxPages: number(value.maxPages, 5, 1, 50),
-        maxItems: number(value.maxItems, 50, 1, 500),
+        maxPages: number(value.maxPages, 5, 1, LIMIT_BOUNDS.maxPages),
+        maxItems: number(value.maxItems, 50, 1, LIMIT_BOUNDS.maxItems),
         followLinksToOtherSites: value.followLinksToOtherSites === true,
         ...(key ? { key } : {}),
         ...(ignoredQueryParameters ? { ignoredQueryParameters } : {}),
       },
       mcp: { collect: isRecord(value.mcp) && value.mcp.collect === true },
+      ...(text(value.profile) ? { profile: text(value.profile) } : {}),
       ...(output ? { output } : {}),
     },
   };

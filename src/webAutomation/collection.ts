@@ -49,6 +49,9 @@ export interface StartPage {
   values?: Record<string, string>;
   /** False when collecting everything skips this place; it can still be collected on its own. */
   included?: false;
+  /** This page's own limits; without them, the collection's (its default limits). */
+  maxPages?: number;
+  maxItems?: number;
 }
 
 /** The value every collected record has: its page's URL. It is not a configurable field. */
@@ -77,6 +80,7 @@ export interface CollectionDefinition {
   startPages: StartPage[];
   sites: CollectionSite[];
   patterns: SitePatternDefinition[];
+  /** Default limits for each start page: list pages read, following Next, and new items read. */
   maxPages: number;
   maxItems: number;
   followLinksToOtherSites: boolean;
@@ -157,8 +161,7 @@ export async function testSitePattern(
   url: string,
 ): Promise<SitePatternTestResult> {
   return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(url).origin, label: `Test ${pattern.name}`, interactive: true }, async (lease) => {
-    await lease.pace(url);
-    await deps.host.navigate(lease.workerId, url);
+    await lease.paced(url, () => deps.host.navigate(lease.workerId, url));
     const inspection = await deps.host.inspect(lease.workerId, { patterns: [pattern], fingerprints: patternFingerprints([pattern]) });
     const urlRules = pattern.appliesTo.filter((rule) => rule.target !== 'fingerprint');
     const hasFingerprint = pattern.appliesTo.some((rule) => rule.target === 'fingerprint');
@@ -180,11 +183,11 @@ export async function testSitePattern(
 
 interface ActiveRun {
   state: CollectionRunState;
-  /** Items listed to read, across the run's places, not read yet: they count toward maxItems. */
-  queued: number;
   definition: CollectionDefinition;
   controller: AbortController;
   resumeAttention: (() => void) | null;
+  /** The page waiting for the user now, and those waiting behind it: a run asks about one page at a time. */
+  attentionTurn: Promise<void>;
   consumer: RecordConsumer;
 }
 
@@ -223,8 +226,7 @@ export class CollectionService {
       { profileId, kind: 'collection', origin: new URL(url).origin, label: `${definition.name}: ${url}`, interactive: true, signal: run.controller.signal },
       async (lease) => {
         this.assertAllowed(run, url, false);
-        await lease.pace(url);
-        await this.deps.host.navigate(lease.workerId, url);
+        await lease.paced(url, () => this.deps.host.navigate(lease.workerId, url));
         await this.writeDetail(run, lease, url, await this.inspectAt(run, lease), {});
       },
     )]).then((results) => this.finish(run, results));
@@ -250,10 +252,10 @@ export class CollectionService {
   private createRun(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer): ActiveRun {
     const runId = `run-${this.nextRunId++}`;
     const run: ActiveRun = {
-      queued: 0,
       definition,
       controller: new AbortController(),
       resumeAttention: null,
+      attentionTurn: Promise.resolve(),
       consumer,
       state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, places: {}, attention: null, error: null },
     };
@@ -311,8 +313,7 @@ export class CollectionService {
     const fixed: Record<string, unknown> = { ...(startPage.values ?? {}) };
     progress.status = 'reading';
     this.assertAllowed(run, startUrl, false);
-    await lease.pace(startUrl);
-    await host.navigate(lease.workerId, startUrl);
+    await lease.paced(startUrl, () => host.navigate(lease.workerId, startUrl));
     const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease), 'listing');
     if (start.kind !== 'match') {
       // Not a listing we know: the start page may be one item's own page. If nothing applies, the site needs setting
@@ -331,8 +332,7 @@ export class CollectionService {
       this.checkStopped(run);
       progress.current = item.title;
       emit('collection', `${startPage.id}: reading ${item.title}`);
-      await lease.pace(item.link);
-      await host.navigate(lease.workerId, item.link);
+      await lease.paced(item.link, () => host.navigate(lease.workerId, item.link));
       await this.tracked(run, progress, async () => this.writeDetail(run, lease, item.link, await this.inspectAt(run, lease), item.values));
     }
   }
@@ -349,8 +349,9 @@ export class CollectionService {
     const { host, emit } = this.deps;
     const queue: Array<{ link: string; title: string; values: Record<string, unknown> }> = [];
     const seen = new Set<string>();
-    // Items to read in this run, across its places, may not exceed the collection's limit.
-    const room = () => run.definition.maxItems - run.state.collected - run.state.problems - run.queued;
+    // This page's limits, or the collection's defaults: new items to read from it, and list pages to walk.
+    const maxItems = startPage.maxItems ?? run.definition.maxItems;
+    const maxPages = startPage.maxPages ?? run.definition.maxPages;
     let inspection = start.inspection;
     let listing: ListingResolution = { pattern: start.pattern, match: start.match };
     for (let page = 1; ; page += 1) {
@@ -378,17 +379,17 @@ export class CollectionService {
           emit('collection', `skip known ${knownKey}`);
           continue;
         }
-        if (room() <= 0) {
-          emit('collection', `${run.state.runId} reached maxItems (${run.definition.maxItems})`);
+        if (progress.toCollect >= maxItems) {
+          emit('collection', `${startPage.id}: reached its limit of ${maxItems} new items`);
           return queue;
         }
         const title = typeof listingValues.title === 'string' && listingValues.title ? listingValues.title : link;
-        if (pattern.itemCommandId) {
+        const itemCommandId = pattern.itemCommandId;
+        if (itemCommandId) {
           // Side-pane board: the item opens beside the listing; there is no navigation to undo.
           progress.toCollect += 1;
           progress.current = title;
-          await lease.pace(listingUrl);
-          const opened = await host.runCommand(lease.workerId, { pattern, commandId: pattern.itemCommandId, recordRef: record.ref });
+          const opened = await lease.paced(listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: itemCommandId, recordRef: record.ref }));
           await this.tracked(run, progress, async () => {
             if (opened.status !== 'executed') this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
             else await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
@@ -400,16 +401,15 @@ export class CollectionService {
           continue;
         }
         queue.push({ link, title, values: listingValues });
-        run.queued += 1;
         progress.toCollect += 1;
       }
       // A page that adds nothing (Next on the last page often shows it again) is not one of the place's pages.
       if (newLinks === 0 && page > 1) progress.pages = page - 1;
       emit('collection', `${startPage.id}: page ${progress.pages}, ${progress.found} found, ${progress.known} already listed`);
-      if (page >= run.definition.maxPages || !pattern.paginationCommandId || newLinks === 0) return queue;
+      const paginationCommandId = pattern.paginationCommandId;
+      if (page >= maxPages || !paginationCommandId || newLinks === 0) return queue;
       this.checkStopped(run);
-      await lease.pace(listingUrl);
-      const result = await host.runCommand(lease.workerId, { pattern, commandId: pattern.paginationCommandId });
+      const result = await lease.paced(listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: paginationCommandId }));
       if (result.status !== 'executed') {
         emit('collection', `no next page (${result.status})`);
         return queue;
@@ -432,7 +432,6 @@ export class CollectionService {
       progress.collected += collected;
       progress.problems += problems;
       progress.read += collected + problems;
-      run.queued = Math.max(0, run.queued - (collected + problems));
     }
   }
 
@@ -456,18 +455,31 @@ export class CollectionService {
   }
 
   private async waitForAttention(run: ActiveRun, workerId: string, url: string, reason: string): Promise<void> {
-    run.state.status = 'needs-attention';
-    run.state.attention = { workerId, url, reason };
-    this.deps.emit('collection', `${run.state.runId} needs attention: ${reason} at ${url}`);
-    await new Promise<void>((resolve) => {
-      run.resumeAttention = resolve;
-    });
-    run.resumeAttention = null;
-    run.state.attention = null;
-    run.state.status = 'running';
-    await this.deps.host.hideWorker(workerId);
-    this.checkStopped(run);
-    this.deps.emit('collection', `${run.state.runId} resumed`);
+    // Several pages of a run can need the user at once (two workers on a site that challenges both): the run asks
+    // about one, and the next asks once the user dealt with it.
+    const previous = run.attentionTurn;
+    let dealtWith = () => {};
+    run.attentionTurn = previous.then(() => new Promise<void>((resolve) => {
+      dealtWith = resolve;
+    }));
+    await previous;
+    try {
+      this.checkStopped(run);
+      run.state.status = 'needs-attention';
+      run.state.attention = { workerId, url, reason };
+      this.deps.emit('collection', `${run.state.runId} needs attention: ${reason} at ${url}`);
+      await new Promise<void>((resolve) => {
+        run.resumeAttention = resolve;
+      });
+      run.resumeAttention = null;
+      run.state.attention = null;
+      run.state.status = 'running';
+      await this.deps.host.hideWorker(workerId);
+      this.checkStopped(run);
+      this.deps.emit('collection', `${run.state.runId} resumed`);
+    } finally {
+      dealtWith();
+    }
   }
 
   private matchPattern(inspection: PageInspection, pattern: SitePatternDefinition): ListingResolution {
@@ -491,8 +503,7 @@ export class CollectionService {
     if (resolution.via === 'frame') {
       this.assertAllowed(run, resolution.frameSrc, false);
       this.deps.emit('collection', `opening frame on its own: ${resolution.frameSrc}`);
-      await lease.pace(resolution.frameSrc);
-      await this.deps.host.navigate(lease.workerId, resolution.frameSrc);
+      await lease.paced(resolution.frameSrc, () => this.deps.host.navigate(lease.workerId, resolution.frameSrc));
       page = await this.inspectAt(run, lease);
     }
     const matched = this.matchPattern(page, resolution.pattern);

@@ -6,6 +6,7 @@ import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, type MockFlow } from '../test/webAutomation/flow';
+import { readWebAutomationBlocks } from './documentBlocks';
 import { readSiteSetupText, siteSetupText } from './siteSetups';
 import {
   ATS_ORIGIN,
@@ -221,7 +222,7 @@ describe('mock integration: job search flow', () => {
     expect(analysesBeforeResume).toBeLessThanOrEqual(1);
   });
 
-  it('10. concurrency: API calls never wait for a run, the same origin waits, different origins run in parallel', async () => {
+  it('10. concurrency: API calls never wait for a run, two pages share a site and a third waits, different origins run in parallel', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
 
@@ -236,11 +237,16 @@ describe('mock integration: job search flow', () => {
     expect(flow!.automation.getState().runs[0].status).toBe('running');
     await flow!.settle();
 
-    const sameOrigin = listingCollection([`${ATS_ORIGIN}/globex/jobs`, `${ATS_ORIGIN}/hooli/jobs`]);
+    // Two workers on one site at once (their loads there take turns: scheduler.test.ts); a third page there waits.
+    const sameOrigin = listingCollection([`${ATS_ORIGIN}/globex/jobs`, `${ATS_ORIGIN}/hooli/jobs`, `${ATS_ORIGIN}/wonka/jobs`]);
     flow!.approve();
     await flow!.collect(sameOrigin);
-    const serial = flow!.print().split('run-2 started')[1];
-    expect(serial.indexOf('finish: Listings: boards.mock-ats.test')).toBeLessThan(serial.lastIndexOf('start: Listings: boards.mock-ats.test'));
+    const shared = flow!.print().split('run-2 started')[1];
+    const starts = [...shared.matchAll(/start: Listings: boards\.mock-ats\.test/g)].map((match) => match.index!);
+    const firstFinish = shared.indexOf('finish: Listings: boards.mock-ats.test');
+    expect(starts).toHaveLength(3);
+    expect(starts[1]).toBeLessThan(firstFinish);
+    expect(starts[2]).toBeGreaterThan(firstFinish);
 
     const twoOrigins = listingCollection([`${ATS_ORIGIN}/globex/jobs`, `${OTHER_ATS_ORIGIN}/umbrella/jobs`], { patterns: [otherAtsListingPattern, otherAtsDetailPattern] });
     flow!.approve();
@@ -653,5 +659,59 @@ describe('mock integration: job search flow', () => {
     flow!.restartApp();
     expect(flow!.listQueue(EVALUATE_QUEUE)).toEqual([]);
     expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ awaitingResume: false });
+  });
+  it('33. the document names its browser profiles: an instance\'s own wins over the file\'s, and a name this machine lacks is chosen again', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    // The file's profile is Boards; the service's block names its own, Service (a home page's work mail, say).
+    expect(flow!.automation.profileOf(boards.capabilityId)).toEqual({ id: 'boards', name: 'Boards' });
+    expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
+    // Both are in the saved file, so they reopen with it.
+    expect(flow!.save()).toMatch(/metadata:\n\s+galaxy:\n\s+web_profile: Boards/);
+    flow!.restartApp();
+    expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
+
+    const serviceBlock = () => readWebAutomationBlocks(flow!.document).webApis[0].block;
+    const setOwnProfile = (profile: string) => {
+      serviceBlock().schema.pluginConfig = { ...serviceBlock().schema.pluginConfig, profile };
+    };
+    // A copy from another machine names a profile this one has no profile called: nothing runs until one is chosen.
+    setOwnProfile('Work');
+    expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toBeNull();
+    await expect(flow!.probe()).rejects.toThrow(/Choose a browser profile for "Mock Analysis"/);
+
+    // UI: "Change profile…", "Every web plugin in this file": the block follows the file's profile, and the service
+    // is asked about again before it is used there.
+    setOwnProfile('');
+    expect(flow!.automation.profileOf(flow!.api.capability.capabilityId)).toEqual({ id: 'boards', name: 'Boards' });
+    expect(flow!.reviewWebApi()).toMatchObject({ reason: 'profile-changed' });
+  });
+  it('34. limits: each page reads up to its own limits, or the default limits when it sets none', async () => {
+    const globex = `${ATS_ORIGIN}/globex/jobs`;
+    // Defaults: one list page and one new job from each page. Acme sets its own: two pages, four new jobs.
+    const boards = listingCollection([ACME, globex], { maxPages: 1, maxItems: 1 });
+    const limited = { ...boards, startPages: boards.startPages.map((page) => (page.url === ACME ? { ...page, maxPages: 2, maxItems: 4 } : page)) };
+    await signedInFlow(limited);
+    const run = await flow!.collect(limited);
+    expect(run.places['start-1']).toMatchObject({ pages: 2, toCollect: 4, collected: 4 });
+    expect(run.places['start-2']).toMatchObject({ pages: 1, toCollect: 1, collected: 1 });
+  });
+  it('35. two pages on one site both need you: the run asks about one, then the other, and neither is lost', async () => {
+    const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`, `${ATS_ORIGIN}/cyberdyne/jobs`]);
+    await signedInFlow(boards);
+    // Two workers are on the site at once, and both are challenged.
+    const first = await flow!.collect(boards);
+    expect(first).toMatchObject({ status: 'needs-attention', attention: { reason: 'challenge' } });
+    // While the user hasn't got to it, the other worker's turn at the site comes and it is challenged too; it waits to
+    // ask until the first is dealt with.
+    await flow!.advance(10_000);
+    expect(flow!.print()).toMatch(/→ boards\.mock-ats\.test\/cyberdyne\/jobs/);
+    expect(flow!.automation.getState().runs[0].attention?.url).toBe(first.attention!.url);
+    flow!.solveChallenge(ATS_ORIGIN);
+    const second = await flow!.resumeAttention(first.runId);
+    expect(second).toMatchObject({ status: 'needs-attention', attention: { reason: 'challenge' } });
+    expect(second.attention!.url).not.toBe(first.attention!.url);
+    const done = await flow!.resumeAttention(first.runId);
+    expect(done).toMatchObject({ status: 'done', collected: 2, attention: null });
   });
 });

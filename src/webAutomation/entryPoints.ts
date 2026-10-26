@@ -1,4 +1,3 @@
-import { setWebCapabilityProfileBinding } from '../webCapabilities';
 import { recordAuthorization, reviewAuthorization, revokeAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock, Random } from './clock';
 import {
@@ -17,6 +16,7 @@ import { MAX_DOCUMENT_TEXT } from './servedDocuments';
 import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
 import { createEventChannel, type AutomationEvent } from './events';
 import type { BrowserHost } from './host';
+import { resolveProfile, type BrowserProfile } from './profiles';
 import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResult, type QueueState, type QueueTarget } from './queue';
 import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './scheduler';
 import { SessionService, type SessionState } from './session';
@@ -40,6 +40,8 @@ export interface WebAutomationRuntimeDeps {
   clock: Clock;
   random: Random;
   settings: AutomationSettingsStore;
+  /** The browser profiles on this machine (Galaxy's profile registry). */
+  profiles(): BrowserProfile[];
   /** New idempotency keys for queue entries (crypto.randomUUID in the app). */
   createId(): string;
   scheduler?: Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>;
@@ -55,6 +57,8 @@ export interface WebAutomationDocumentDeps {
   isPluginAuthorized(pluginId: string): boolean;
   /** The origin of the document's web API block with this capability id, as its block is now. */
   webApiOrigin(capabilityId: string): string | null;
+  /** The browser profile the document names for its web plugin instance with this capability id (its own, or the file's). */
+  profileName(capabilityId: string): string | null;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -141,10 +145,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     }
   }
 
+  /** The local profile the document's instance uses, as the document names it. Null until the user chooses one. */
+  function profileOf(capabilityId: string): BrowserProfile | null {
+    return resolveProfile(deps.profileName(capabilityId), deps.profiles());
+  }
+
   function profileFor(capabilityId: string, name: string): string {
-    const profileId = deps.settings.get().profileBindings[deps.documentPath()]?.[capabilityId];
-    if (!profileId) throw new WebAutomationError('no_profile', `Choose a profile for "${name}".`);
-    return profileId;
+    const profile = profileOf(capabilityId);
+    if (!profile) throw new WebAutomationError('no_profile', `Choose a browser profile for "${name}".`);
+    return profile.id;
   }
 
   /**
@@ -161,8 +170,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       const item = queues.get(queueId);
       const paused = item?.getState();
       if (!item || state.status !== 'signed-in' || !paused?.paused || paused.pauseReason !== 'not_authenticated') return;
-      const profileId = deps.settings.get().profileBindings[deps.documentPath()]?.[capabilityId];
-      if (state.origin !== deps.webApiOrigin(capabilityId) || state.profileId !== profileId) return;
+      if (state.origin !== deps.webApiOrigin(capabilityId) || state.profileId !== profileOf(capabilityId)?.id) return;
       emit('queue', `${queueId}: signed in again, resuming`);
       item.resume();
     }));
@@ -185,17 +193,18 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       };
     },
 
-    // UI: block editor and reader, "Use profile" select.
-    bindProfile(capabilityId: string, profileId: string): void {
-      deps.settings.update((settings) => ({
-        ...settings,
-        profileBindings: setWebCapabilityProfileBinding(settings.profileBindings, deps.documentPath(), capabilityId, profileId),
-      }));
+    // UI: web plugin readers, the profile an instance uses ("Signed in · Personal"), or none yet.
+    profileOf,
+
+    // UI: "Change profile…", or a profile chosen while allowing a site, once the choice is saved in the document. Every
+    // web reader redraws in it (they redraw on events), and the log records it.
+    profileChosen(name: string, capabilityId: string | null): void {
+      emit('document', capabilityId ? `${capabilityId} uses browser profile ${name}` : `this file uses browser profile ${name}`);
     },
 
     // UI: "Sign in" modal for a galaxy.web-api block: what the document does with your account, and what changed.
     reviewWebApi(capability: WebApiCapability): AuthorizationReview {
-      return webApi.review(deps.documentPath(), capability);
+      return webApi.review(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name));
     },
 
     // UI: "Sign in" modal, "Allow and sign in with [profile]" for a galaxy.web-api block.
@@ -236,7 +245,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // state is handed over at once: the script may register after the account check that signed it in.
     onSessionChange(capability: WebApiCapability, key: string, handler: (state: SessionState) => void): void {
       const watcherKey = `${capability.capabilityId}\0${key}`;
-      const boundProfile = () => deps.settings.get().profileBindings[deps.documentPath()]?.[capability.capabilityId];
+      const boundProfile = () => profileOf(capability.capabilityId)?.id;
       sessionWatchers.get(watcherKey)?.();
       sessionWatchers.set(watcherKey, sessions.onChange((state) => {
         if (state.origin === capabilityOrigin(capability) && state.profileId === boundProfile()) handler(state);
@@ -254,7 +263,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: galaxy.web-api reader, endpoint form "Run"; scripting doc.plugins.call("galaxy.web-api", "call", …).
     callEndpoint(capability: WebApiCapability, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
       requirePlugin(WEB_API_PLUGIN_ID, 'Web API');
-      return webApi.call(deps.documentPath(), capability, endpointId, input, options);
+      return webApi.call(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name), endpointId, input, options);
     },
 
     // UI: galaxy.web-collection reader, "Collect"; scripting collect({ … }). Records go to the consumer (usually a record sink).

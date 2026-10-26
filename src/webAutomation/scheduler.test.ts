@@ -39,30 +39,45 @@ describe('worker scheduler', () => {
     expect(host.workerIds().length).toBeLessThanOrEqual(4);
   });
 
-  it('serializes jobs on the same origin and profile, and closes idle workers', async () => {
-    const { clock, scheduler, host, log } = setup();
-    const order: string[] = [];
-    const job = (label: string) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label }, async () => {
-      order.push(`start ${label}`);
-      await clock.sleep(1_000);
-      order.push(`end ${label}`);
+  it('runs two jobs on a site at once, whose loads there take turns, and closes idle workers', async () => {
+    const { clock, scheduler, host, log } = setup({ perProfile: 4 });
+    const loads: string[] = [];
+    let running = 0;
+    let mostAtOnce = 0;
+    const job = (label: string) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label }, async (lease) => {
+      running += 1;
+      mostAtOnce = Math.max(mostAtOnce, running);
+      for (let page = 1; page <= 2; page += 1) {
+        await lease.paced(`https://same.test/${label}/${page}`, async () => {
+          loads.push(`load ${label}`);
+          await clock.sleep(500);
+          loads.push(`loaded ${label}`);
+        });
+      }
+      running -= 1;
     });
-    const both = Promise.all([job('first'), job('second')]);
-    await clock.runUntil(() => order.length === 4);
-    await both;
-    expect(order).toEqual(['start first', 'end first', 'start second', 'end second']);
+    const all = Promise.all([job('first'), job('second'), job('third')]);
+    await clock.step(0);
+    // A third job on the site waits for one of the two there.
+    expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['third']);
+    await clock.runUntil(() => loads.length === 12);
+    await all;
+    expect(mostAtOnce).toBe(2);
+    // A load from the site never starts before the one before it finished.
+    expect(loads.every((event, index) => (index % 2 === 0 ? event.startsWith('load ') : event === loads[index - 1].replace('load ', 'loaded ')))).toBe(true);
     await clock.advance(61_000);
     expect(host.workerIds()).toEqual([]);
     expect(log).toContain('worker closed (idle)');
   });
 
-  it('waits a random delay between navigations to the same origin', async () => {
+  it('waits a random delay between loads from the same site', async () => {
     const { clock, scheduler } = setup();
     const times: number[] = [];
     const done = scheduler.run({ profileId: 'p1', kind: 'collection', label: 'pace' }, async (lease) => {
       for (let index = 0; index < 4; index += 1) {
-        await lease.pace('https://same.test/page');
-        times.push(clock.now());
+        await lease.paced('https://same.test/page', async () => {
+          times.push(clock.now());
+        });
       }
     });
     await clock.runUntil(() => times.length === 4);
@@ -77,8 +92,9 @@ describe('worker scheduler', () => {
     const times: number[] = [];
     const done = scheduler.run({ profileId: 'p1', kind: 'collection', label: 'pace' }, async (lease) => {
       for (let index = 0; index < 4; index += 1) {
-        await lease.pace('https://same.test/page');
-        times.push(clock.now());
+        await lease.paced('https://same.test/page', async () => {
+          times.push(clock.now());
+        });
       }
     });
     await clock.runUntil(() => times.length === 4);

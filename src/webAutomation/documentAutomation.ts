@@ -11,6 +11,7 @@ import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_
 import { readWebAutomationBlocks } from './documentBlocks';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
+import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
 import { capabilityOrigin } from './webApi';
 // Registers the blocks' checks with hvy lint.
@@ -136,6 +137,13 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     webApiOrigin: (capabilityId) => {
       const capability = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability;
       return capability ? capabilityOrigin(capability) : null;
+    },
+    // The instance's own profile, or the file's. Read when used: choosing one writes it into the document.
+    profileName: (capabilityId) => {
+      const { webApis, collections } = readWebAutomationBlocks(document);
+      const own = webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.profile
+        ?? collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config.profile;
+      return own ?? documentProfileName(document.meta);
     },
     callPlugin: (pluginId, method, args) => {
       // A queue's target plugin not allowed in this file pauses the queue for review rather than failing entries.

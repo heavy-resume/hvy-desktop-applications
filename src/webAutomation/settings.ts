@@ -1,4 +1,3 @@
-import type { WebCapabilityProfileBindings } from '../webCapabilities';
 import type { CapabilityAuthorizations } from './authorization';
 
 export interface AccountSummary {
@@ -9,7 +8,6 @@ export interface AccountSummary {
 
 /** Local app settings used by web automation. Never written into a document. */
 export interface AutomationSettings {
-  profileBindings: WebCapabilityProfileBindings;
   authorizations: CapabilityAuthorizations;
   /** `${origin}\0${profileId}` → account summary. */
   accounts: Record<string, AccountSummary>;
@@ -21,7 +19,7 @@ export interface AutomationSettingsStore {
 }
 
 export function emptyAutomationSettings(): AutomationSettings {
-  return { profileBindings: {}, authorizations: {}, accounts: {} };
+  return { authorizations: {}, accounts: {} };
 }
 
 export function createMemorySettingsStore(initial: AutomationSettings = emptyAutomationSettings()): AutomationSettingsStore {
@@ -40,16 +38,6 @@ export function accountKey(origin: string, profileId: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function nestedStrings(value: unknown, depth: number): Record<string, unknown> {
-  if (!isRecord(value)) return {};
-  return Object.fromEntries(Object.entries(value).flatMap(([key, item]): Array<[string, unknown]> => {
-    if (!key.trim()) return [];
-    if (depth === 0) return typeof item === 'string' && item.trim() ? [[key, item.trim()]] : [];
-    const nested = nestedStrings(item, depth - 1);
-    return Object.keys(nested).length ? [[key, nested]] : [];
-  }));
 }
 
 /** Loads service approvals (also Galaxy's `appSettings.webServiceApprovals`), dropping malformed entries. */
@@ -84,7 +72,6 @@ export function normalizeAutomationSettings(value: unknown): AutomationSettings 
     }]];
   }));
   return {
-    profileBindings: nestedStrings(source.profileBindings, 1) as AutomationSettings['profileBindings'],
     authorizations,
     accounts,
   };

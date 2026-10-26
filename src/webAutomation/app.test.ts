@@ -3,6 +3,7 @@ import { clearPluginAuthorization } from '../../../heavy-file-format/src/plugins
 import { runWithStateRuntime } from '../../../heavy-file-format/src/state';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { defaultAppSettings } from '../backend';
+import { defaultIntegrationRegistry } from '../integrationRegistry';
 import { state, type AppState } from '../state';
 import { mockAnalysisService } from '../test/webAutomation/analysisService';
 import { createDocumentState } from '../test/webAutomation/documentHost';
@@ -36,13 +37,14 @@ describe('web automation in the app', () => {
   state.appSettings = defaultAppSettings();
   state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
   setWebAutomationHost(new MockHost([]));
+  // One browser profile on this machine: the document names none, and uses it without asking.
+  state.integrationRegistry = { ...defaultIntegrationRegistry(), profiles: [{ id: 'service', name: 'Service', providerId: 'google', browserStoreId: 'service' }] };
 
-  it('keeps profile bindings and service approvals in the app settings', () => {
+  it('uses the only browser profile without asking, and keeps service approvals in the app settings', () => {
     const { automation } = mountedDocument().open();
-    automation.bindProfile(api.capability.capabilityId, 'service');
+    expect(automation.profileOf(api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
     automation.authorizeWebApi(api.capability);
 
-    expect(state.appSettings.webCapabilityProfileBindings[DOCUMENT_PATH]).toEqual({ [api.capability.capabilityId]: 'service' });
     expect(state.appSettings.webServiceApprovals[DOCUMENT_PATH]?.[api.capability.capabilityId]).toMatchObject({ profileId: 'service', name: api.capability.name });
   });
 
@@ -80,12 +82,11 @@ describe('web automation in the app', () => {
 
     expect(lookup.automation).toBe(automation);
     // The plugin is allowed in the new mount's state, so the automation's calls go through.
-    automation.bindProfile(api.capability.capabilityId, 'service');
     automation.authorizeWebApi(api.capability);
     await expect(automation.probeSession(api.capability)).resolves.toMatchObject({ profileId: 'service' });
   });
 
-  it('follows a renamed document: its profile, approval, and queues stay with it', async () => {
+  it('follows a renamed document: its approval and queues stay with it (its profile is in the document)', async () => {
     const renamed = '/workspace/Renamed Jobs.hvy';
     state.appSettings = defaultAppSettings();
     state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
@@ -93,7 +94,6 @@ describe('web automation in the app', () => {
     // Saved before the job is queued, so only the queue still in memory can hold it when the document is opened again.
     const savedBeforeQueueing = serializeDocument(mounted.document);
     const { automation } = mounted.open();
-    automation.bindProfile(api.capability.capabilityId, 'service');
     automation.authorizeWebApi(api.capability);
     automation.pauseQueue(EVALUATE_QUEUE);
     automation.enqueue(EVALUATE_QUEUE, 'job-1', { url: 'https://boards.example.test/1' });
@@ -103,7 +103,6 @@ describe('web automation in the app', () => {
     relocateWebAutomationDocument(DOCUMENT_PATH, renamed);
     state.document = { source: { path: renamed } } as AppState['document'];
 
-    expect(state.appSettings.webCapabilityProfileBindings[DOCUMENT_PATH]).toBeUndefined();
     expect(automation.reviewWebApi(api.capability)).toMatchObject({ reason: 'authorized' });
     await expect(automation.probeSession(api.capability)).resolves.toMatchObject({ profileId: 'service' });
 
