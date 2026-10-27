@@ -29,13 +29,25 @@ export interface WebApiCapability {
   capabilityId: string;
   name: string;
   pageUrl: string;
-  allowedOrigins: string[];
   /** Page the API worker parks on; defaults to pageUrl. */
   apiPageUrl?: string;
   session?: SessionDefinition;
   endpoints: ApiEndpointDefinition[];
   /** Origins a served document may be read from (for example, a storage bucket), besides the page's own. */
   readOrigins?: string[];
+  /**
+   * Built from what the service publishes about itself (serviceManifests.ts): the permissions this document was
+   * granted, in the service's words. Its endpoints are the ones those permissions grant, and the sign-in's.
+   */
+  published?: { permissions: PublishedPermission[] };
+}
+
+/** A permission a service publishes: what it lets a document do, in the service's words. */
+export interface PublishedPermission {
+  id: string;
+  description: string;
+  /** One of its endpoints is not a GET: it can change data on the site as the user. */
+  changesData: boolean;
 }
 
 /** A stable key for the call (a queue entry's), sent in the endpoint's idempotency header. */
@@ -57,8 +69,17 @@ export interface WebApiResult {
  * document-text input declares the endpoint that serves it.
  */
 export function webApiAuthorizationParts(capability: WebApiCapability): Record<string, unknown> {
+  // A published service owns what its permissions do: the user approves the service, the permissions asked for, and
+  // the sites files are read from. Its endpoints may change within a permission without asking again.
+  if (capability.published) {
+    return {
+      service: capabilityOrigin(capability),
+      permissions: capability.published.permissions.map((permission) => permission.id).sort(),
+      reads: [...(capability.readOrigins ?? [])].sort(),
+    };
+  }
   return {
-    page: { pageUrl: capability.pageUrl, apiPageUrl: capability.apiPageUrl ?? null, allowedOrigins: [...capability.allowedOrigins].sort() },
+    page: { pageUrl: capability.pageUrl, apiPageUrl: capability.apiPageUrl ?? null },
     session: capability.session ?? null,
     endpoints: capability.endpoints
       .map((endpoint) => ({ id: endpoint.id, method: endpoint.method, path: endpoint.path, inputSchema: endpoint.inputSchema, idempotency: endpoint.idempotency ?? null, servesDocument: endpoint.servesDocument ?? null }))

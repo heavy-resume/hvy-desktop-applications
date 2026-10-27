@@ -64,7 +64,7 @@ export function findWebAutomationProblems(document: VisualDocument): WebAutomati
   const blocks = readWebAutomationBlocks(document);
   const problems = [...blocks.problems];
   const capabilities = [
-    ...blocks.webApis.map(({ block, config }) => ({ block, id: config.capability.capabilityId })),
+    ...blocks.webApis.map(({ block, config }) => ({ block, id: config.capabilityId })),
     ...blocks.collections.map(({ block, config }) => ({ block, id: config.collection.capabilityId })),
   ];
   for (const { id, entries } of duplicates(capabilities, (entry) => entry.id)) {
@@ -87,12 +87,13 @@ export function findWebAutomationProblems(document: VisualDocument): WebAutomati
     }
     const capabilityId = String(config.target.args.capabilityId ?? '');
     const endpointId = String(config.target.args.endpointId ?? '');
-    const api = blocks.webApis.find(({ config: candidate }) => candidate.capability.capabilityId === capabilityId);
+    const api = blocks.webApis.find(({ config: candidate }) => candidate.capabilityId === capabilityId);
     if (!api) {
       problems.push({ blocks: [block], message: `the queue targets "${capabilityId}", which no web API block in this document defines.` });
       continue;
     }
-    if (!api.config.capability.endpoints.some((candidate) => candidate.id === endpointId)) {
+    // A published service's endpoints are known once its file is fetched.
+    if (api.config.capability && !api.config.capability.endpoints.some((candidate) => candidate.id === endpointId)) {
       problems.push({ blocks: [block], message: `"${capabilityId}" has no endpoint "${endpointId}".` });
     }
   }

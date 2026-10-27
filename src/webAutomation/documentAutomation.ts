@@ -14,6 +14,7 @@ import { WebAutomationError } from './errors';
 import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
+import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
 import { capabilityOrigin } from './webApi';
 // Registers the blocks' checks with hvy lint.
 import './lint';
@@ -142,14 +143,14 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     documentPath: options.documentPath,
     isPluginAuthorized,
     webApiOrigin: (capabilityId) => {
-      const capability = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability;
+      const capability = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capabilityId)?.config.capability;
       return capability ? capabilityOrigin(capability) : null;
     },
     // The profile of the web profile context around the instance, or the file's. Read when used: choosing one writes
     // it into the document.
     profileName: (capabilityId) => {
       const { webApis, collections } = readWebAutomationBlocks(document);
-      const block = webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.block
+      const block = webApis.find(({ config }) => config.capabilityId === capabilityId)?.block
         ?? collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.block;
       const context = block ? profileContextFor(document, block) : null;
       return context ? contextProfileName(context) : documentProfileName(document.meta);
@@ -157,7 +158,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     linkOwner: (url) => {
       const origin = new URL(url).origin;
       const { webApis, collections } = readWebAutomationBlocks(document);
-      return webApis.find(({ config }) => config.capability.allowedOrigins.includes(origin))?.config.capability.capabilityId
+      return webApis.find(({ config }) => config.capability && capabilityOrigin(config.capability) === origin)?.config.capabilityId
         ?? collections.find(({ config }) => config.collection.startPages.some((page) => new URL(page.url).origin === origin))?.config.collection.capabilityId
         ?? null;
     },
@@ -174,7 +175,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   const collectionBlock = (capabilityId: string) => readWebAutomationBlocks(document).collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config ?? null;
   const lookup: DocumentAutomationLookup = {
     automation,
-    webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capabilityId)?.config.capability ?? null,
+    webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capabilityId)?.config.capability ?? null,
     collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
     sink: (capabilityId) => {
       const output = collectionBlock(capabilityId)?.output;
@@ -197,6 +198,20 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     },
   });
   for (const { config } of blocks.queues) automation.openQueue(config.queueId, config.target, config.config, config.state);
+  // A web API block that uses a service's published file has its capability once the file is fetched: fetched as the
+  // document opens (again if it failed before), and the readers redraw when it arrives.
+  visitBlocks(document.sections, (block) => {
+    const service = block.schema.plugin === WEB_API_PLUGIN_ID ? block.schema.pluginConfig.service : undefined;
+    if (typeof service !== 'string') return;
+    let origin: string;
+    try {
+      origin = new URL(service).origin;
+    } catch {
+      // Not an address: the block's own check says so.
+      return;
+    }
+    void automation.fetchPublishedService(origin);
+  });
 
   return {
     automation,

@@ -2,6 +2,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { encryptDocumentBytes } from '../../../../heavy-file-format/src/encryption';
 import type { WebApiCapability } from '../../webAutomation/webApi';
+import { SERVICE_MANIFEST_FORMAT, SERVICE_MANIFEST_PATH } from '../../webAutomation/serviceManifests';
 import type { MockSite } from './mockHost';
 import type { MockApiIntegration } from './integration';
 
@@ -51,6 +52,24 @@ export interface MockAnalysisServiceState {
   corruptStoredSource: boolean;
   analysesByKey: Map<string, string>;
   analyses: Map<string, { id: string; url: string; text: string; polls: number }>;
+  /** What the service publishes about itself for documents (serviceManifests.ts); a test may change it. */
+  published: Record<string, unknown>;
+}
+
+/** What the mock service publishes: its endpoints in two permissions, the sign-in's always included. */
+export function analysisServiceManifest(): Record<string, unknown> {
+  return {
+    hvy: SERVICE_MANIFEST_FORMAT,
+    name: analysisServiceCapability.name,
+    page: '/',
+    session: { loginPath: '/login', completePath: '/login/done', probe: 'session', logout: 'logout' },
+    readOrigins: analysisServiceCapability.readOrigins,
+    endpoints: structuredClone(analysisServiceCapability.endpoints),
+    permissions: [
+      { id: 'account', description: 'See your account defaults', endpoints: ['profile'] },
+      { id: 'analyses', description: 'Analyze texts against your stored documents', endpoints: ['create-analysis', 'get-analysis', 'open-source'] },
+    ],
+  };
 }
 
 const objectSchema = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
@@ -59,7 +78,6 @@ export const analysisServiceCapability: WebApiCapability = {
   capabilityId: 'analysis',
   name: 'Mock Analysis',
   pageUrl: `${ANALYSIS_ORIGIN}/`,
-  allowedOrigins: [ANALYSIS_ORIGIN],
   readOrigins: [STORAGE_ORIGIN],
   session: {
     loginUrl: `${ANALYSIS_ORIGIN}/login`,
@@ -128,7 +146,7 @@ export function mockAnalysisService(): MockApiIntegration<MockAnalysisServiceSta
   // Encrypting the stored copy is real asynchronous work; start it now so a request never waits on it in virtual time.
   void storedSource();
   const state: MockAnalysisServiceState = {
-    rateLimitNextCreates: 0, createCalls: 0, lastSourceText: null, lastSourceRevision: null, sourceOpens: 0, servedUrlOverride: null, corruptStoredSource: false, analysesByKey: new Map(), analyses: new Map(),
+    rateLimitNextCreates: 0, createCalls: 0, lastSourceText: null, lastSourceRevision: null, sourceOpens: 0, servedUrlOverride: null, corruptStoredSource: false, analysesByKey: new Map(), analyses: new Map(), published: analysisServiceManifest(),
   };
   const accounts: Record<string, { id: string; name: string }> = {
     'mock-session': { id: 'a-1', name: 'Pat Example' },
@@ -141,6 +159,7 @@ export function mockAnalysisService(): MockApiIntegration<MockAnalysisServiceSta
     origin: ANALYSIS_ORIGIN,
     pages: { '/': {}, '/login': {}, '/login/done': {} },
     login: { loginPath: '/login', completePath: '/login/done', cookie: { name: 'session_id', value: 'mock-session' } },
+    files: { [SERVICE_MANIFEST_PATH]: { bytes: async () => new TextEncoder().encode(JSON.stringify(state.published)) } },
     api: {
       'GET /api/session': ({ cookies }) => (signedIn(cookies) ? { status: 200, body: { account: accounts[cookies.session_id] } } : unauthorized),
       'POST /api/logout': ({ clearCookie }) => {

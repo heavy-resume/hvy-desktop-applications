@@ -4,7 +4,7 @@ import { saveAppSettings } from '../backend';
 import { state } from '../state';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
-import { createWebAutomationRuntime, type WebAutomationRuntime } from './entryPoints';
+import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { BrowserHost } from './host';
 import type { AccountSummary, AutomationSettings, AutomationSettingsStore } from './settings';
@@ -83,7 +83,7 @@ function componentListAt(document: VisualDocument, listPath: string): { sectionK
 }
 
 /** Readers rerender on every automation event (sessions, runs, queues). */
-export function subscribeWebAutomation(listener: () => void): () => void {
+export function subscribeWebAutomation(listener: (event: AutomationEvent) => void): () => void {
   return appRuntime().events.subscribe(listener);
 }
 

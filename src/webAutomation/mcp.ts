@@ -4,6 +4,7 @@ import { documentTextInputs } from './endpoints';
 import type { WebAutomation } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { CollectedRecord } from './records';
+import type { WebApiCapability } from './webApi';
 
 export type McpIntegrationAccess = 'off' | 'read' | 'actions';
 
@@ -11,7 +12,8 @@ export type McpIntegrationAccess = 'off' | 'read' | 'actions';
 export interface McpDocument {
   documentPath: string;
   automation: WebAutomation;
-  webApis: WebApiBlockConfig[];
+  /** Web API blocks whose capability is known (a published service's once its file is fetched). */
+  webApis: Array<{ capability: WebApiCapability; mcp: WebApiBlockConfig['mcp'] }>;
   /** Collection blocks, each with the record sink the document wires it to (if any). */
   collections: Array<CollectionBlockConfig & { sink?: RecordConsumer }>;
 }

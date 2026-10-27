@@ -3,9 +3,12 @@ import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-f
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createCliItemStore } from './cliItemStore';
 import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
-import { analysisServiceCapability, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
-import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
-import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, type MockFlow } from '../test/webAutomation/flow';
+import { ANALYSIS_ORIGIN, analysisServiceCapability, analysisServiceManifest, mockAnalysisService, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
+import { buildSearchDocument } from '../test/webAutomation/listingDocument';
+import { readWebAutomationBlocks } from './documentBlocks';
+import { loadPublishedService } from './serviceManifests';
+import { readWebApiBlockConfig, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
+import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, mockQueueBlocks, type MockFlow } from '../test/webAutomation/flow';
 import { ignoredProfileContexts } from './profileContexts';
 import { SESSION_CHECK_TIMEOUT_MS } from './session';
 import { readSiteSetupText, siteSetupText } from './siteSetups';
@@ -828,5 +831,58 @@ describe('mock integration: job search flow', () => {
     expect(flow!.print()).toContain('user window (service) → ');
     // Anywhere else opens in the default browser, as before.
     expect(flow!.openLink('https://elsewhere.test/page')).toBe(false);
+  });
+  it('42. a service that publishes what documents may do: the block asks for permissions, and gets only their endpoints', async () => {
+    // The document names the service and one of its permissions; the service's published file says what that allows.
+    flow = createMockFlow({
+      document: { build: () => buildSearchDocument({ webApi: { capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] }, queues: mockQueueBlocks(mockAnalysisService()) }) },
+    });
+    const fetchFile = (url: string, limits: { maxBytes: number }) => flow!.host.fetchFile(url, limits);
+    await loadPublishedService(ANALYSIS_ORIGIN, fetchFile, true);
+    const capability = () => readWebAutomationBlocks(flow!.document).webApis[0].config.capability!;
+    expect(capability().endpoints.map((endpoint) => endpoint.id).sort()).toEqual(['create-analysis', 'get-analysis', 'logout', 'open-source', 'session']);
+    expect(capability().published).toEqual({ permissions: [{ id: 'analyses', description: 'Analyze texts against your stored documents', changesData: true }] });
+
+    flow.bindProfiles(listingCollection([ACME]), capability());
+    flow.approve(capability());
+    await flow.signIn(capability());
+    await flow.completeLogin();
+    expect(flow.automation.getState().sessions[0]).toMatchObject({ status: 'signed-in' });
+    // Not one of the permissions it asked for: the block has no such endpoint.
+    await expect(flow.callEndpoint('profile', {}, capability())).rejects.toThrow(/has no endpoint "profile"/);
+
+    // The service changes an endpoint within the granted permission: it owns that, so nothing is asked again.
+    const endpoints = flow.service.published.endpoints as Array<Record<string, unknown>>;
+    flow.service.published = { ...flow.service.published, endpoints: endpoints.map((endpoint) => (endpoint.id === 'get-analysis' ? { ...endpoint, description: 'Reads an analysis.' } : endpoint)) };
+    await loadPublishedService(ANALYSIS_ORIGIN, fetchFile, true);
+    expect(flow.reviewWebApi(capability())).toMatchObject({ reason: 'authorized' });
+
+    // The document asks for another permission: approved again, naming what changed.
+    const block = readWebAutomationBlocks(flow.document).webApis[0].block;
+    block.schema.pluginConfig = { ...block.schema.pluginConfig, permissions: ['analyses', 'account'] };
+    expect(flow.reviewWebApi(capability())).toMatchObject({ reason: 'capability-changed', changedCategories: ['permissions'] });
+
+    // A permission the service does not offer is refused, naming it.
+    block.schema.pluginConfig = { ...block.schema.pluginConfig, permissions: ['analyses', 'billing'] };
+    expect(readWebApiBlockConfig(block.schema.pluginConfig)).toEqual({ ok: false, errors: ['app.mock-analysis.test’s published file offers no permission "billing".'] });
+  });
+  it('43. a service\'s published file that could not be read: the block says why, and reads it on Try again', async () => {
+    flow = createMockFlow({
+      document: { build: () => buildSearchDocument({ webApi: { capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] }, queues: mockQueueBlocks(mockAnalysisService()) }) },
+    });
+    // The service serves something that is not its published file.
+    flow.service.published = ['not', 'an', 'object'] as unknown as Record<string, unknown>;
+    expect(await flow.automation.fetchPublishedService(ANALYSIS_ORIGIN, true)).toEqual({ status: 'failed', error: 'Its published file is not a JSON object.' });
+    // The block says why.
+    expect(readWebApiBlockConfig({ schemaVersion: 1, capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] })).toEqual({
+      ok: false,
+      errors: ['Couldn’t read app.mock-analysis.test’s published file: Its published file is not a JSON object.'],
+    });
+
+    // The service fixes it; UI: "Try again".
+    flow.service.published = analysisServiceManifest();
+    expect(await flow.automation.fetchPublishedService(ANALYSIS_ORIGIN, true)).toMatchObject({ status: 'loaded' });
+    expect(readWebAutomationBlocks(flow.document).webApis[0].config.capability?.published?.permissions.map((permission) => permission.id)).toEqual(['analyses']);
+    expect(flow.print()).toContain('read app.mock-analysis.test’s published file');
   });
 });

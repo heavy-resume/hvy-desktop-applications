@@ -20,6 +20,7 @@ import { resolveProfile, type BrowserProfile } from './profiles';
 import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResult, type QueueState, type QueueTarget } from './queue';
 import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './scheduler';
 import { SessionService, type SessionState } from './session';
+import { loadPublishedService, type PublishedService } from './serviceManifests';
 import type { AutomationSettingsStore } from './settings';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { ApiTransport, capabilityOrigin, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
@@ -306,6 +307,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       emit('user', `opens ${new URL(url).host} in the browser window`, { profileId: profile.id });
       void deps.host.openUserWindow(profile.id, url);
       return true;
+    },
+
+    // Document open: each web API block that uses a service's published file has it fetched. UI: "Try again" after a
+    // failed fetch (`reload`), and the inline editor asking whether the page's service publishes one. Readers redraw
+    // when it arrives.
+    async fetchPublishedService(origin: string, reload = false): Promise<PublishedService> {
+      const loaded = await loadPublishedService(origin, (url, limits) => deps.host.fetchFile(url, limits), reload);
+      emit('document', loaded.status === 'failed' ? `couldn’t read ${new URL(origin).host}’s published file: ${loaded.error}` : `read ${new URL(origin).host}’s published file`);
+      return loaded;
     },
 
     // UI: Needs attention item, "Show".

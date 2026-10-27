@@ -4,12 +4,13 @@ import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
-import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, WEB_AUTOMATION_SCHEMA_VERSION } from '../webAutomation/configs';
+import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from '../webAutomation/configs';
 import { createWebAutomationPlugins, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
 import { isIgnoredProfileContext, profileContextFor } from '../webAutomation/profileContexts';
+import { publishedService, SERVICE_MANIFEST_FORMAT, SERVICE_MANIFEST_PATH } from '../webAutomation/serviceManifests';
 import { documentProfileName, resolveProfile, withDocumentProfile, type BrowserProfile } from '../webAutomation/profiles';
-import type { QueueEntry } from '../webAutomation/queue';
+import { DEFAULT_QUEUE_CONFIG, type QueueEntry } from '../webAutomation/queue';
 import type { DocumentAutomationLookup } from '../webAutomation/scripting';
 import { canSetUpSites, setUpSite } from '../webAutomation/siteSetupOpener';
 import {
@@ -209,8 +210,11 @@ function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApi
     ['Browser profile', profile.name],
     // The page you are sent to, in full, so its address can be checked before signing in.
     capability.session ? ['Sign-in page', capability.session.loginUrl] : ['Website', capability.pageUrl],
-    ['What it can do', capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
-    ...(capability.readOrigins?.length ? [['Also reads files from', capability.readOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
+    // A published service's permissions, in its own words; otherwise the endpoints the file declares.
+    ['What it can do', capability.published
+      ? capability.published.permissions.map((permission) => `${permission.description}${permission.changesData ? ' (can change your data there)' : ''}`).join('; ')
+      : capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
+    ...(capability.readOrigins?.length ? [['Also reads from', capability.readOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
   ];
   for (const [term, description] of rows) {
     const dt = document.createElement('dt');
@@ -247,7 +251,7 @@ function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApi
  * A web profile context: the browser profile for the web plugins in its section or container, and anything nested
  * there. Chosen here; the document keeps it by name.
  */
-const profileContextReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup) => {
+const profileContextView: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup) => {
   const result = readProfileContextBlockConfig(ctx.block.schema.pluginConfig);
   if (!result.ok) {
     root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
@@ -276,7 +280,629 @@ const profileContextReader: HvyPluginFactory = (ctx) => reader(ctx, (root, looku
   );
 });
 
+const ENDPOINT_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+/** An endpoint's fields the dialog edits on their own; the rest (idempotency, a served document, an error pointer) are JSON. */
+const ENDPOINT_FIELDS = ['id', 'name', 'description', 'method', 'path', 'inputSchema', 'timeoutMs'];
+
+function textArea(name: string, value: string, rows: number): HTMLTextAreaElement {
+  const area = document.createElement('textarea');
+  area.className = 'hvy-galaxy-input hvy-web-json';
+  area.name = name;
+  area.rows = rows;
+  area.value = value;
+  return area;
+}
+
+function select(name: string, options: Array<[string, string]>, current: string): HTMLSelectElement {
+  const element = document.createElement('select');
+  element.className = 'hvy-galaxy-select';
+  element.name = name;
+  for (const [value, text] of options) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    option.selected = value === current;
+    element.append(option);
+  }
+  return element;
+}
+
+function checkboxRow(text: string, checked: boolean, onChange: (checked: boolean) => void): HTMLLabelElement {
+  const label = document.createElement('label');
+  label.className = 'checkbox-row';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.className = 'hvy-galaxy-input';
+  input.checked = checked;
+  input.addEventListener('change', () => onChange(input.checked));
+  const span = document.createElement('span');
+  span.textContent = text;
+  label.append(input, span);
+  return label;
+}
+
+function fieldset(legendText: string, ...children: HTMLElement[]): HTMLFieldSetElement {
+  const box = document.createElement('fieldset');
+  box.className = 'hvy-web-page-values';
+  const legend = document.createElement('legend');
+  legend.textContent = legendText;
+  box.append(legend, ...children);
+  return box;
+}
+
+const lines = (value: string) => value.split('\n').map((line) => line.trim()).filter(Boolean);
+const isObject = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/** Parses a JSON object from a textarea, or says why it could not. */
+function jsonObject(value: string, what: string): { value: Record<string, unknown> } | { error: string } {
+  if (!value.trim()) return { value: {} };
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isObject(parsed) ? { value: parsed } : { error: `${what} must be a JSON object.` };
+  } catch (error) {
+    return { error: `${what} is not valid JSON: ${errorMessage(error)}` };
+  }
+}
+
+/** A block's configuration being edited in place. */
+interface ConfigEditing {
+  /** The configuration as stored now. */
+  config: Record<string, unknown>;
+  /** Makes a change, kept only when the block accepts it. Returns why it was refused, if it was. */
+  commit(change: (draft: Record<string, unknown>) => void): string[];
+  /** Why the last change was refused: the editor places it under its heading. */
+  problem: HTMLElement;
+}
+
+/**
+ * A web plugin's configuration edited in place, in the editor. `render` draws it from the stored configuration; each
+ * change is checked as the block's loader and `hvy lint` check it (`read`) and kept only when it passes, otherwise the
+ * reason shows and the block stays as it was. A key a change removes is set to undefined, since the stored
+ * configuration is merged with the change.
+ */
+function configEditor(
+  ctx: HvyPluginContext,
+  read: (value: unknown) => { ok: true } | { ok: false; errors: string[] },
+  className: string,
+  render: (root: HTMLElement, editing: ConfigEditing) => void,
+): HvyPluginInstance {
+  const root = document.createElement('div');
+  root.className = `hvy-web-capability hvy-web-automation hvy-web-config-editor ${className}`;
+  // Why the last change was refused, kept across the redraw that follows it.
+  let refused = '';
+  const stored = () => structuredClone(ctx.block.schema.pluginConfig) as Record<string, unknown>;
+  const commit = (change: (draft: Record<string, unknown>) => void): string[] => {
+    const draft = stored();
+    change(draft);
+    const result = read(draft);
+    refused = result.ok ? '' : result.errors.join(' ');
+    if (result.ok) ctx.setConfig(draft as JsonObject);
+    draw();
+    return result.ok ? [] : result.errors;
+  };
+  const draw = () => {
+    root.replaceChildren();
+    const problem = paragraph(refused, 'hvy-web-error');
+    problem.setAttribute('role', 'alert');
+    render(root, { config: stored(), commit, problem });
+  };
+  draw();
+  return { element: root, refresh: draw };
+}
+
+/** A number input whose stored value is in milliseconds, shown in seconds. */
+function secondsInput(name: string, milliseconds: unknown, max: number): HTMLInputElement {
+  const input = textInput(name, typeof milliseconds === 'number' ? String(milliseconds / 1000) : '');
+  input.type = 'number';
+  input.min = '0';
+  input.max = String(max);
+  input.step = 'any';
+  return input;
+}
+
+/**
+ * The inline editor's offer when the page's service publishes what documents may do: use that instead of the calls
+ * described in the file, asking for the permissions checked (at first, those that cover the block's endpoints). The
+ * block keeps its id, and what AI tools may call within what the permissions grant.
+ */
+function publishedOffer(origin: string, manifest: Record<string, unknown>, endpoints: Record<string, unknown>[], commit: ConfigEditing['commit']): HTMLElement[] {
+  const offered = (Array.isArray(manifest.permissions) ? manifest.permissions : []).filter(isObject);
+  if (!offered.length) return [];
+  const granted = (permission: Record<string, unknown>) => (Array.isArray(permission.endpoints) ? permission.endpoints.map(String) : []);
+  const current = new Set(endpoints.map((endpoint) => String(endpoint.id)));
+  const chosen = new Set(offered.filter((permission) => granted(permission).some((id) => current.has(id))).map((permission) => String(permission.id)));
+  const rows = offered.map((permission) => checkboxRow(String(permission.description ?? permission.id), chosen.has(String(permission.id)), (on) => {
+    if (on) chosen.add(String(permission.id));
+    else chosen.delete(String(permission.id));
+  }));
+  const use = button('Use what it publishes', true);
+  use.addEventListener('click', () => commit((draft) => {
+    Object.assign(draft, switchToPublishedService(draft, origin, manifest, [...chosen]));
+  }));
+  return [fieldset('Published by the service',
+    paragraph(`${String(manifest.name ?? new URL(origin).host)} publishes what documents may do with it. Use that instead of the calls described here: the service decides what each permission allows, and this file asks for the ones checked.`, 'hvy-web-page-hint'),
+    ...rows,
+    actions(use))];
+}
+
+/** The site (origin) of an address, or null when it is not one. */
+function originOf(address: unknown): string | null {
+  try {
+    return new URL(String(address)).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** "Try again" for a service whose published file could not be read: it is fetched again. */
+function tryAgain(lookup: DocumentAutomationLookup, origin: string): HTMLElement {
+  const again = button('Try again', true);
+  again.addEventListener('click', () => void lookup.automation.fetchPublishedService(origin, true));
+  return actions(again);
+}
+
+/**
+ * A Web API block that uses a service's published file, in the editor: the service, the permissions it asks for (as
+ * the service describes them), and which of their endpoints AI tools may call. The service decides what each
+ * permission allows; asking for another one is approved again before the file uses it.
+ */
+function publishedServiceEditor(ctx: HvyPluginContext, root: HTMLElement, { config, commit, problem }: ConfigEditing): void {
+  const service = textInput('service', String(config.service ?? ''));
+  service.type = 'url';
+  service.addEventListener('change', () => commit((draft) => {
+    draft.service = service.value.trim();
+  }));
+  const origin = originOf(config.service);
+  const published = origin ? publishedService(origin) : null;
+  const asked = Array.isArray(config.permissions) ? config.permissions.map(String) : [];
+  const exposed = isObject(config.mcp) && Array.isArray(config.mcp.endpointIds) ? config.mcp.endpointIds.map(String) : [];
+  const offered = published?.status === 'loaded' && Array.isArray(published.manifest.permissions) ? published.manifest.permissions.filter(isObject) : [];
+  const permissions = published?.status === 'loaded'
+    ? offered.map((permission) => {
+      const id = String(permission.id ?? '');
+      return checkboxRow(String(permission.description ?? id), asked.includes(id), (on) => commit((draft) => {
+        draft.permissions = on ? [...asked, id] : asked.filter((candidate) => candidate !== id);
+      }));
+    })
+    : published?.status === 'failed'
+      ? [paragraph(`Couldn’t read its published file: ${published.error}`, 'hvy-web-error'), tryAgain(resolveDocumentAutomation(ctx), origin!)]
+      : [paragraph('Reading its published file…', 'hvy-web-page-hint')];
+  // The endpoints the permissions asked for grant, once the file is read.
+  const read = readWebApiBlockConfig(config);
+  const endpoints = read.ok && read.value.capability ? read.value.capability.endpoints : [];
+  const tools = endpoints.map((endpoint) => checkboxRow(`AI tools can call ${endpoint.name}`, exposed.includes(endpoint.id), (on) => commit((draft) => {
+    draft.mcp = { ...(isObject(draft.mcp) ? draft.mcp : {}), endpointIds: on ? [...exposed, endpoint.id] : exposed.filter((candidate) => candidate !== endpoint.id) };
+  })));
+  root.append(
+    heading(read.ok && read.value.capability ? read.value.capability.name : (origin ? new URL(origin).host : 'Web API')),
+    paragraph(`Id: ${String(config.capabilityId ?? '')}. Uses what the service publishes about itself (${SERVICE_MANIFEST_PATH} on its site): the file asks for permissions, and the service decides what they allow.`, 'hvy-web-page-hint'),
+    problem,
+    fieldset('Service', labelled('Service address', service, 'The service’s site.')),
+    fieldset('Permissions it asks for', ...permissions),
+    ...(tools.length ? [fieldset('AI tools', ...tools)] : []),
+  );
+}
+
+/**
+ * The Web API block in the editor: its service, sign-in, endpoints, and what AI tools may call. A changed
+ * configuration is approved again before the file uses the service.
+ */
+function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
+  const instance = configEditor(ctx, readWebApiBlockConfig, 'hvy-web-api-editor', (root, editing) => {
+    // A block that uses a service's published file edits what it asks of the service; an inline block, its snapshot.
+    if (editing.config.service !== undefined) {
+      publishedServiceEditor(ctx, root, editing);
+      return;
+    }
+    const { config, commit, problem } = editing;
+    const endpoints = (Array.isArray(config.endpoints) ? config.endpoints : []).filter(isObject);
+    const session = isObject(config.session) ? config.session : null;
+    const exposed = isObject(config.mcp) && Array.isArray(config.mcp.endpointIds) ? config.mcp.endpointIds.map(String) : [];
+    const pageOrigin = originOf(config.pageUrl) ?? '';
+    // Whether the page's service publishes what documents may do (asked once); if it does, the offer to use that.
+    const publishedHere = pageOrigin ? publishedService(pageOrigin) : null;
+    if (pageOrigin && !publishedHere) void resolveDocumentAutomation(ctx).automation.fetchPublishedService(pageOrigin);
+    const offer = publishedHere?.status === 'loaded' && publishedHere.manifest.hvy === SERVICE_MANIFEST_FORMAT
+      ? publishedOffer(pageOrigin, publishedHere.manifest, endpoints, commit)
+      : [];
+
+    // The service.
+    const name = textInput('name', String(config.name ?? ''));
+    name.addEventListener('change', () => commit((draft) => {
+      draft.name = name.value.trim();
+    }));
+    const pageUrl = textInput('pageUrl', String(config.pageUrl ?? ''));
+    pageUrl.type = 'url';
+    pageUrl.addEventListener('change', () => commit((draft) => {
+      draft.pageUrl = pageUrl.value.trim();
+    }));
+    const readOrigins = textArea('readOrigins', (Array.isArray(config.readOrigins) ? config.readOrigins.map(String) : []).join('\n'), 2);
+    readOrigins.addEventListener('change', () => commit((draft) => {
+      draft.readOrigins = lines(readOrigins.value).length ? lines(readOrigins.value) : undefined;
+    }));
+
+    // The sign-in.
+    const getEndpoints = endpoints.filter((endpoint) => String(endpoint.method ?? '').toUpperCase() === 'GET');
+    const signIn: HTMLElement[] = [checkboxRow('Has a sign-in', Boolean(session), (on) => commit((draft) => {
+      draft.session = on
+        ? { loginUrl: `${pageOrigin}/login`, completeUrl: `${pageOrigin}/`, probe: { endpointId: String(getEndpoints[0]?.id ?? '') } }
+        : undefined;
+    }))];
+    if (session) {
+      const sessionField = (key: 'loginUrl' | 'completeUrl') => {
+        const input = textInput(key, String(session[key] ?? ''));
+        input.type = 'url';
+        input.addEventListener('change', () => commit((draft) => {
+          (draft.session as Record<string, unknown>)[key] = input.value.trim();
+        }));
+        return input;
+      };
+      const probe = isObject(session.probe) ? session.probe : {};
+      const statuses = textInput('signedOutStatuses', (Array.isArray(probe.signedOutStatuses) ? probe.signedOutStatuses : []).join(', '));
+      statuses.placeholder = '401 (default)';
+      statuses.addEventListener('change', () => commit((draft) => {
+        const draftSession = draft.session as Record<string, unknown>;
+        const numbers = statuses.value.split(',').map((part) => Number(part.trim())).filter((status) => Number.isInteger(status));
+        draftSession.probe = { ...(isObject(draftSession.probe) ? draftSession.probe : {}), signedOutStatuses: numbers.length ? numbers : undefined };
+      }));
+      signIn.push(
+        labelled('Sign-in page', sessionField('loginUrl'), 'Where the user signs in, on the service’s site.'),
+        labelled('Page after signing in', sessionField('completeUrl'), 'Reaching it means the sign-in finished.'),
+        labelled('Signed-out statuses', statuses, 'The session check’s answers that mean signed out.'),
+        paragraph('Which endpoint checks the session, and which signs out, is chosen on the endpoints above.', 'hvy-web-page-hint'),
+      );
+    }
+
+    // The endpoints.
+    const list = document.createElement('div');
+    list.setAttribute('role', 'list');
+    list.className = 'hvy-web-queue-entries';
+    for (const endpoint of endpoints) {
+      const id = String(endpoint.id ?? '');
+      const item = document.createElement('div');
+      item.setAttribute('role', 'listitem');
+      item.className = 'hvy-web-queue-entry';
+      const edit = button('Edit');
+      edit.addEventListener('click', () => openEndpointDialog(endpoint));
+      const remove = button('Remove');
+      remove.addEventListener('click', () => commit((draft) => {
+        draft.endpoints = (draft.endpoints as unknown[]).filter((candidate) => !isObject(candidate) || candidate.id !== id);
+        draft.mcp = { ...(isObject(draft.mcp) ? draft.mcp : {}), endpointIds: exposed.filter((candidate) => candidate !== id) };
+      }));
+      // Its part in the sign-in: the session check (a GET endpoint that fails while signed out), or sign-out.
+      const role = session
+        ? select('role', [['', 'Nothing else'], ...(String(endpoint.method ?? '').toUpperCase() === 'GET' ? [['probe', 'Checking the session'] as [string, string]] : []), ['logout', 'Signing out']],
+          isObject(session.probe) && session.probe.endpointId === id ? 'probe' : session.logoutEndpointId === id ? 'logout' : '')
+        : null;
+      role?.addEventListener('change', () => commit((draft) => {
+        const draftSession = draft.session as Record<string, unknown>;
+        const draftProbe = isObject(draftSession.probe) ? draftSession.probe : {};
+        if (role.value === 'probe') draftSession.probe = { ...draftProbe, endpointId: id };
+        if (role.value === 'logout') draftSession.logoutEndpointId = id;
+        // No longer the session check leaves the sign-in without one, which is refused with the reason.
+        if (role.value !== 'probe' && draftProbe.endpointId === id) draftSession.probe = { ...draftProbe, endpointId: '' };
+        if (role.value !== 'logout' && draftSession.logoutEndpointId === id) draftSession.logoutEndpointId = undefined;
+      }));
+      item.append(
+        paragraph(String(endpoint.name ?? id), 'hvy-web-automation-entry'),
+        paragraph(`${String(endpoint.method ?? '')} ${String(endpoint.path ?? '')}`, 'hvy-web-page-hint'),
+        ...(role ? [labelled('Also used for', role)] : []),
+        checkboxRow('AI tools can call it', exposed.includes(id), (on) => commit((draft) => {
+          draft.mcp = { ...(isObject(draft.mcp) ? draft.mcp : {}), endpointIds: on ? [...exposed, id] : exposed.filter((candidate) => candidate !== id) };
+        })),
+        actions(edit, remove),
+      );
+      list.append(item);
+    }
+    const add = button('+ Add endpoint');
+    add.addEventListener('click', () => openEndpointDialog(null));
+
+    root.append(
+      heading(String(config.name ?? 'Web API')),
+      paragraph(`Id: ${String(config.capabilityId ?? '')}. Scripts and queues call it by this id. A changed configuration is approved again before the file uses the service.`, 'hvy-web-page-hint'),
+      problem,
+      ...offer,
+      fieldset('Service',
+        labelled('Name', name),
+        labelled('Page address', pageUrl, 'The service’s page that calls are made from.'),
+        labelled('Other sites it reads from', readOrigins, 'One per line. Galaxy reads what the service points it to on these sites, without your sign-in and keeping nothing: such as a document the service stores elsewhere.')),
+      fieldset('Endpoints', ...(endpoints.length ? [list] : [paragraph('No endpoints yet.', 'hvy-web-page-hint')]), actions(add)),
+      fieldset('Sign-in', ...signIn),
+    );
+
+    /** An endpoint's own dialog: its fields, its inputs as JSON Schema, and the rest as JSON. Confirming checks the whole block. */
+    function openEndpointDialog(endpoint: Record<string, unknown> | null): void {
+      const { form, body, errors, row, close } = openModal(endpoint ? `Endpoint: ${String(endpoint.name ?? endpoint.id)}` : 'New endpoint', 'hvy-web-page-dialog wide-dialog');
+      const field = (key: string, value: unknown) => textInput(key, value === undefined ? '' : String(value));
+      const id = field('id', endpoint?.id);
+      const endpointName = field('name', endpoint?.name);
+      const description = field('description', endpoint?.description);
+      const method = select('method', ENDPOINT_METHODS.map((value): [string, string] => [value, value]), String(endpoint?.method ?? 'GET'));
+      const path = field('path', endpoint?.path);
+      path.placeholder = '/api/items/{id}';
+      const timeout = secondsInput('timeout', endpoint?.timeoutMs, 60);
+      timeout.min = '1';
+      timeout.placeholder = '15 (default)';
+      const inputs = textArea('inputSchema', JSON.stringify(endpoint?.inputSchema ?? { type: 'object', properties: {} }, null, 2), 8);
+      const rest = Object.fromEntries(Object.entries(endpoint ?? {}).filter(([key]) => !ENDPOINT_FIELDS.includes(key)));
+      const more = textArea('more', Object.keys(rest).length ? JSON.stringify(rest, null, 2) : '', 6);
+      more.placeholder = '{ "idempotency": { "header": "Idempotency-Key" } }';
+      body.append(
+        labelled('Id', id, 'How scripts and queues name it.'),
+        labelled('Name', endpointName),
+        labelled('Description', description),
+        labelled('Method', method, 'Anything but GET can change data on the site as the user.'),
+        labelled('Path', path, 'On the page’s site. {name} takes the input of that name.'),
+        labelled('Timeout (seconds)', timeout),
+        labelled('Inputs (JSON Schema)', inputs, 'Its properties are the only inputs the endpoint accepts.'),
+        labelled('More (JSON)', more, 'Idempotency, a served document, or an error message pointer.'),
+      );
+      const cancel = button('Cancel');
+      cancel.addEventListener('click', close);
+      const confirm = button('Confirm', true);
+      confirm.type = 'submit';
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const schema = jsonObject(inputs.value, 'Inputs');
+        const extra = jsonObject(more.value, 'More');
+        if ('error' in schema || 'error' in extra) {
+          errors.textContent = ['error' in schema ? schema.error : '', 'error' in extra ? extra.error : ''].filter(Boolean).join(' ');
+          return;
+        }
+        const previousId = endpoint ? String(endpoint.id ?? '') : null;
+        const next: Record<string, unknown> = {
+          ...extra.value,
+          id: id.value.trim(),
+          name: endpointName.value.trim(),
+          description: description.value.trim(),
+          method: method.value,
+          path: path.value.trim(),
+          inputSchema: schema.value,
+          ...(timeout.value.trim() ? { timeoutMs: Number(timeout.value) * 1000 } : {}),
+        };
+        const problems = commit((draft) => {
+          const current = (Array.isArray(draft.endpoints) ? draft.endpoints : []) as unknown[];
+          draft.endpoints = previousId === null ? [...current, next] : current.map((candidate) => (isObject(candidate) && candidate.id === previousId ? next : candidate));
+          // A renamed endpoint keeps its place in the sign-in and in what AI tools may call.
+          if (previousId !== null && previousId !== next.id) {
+            if (isObject(draft.session)) {
+              const draftSession = draft.session;
+              if (isObject(draftSession.probe) && draftSession.probe.endpointId === previousId) draftSession.probe = { ...draftSession.probe, endpointId: next.id };
+              if (draftSession.logoutEndpointId === previousId) draftSession.logoutEndpointId = next.id;
+            }
+            if (isObject(draft.mcp) && Array.isArray(draft.mcp.endpointIds)) draft.mcp = { ...draft.mcp, endpointIds: draft.mcp.endpointIds.map((candidate) => (candidate === previousId ? next.id : candidate)) };
+          }
+        });
+        if (problems.length) errors.textContent = problems.join(' ');
+        else close();
+      });
+      row.append(cancel, confirm);
+      id.focus();
+    }
+  });
+  // A published service's file arriving (or failing) redraws the editor: its permissions are read from it.
+  const unsubscribe = subscribeWebAutomation((event) => {
+    if (event.source === 'document') instance.refresh?.();
+  });
+  return { ...instance, unmount: unsubscribe };
+}
+
+/** The queue block in the editor: what it calls, how its calls are paced, and how failures are retried. */
+function queueEditor(ctx: HvyPluginContext): HvyPluginInstance {
+  return configEditor(ctx, readQueueBlockConfig, 'hvy-web-queue-editor', (root, { config, commit, problem }) => {
+    const target = isObject(config.target) ? config.target : {};
+    const pacing = isObject(config.config) ? config.config : {};
+    const retry = isObject(pacing.retry) ? pacing.retry : {};
+    const defaults = DEFAULT_QUEUE_CONFIG;
+    // A change to the pacing or the retries, in the stored `config`.
+    const setPacing = (change: (pacing: Record<string, unknown>) => void) => commit((draft) => {
+      const next = isObject(draft.config) ? draft.config : {};
+      change(next);
+      draft.config = next;
+    });
+    const setRetry = (change: (retry: Record<string, unknown>) => void) => setPacing((next) => {
+      const nextRetry = isObject(next.retry) ? next.retry : {};
+      change(nextRetry);
+      next.retry = nextRetry;
+    });
+    const number = (name: string, value: unknown, min: number, max: number, placeholder: number) => {
+      const input = textInput(name, typeof value === 'number' ? String(value) : '');
+      input.type = 'number';
+      input.min = String(min);
+      input.max = String(max);
+      input.placeholder = `${placeholder} (default)`;
+      return input;
+    };
+    const asNumber = (input: HTMLInputElement, scale = 1) => (input.value.trim() ? Number(input.value) * scale : undefined);
+
+    const pluginId = textInput('pluginId', String(target.pluginId ?? ''));
+    const method = textInput('method', String(target.method ?? ''));
+    const args = textArea('args', JSON.stringify(target.args ?? {}, null, 2), 4);
+    const setTarget = () => {
+      const parsed = jsonObject(args.value, 'Arguments');
+      if ('error' in parsed) {
+        problem.textContent = parsed.error;
+        return;
+      }
+      commit((draft) => {
+        draft.target = { pluginId: pluginId.value.trim(), method: method.value.trim(), args: parsed.value };
+      });
+    };
+    for (const input of [pluginId, method, args]) input.addEventListener('change', setTarget);
+
+    const concurrency = number('concurrency', pacing.concurrency, 1, 4, defaults.concurrency);
+    concurrency.addEventListener('change', () => setPacing((next) => {
+      next.concurrency = asNumber(concurrency);
+    }));
+    const interval = secondsInput('minIntervalMs', pacing.minIntervalMs, 3_600);
+    interval.placeholder = `${defaults.minIntervalMs / 1000} (default)`;
+    interval.addEventListener('change', () => setPacing((next) => {
+      next.minIntervalMs = asNumber(interval, 1000);
+    }));
+    const jitter = secondsInput('jitterMs', pacing.jitterMs, 600);
+    jitter.placeholder = `${defaults.jitterMs / 1000} (default)`;
+    jitter.addEventListener('change', () => setPacing((next) => {
+      next.jitterMs = asNumber(jitter, 1000);
+    }));
+
+    const listText = (value: unknown, fallback: unknown[]) => (Array.isArray(value) ? value : fallback).join(', ');
+    const statuses = textInput('statuses', listText(retry.statuses, defaults.retry.statuses));
+    statuses.addEventListener('change', () => setRetry((next) => {
+      next.statuses = statuses.value.split(',').map((part) => Number(part.trim())).filter((status) => Number.isInteger(status));
+    }));
+    const codes = textInput('codes', listText(retry.codes, defaults.retry.codes));
+    codes.addEventListener('change', () => setRetry((next) => {
+      next.codes = codes.value.split(',').map((part) => part.trim()).filter(Boolean);
+    }));
+    const attempts = number('maxAttempts', retry.maxAttempts, 1, 10, defaults.retry.maxAttempts);
+    attempts.addEventListener('change', () => setRetry((next) => {
+      next.maxAttempts = asNumber(attempts);
+    }));
+    const firstWait = secondsInput('baseDelayMs', retry.baseDelayMs, 3_600);
+    firstWait.placeholder = `${defaults.retry.baseDelayMs / 1000} (default)`;
+    firstWait.addEventListener('change', () => setRetry((next) => {
+      next.baseDelayMs = asNumber(firstWait, 1000);
+    }));
+    const longestWait = secondsInput('maxDelayMs', retry.maxDelayMs, 86_400);
+    longestWait.placeholder = `${defaults.retry.maxDelayMs / 1000} (default)`;
+    longestWait.addEventListener('change', () => setRetry((next) => {
+      next.maxDelayMs = asNumber(longestWait, 1000);
+    }));
+
+    root.append(
+      heading(`Queue: ${String(config.queueId ?? '')}`),
+      paragraph('Scripts add work to it by this id.', 'hvy-web-page-hint'),
+      problem,
+      fieldset('What it calls',
+        labelled('Plugin', pluginId, 'Another plugin in this file, such as galaxy.web-api.'),
+        labelled('Method', method, 'Its method each entry calls, such as call.'),
+        labelled('Arguments (JSON)', args, 'Sent with every call, beside the entry’s input: such as the web API and endpoint.')),
+      fieldset('Pacing',
+        labelled('Calls at once', concurrency),
+        labelled('Seconds between calls', interval),
+        labelled('Random extra seconds', jitter, 'Up to this much more between calls, so they do not come at a fixed beat.')),
+      fieldset('Retries',
+        labelled('Retry on statuses', statuses, 'Comma-separated, such as 429, 503.'),
+        labelled('Retry on error codes', codes, 'Comma-separated.'),
+        labelled('Attempts', attempts, 'In all, the first one included.'),
+        labelled('First retry after (seconds)', firstWait, 'Each retry waits twice as long as the one before.'),
+        labelled('Longest wait (seconds)', longestWait)),
+    );
+  });
+}
+
+/**
+ * The collection block's settings in the editor: its name, what an item is called, its fields, how a record is told
+ * apart, where its records go, and whether AI tools may run it. Its pages, site setups, and limits are edited in its
+ * reader below, as in the viewer.
+ */
+function collectionSettingsEditor(ctx: HvyPluginContext): HvyPluginInstance {
+  return configEditor(ctx, readCollectionBlockConfig, 'hvy-web-collection-editor', (root, { config, commit, problem }) => {
+    const fields = (Array.isArray(config.fields) ? config.fields : []).filter(isObject);
+    const name = textInput('name', String(config.name ?? ''));
+    name.addEventListener('change', () => commit((draft) => {
+      draft.name = name.value.trim();
+    }));
+    const itemName = textInput('itemName', String(config.itemName ?? ''));
+    itemName.placeholder = 'item (default)';
+    itemName.addEventListener('change', () => commit((draft) => {
+      draft.itemName = itemName.value.trim() || undefined;
+    }));
+    const fieldsJson = textArea('fields', JSON.stringify(fields, null, 2), 6);
+    fieldsJson.addEventListener('change', () => {
+      try {
+        const parsed: unknown = JSON.parse(fieldsJson.value);
+        commit((draft) => {
+          draft.fields = parsed;
+        });
+      } catch (error) {
+        problem.textContent = `Fields is not valid JSON: ${errorMessage(error)}`;
+      }
+    });
+    const key = isObject(config.key) ? config.key : { kind: 'url' };
+    const keyValue = key.kind === 'field' ? `field:${String(key.field)}` : key.kind === 'fields' ? 'fields' : 'url';
+    const identity = select('key', [
+      ['url', 'Its page’s address'],
+      ...fields.map((field): [string, string] => [`field:${String(field.id)}`, `Its ${String(field.label ?? field.id)}`]),
+      ...(key.kind === 'fields' ? [['fields', `Its ${(Array.isArray(key.fields) ? key.fields : []).join(' and ')}`] as [string, string]] : []),
+    ], keyValue);
+    identity.addEventListener('change', () => commit((draft) => {
+      if (identity.value === 'fields') return;
+      draft.key = identity.value === 'url' ? undefined : { kind: 'field', field: identity.value.slice('field:'.length) };
+    }));
+    const ignored = textArea('ignoredQueryParameters', (Array.isArray(config.ignoredQueryParameters) ? config.ignoredQueryParameters.map(String) : []).join('\n'), 2);
+    ignored.placeholder = 'Tracking parameters (default)';
+    ignored.addEventListener('change', () => commit((draft) => {
+      draft.ignoredQueryParameters = lines(ignored.value).length ? lines(ignored.value) : undefined;
+    }));
+    const output = textArea('output', config.output === undefined ? '' : JSON.stringify(config.output, null, 2), 8);
+    output.placeholder = 'Records go to the script that runs the collection.';
+    output.addEventListener('change', () => {
+      const parsed = jsonObject(output.value, 'Output');
+      if ('error' in parsed) {
+        problem.textContent = parsed.error;
+        return;
+      }
+      commit((draft) => {
+        draft.output = Object.keys(parsed.value).length ? parsed.value : undefined;
+      });
+    });
+    root.append(
+      heading(`Settings: ${String(config.name ?? 'Collection')}`),
+      paragraph(`Id: ${String(config.capabilityId ?? '')}. Scripts collect by this id.`, 'hvy-web-page-hint'),
+      problem,
+      fieldset('Collection',
+        labelled('Name', name),
+        labelled('What one item is called', itemName, 'Such as job: used in the pages and setup wording.'),
+        labelled('Fields (JSON)', fieldsJson, 'What each record holds: [{ "id": "title", "label": "Title" }, …]. Long text: "kind": "long-text".'),
+        labelled('A record is the same as another by', identity),
+        labelled('Address parameters to ignore', ignored, 'One per line: two addresses that differ only in these are one page.'),
+        checkboxRow('Follow links to other sites', config.followLinksToOtherSites === true, (on) => commit((draft) => {
+          draft.followLinksToOtherSites = on;
+        })),
+        checkboxRow('AI tools can run it', isObject(config.mcp) && config.mcp.collect === true, (on) => commit((draft) => {
+          draft.mcp = { ...(isObject(draft.mcp) ? draft.mcp : {}), collect: on };
+        }))),
+      fieldset('Where records go',
+        labelled('Output (JSON)', output, 'The list in this document its records are written to, and how a record updates one there.')),
+    );
+  });
+}
+
+/** An editor and a reader of the same block, one above the other: both redraw when the block changes. */
+function stacked(editor: HvyPluginInstance, view: HvyPluginInstance): HvyPluginInstance {
+  const element = document.createElement('div');
+  element.className = 'hvy-web-editor-stack';
+  element.append(editor.element, view.element);
+  return {
+    element,
+    refresh: () => {
+      editor.refresh?.();
+      view.refresh?.();
+    },
+    unmount: () => {
+      editor.unmount?.();
+      view.unmount?.();
+    },
+  };
+}
+
+/** A web profile context in the editor: the profile by name, typed, for one this machine may not have. */
+function profileContextEditor(ctx: HvyPluginContext): HvyPluginInstance {
+  return configEditor(ctx, readProfileContextBlockConfig, 'hvy-web-context-editor', (root, { config, commit, problem }) => {
+    const name = textInput('profile', String(config.profile ?? ''));
+    name.placeholder = 'Chosen when the file is opened';
+    name.addEventListener('change', () => commit((draft) => {
+      draft.schemaVersion = WEB_AUTOMATION_SCHEMA_VERSION;
+      draft.profile = name.value.trim() || undefined;
+    }));
+    root.append(problem, labelled('Browser profile name', name, 'Matched by name on each machine. Blank: whoever opens the file chooses one.'));
+  });
+}
+
 const webApiReader: HvyPluginFactory = (ctx) => {
+  // The editor edits the block's configuration; the reader shows the account and signs in.
+  if (ctx.mode === 'editor') return webApiEditor(ctx);
   // A probe or sign-in failure is shown until the user acts again.
   let problem = '';
   const probing = new Set<string>();
@@ -284,9 +910,17 @@ const webApiReader: HvyPluginFactory = (ctx) => {
     const result = readWebApiBlockConfig(ctx.block.schema.pluginConfig);
     if (!result.ok) {
       root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
+      // A service whose published file could not be read: it can be fetched again.
+      const origin = originOf(ctx.block.schema.pluginConfig.service);
+      if (origin && publishedService(origin)?.status === 'failed') root.append(tryAgain(lookup, origin));
       return;
     }
     const capability = result.value.capability;
+    // A published service's capability is known once its file is fetched (the document opening fetches it).
+    if (!capability) {
+      root.append(heading(new URL(result.value.service!.origin).host), status('Reading the service’s published permissions…'));
+      return;
+    }
     const showProblem = (message: string) => {
       problem = message;
       sync();
@@ -484,7 +1118,7 @@ function openConfirmDialog(options: { title: string; message: string; confirm: s
   cancel.focus();
 }
 
-function labelled(text: string, input: HTMLInputElement, hint?: string): HTMLLabelElement {
+function labelled(text: string, input: HTMLElement, hint?: string): HTMLLabelElement {
   const label = document.createElement('label');
   const name = document.createElement('span');
   name.textContent = text;
@@ -990,7 +1624,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   return section;
 }
 
-const collectionReader: HvyPluginFactory = (ctx) => {
+const collectionView: HvyPluginFactory = (ctx) => {
   // Why collecting one start page could not start, shown until the next try.
   let problem = '';
   return reader(ctx, (root, lookup, sync) => {
@@ -1047,7 +1681,7 @@ const PAUSE_REASONS: Record<string, string> = {
   paused: 'Paused.',
 };
 
-const queueReader: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) => {
+const queueView: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) => {
   const result = readQueueBlockConfig(ctx.block.schema.pluginConfig);
   if (!result.ok) {
     root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
@@ -1135,6 +1769,12 @@ const QUEUE_ENTRY_STATUS: Record<QueueEntry['status'], string> = {
   done: 'Done',
   cancelled: 'Cancelled',
 };
+
+// In the editor, each block's configuration is edited above its reader (which already edits what it can: pages, limits,
+// a profile); the Web API block's editor replaces its reader.
+const collectionReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(collectionSettingsEditor(ctx), collectionView(ctx)) : collectionView(ctx));
+const queueReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(queueEditor(ctx), queueView(ctx)) : queueView(ctx));
+const profileContextReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(profileContextEditor(ctx), profileContextView(ctx)) : profileContextView(ctx));
 
 export const [webApiPlugin, webCollectionPlugin, queuePlugin, profileContextPlugin] = createWebAutomationPlugins({
   webApi: webApiReader,

@@ -214,7 +214,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
         }
       });
       // The service's block goes into a container of its own, with a web profile context naming Service.
-      const service = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capability.capabilityId === capability.capabilityId)!.block;
+      const service = readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capability.capabilityId)!.block;
       const section = document.sections.find((candidate) => candidate.blocks.includes(service))!;
       executeHvyCliCommandSync(document, `hvy insert -1 container /body/${section.customId} --id service-profile`);
       executeHvyCliCommandSync(document, `hvy insert -1 plugin /body/${section.customId}/service-profile profile ${WEB_PROFILE_CONTEXT_PLUGIN_ID}`);

@@ -4,6 +4,7 @@ import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type A
 import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntryStatus, type QueueState } from './queue';
 import type { ServedDocumentDefinition } from './servedDocuments';
 import type { RecordSinkConfig } from './recordSink';
+import { publishedService, SERVICE_MANIFEST_FORMAT } from './serviceManifests';
 import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
 import type { SessionDefinition, WebApiCapability } from './webApi';
 
@@ -21,9 +22,16 @@ export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500 } as const;
 
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
-/** MCP exposure is stored beside the snapshot and is not part of what the user approves for the document. */
+/**
+ * MCP exposure is stored beside the snapshot and is not part of what the user approves for the document. A block that
+ * uses a service's published file names the service and the permissions it asks for (`service`); its capability is
+ * built from that file once Galaxy has fetched it, and is null until then.
+ */
 export interface WebApiBlockConfig {
-  capability: WebApiCapability;
+  /** The block's id, as scripts and queues name it: known before a published service's capability is. */
+  capabilityId: string;
+  capability: WebApiCapability | null;
+  service?: { origin: string; permissions: string[] };
   mcp: { endpointIds: string[] };
 }
 
@@ -264,9 +272,81 @@ function readSession(value: unknown, origin: string, endpoints: ApiEndpointDefin
   };
 }
 
+/**
+ * A block that uses a service's published file (serviceManifests.ts): it names the service and the permissions it asks
+ * for. Once Galaxy has fetched the file, the block's capability is what the file publishes for those permissions (and
+ * the sign-in), checked as an inline block's is, on the service's own site; until then the block has no capability.
+ */
+function readPublishedWebApiBlockConfig(value: Record<string, unknown>): ConfigResult<WebApiBlockConfig> {
+  const errors: string[] = [];
+  const capabilityId = text(value.capabilityId);
+  if (!capabilityId) errors.push('The block needs a capability id.');
+  const serviceUrl = trustworthyUrl(value.service);
+  if (!serviceUrl) errors.push('The service must be an HTTPS address (or HTTP on a loopback host).');
+  const permissions = [...new Set(strings(value.permissions))];
+  if (!permissions.length) errors.push('The block asks for none of the service’s permissions.');
+  const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
+  if (errors.length || !serviceUrl) return { ok: false, errors };
+  const service = { origin: serviceUrl.origin, permissions };
+  const published = publishedService(service.origin);
+  if (!published || published.status === 'loading') return { ok: true, value: { capabilityId, capability: null, service, mcp: { endpointIds: exposed } } };
+  const where = `${serviceUrl.host}’s published file`;
+  if (published.status === 'failed') return { ok: false, errors: [`Couldn’t read ${where}: ${published.error}`] };
+  const manifest = published.manifest;
+  if (manifest.hvy !== SERVICE_MANIFEST_FORMAT) return { ok: false, errors: [`${where} is not a ${SERVICE_MANIFEST_FORMAT} file.`] };
+  const offered = (Array.isArray(manifest.permissions) ? manifest.permissions : []).filter(isRecord);
+  const granted = permissions.flatMap((id) => offered.filter((permission) => text(permission.id) === id).slice(0, 1));
+  const missing = permissions.filter((id) => !granted.some((permission) => text(permission.id) === id));
+  if (missing.length) return { ok: false, errors: [`${where} offers no permission ${missing.map((id) => `"${id}"`).join(', ')}.`] };
+  const session = isRecord(manifest.session) ? manifest.session : null;
+  const published_endpoints = (Array.isArray(manifest.endpoints) ? manifest.endpoints : []).filter(isRecord);
+  const wanted = new Set([
+    ...granted.flatMap((permission) => strings(permission.endpoints)),
+    ...(session ? [text(session.probe), text(session.logout)].filter(Boolean) : []),
+  ]);
+  const undefinedEndpoints = [...wanted].filter((id) => !published_endpoints.some((endpoint) => text(endpoint.id) === id));
+  if (undefinedEndpoints.length) return { ok: false, errors: [`${where} grants endpoints it does not define: ${undefinedEndpoints.join(', ')}.`] };
+  const at = (path: unknown) => `${service.origin}${text(path) || '/'}`;
+  // The published file as an inline block: the same checks, and every path on the service's own site.
+  const inline = readWebApiBlockConfig({
+    schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION,
+    capabilityId,
+    name: text(manifest.name) || serviceUrl.host,
+    pageUrl: at(manifest.page),
+    ...(session ? {
+      session: {
+        loginUrl: at(session.loginPath),
+        completeUrl: at(session.completePath),
+        probe: { endpointId: text(session.probe), ...(Array.isArray(session.signedOutStatuses) ? { signedOutStatuses: session.signedOutStatuses } : {}) },
+        ...(text(session.logout) ? { logoutEndpointId: text(session.logout) } : {}),
+      },
+    } : {}),
+    endpoints: published_endpoints.filter((endpoint) => wanted.has(text(endpoint.id))),
+    readOrigins: manifest.readOrigins,
+    mcp: { endpointIds: exposed },
+  });
+  if (!inline.ok) return { ok: false, errors: inline.errors.map((error) => `${where}: ${error}`) };
+  const capability = inline.value.capability!;
+  const changesData = (permission: Record<string, unknown>) => strings(permission.endpoints)
+    .some((id) => capability.endpoints.find((endpoint) => endpoint.id === id)?.method !== 'GET');
+  return {
+    ok: true,
+    value: {
+      capabilityId,
+      capability: {
+        ...capability,
+        published: { permissions: granted.map((permission) => ({ id: text(permission.id), description: text(permission.description) || text(permission.id), changesData: changesData(permission) })) },
+      },
+      service,
+      mcp: inline.value.mcp,
+    },
+  };
+}
+
 export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockConfig> {
   const errors: string[] = [];
   if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported web API block configuration.'] };
+  if (value.service !== undefined) return readPublishedWebApiBlockConfig(value);
   const capabilityId = text(value.capabilityId);
   if (!capabilityId) errors.push('The block needs a capability id.');
   const pageUrl = trustworthyUrl(value.pageUrl);
@@ -297,11 +377,11 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
   return {
     ok: true,
     value: {
+      capabilityId,
       capability: {
         capabilityId,
         name: text(value.name) || pageUrl.hostname,
         pageUrl: pageUrl.href,
-        allowedOrigins: [...new Set([pageUrl.origin, ...strings(value.allowedOrigins).flatMap((origin) => trustworthyUrl(origin)?.origin ?? [])])],
         ...(apiPageUrl ? { apiPageUrl: apiPageUrl.href } : {}),
         ...(session ? { session } : {}),
         endpoints,
@@ -561,5 +641,28 @@ function readQueueState(value: unknown): QueueState | null {
     paused: value.paused === true,
     pauseReason: typeof value.pauseReason === 'string' ? value.pauseReason : null,
     awaitingResume: false,
+  };
+}
+
+/**
+ * An inline web API block switched to a service's published file: the snapshot goes, and the block names the service
+ * and the permissions it asks for. It keeps its id, and what AI tools may call within what those permissions grant.
+ * Keys that go are set to undefined, since a block's stored configuration is merged with the change.
+ */
+export function switchToPublishedService(config: Record<string, unknown>, origin: string, manifest: Record<string, unknown>, permissions: string[]): Record<string, unknown> {
+  const offered = (Array.isArray(manifest.permissions) ? manifest.permissions : []).filter(isRecord);
+  const allowed = new Set(offered.filter((permission) => permissions.includes(text(permission.id))).flatMap((permission) => strings(permission.endpoints)));
+  const exposed = strings(isRecord(config.mcp) ? config.mcp.endpointIds : []);
+  return {
+    ...config,
+    name: undefined,
+    pageUrl: undefined,
+    apiPageUrl: undefined,
+    session: undefined,
+    endpoints: undefined,
+    readOrigins: undefined,
+    service: origin,
+    permissions,
+    mcp: { ...(isRecord(config.mcp) ? config.mcp : {}), endpointIds: exposed.filter((id) => allowed.has(id)) },
   };
 }

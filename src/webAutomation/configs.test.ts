@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
-import { analysisServiceCapability } from '../test/webAutomation/analysisService';
+import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
+import { loadPublishedService } from './serviceManifests';
+import { analysisServiceCapability, analysisServiceManifest } from '../test/webAutomation/analysisService';
 import { ATS_ORIGIN, atsDetailPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
 
 const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
@@ -23,7 +24,20 @@ describe('a start page left out of collecting all', () => {
 describe('block configuration readers', () => {
   it('round-trips the web API snapshot and its MCP exposure', () => {
     const result = readWebApiBlockConfig(rawWebApi());
-    expect(result).toEqual({ ok: true, value: { capability: analysisServiceCapability, mcp: { endpointIds: ['profile'] } } });
+    expect(result).toEqual({ ok: true, value: { capabilityId: analysisServiceCapability.capabilityId, capability: analysisServiceCapability, mcp: { endpointIds: ['profile'] } } });
+  });
+
+  it('switches an inline block to the service\'s published file, keeping AI tools on what its permissions grant', async () => {
+    const manifest = analysisServiceManifest();
+    // A service the test publishes itself, so no other test's fetch of the mock service is reused.
+    const origin = 'https://switch.mock-analysis.test';
+    await loadPublishedService(origin, async () => new TextEncoder().encode(JSON.stringify(manifest)), true);
+    const switched = switchToPublishedService(rawWebApi({ mcp: { endpointIds: ['profile', 'create-analysis'] } }), origin, manifest, ['analyses']);
+    // The snapshot's keys go (set to undefined, as a merged change removes them).
+    expect(Object.entries(switched).filter(([, value]) => value !== undefined).map(([key]) => key).sort()).toEqual(['capabilityId', 'mcp', 'permissions', 'schemaVersion', 'service']);
+    const read = readWebApiBlockConfig(switched);
+    expect(read).toMatchObject({ ok: true, value: { service: { origin, permissions: ['analyses'] }, mcp: { endpointIds: ['create-analysis'] } } });
+    expect(read.ok && read.value.capability?.published?.permissions.map((permission) => permission.id)).toEqual(['analyses']);
   });
 
   it('rejects web API snapshots that could reach other origins or are incomplete', () => {
