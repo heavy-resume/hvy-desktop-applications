@@ -77,17 +77,17 @@ function buildRecordType(integration: IntegrationDefinition, name: string): void
   state.integrationActionDraftName = name;
   rerender({ preserveMountedDocument: true });
   // A new record type has nothing picked yet: the page goes straight into picking the first example, as the step
-  // says ("point at…"), instead of waiting for the builder's Add example. It starts once the open is done, as
+  // says ("pick an example…"), instead of waiting for the builder's Add example. It starts once the open is done, as
   // Add example would: one busy task at a time.
   void opened.then(() => handlers.addIntegrationActionAnchor());
 }
 
-/** The first item link the picked rows find on the list page, as the item page to point at. */
+/** The first item link the picked rows find on the list page, as the item page to pick from. */
 async function openFirstItemPage(session: NonNullable<typeof active>): Promise<void> {
   const list = sessionIntegration(session.listId);
   const action = list?.actions[0];
   const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-  if (!list || !action || !profile) throw new Error('Point at the rows first.');
+  if (!list || !action || !profile) throw new Error('Pick an example row first.');
   const result = await fetchIntegrationRecords(list.id, list.pages[0], action, profile);
   const records = (result.records ?? []) as Array<{ targets?: Array<{ href?: string | null }> }>;
   const href = records.flatMap((record) => record.targets ?? []).map((target) => target.href).find((value): value is string => Boolean(value));

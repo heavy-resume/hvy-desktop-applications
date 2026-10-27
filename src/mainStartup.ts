@@ -13,6 +13,7 @@ import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
 import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { handleIntegrationWebMcpResult } from './integrationWebMcpRuntime';
+import { browserClosed, browserResultRequestId } from './browserRequests';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
 import { runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
@@ -79,13 +80,32 @@ export async function boot(): Promise<void> {
         handlers.requestIntegrationNavigationApproval(result);
         return;
       }
-      if (handleIntegrationWebMcpResult(result)) return;
-      if (handleWebCapabilityIntegrationResult(result)) return;
-      if (result && typeof result === 'object'
-        && (result as { kind?: unknown }).kind === 'integration-ready-check-validation') {
-        handlers.completeIntegrationReadyCheckValidation(result);
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {
+        // Every request still waiting on the window fails (its owner clears its own state), and a selection being made
+        // in it ends, back where it started.
+        const profileId = (result as { profileId?: unknown }).profileId;
+        if (typeof profileId === 'string') browserClosed(profileId);
+        if (state.integrationReadyCheckSelectionPending) {
+          state.integrationReadyCheckSelectionPending = false;
+          state.integrationReadyChecksDialogOpen = true;
+        }
+        if (state.integrationActionSelectionPending) {
+          state.integrationActionSelectionPending = false;
+          state.integrationActionBuilderOpen = true;
+        }
+        if (state.integrationCommandSelectionPending) {
+          state.integrationCommandBuilderOpen = false;
+          state.integrationCommandSelectionPending = false;
+          state.integrationCommandDraftSteps = [];
+        }
+        state.status = 'Integration browser closed';
+        rerender({ preserveMountedDocument: true });
         return;
       }
+      if (handleIntegrationWebMcpResult(result)) return;
+      if (handleWebCapabilityIntegrationResult(result)) return;
+      // An answer to a request that already ended (timed out, stopped, or its window closed) has no one left to go to.
+      if (browserResultRequestId(result)) return;
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-scope-selection-request') {
         handlers.limitIntegrationActionToSection();
         return;
@@ -105,10 +125,9 @@ export async function boot(): Promise<void> {
         if (action === 'define-record-type') handlers.addActionForIntegrationPage(integration.id, page.id);
         return;
       }
+      // The scan on each page load: one asked for is answered as its request, above.
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-source-discovery') {
         const discovery = result as { context?: { pageId?: string }; sources?: import('./integrationBrowser').IntegrationStructuredSource[] };
-        state.integrationStructuredSourcePending = false;
-        state.integrationStructuredSourceError = null;
         const selectedPageId = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId)?.pages[0]?.id ?? null;
         state.integrationStructuredSourcePageId = discovery.context?.pageId ?? selectedPageId;
         state.integrationStructuredSources = discovery.sources ?? [];
@@ -116,27 +135,6 @@ export async function boot(): Promise<void> {
           ? `Found ${state.integrationStructuredSources.length} structured data source${state.integrationStructuredSources.length === 1 ? '' : 's'}`
           : 'No structured data sources found';
         rerender({ preserveMountedDocument: true });
-        if (!(discovery.context as { automatic?: boolean } | undefined)?.automatic) await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-structured-result') {
-        const structured = result as { context?: { sourceName?: string }; value?: unknown };
-        state.integrationStructuredSourcePending = false;
-        state.integrationStructuredSourceError = null;
-        state.integrationStructuredResultName = structured.context?.sourceName ?? 'Structured data';
-        state.integrationStructuredResult = structured.value;
-        state.integrationStructuredResultOpen = true;
-        state.status = `Fetched ${state.integrationStructuredResultName}`;
-        rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-structured-error') {
-        state.integrationStructuredSourcePending = false;
-        state.integrationStructuredSourceError = String((result as { message?: unknown }).message ?? 'The structured source could not be fetched.');
-        state.status = 'Structured data fetch failed';
-        rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-recording-cancelled') {
@@ -166,59 +164,6 @@ export async function boot(): Promise<void> {
             : commandResult.status === 'not-ready'
               ? String(commandResult.message || 'The expected page is not ready.')
             : `Command stopped${failedStep}: ${String(commandResult.reason || 'target not found').replaceAll('_', ' ')}`;
-        rerender({ preserveMountedDocument: true });
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-extraction') {
-        state.integrationActionFetchPendingId = null;
-        state.integrationActionFetchError = null;
-        const extraction = result as { status?: string; message?: string; context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
-        if (extraction.status === 'not-ready') {
-          state.integrationActionPreviewPending = false;
-          state.integrationActionEditPageLoading = false;
-          state.integrationActionFetchError = extraction.message ?? 'The expected page is not ready.';
-          state.status = 'Page is not ready';
-          rerender({ preserveMountedDocument: true });
-          await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-          return;
-        }
-        if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, extraction.minimumConfidence));
-        const isBackgroundExampleValidation = extraction.context?.mode === 'examples';
-        if (isBackgroundExampleValidation) {
-          state.integrationActionLiveExampleRecords = extraction.records ?? [];
-          state.integrationActionEditPageLoading = false;
-          state.status = `Validated ${(extraction.records ?? []).filter(Boolean).length} live examples`;
-        } else if (extraction.context?.mode === 'builder') {
-          state.integrationActionPreviewPending = false;
-          state.integrationActionPreviewRecords = extraction.records ?? [];
-          state.integrationActionPreviewDiagnostics = extraction.diagnostics ?? null;
-          state.integrationActionBuilderStep = 'preview';
-          state.integrationActionBuilderOpen = true;
-        } else {
-          state.integrationActionResultName = extraction.context?.actionName ?? 'Action results';
-          state.integrationActionResultRecords = extraction.records ?? [];
-          state.integrationActionResultActionId = extraction.context?.actionId ?? null;
-          state.integrationActionResultOpen = true;
-        }
-        state.status = `Extracted ${(extraction.records ?? []).length} matching items`;
-        rerender({ preserveMountedDocument: true });
-        if (!isBackgroundExampleValidation) await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {
-        if (state.integrationReadyCheckSelectionPending) {
-          state.integrationReadyCheckSelectionPending = false;
-          state.integrationReadyChecksDialogOpen = true;
-        }
-        state.integrationActionSelectionPending = false;
-        state.integrationActionPreviewPending = false;
-        state.integrationActionBuilderOpen = true;
-        if (state.integrationCommandBuilderOpen) {
-          state.integrationCommandBuilderOpen = false;
-          state.integrationCommandSelectionPending = false;
-          state.integrationCommandDraftSteps = [];
-        }
-        state.status = 'Integration browser closed';
         rerender({ preserveMountedDocument: true });
         return;
       }

@@ -10,6 +10,7 @@ import {
   type WebRecordsCapabilityConfig,
 } from './webCapabilities';
 import { enqueueWebCapabilityForProfile } from './webCapabilityQueue';
+import { answerBrowserRequest, failBrowserRequest, waitForBrowserAnswer } from './browserRequests';
 
 export interface WebCapabilityExecutionContext {
   documentPath: string;
@@ -38,15 +39,8 @@ export interface WebRecordChange {
   record?: unknown;
 }
 
-type PendingOperation = {
-  kind: 'records' | 'command' | 'readiness';
-  resolve(value: unknown): void;
-  reject(error: Error): void;
-  timeout: ReturnType<typeof setTimeout>;
-  cleanupAbort?: () => void;
-};
+type OperationKind = 'records' | 'command' | 'readiness';
 
-const pendingOperations = new Map<string, PendingOperation>();
 const pendingRecordWatches = new Map<string, {
   notify(change: WebRecordChange): void;
   timeout: ReturnType<typeof setTimeout>;
@@ -70,31 +64,51 @@ function assertAuthorized(config: WebCapabilityConfig, context: WebCapabilityExe
   )) throw new WebCapabilityAuthorizationError();
 }
 
-function waitForResult<T>(requestId: string, kind: PendingOperation['kind'], timeoutMs: number, profileId: string, signal?: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingOperations.delete(requestId);
-      signal?.removeEventListener('abort', abort);
-      const watch = pendingRecordWatches.get(requestId);
-      if (watch) clearTimeout(watch.timeout);
-      pendingRecordWatches.delete(requestId);
-      if (kind === 'records') void controlIntegrationBrowser('cancel-extraction', profileId).catch(() => undefined);
-      reject(new Error('The web capability timed out while waiting for the page.'));
-    }, timeoutMs);
-    const abort = () => {
-      if (!pendingOperations.has(requestId)) return;
-      if (kind === 'records') void controlIntegrationBrowser('cancel-extraction', profileId).catch(() => undefined);
-      rejectPendingOperation(requestId, signal?.reason instanceof Error ? signal.reason : new Error('The fetch was stopped.'));
+const RESULT_KINDS: Record<OperationKind, string> = {
+  readiness: 'integration-page-readiness',
+  records: 'integration-extraction',
+  command: 'integration-command-result',
+};
+
+function clearRecordWatch(requestId: string): void {
+  const watch = pendingRecordWatches.get(requestId);
+  if (watch) clearTimeout(watch.timeout);
+  pendingRecordWatches.delete(requestId);
+}
+
+const notReady = (result: Record<string, unknown>) => new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.');
+
+/** The page's answer to an operation, as what the operation returns. */
+function operationAnswer(kind: OperationKind, requestId: string, result: Record<string, unknown>): unknown {
+  if (kind === 'readiness') return result;
+  if (kind === 'records') {
+    if (result.status === 'not-ready') throw notReady(result);
+    return {
+      records: Array.isArray(result.records) ? result.records : [],
+      ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
+      ...(result.page && typeof result.page === 'object' ? { page: result.page } : {}),
     };
-    signal?.addEventListener('abort', abort, { once: true });
-    pendingOperations.set(requestId, {
-      kind,
-      resolve: (value) => resolve(value as T),
-      reject,
-      timeout,
-      cleanupAbort: () => signal?.removeEventListener('abort', abort),
-    });
-    if (signal?.aborted) abort();
+  }
+  if (result.status !== 'executed') clearRecordWatch(requestId);
+  if (result.status === 'executed') return { status: 'executed', commandId: result.commandId };
+  if (result.status === 'not-ready') throw notReady(result);
+  const failedStep = typeof result.stepIndex === 'number' ? ` at step ${result.stepIndex + 1}` : '';
+  throw new Error(`Command stopped${failedStep}: ${String(result.reason ?? result.status ?? 'target not found').replaceAll('_', ' ')}`);
+}
+
+function waitForResult<T>(requestId: string, kind: OperationKind, timeoutMs: number, profileId: string, signal?: AbortSignal): Promise<T> {
+  return waitForBrowserAnswer<T>(requestId, {
+    profileId,
+    accepts: (result) => result.kind === RESULT_KINDS[kind],
+    answer: (result) => operationAnswer(kind, requestId, result) as T,
+    timeoutMs,
+    timeoutMessage: 'The web capability timed out while waiting for the page.',
+    signal,
+    abortMessage: 'The fetch was stopped.',
+    onStop: () => {
+      clearRecordWatch(requestId);
+      if (kind === 'records') void controlIntegrationBrowser('cancel-extraction', profileId).catch(() => undefined);
+    },
   });
 }
 
@@ -109,10 +123,10 @@ async function openForOperation(
     try {
       await controlIntegrationBrowser('check-page-ready', context.profile.id, {
         readyChecks: context.readyChecks ?? config.page.readyChecks,
-        context: { webCapabilityRequestId: requestId },
+        context: { browserRequestId: requestId },
       });
     } catch (error) {
-      rejectPendingOperation(requestId, error);
+      failBrowserRequest(requestId, error);
     }
     if ((await readiness).ready) {
       context.signal?.throwIfAborted();
@@ -170,7 +184,7 @@ export async function fetchWebRecords(
         context: {
           mode: 'hvy-capability',
           foreground: context.foreground ?? true,
-          webCapabilityRequestId: requestId,
+          browserRequestId: requestId,
           capabilityId: config.capabilityId,
           expectedOrigin: new URL(config.page.url).origin,
           expectedOrigins: integrationPageExpectedOrigins({ ...config.page, readyChecks: context.readyChecks ?? config.page.readyChecks }),
@@ -178,7 +192,7 @@ export async function fetchWebRecords(
         },
       });
     } catch (error) {
-      rejectPendingOperation(requestId, error);
+      failBrowserRequest(requestId, error);
     }
     return result;
   });
@@ -213,7 +227,7 @@ async function executeCommand(
         context: {
           expectedOrigin: new URL(config.page.url).origin,
           expectedOrigins: integrationPageExpectedOrigins({ ...config.page, readyChecks: context.readyChecks ?? config.page.readyChecks }),
-          webCapabilityRequestId: requestId,
+          browserRequestId: requestId,
         },
         payload: {
           requestId,
@@ -229,10 +243,8 @@ async function executeCommand(
         },
       });
     } catch (error) {
-      const watch = pendingRecordWatches.get(requestId);
-      if (watch) clearTimeout(watch.timeout);
-      pendingRecordWatches.delete(requestId);
-      rejectPendingOperation(requestId, error);
+      clearRecordWatch(requestId);
+      failBrowserRequest(requestId, error);
     }
     return result;
   });
@@ -260,21 +272,9 @@ export function executeWebRecordCommandCapability(
   return executeCommand(config, command, context, inputs, recordParent, recordIdentity, onRecordChange);
 }
 
-function rejectPendingOperation(requestId: string, error: unknown): void {
-  const pending = pendingOperations.get(requestId);
-  if (!pending) return;
-  clearTimeout(pending.timeout);
-  pending.cleanupAbort?.();
-  pendingOperations.delete(requestId);
-  pending.reject(error instanceof Error ? error : new Error(String(error)));
-}
-
 export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
-  const context = result.context && typeof result.context === 'object' && !Array.isArray(result.context)
-    ? result.context as Record<string, unknown>
-    : null;
   if (result.kind === 'integration-record-watch-result' && typeof result.requestId === 'string') {
     const watch = pendingRecordWatches.get(result.requestId);
     if (!watch || !result.recordChange || typeof result.recordChange !== 'object') return false;
@@ -283,42 +283,5 @@ export function handleWebCapabilityIntegrationResult(value: unknown): boolean {
     watch.notify(result.recordChange as WebRecordChange);
     return true;
   }
-  const requestId = result.kind === 'integration-command-result'
-    ? result.requestId
-    : context?.webCapabilityRequestId;
-  if (typeof requestId !== 'string') return false;
-  const pending = pendingOperations.get(requestId);
-  if (!pending) return false;
-  if ((pending.kind === 'readiness' && result.kind !== 'integration-page-readiness')
-    || (pending.kind === 'records' && result.kind !== 'integration-extraction')
-    || (pending.kind === 'command' && result.kind !== 'integration-command-result')) return false;
-  clearTimeout(pending.timeout);
-  pending.cleanupAbort?.();
-  pendingOperations.delete(requestId);
-  if (pending.kind === 'command' && result.status !== 'executed') {
-    const watch = pendingRecordWatches.get(requestId);
-    if (watch) clearTimeout(watch.timeout);
-    pendingRecordWatches.delete(requestId);
-  }
-  if (pending.kind === 'readiness') {
-    pending.resolve(result);
-  } else if (pending.kind === 'records') {
-    if (result.status === 'not-ready') {
-      pending.reject(new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.'));
-      return true;
-    }
-    pending.resolve({
-      records: Array.isArray(result.records) ? result.records : [],
-      ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
-      ...(result.page && typeof result.page === 'object' ? { page: result.page } : {}),
-    });
-  } else if (result.status === 'executed') {
-    pending.resolve({ status: 'executed', commandId: result.commandId });
-  } else if (result.status === 'not-ready') {
-    pending.reject(new Error(typeof result.message === 'string' ? result.message : 'The expected web page is not ready.'));
-  } else {
-    const failedStep = typeof result.stepIndex === 'number' ? ` at step ${result.stepIndex + 1}` : '';
-    pending.reject(new Error(`Command stopped${failedStep}: ${String(result.reason ?? result.status ?? 'target not found').replaceAll('_', ' ')}`));
-  }
-  return true;
+  return answerBrowserRequest(result);
 }

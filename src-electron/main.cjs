@@ -1368,8 +1368,6 @@ function executePendingIntegrationExtraction(browser) {
     : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return Promise.resolve(null);
   browser.pendingExtraction = null;
   if (extraction.kind === 'command-target') {
-    // A selection started once the page loads is pending as one started with inspect is: closing the window ends it.
-    browser.actionModePending = true;
     return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
   }
   if (extraction.kind === 'command-execution') {
@@ -1570,9 +1568,10 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       if (siteTitle) integrationWindow.setTitle(siteTitle);
     });
     integrationWindow.on('closed', () => {
+      // Every close is reported: whatever was waiting on this window ends, not only a selection.
+      mainWindow?.webContents.send('hvy:integration-inspection-result', { kind: 'integration-browser-closed', profileId });
       if (browser.actionModePending) {
         browser.actionModePending = false;
-        mainWindow?.webContents.send('hvy:integration-inspection-result', { kind: 'integration-browser-closed', profileId });
         raiseWindow(mainWindow);
       }
       integrationBrowsers.delete(profileId);

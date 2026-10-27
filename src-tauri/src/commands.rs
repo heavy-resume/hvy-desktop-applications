@@ -1462,11 +1462,6 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
         })
 }
 
-/// A queued selection (started once the page loads) is pending as one started with inspect is: closing the window ends it.
-fn integration_extraction_starts_selection(extraction: &serde_json::Value) -> bool {
-    extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target")
-}
-
 fn integration_extraction_script(extraction: &serde_json::Value) -> String {
     if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
         let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
@@ -1539,7 +1534,6 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
                         .map_err(|error| AppError::Message(error.to_string()))?;
                 } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
-                    if integration_extraction_starts_selection(&extraction) { action_mode_pending.store(true, Ordering::SeqCst); }
                     content.eval(integration_extraction_script(&extraction)).map_err(|error| AppError::Message(error.to_string()))?;
                 }
             } else {
@@ -1633,7 +1627,6 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
-                        if integration_extraction_starts_selection(&extraction) { page_load_action_mode.store(true, Ordering::SeqCst); }
                         let script = integration_extraction_script(&extraction);
                         let _ = window.eval(&script);
                       }
@@ -1912,11 +1905,12 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let destroyed_profile_id = profile_id.clone();
         native_window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                // Every close is reported: whatever was waiting on this window ends, not only a selection.
+                let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
+                    "kind": "integration-browser-closed",
+                    "profileId": destroyed_profile_id,
+                }));
                 if destroyed_action_mode.swap(false, Ordering::SeqCst) {
-                    let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
-                        "kind": "integration-browser-closed",
-                        "profileId": destroyed_profile_id,
-                    }));
                     if let Some(main_window) = menu_app.get_webview_window("main") {
                         let _ = raise_integration_window(&main_window.as_ref().window());
                     }

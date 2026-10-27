@@ -75,7 +75,7 @@ export interface CollectionSite {
 export interface CollectionDefinition {
   capabilityId: string;
   name: string;
-  /** What one item is called when setting up a site, such as "job" ("Point at the job rows"). Defaults to "item". */
+  /** What one item is called when setting up a site, such as "job" ("Pick an example job row"). Defaults to "item". */
   itemName?: string;
   fields: CollectionField[];
   startPages: StartPage[];

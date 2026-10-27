@@ -4,11 +4,12 @@ import { beginDocumentKeyMigration, commitDocumentKeyMigration, finalizeDocument
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { findFileInWorkspaces, state } from './state';
-import { applyAppColorTheme, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
+import { applyAppColorTheme, handlers, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { adoptIntoSiteSetup, endSiteSetup, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
+import { IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 import { openDocumentKeyFileDialog } from './backend';
 import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, preserveStoredDocumentKey, reloadDocumentKeys, renameStoredDocumentKey, reviewDocumentKeyImports, serializeDocumentKeyFile } from './documentKeys';
@@ -35,6 +36,9 @@ async function openDocumentNamesUsingKey(keyId: string): Promise<string[]> {
   }
   return [...new Set(names)];
 }
+
+/** How long the Integrations manager waits for the page to answer a background request, as the web capability runtime does. */
+const INTEGRATION_PAGE_REQUEST_TIMEOUT_MS = 60_000;
 
 function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'): string {
   if (destination === 'msn') return 'MSN image test';
@@ -185,6 +189,55 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const integrationId = state.integrationRegistry.integrations.find((integration) => integration.pages.some((candidate) => candidate.id === page.id))?.id;
       await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name, integrationId, page.id);
     }
+  };
+  /**
+   * Asks the integration page for something it answers (a preview, its structured data sources, a ready check test),
+   * as the web capability runtime does: the answer comes back with the request's id, and closing the browser, or no
+   * answer in time, fails it. `send` puts the id in the request's context.
+   */
+  const requestFromIntegrationPage = (profileId: string, kinds: string[], send: (requestId: string) => Promise<unknown>) =>
+    requestFromBrowser<Record<string, unknown>>({
+      profileId,
+      accepts: (result) => kinds.includes(String(result.kind)),
+      answer: (result) => result,
+      timeoutMs: INTEGRATION_PAGE_REQUEST_TIMEOUT_MS,
+      timeoutMessage: 'The page didn’t answer in time.',
+    }, send);
+  /** Why a request of the page failed: closing the browser isn't an error, only the end of what was waiting on it. */
+  const integrationPageRequestFailed = (error: unknown, status: string): string | null => {
+    if (error instanceof IntegrationBrowserClosedError) {
+      state.status = 'Integration browser closed';
+      return null;
+    }
+    state.status = status;
+    return error instanceof Error ? error.message : String(error);
+  };
+  /** Runs a record type's extraction on its page (opening it if the browser is closed) and waits for the records. */
+  const extractOnIntegrationActionPage = (extraction: { context: Record<string, unknown> } & Record<string, unknown>) =>
+    requestFromIntegrationPage(state.selectedIntegrationProfileId, ['integration-extraction'], async (requestId) => {
+      const request = { ...extraction, context: { ...extraction.context, browserRequestId: requestId } };
+      if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
+        await reopenIntegrationActionPage(request, false);
+        return;
+      }
+      try {
+        await controlIntegrationBrowser('extract-pattern', state.selectedIntegrationProfileId, request);
+      } catch (error) {
+        if (!integrationBrowserUnavailable(error)) throw error;
+        await reopenIntegrationActionPage(request, false);
+      }
+    });
+  /** What every extraction's answer carries: the confidence it used, and whether the page was ready (said when not). */
+  const integrationActionPageReady = (result: Record<string, unknown>): boolean => {
+    if (result.status === 'not-ready') {
+      state.integrationActionFetchError = typeof result.message === 'string' ? result.message : 'The expected page is not ready.';
+      state.status = 'Page is not ready';
+      void controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+      return false;
+    }
+    state.integrationActionFetchError = null;
+    if (typeof result.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, result.minimumConfidence));
+    return true;
   };
   const integrationPageContext = (integrationId: string, pageId: string) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
@@ -670,13 +723,23 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationStructuredSourceError = null;
     state.integrationStructuredSourcePageId = pageId;
     rerender({ preserveMountedDocument: true });
-    void runBusy(`Looking for structured data sources on ${page.name}...`, async () => {
-      const context = { integrationId, pageId };
+    state.status = `Looking for structured data sources on ${page.name}...`;
+    rerender({ preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-source-discovery'], async (requestId) => {
+      const context = { integrationId, pageId, browserRequestId: requestId };
       if (await isIntegrationBrowserOpen(profile.id)) await controlIntegrationBrowser('discover-sources', profile.id, context);
       else await openPageForStructuredSource(page, profile, { kind: 'source-discovery', context });
-    }, { preserveMountedDocument: true }).catch((error) => {
+    }).then(async (result) => {
+      state.integrationStructuredSourceError = null;
+      state.integrationStructuredSources = (result.sources as typeof state.integrationStructuredSources | undefined) ?? [];
+      state.status = state.integrationStructuredSources.length
+        ? `Found ${state.integrationStructuredSources.length} structured data source${state.integrationStructuredSources.length === 1 ? '' : 's'}`
+        : 'No structured data sources found';
+      await controlIntegrationBrowser('focus-main', profile.id);
+    }, (error: unknown) => {
+      state.integrationStructuredSourceError = integrationPageRequestFailed(error, 'Looking for structured data sources failed');
+    }).finally(() => {
       state.integrationStructuredSourcePending = false;
-      state.integrationStructuredSourceError = error instanceof Error ? error.message : String(error);
       rerender({ preserveMountedDocument: true });
     });
   },
@@ -702,14 +765,29 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationStructuredSourcePending = true;
     state.integrationStructuredSourceError = null;
     rerender({ preserveMountedDocument: true });
-    void runBusy(`Fetching ${source.name}...`, async () => {
+    state.status = `Fetching ${source.name}...`;
+    rerender({ preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-structured-result', 'integration-structured-error'], async (requestId) => {
       const request = { kind: source.kind, url: source.url };
-      const context = { integrationId, pageId, sourceId, sourceName: source.name };
+      const context = { integrationId, pageId, sourceId, sourceName: source.name, browserRequestId: requestId };
       if (await isIntegrationBrowserOpen(profile.id)) await controlIntegrationBrowser('fetch-source', profile.id, { source: request, context });
       else await openPageForStructuredSource(page, profile, { kind: 'source-fetch', source: request, context });
-    }, { preserveMountedDocument: true }).catch((error) => {
+    }).then(async (result) => {
+      if (result.kind === 'integration-structured-error') {
+        state.integrationStructuredSourceError = String(result.message ?? 'The structured source could not be fetched.');
+        state.status = 'Structured data fetch failed';
+      } else {
+        state.integrationStructuredSourceError = null;
+        state.integrationStructuredResultName = source.name;
+        state.integrationStructuredResult = result.value;
+        state.integrationStructuredResultOpen = true;
+        state.status = `Fetched ${source.name}`;
+      }
+      await controlIntegrationBrowser('focus-main', profile.id);
+    }, (error: unknown) => {
+      state.integrationStructuredSourceError = integrationPageRequestFailed(error, 'Structured data fetch failed');
+    }).finally(() => {
       state.integrationStructuredSourcePending = false;
-      state.integrationStructuredSourceError = error instanceof Error ? error.message : String(error);
       rerender({ preserveMountedDocument: true });
     });
   },
@@ -1210,20 +1288,20 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       expectedOrigin: new URL(page.url).origin,
       expectedOrigins: integrationPageExpectedOrigins(pageWithDraft),
     };
-    const validation = { kind: 'ready-check-validation', context, payload: { readyChecks: structuredClone(draft) } };
     const targetUrl = draft.urlMode === 'strict-url' ? draft.urlValue : page.url;
     state.integrationReadyCheckValidationPending = true;
     state.integrationReadyCheckValidationResult = null;
+    state.status = `Reloading ${page.name} and testing ready checks...`;
     rerender({ preserveMountedDocument: true });
-    void runBusy(`Reloading ${page.name} and testing ready checks...`, async () => {
-      try {
-        await openIntegrationDefinitionPage(pageWithDraft, profile, validation, true, targetUrl);
-      } catch (error) {
-        state.integrationReadyCheckValidationPending = false;
-        throw error;
-      }
-      state.status = `Testing ${page.name} ready checks`;
-    }, { preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-ready-check-validation'], async (requestId) => {
+      const validation = { kind: 'ready-check-validation', context: { ...context, browserRequestId: requestId }, payload: { readyChecks: structuredClone(draft) } };
+      await openIntegrationDefinitionPage(pageWithDraft, profile, validation, true, targetUrl);
+    }).then((result) => handlers.completeIntegrationReadyCheckValidation(result), (error: unknown) => {
+      state.error = integrationPageRequestFailed(error, 'Testing ready checks failed');
+    }).finally(() => {
+      state.integrationReadyCheckValidationPending = false;
+      rerender({ preserveMountedDocument: true });
+    });
   },
   completeIntegrationReadyCheckValidation: (value) => {
     if (!value || typeof value !== 'object') return;
@@ -1478,27 +1556,31 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.inspectionPrivacyRules = [];
     state.status = `Editing ${action.name}`;
     rerender({ preserveMountedDocument: true });
-    void (async () => {
+    // The page opens behind the builder, and checks the saved examples against it once loaded.
+    void requestFromIntegrationPage(profile.id, ['integration-extraction'], async (requestId) => {
+      const liveExampleExtraction = {
+        pattern: { ...actionPatternPayload(action), scrollPage: action.scrollPage !== false },
+        context: { mode: 'examples', browserRequestId: requestId, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
+        foreground: false,
+      };
       try {
-        const liveExampleExtraction = {
-          pattern: { ...actionPatternPayload(action), scrollPage: action.scrollPage !== false },
-          context: { mode: 'examples', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
-          foreground: false,
-        };
         if (page.id === 'gmail' || page.id === 'google-calendar') {
           await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name);
         } else {
           await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name, integration.id, page.id);
         }
-        state.integrationActionEditPageLoading = false;
         state.status = `Ready to edit ${action.name}`;
-        rerender({ preserveMountedDocument: true });
-      } catch (error) {
+      } finally {
         state.integrationActionEditPageLoading = false;
-        state.error = error instanceof Error ? error.message : String(error);
         rerender({ preserveMountedDocument: true });
       }
-    })();
+    }).then((result) => {
+      if (!integrationActionPageReady(result)) return;
+      state.integrationActionLiveExampleRecords = (result.records as unknown[] | undefined) ?? [];
+      state.status = `Validated ${state.integrationActionLiveExampleRecords.filter(Boolean).length} live examples`;
+    }, (error: unknown) => {
+      state.error = integrationPageRequestFailed(error, `Couldn’t check ${action.name}’s examples`);
+    }).finally(() => rerender({ preserveMountedDocument: true }));
   },
   closeIntegrationActionBuilder: () => {
     if (state.integrationActionSelectionPending) {
@@ -1722,23 +1804,21 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
       foreground: false,
     };
-    void (async () => {
-      if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
-        await reopenIntegrationActionPage(extraction, false);
-        return;
-      }
-      try {
-        await controlIntegrationBrowser('extract-pattern', state.selectedIntegrationProfileId, extraction);
-      } catch (error) {
-        if (!integrationBrowserUnavailable(error)) throw error;
-        await reopenIntegrationActionPage(extraction, false);
-      }
-    })().catch((error) => {
-        state.integrationActionPreviewPending = false;
-        state.error = error instanceof Error ? error.message : String(error);
-        state.status = 'Review extraction failed';
-        rerender({ preserveMountedDocument: true });
-      });
+    void extractOnIntegrationActionPage(extraction).then(async (result) => {
+      if (!integrationActionPageReady(result)) return;
+      state.integrationActionPreviewRecords = (result.records as unknown[] | undefined) ?? [];
+      state.integrationActionPreviewDiagnostics = result.diagnostics ?? null;
+      state.integrationActionBuilderStep = 'preview';
+      state.integrationActionBuilderOpen = true;
+      state.status = `Extracted ${state.integrationActionPreviewRecords.length} matching items`;
+      rerender({ preserveMountedDocument: true });
+      await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+    }, (error: unknown) => {
+      state.error = integrationPageRequestFailed(error, 'Review extraction failed');
+    }).finally(() => {
+      state.integrationActionPreviewPending = false;
+      rerender({ preserveMountedDocument: true });
+    });
   },
   continueIntegrationActionBuilder: () => {
     state.integrationActionBuilderStep = 'save';

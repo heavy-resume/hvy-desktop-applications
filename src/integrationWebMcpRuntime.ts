@@ -3,35 +3,33 @@ import { approvalMatchesDescriptor, type IntegrationWebMcpApproval, type Integra
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationPage } from './integrationBrowser';
 import { enqueueWebCapabilityForProfile } from './webCapabilityQueue';
 import { disableIntegrationWebMcpApproval } from './integrationWebMcpApprovalStore';
+import { answerBrowserRequest, failBrowserRequest, waitForBrowserAnswer } from './browserRequests';
 
-type PendingOperation = {
-  kind: 'tools' | 'result';
-  resolve(value: unknown): void;
-  reject(error: Error): void;
-  timeout: ReturnType<typeof setTimeout>;
-  capabilityId?: string;
-  cleanupAbort?: () => void;
-};
-
-const pending = new Map<string, PendingOperation>();
+type OperationKind = 'tools' | 'result';
 const TIMEOUT_MS = 60_000;
 
-function waitFor<T>(requestId: string, kind: PendingOperation['kind'], profileId?: string, capabilityId?: string, signal?: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pending.delete(requestId);
-      signal?.removeEventListener('abort', abort);
-      if (profileId) void controlIntegrationBrowser('cancel-webmcp-tool', profileId, { requestId }).catch(() => undefined);
-      reject(new Error('The WebMCP operation timed out while waiting for the page.'));
-    }, TIMEOUT_MS);
-    const abort = () => {
-      if (!pending.has(requestId)) return;
-      if (profileId) void controlIntegrationBrowser('cancel-webmcp-tool', profileId, { requestId }).catch(() => undefined);
-      rejectPending(requestId, signal?.reason instanceof Error ? signal.reason : new Error('The WebMCP operation was cancelled.'));
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-    pending.set(requestId, { kind, resolve: (value) => resolve(value as T), reject, timeout, capabilityId, cleanupAbort: () => signal?.removeEventListener('abort', abort) });
-    if (signal?.aborted) abort();
+function waitFor<T>(requestId: string, kind: OperationKind, profileId: string, capabilityId?: string, signal?: AbortSignal): Promise<T> {
+  return waitForBrowserAnswer<T>(requestId, {
+    profileId,
+    accepts: (result) => String(result.kind).startsWith('integration-webmcp-'),
+    answer: (result) => {
+      if (result.kind === 'integration-webmcp-error') {
+        if (result.code === 'WebMcpDescriptorChangedError' && capabilityId) disableIntegrationWebMcpApproval(capabilityId);
+        throw new Error(typeof result.message === 'string' ? result.message : 'The WebMCP operation failed.');
+      }
+      if (kind === 'tools' && result.kind === 'integration-webmcp-tools') return (Array.isArray(result.tools) ? result.tools : []) as T;
+      if (kind === 'result' && result.kind === 'integration-webmcp-result') {
+        const descriptor = result.descriptor as IntegrationWebMcpToolDescriptor;
+        return { value: result.value, isJson: result.isJson === true, descriptor } as T;
+      }
+      throw new Error('The page returned an unexpected WebMCP response.');
+    },
+    timeoutMs: TIMEOUT_MS,
+    timeoutMessage: 'The WebMCP operation timed out while waiting for the page.',
+    signal,
+    abortMessage: 'The WebMCP operation was cancelled.',
+    // Only an invocation runs on the page until it is cancelled.
+    onStop: kind === 'result' ? () => void controlIntegrationBrowser('cancel-webmcp-tool', profileId, { requestId }).catch(() => undefined) : undefined,
   });
 }
 
@@ -59,9 +57,9 @@ export function discoverIntegrationWebMcpTools(
 ): Promise<IntegrationWebMcpToolDescriptor[]> {
   return enqueueWebCapabilityForProfile(profile.id, async () => {
     const requestId = crypto.randomUUID();
-    const result = waitFor<IntegrationWebMcpToolDescriptor[]>(requestId, 'tools');
+    const result = waitFor<IntegrationWebMcpToolDescriptor[]>(requestId, 'tools', profile.id);
     try { await dispatch(page, profile, 'discover-webmcp-tools', { requestId, fromOrigins: page.allowedOrigins, focusMainOnResult: true }, true, false); }
-    catch (error) { rejectPending(requestId, error); }
+    catch (error) { failBrowserRequest(requestId, error); }
     return result;
   });
 }
@@ -89,41 +87,14 @@ export function invokeIntegrationWebMcpTool(
         arguments: args,
         fromOrigins: page.allowedOrigins,
       }, openIfClosed, foreground, approval.integrationId);
-    } catch (error) { rejectPending(requestId, error); }
+    } catch (error) { failBrowserRequest(requestId, error); }
     return result;
   });
 }
 
-function rejectPending(requestId: string, error: unknown): void {
-  const operation = pending.get(requestId);
-  if (!operation) return;
-  clearTimeout(operation.timeout);
-  operation.cleanupAbort?.();
-  pending.delete(requestId);
-  operation.reject(error instanceof Error ? error : new Error(String(error)));
-}
-
 export function handleIntegrationWebMcpResult(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const result = value as Record<string, unknown>;
-  if (typeof result.requestId !== 'string' || !String(result.kind).startsWith('integration-webmcp-')) return false;
-  const operation = pending.get(result.requestId);
-  if (!operation) return false;
-  clearTimeout(operation.timeout);
-  operation.cleanupAbort?.();
-  pending.delete(result.requestId);
-  if (result.kind === 'integration-webmcp-error') {
-    if (result.code === 'WebMcpDescriptorChangedError' && operation.capabilityId) disableIntegrationWebMcpApproval(operation.capabilityId);
-    operation.reject(new Error(typeof result.message === 'string' ? result.message : 'The WebMCP operation failed.'));
-  } else if (operation.kind === 'tools' && result.kind === 'integration-webmcp-tools') {
-    operation.resolve(Array.isArray(result.tools) ? result.tools : []);
-  } else if (operation.kind === 'result' && result.kind === 'integration-webmcp-result') {
-    const descriptor = result.descriptor as IntegrationWebMcpToolDescriptor;
-    operation.resolve({ value: result.value, isJson: result.isJson === true, descriptor });
-  } else {
-    operation.reject(new Error('The page returned an unexpected WebMCP response.'));
-  }
-  return true;
+  return answerBrowserRequest(value);
 }
 
 export function assertLiveWebMcpDescriptor(approval: IntegrationWebMcpApproval, value: unknown): unknown {

@@ -101,24 +101,24 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         <div class="site-setup-step-actions">${actions}</div>
       </div>
     </li>`;
-  const rowsStep = step(1, `Point at the ${item} rows`, Boolean(rows), false,
-    `On the list page, pick one ${escapeHtml(item)} row, then assign what it shows to a field. <strong>Highlight matches</strong> checks it finds the others. The link to each ${escapeHtml(item)} comes from the title.`,
+  const rowsStep = step(1, `Pick an example ${item} row`, Boolean(rows), false,
+    `On the list page, pick the box around one ${escapeHtml(item)}, with everything you want from it inside, then assign what it shows to fields. <strong>Highlight matches</strong> checks it finds the other rows. The link to each ${escapeHtml(item)} comes from the title.`,
     rows ? `Reads: ${escapeHtml(fieldLabels(rows))} · ${rows.pattern!.parents.length} ${rows.pattern!.parents.length === 1 ? 'example' : 'examples'}` : '',
-    rows ? button('Redo rows', 'rows') : button('Point at rows', 'rows', true));
-  const nextStep = step(2, 'Point at Next', Boolean(next), true,
+    rows ? button('Edit examples', 'rows') : button('Pick an example', 'rows', true));
+  const nextStep = step(2, 'Record Next', Boolean(next), true,
     'If the list has more pages, record clicking its Next link. Skip this when everything fits on one page.',
     next ? `Recorded: ${escapeHtml(next.name)}` : '',
     next && listPage && list
       ? `<button type="button" class="hvy-galaxy-button" data-action="request-delete-integration-page-command" data-integration-id="${escapeAttr(list.id)}" data-page-id="${escapeAttr(listPage.id)}" data-command-id="${escapeAttr(next.id)}">Remove</button>`
       : button('Record Next', 'next', false, !rows));
   const other = button(`Use a different ${item}…`, 'other-item-page', false, !rows);
-  const itemStep = step(3, `Point at one ${item}'s page`, Boolean(posting), false,
+  const itemStep = step(3, `Pick an example ${item} page`, Boolean(posting), false,
     `Galaxy opens the first ${escapeHtml(item)} from the list. Pick the whole posting, then assign its fields.`,
     posting && itemPage ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${escapeHtml(shortAddress(itemPage.url))}` : itemPage ? `Page: ${escapeHtml(shortAddress(itemPage.url))}` : '',
     posting
-      ? `${button('Redo page', 'item-page')}${other}`
+      ? `${button('Edit example', 'item-page')}${other}`
       : itemPage
-        ? `${button(`Point at this ${item}'s page`, 'item-page', true)}${other}`
+        ? `${button(`Pick the ${item} on this page`, 'item-page', true)}${other}`
         : `${button(`Open the first ${item}`, 'open-item-page', Boolean(rows), !rows)}${other}`);
   const profiles = state.integrationRegistry.profiles;
   return `

@@ -19,6 +19,7 @@ import {
   executeWebRecordsCapability,
   handleWebCapabilityIntegrationResult,
 } from './webCapabilityRuntime';
+import { browserClosed } from './browserRequests';
 
 const config = {
   schemaVersion: 1,
@@ -67,14 +68,14 @@ describe('web capability operation timeouts', () => {
     vi.useFakeTimers();
     const operation = executeWebRecordsCapability(config, executionContext(true));
     await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
-    const extraction = openIntegrationPage.mock.calls[0][5] as { context: { webCapabilityRequestId: string } };
+    const extraction = openIntegrationPage.mock.calls[0][5] as { context: { browserRequestId: string } };
 
     expect(extraction).toMatchObject({ pattern: { recordLimit: 25, scrollPage: true } });
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(handleWebCapabilityIntegrationResult({
       kind: 'integration-extraction',
-      context: { webCapabilityRequestId: extraction.context.webCapabilityRequestId },
+      context: { browserRequestId: extraction.context.browserRequestId },
       records: [{ value: 'signed in' }],
     })).toBe(true);
 
@@ -92,17 +93,28 @@ describe('web capability operation timeouts', () => {
     await rejection;
   });
 
+  it('fails a fetch waiting on a browser window that closes, and leaves other profiles\' alone', async () => {
+    const operation = executeWebRecordsCapability(config, executionContext(true));
+    await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
+    const rejection = expect(operation).rejects.toThrow('The browser window was closed.');
+
+    browserClosed('another-profile');
+    browserClosed(profile.id);
+
+    await rejection;
+  });
+
   it('reports a failed ready check instead of treating the interstitial as an empty result', async () => {
     const operation = executeWebRecordsCapability(config, executionContext(true));
     await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
-    const extraction = openIntegrationPage.mock.calls[0][5] as { context: { webCapabilityRequestId: string } };
+    const extraction = openIntegrationPage.mock.calls[0][5] as { context: { browserRequestId: string } };
     const rejection = expect(operation).rejects.toThrow('The browser is not at the exact configured URL.');
 
     expect(handleWebCapabilityIntegrationResult({
       kind: 'integration-extraction',
       status: 'not-ready',
       message: 'The browser is not at the exact configured URL.',
-      context: { webCapabilityRequestId: extraction.context.webCapabilityRequestId },
+      context: { browserRequestId: extraction.context.browserRequestId },
       records: [],
     })).toBe(true);
 
@@ -172,7 +184,7 @@ describe('live integration page reuse', () => {
   it.each([true, false])('checks the running page before fetching (ready=%s)', async (ready) => {
     isIntegrationBrowserOpen.mockResolvedValue(true);
     controlIntegrationBrowser.mockImplementation(async (command, _profileId, payload) => {
-      const data = payload as { context: { webCapabilityRequestId: string } };
+      const data = payload as { context: { browserRequestId: string } };
       if (command === 'check-page-ready') {
         handleWebCapabilityIntegrationResult({ kind: 'integration-page-readiness', context: data.context, ready });
       } else if (command === 'extract-pattern') {
@@ -186,7 +198,7 @@ describe('live integration page reuse', () => {
       expect(controlIntegrationBrowser).toHaveBeenCalledWith('extract-pattern', profile.id, expect.objectContaining({ foreground: false }));
     } else {
       await vi.waitFor(() => expect(openIntegrationPage).toHaveBeenCalledOnce());
-      const extraction = openIntegrationPage.mock.calls[0][5] as { context: { webCapabilityRequestId: string } };
+      const extraction = openIntegrationPage.mock.calls[0][5] as { context: { browserRequestId: string } };
       handleWebCapabilityIntegrationResult({ kind: 'integration-extraction', context: extraction.context, records: [] });
       await expect(operation).resolves.toEqual({ records: [] });
       expect(controlIntegrationBrowser).not.toHaveBeenCalledWith('extract-pattern', expect.anything(), expect.anything());

@@ -1389,7 +1389,7 @@ function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefiniti
       result.append(paragraph(`Reads with: ${recognized}`, 'hvy-web-page-hint'));
       action = () => saveCollection(ctx, { startPages: withPage(currentCollection(ctx, collection), url, values.read()) });
     } else if (url && canSetUpSites()) {
-      result.append(paragraph(`This site isn’t set up yet. Next, point at where the ${items(now)} are on its page.`, 'hvy-web-page-hint'));
+      result.append(paragraph(`This site isn’t set up yet. Next, pick an example of one of its ${items(now)}.`, 'hvy-web-page-hint'));
       submit.textContent = 'Set up this site';
       action = () => {
         close();
