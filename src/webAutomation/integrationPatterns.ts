@@ -20,12 +20,9 @@ function scopeFor(page: IntegrationPageDefinition): SitePatternDefinition['appli
   return [{ target: 'page', host: url.hostname, path: `${folder}*` }];
 }
 
-function sitePattern(integration: IntegrationDefinition, page: IntegrationPageDefinition, action: IntegrationActionDefinition): SitePatternDefinition | null {
+function sitePattern(integration: IntegrationDefinition, page: IntegrationPageDefinition, action: IntegrationActionDefinition, listing: boolean): SitePatternDefinition | null {
   const pattern = actionPatternPayload(action);
   if (!pattern || !action.pattern) return null;
-  // A record picked from several examples repeats on its page, as rows on a list page do; one picked once is a page's
-  // own record, such as a job posting.
-  const listing = action.pattern.parents.length > 1;
   const fields: SitePatternField[] = action.pattern.fields.map((field) => ({ id: field.label, kind: 'text' }));
   const pageCommands = (page.commands ?? []).filter((command) => command.scope === 'page');
   const next = pageCommands.find((command) => /^next\b/i.test(command.name.trim()));
@@ -44,11 +41,15 @@ function sitePattern(integration: IntegrationDefinition, page: IntegrationPageDe
   };
 }
 
-/** Integrations' record types as site patterns: how a site setup made by pointing is saved. */
-export function sitePatternsFromIntegrations(registry: IntegrationRegistry): SitePatternDefinition[] {
+/**
+ * Integrations' record types as site patterns: how a site setup made by pointing is saved. The list pages' record types
+ * (`listIds`) read rows; the others read one item's own page. One example is enough for either: the inspector's
+ * pattern finds every row like it.
+ */
+export function sitePatternsFromIntegrations(registry: IntegrationRegistry, listIds: ReadonlySet<string>): SitePatternDefinition[] {
   return registry.integrations.flatMap((integration) => integration.actions.flatMap((action) => {
     const page = integration.pages.find((candidate) => action.pageIds.includes(candidate.id));
-    const pattern = page ? sitePattern(integration, page, action) : null;
+    const pattern = page ? sitePattern(integration, page, action, listIds.has(integration.id)) : null;
     return pattern ? [pattern] : [];
   }));
 }

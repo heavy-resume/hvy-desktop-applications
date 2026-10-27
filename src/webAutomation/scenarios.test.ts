@@ -18,6 +18,7 @@ import {
   atsListingPattern,
   atsListingWithFramePattern,
   listingCollection,
+  LISTING_FIELDS,
   CAREERS_ORIGIN,
   INITRODE_HOSTED_ORIGIN,
   INITRODE_ORIGIN,
@@ -115,8 +116,27 @@ describe('mock integration: job search flow', () => {
     const boards = listingCollection([`${UNKNOWN_ORIGIN}/openings/7`]);
     await signedInFlow(boards);
     const run = await flow!.collect(boards);
-    expect(run).toMatchObject({ status: 'done', collected: 0, problems: 1, startPageProblems: { 'start-1': 'No pattern for jobs.unknown.test.' } });
+    expect(run).toMatchObject({ status: 'done', collected: 0, problems: 1, startPageProblems: { 'start-1': 'No site setup reads this page (jobs.unknown.test).' } });
+    // The summary's "with problems" lists it, and why.
+    expect(run.problemPages).toEqual([{ kind: 'start-page', url: `${UNKNOWN_ORIGIN}/openings/7`, title: null, problem: 'No site setup reads this page (jobs.unknown.test).' }]);
     expect(flow!.item(`${UNKNOWN_ORIGIN}/openings/7`)).toBeNull();
+  });
+
+  it('4b. a list setup that doesn\'t match: the start page read as one job\'s page is its problem, and no job is written', async () => {
+    // The rows set up with one example picked are one page's record, not a list: the list page has no list pattern, and
+    // reading it as one job's page finds the first row and no description.
+    const { linkFieldId: _link, paginationCommandId: _next, ...rows } = atsListingPattern;
+    const boards = listingCollection([ACME], {
+      patterns: [{ ...rows, role: 'detail' }, atsDetailPattern],
+      fields: LISTING_FIELDS.map((field) => (field.id === 'description' ? { ...field, required: true } : field)),
+    });
+    await signedInFlow(boards);
+    const run = await flow!.collect(boards);
+    expect(run).toMatchObject({ status: 'done', collected: 0, problems: 1 });
+    const problem = 'It didn’t match its site setup’s list, so it was read as one item’s page: "Description" is missing.';
+    expect(run.problemPages).toEqual([{ kind: 'start-page', url: ACME, title: null, problem }]);
+    expect(run.startPageProblems).toEqual({ 'start-1': problem });
+    expect(flow!.item(ACME)).toBeNull();
   });
 
   it('5. challenge: the run pauses for attention, the user solves it, and the run resumes', async () => {
@@ -355,6 +375,9 @@ describe('mock integration: job search flow', () => {
     await signedInFlow(mixed);
     const before = await flow!.collect(mixed);
     expect(before).toMatchObject({ status: 'done', collected: 0, problems: 3 });
+    // Each problem the summary counts is listed with why.
+    expect(before.problemPages).toHaveLength(3);
+    expect(before.problemPages.every((page) => page.problem.length > 0)).toBe(true);
 
     const pasted = readSiteSetupText(siteSetupText([
       { id: 'pane', name: 'Side pane board', from: { name: 'Publisher', version: 1 }, patterns: [sidePaneListingPattern, sidePaneDetailPattern] },
@@ -364,7 +387,7 @@ describe('mock integration: job search flow', () => {
     expect(after).toMatchObject({ status: 'done', collected: 2 });
     expect(flow!.item(`${SIDE_PANE_ORIGIN}/view/1`)).toMatchObject({ state: 'ok', provenance: { patternId: 'pane-detail' } });
     expect(flow!.print()).toContain(`skip out of scope ${INITRODE_HOSTED_ORIGIN}/Portal/Job.aspx?id=11`);
-    expect(after.startPageProblems).toEqual({ 'start-1': 'No pattern for jobs.unknown.test.' });
+    expect(after.startPageProblems).toEqual({ 'start-1': 'No site setup reads this page (jobs.unknown.test).' });
   });
 
   it('20. test on another site: a pattern is checked on a second customer before relying on it', async () => {

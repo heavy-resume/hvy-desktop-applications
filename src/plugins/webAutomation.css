@@ -207,3 +207,39 @@
   overflow: auto;
   white-space: pre;
 }
+
+/* A run's "with problems" count: opens the list of them. */
+.hvy-web-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hvy-link-color, #2f6968);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The pages a run couldn't read, in its problems dialog: long after a run on a changed site, so it scrolls. */
+.hvy-web-problems {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.hvy-web-problem {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.6rem;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+/* A problem page's address, in the theme's link colors (the dialog is outside the document). */
+.hvy-web-problem-link {
+  color: var(--hvy-link-color, #2f6968);
+}
+
+.hvy-web-problem-link:hover {
+  color: var(--hvy-link-hover-color, var(--hvy-link-color, #2f6968));
+}

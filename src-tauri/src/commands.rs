@@ -471,9 +471,12 @@ fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id
         object.insert("profileId".into(), serde_json::Value::String(profile_id.into()));
     }
     let is_background = integration_result_is_background(&result);
-    action_mode.store(false, Ordering::SeqCst);
-    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
-        let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+    // A background result (such as the scan on each page load) doesn't end a selection the person is making.
+    if !is_background {
+        action_mode.store(false, Ordering::SeqCst);
+        if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+            let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+        }
     }
     let _ = app.emit("integration-inspection-result", result);
     if !is_background {
@@ -1459,6 +1462,11 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
         })
 }
 
+/// A queued selection (started once the page loads) is pending as one started with inspect is: closing the window ends it.
+fn integration_extraction_starts_selection(extraction: &serde_json::Value) -> bool {
+    extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target")
+}
+
 fn integration_extraction_script(extraction: &serde_json::Value) -> String {
     if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
         let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
@@ -1531,6 +1539,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
                         .map_err(|error| AppError::Message(error.to_string()))?;
                 } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
+                    if integration_extraction_starts_selection(&extraction) { action_mode_pending.store(true, Ordering::SeqCst); }
                     content.eval(integration_extraction_script(&extraction)).map_err(|error| AppError::Message(error.to_string()))?;
                 }
             } else {
@@ -1624,6 +1633,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
+                        if integration_extraction_starts_selection(&extraction) { page_load_action_mode.store(true, Ordering::SeqCst); }
                         let script = integration_extraction_script(&extraction);
                         let _ = window.eval(&script);
                       }
@@ -1712,9 +1722,11 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                             object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
                         }
                         let is_background_result = integration_result_is_background(&result);
-                        navigation_action_mode.store(false, Ordering::SeqCst);
-                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                            let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+                        if !is_background_result {
+                            navigation_action_mode.store(false, Ordering::SeqCst);
+                            if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
+                                let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+                            }
                         }
                         let _ = integration_app.emit("integration-inspection-result", result);
                         if !is_background_result {

@@ -101,9 +101,9 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         <div class="site-setup-step-actions">${actions}</div>
       </div>
     </li>`;
-  const rowsStep = step(1, `Point at two ${item} rows`, Boolean(rows), false,
-    `On the list page, pick two ${escapeHtml(item)} rows, then assign what each shows to a field. The link to each ${escapeHtml(item)} comes from the title.`,
-    rows ? `Reads: ${escapeHtml(fieldLabels(rows))} · ${rows.pattern!.parents.length} examples` : '',
+  const rowsStep = step(1, `Point at the ${item} rows`, Boolean(rows), false,
+    `On the list page, pick one ${escapeHtml(item)} row, then assign what it shows to a field. <strong>Highlight matches</strong> checks it finds the others. The link to each ${escapeHtml(item)} comes from the title.`,
+    rows ? `Reads: ${escapeHtml(fieldLabels(rows))} · ${rows.pattern!.parents.length} ${rows.pattern!.parents.length === 1 ? 'example' : 'examples'}` : '',
     rows ? button('Redo rows', 'rows') : button('Point at rows', 'rows', true));
   const nextStep = step(2, 'Point at Next', Boolean(next), true,
     'If the list has more pages, record clicking its Next link. Skip this when everything fits on one page.',

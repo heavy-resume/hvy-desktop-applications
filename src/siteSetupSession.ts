@@ -39,9 +39,8 @@ function sessionIntegration(id: string | null | undefined): IntegrationDefinitio
 function startSiteSetup(request: SiteSetupRequest): void {
   endSiteSetup();
   const item = capitalized(itemName(request));
-  const existing = setupIntegrations(request.patterns);
+  const { integrations: existing, list: previousList } = setupIntegrations(request.patterns);
   // Set up again on another place it reads: the list page is this place, keeping what was picked on the other.
-  const previousList = existing.find((integration) => integration.actions.some((action) => (action.pattern?.parents.length ?? 0) > 1)) ?? null;
   const list = previousList
     ? { ...previousList, pages: previousList.pages.map((page, index) => (index === 0 ? { ...page, url: request.url } : page)) }
     : { ...createCustomPageIntegration(`${item} list`, request.url), siteSetup: true as const };
@@ -67,12 +66,13 @@ function startSiteSetup(request: SiteSetupRequest): void {
 /** Builds (or rebuilds) a page's record type in the existing builder, named for its role, with its page open to pick from. */
 function buildRecordType(integration: IntegrationDefinition, name: string): void {
   state.selectedIntegrationId = integration.id;
-  const opened = handlers.openIntegrationPage(integration.id, integration.pages[0].id);
   const action = integration.actions[0];
   if (action) {
+    // Editing opens the page itself, behind the builder, as Edit does in the Integrations manager.
     handlers.editIntegrationAction(integration.id, action.id);
     return;
   }
+  const opened = handlers.openIntegrationPage(integration.id, integration.pages[0].id);
   handlers.addActionForIntegrationPage(integration.id, integration.pages[0].id);
   state.integrationActionDraftName = name;
   rerender({ preserveMountedDocument: true });
@@ -104,7 +104,7 @@ function setItemPage(integration: IntegrationDefinition): void {
 /** The session's pages as the setup's patterns. */
 function sessionPatterns(session: NonNullable<typeof active>): SitePatternDefinition[] {
   const integrations = state.integrationRegistry.integrations.filter((integration) => session.integrationIds.has(integration.id));
-  return patternsFromSetup(session.request.site.id, integrations);
+  return patternsFromSetup(session.request.site.id, integrations, session.listId);
 }
 
 export type SiteSetupStep = 'rows' | 'next' | 'item-page' | 'open-item-page' | 'other-item-page' | 'done';

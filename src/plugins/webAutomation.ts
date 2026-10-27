@@ -1,6 +1,6 @@
 import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
 import type { HvyPluginContext, HvyPluginFactory, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
-import { readSystemClipboardText } from '../backend';
+import { openExternalUrl, readSystemClipboardText } from '../backend';
 import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
@@ -1511,6 +1511,42 @@ function pageProgressText(progress: StartPageProgress, items: string, needsYou: 
   }
 }
 
+/**
+ * A run's pages with problems, from its summary: each page (a start page by its name, an item by its title from the
+ * list) and why it couldn't be read. Its address opens it in the browser window, signed in as the run was, to look at.
+ */
+function openProblemsDialog(lookup: DocumentAutomationLookup, collection: CollectionDefinition, run: CollectionRunState): void {
+  const count = run.problemPages.length;
+  const { body, row, close } = openModal(`${count} ${count === 1 ? 'page' : 'pages'} with problems`, 'hvy-web-page-dialog wide-dialog');
+  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it.', 'hvy-web-page-hint'));
+  const list = document.createElement('div');
+  list.className = 'hvy-web-problems';
+  for (const problem of run.problemPages) {
+    const startPage = problem.kind === 'start-page' ? collection.startPages.find((page) => page.url === problem.url) : undefined;
+    const entry = document.createElement('div');
+    entry.className = 'hvy-web-problem';
+    const address = document.createElement('a');
+    address.className = 'hvy-web-automation-entry hvy-web-problem-link';
+    address.href = problem.url;
+    address.textContent = shortAddress(problem.url);
+    address.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (!lookup.automation.openLink(problem.url)) void openExternalUrl(problem.url);
+    });
+    entry.append(
+      paragraph(startPage ? `Start page: ${pageName(collection, startPage)}` : problem.title ?? shortAddress(problem.url), 'hvy-web-automation-entry hvy-web-page-name'),
+      address,
+      paragraph(problem.problem, 'hvy-web-error'),
+    );
+    list.append(entry);
+  }
+  body.append(list);
+  const done = button('Close', true);
+  done.addEventListener('click', close);
+  row.append(done);
+  done.focus();
+}
+
 /** Each start page's progress in the latest run that included it. */
 function latestPageProgress(runs: CollectionRunState[]): Record<string, { progress: StartPageProgress; problem: string | null; running: boolean; needsYou: boolean }> {
   const latest: Record<string, { progress: StartPageProgress; problem: string | null; running: boolean; needsYou: boolean }> = {};
@@ -1667,7 +1703,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
       paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-page-hint'),
       ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-page-hint')] : []),
       ...(latest?.problem
-        ? [paragraph('Last run: couldn’t read this page.', 'hvy-web-error')]
+        ? [paragraph(`Last run: couldn’t read this page. ${latest.problem}`, 'hvy-web-error')]
         : latest ? [paragraph(pageProgressText(latest.progress, items(collection), latest.needsYou), latest.needsYou ? 'hvy-web-page-progress hvy-web-page-needs-you' : latest.running ? 'hvy-web-page-progress' : 'hvy-web-page-hint')] : []),
       includeLabel,
     );
@@ -1734,8 +1770,19 @@ const collectionView: HvyPluginFactory = (ctx) => {
     root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPage));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
-    const counts = `${run.collected} new, ${run.skipped} already listed, ${run.problems} with problems`;
-    root.append(status(`${RUN_STATUS[run.status]}: ${counts}.`));
+    const summary = status(`${RUN_STATUS[run.status]}: ${run.collected} new, ${run.skipped} already listed, `);
+    if (run.problemPages.length) {
+      // The pages it couldn't read, and why, in a dialog.
+      const problems = document.createElement('button');
+      problems.type = 'button';
+      problems.className = 'hvy-web-link-button';
+      problems.textContent = `${run.problems} with problems`;
+      problems.addEventListener('click', () => openProblemsDialog(lookup, collection, run));
+      summary.append(problems, '.');
+    } else {
+      summary.append(`${run.problems} with problems.`);
+    }
+    root.append(summary);
     if (run.status === 'running') {
       const stop = button('Stop');
       stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));

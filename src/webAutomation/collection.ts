@@ -75,7 +75,7 @@ export interface CollectionSite {
 export interface CollectionDefinition {
   capabilityId: string;
   name: string;
-  /** What one item is called when setting up a site, such as "job" ("Point at two job rows"). Defaults to "item". */
+  /** What one item is called when setting up a site, such as "job" ("Point at the job rows"). Defaults to "item". */
   itemName?: string;
   fields: CollectionField[];
   startPages: StartPage[];
@@ -120,6 +120,16 @@ export interface StartPageProgress {
   current: string | null;
 }
 
+/** A page a run opened and could not read, and why. */
+export interface CollectionProblem {
+  /** A start page itself, or an item one listed. */
+  kind: 'start-page' | 'item';
+  url: string;
+  /** The item's title, when the list showed one. */
+  title: string | null;
+  problem: string;
+}
+
 export interface CollectionRunState {
   runId: string;
   capabilityId: string;
@@ -131,6 +141,8 @@ export interface CollectionRunState {
   problems: number;
   /** Start pages this run could not read at all, by start page id: a site to set up, not an item. */
   startPageProblems: Record<string, string>;
+  /** Every page this run opened and could not read, and why, in the order it found them: what "with problems" counts. */
+  problemPages: CollectionProblem[];
   /** Each start page's progress, by start page id. */
   startPages: Record<string, StartPageProgress>;
   attention: { workerId: string; url: string; reason: string } | null;
@@ -263,7 +275,7 @@ export class CollectionService {
       resumeAttention: null,
       attentionTurn: Promise.resolve(),
       consumer,
-      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, startPages: {}, attention: null, error: null },
+      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, problemPages: [], startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
     this.deps.emit('collection', `${runId} started: ${definition.name}`, { profileId });
@@ -322,11 +334,12 @@ export class CollectionService {
     await lease.paced(startUrl, () => host.navigate(lease.workerId, startUrl));
     const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease), 'listing');
     if (start.kind !== 'match') {
-      // Not a listing we know: the start page may be one item's own page. If nothing applies, the site needs setting
-      // up; that is the start page's problem, not an item.
+      // Not a listing we know: the start page may be one item's own page. If nothing reads it as one, the site needs
+      // setting up (or its list setup no longer matches); that is the start page's problem, not an item.
       await this.tracked(run, progress, () => this.writeDetail(run, lease, startUrl, start.inspection, fixed, (problem) => {
         run.state.problems += 1;
         run.state.startPageProblems[startPage.id] = problem;
+        run.state.problemPages.push({ kind: 'start-page', url: startUrl, title: null, problem });
         emit('collection', `start page ${startPage.id}: ${problem}`);
       }));
       return;
@@ -552,19 +565,26 @@ export class CollectionService {
     return this.resolveRole(run, lease, await this.inspectAt(run, lease), role);
   }
 
-  private async writeDetail(run: ActiveRun, lease: WorkerLease, url: string, inspection: PageInspection, listingValues: Record<string, unknown>, noPattern?: (problem: string) => void): Promise<void> {
+  /**
+   * Reads an item's own page into a record, or reports why it couldn't. A start page read this way (its list setup
+   * didn't match it) reports to `startPageProblem` instead: one that isn't a whole item is the start page's problem,
+   * and no item is written for it.
+   */
+  private async writeDetail(run: ActiveRun, lease: WorkerLease, url: string, inspection: PageInspection, listingValues: Record<string, unknown>, startPageProblem?: (problem: string) => void): Promise<void> {
+    const report = (problem: string) => (startPageProblem ? startPageProblem(problem) : this.writeProblem(run, url, listingValues, problem));
     const resolved = await this.resolveExpected(run, lease, inspection, 'detail');
     if (resolved.kind === 'ambiguous') {
-      this.writeProblem(run, url, listingValues, `Several patterns could apply: ${resolved.names.join(', ')}.`);
+      report(`Several patterns could apply: ${resolved.names.join(', ')}.`);
       return;
     }
     if (resolved.kind === 'match' && resolved.match.records[0]) {
-      this.writeRecord(run, url, { ...listingValues, ...this.mapFields(resolved.pattern, resolved.match.records[0].values) }, resolved.pattern.id);
+      const values = { ...listingValues, ...this.mapFields(resolved.pattern, resolved.match.records[0].values) };
+      const invalid = startPageProblem ? validateRecord(values, run.definition.fields) : null;
+      if (invalid) report(`It didn’t match its site setup’s list, so it was read as one ${run.definition.itemName?.trim() || 'item'}’s page: ${invalid}`);
+      else this.writeRecord(run, url, values, resolved.pattern.id);
       return;
     }
-    const problem = `No pattern for ${new URL(url).host}.`;
-    if (noPattern) noPattern(problem);
-    else this.writeProblem(run, url, listingValues, problem);
+    report(`No site setup reads this page (${new URL(url).host}).`);
   }
 
   private keyFor(run: ActiveRun, url: string, values: Record<string, unknown>): string | null {
@@ -592,7 +612,10 @@ export class CollectionService {
       ...(problem ? { problem } : key || state !== 'ok' ? {} : { problem: 'The record has no value for its key.' }),
     };
     if (record.state === 'ok') run.state.collected += 1;
-    else run.state.problems += 1;
+    else {
+      run.state.problems += 1;
+      run.state.problemPages.push({ kind: 'item', url, title: typeof values.title === 'string' && values.title ? values.title : null, problem: record.problem ?? '' });
+    }
     this.deps.emit('collection', `record ${record.state}${patternId ? ` (${patternId})` : ''} ${record.key}`);
     run.consumer.onRecord(record);
   }

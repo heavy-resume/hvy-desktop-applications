@@ -30,7 +30,7 @@ describe('setting up a site into a collection', () => {
   it('turns the session\'s pages into the setup\'s patterns, each keeping its source', () => {
     const list = setupPage('https://boards.test/acme/jobs', 2, ['title', 'location'], ['Next']);
     const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title', 'description']);
-    const patterns = patternsFromSetup('acme', [list, job]);
+    const patterns = patternsFromSetup('acme', [list, job], list.id);
 
     expect(patterns.map((pattern) => [pattern.role, pattern.fields.map((entry) => `${entry.id}:${entry.kind}`), pattern.paginationCommandId ?? null])).toEqual([
       ['listing', ['title:text', 'location:text', 'link:link'], 'command-0'],
@@ -46,8 +46,18 @@ describe('setting up a site into a collection', () => {
   it('reopens a setup\'s own pages to set it up again', () => {
     const list = setupPage('https://boards.test/acme/jobs', 2, ['title']);
     const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title', 'description']);
-    const reopened = setupIntegrations(patternsFromSetup('acme', [list, job]));
-    expect(reopened.map((integration) => integration.id)).toEqual([list.id, job.id]);
-    expect(reopened.every((integration) => integration.siteSetup)).toBe(true);
+    const reopened = setupIntegrations(patternsFromSetup('acme', [list, job], list.id));
+    expect(reopened.integrations.map((integration) => integration.id)).toEqual([list.id, job.id]);
+    expect(reopened.list?.id).toBe(list.id);
+    expect(reopened.integrations.every((integration) => integration.siteSetup)).toBe(true);
+  });
+
+  it('reads the list page\'s rows as the listing, even when only one row was picked', () => {
+    // One example is enough: the inspector's pattern finds every row like it (Highlight matches shows which).
+    const list = setupPage('https://boards.test/acme/jobs', 1, ['title']);
+    const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title', 'description']);
+    const patterns = patternsFromSetup('acme', [list, job], list.id);
+    expect(patterns.map((pattern) => [pattern.role, pattern.linkFieldId ?? null])).toEqual([['listing', 'link'], ['detail', null]]);
+    expect(setupIntegrations(patterns).list?.id).toBe(list.id);
   });
 });

@@ -1368,6 +1368,8 @@ function executePendingIntegrationExtraction(browser) {
     : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return Promise.resolve(null);
   browser.pendingExtraction = null;
   if (extraction.kind === 'command-target') {
+    // A selection started once the page loads is pending as one started with inspect is: closing the window ends it.
+    browser.actionModePending = true;
     return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
   }
   if (extraction.kind === 'command-execution') {
@@ -1520,15 +1522,18 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         const encoded = requestedUrl.slice(inspectionPrefix.length);
         const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
         result.profileId = profileId;
-        browser.actionModePending = false;
-        setIntegrationToolbarInspectionState(browser);
-        mainWindow?.webContents.send('hvy:integration-inspection-result', result);
         const isBackgroundResult = result?.kind === 'integration-page-readiness'
           || result?.kind === 'integration-ready-check-validation'
           || result?.kind === 'integration-record-watch-result'
           || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
           || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
           || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
+        // A background result (such as the scan on each page load) doesn't end a selection the person is making.
+        if (!isBackgroundResult) {
+          browser.actionModePending = false;
+          setIntegrationToolbarInspectionState(browser);
+        }
+        mainWindow?.webContents.send('hvy:integration-inspection-result', result);
         if (!isBackgroundResult) raiseWindow(mainWindow);
         return;
       }
