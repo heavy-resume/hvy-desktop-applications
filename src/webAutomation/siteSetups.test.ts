@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { LISTING_FIELDS, listingCollection } from '../test/webAutomation/sites';
 import type { CollectionDefinition, CollectionSite } from './collection';
 import { readCollectionBlockConfig } from './configs';
-import { fieldsNotRead, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup } from './siteSetups';
+import { fieldsNotRead, MAX_SITE_SETUP_TEXT, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup } from './siteSetups';
 import type { SitePatternDefinition } from './sitePatterns';
 
 const ACME = 'https://boards.test/acme/jobs';
@@ -68,11 +68,25 @@ describe('site setups', () => {
     const pasted = readSiteSetupText(`  ${text.replace(/\n/g, ' ')}  `)!;
     expect(pasted).toEqual([updated]);
     const target = collection();
-    expect(planSiteSetupPaste(target, pasted)).toEqual([{ setup: updated, replaces: boards }]);
+    // The pages it reads came along; this collection has them already.
+    expect(updated.pages!.map((page) => page.url)).toEqual([ACME, GLOBEX]);
+    expect(planSiteSetupPaste(target, pasted)).toEqual([{ setup: updated, replaces: boards, pages: [] }]);
     const applied = { ...target, ...withSiteSetups(target, pasted) };
     expect(applied.sites).toEqual([{ ...boards, from: { name: 'Publisher', version: 3 } }, initech]);
     expect(applied.patterns.map((candidate) => candidate.id)).toEqual(['initech:list', 'boards:list-v3']);
+    expect(applied.startPages).toEqual(target.startPages);
     expect(websitesOf(updated)).toEqual(['boards.test']);
+    expect(valid(applied).ok).toBe(true);
+  });
+
+  it('pastes a setup with the pages it reads, adding those the collection lacks', () => {
+    const text = siteSetupText([siteSetupOf(collection(), 'boards')!]);
+    const target = { ...collection(), startPages: [{ id: 'globex', url: GLOBEX }], sites: [initech], patterns: collection().patterns.filter((candidate) => candidate.siteId === 'initech') };
+    const pasted = readSiteSetupText(text)!;
+    expect(planSiteSetupPaste(target, pasted)[0].pages).toEqual([{ url: ACME, values: { company: 'Acme' } }]);
+    const applied = { ...target, ...withSiteSetups(target, pasted) };
+    expect(applied.startPages).toEqual([{ id: 'globex', url: GLOBEX }, { id: 'boards-test-acme-jobs', url: ACME, values: { company: 'Acme' } }]);
+    expect(applied.sites).toEqual([initech, boards]);
     expect(valid(applied).ok).toBe(true);
   });
 
@@ -88,6 +102,11 @@ describe('site setups', () => {
     expect(readSiteSetupText('https://boards.test/acme/jobs')).toBeNull();
     expect(readSiteSetupText('{"hello": 1}')).toBeNull();
     expect(() => readSiteSetupText('HVY site setup: Boards\n{"hvy":"site-setup/1","sites":[{"id"')).toThrow('incomplete');
+    // Each way a paste is wrong says so, rather than reading as no setup at all.
+    expect(() => readSiteSetupText('{"hvy":"site-setup/1","sites":[]}')).toThrow('has no sites in it');
+    expect(() => readSiteSetupText('{"hvy":"site-setup/1","sites":[{"name":"No id"}]}')).toThrow('not one this version can read');
+    expect(() => readSiteSetupText('HVY site setup: Boards\n{"hvy": "site-setup/2","sites":[]}')).toThrow('format from another version of Galaxy');
+    expect(() => readSiteSetupText(`{"hvy":"site-setup/1","sites":[],"padding":"${'x'.repeat(MAX_SITE_SETUP_TEXT)}"}`)).toThrow('too large');
   });
 
   it('removes a setup with its patterns; its start pages stay, and are no longer read', () => {

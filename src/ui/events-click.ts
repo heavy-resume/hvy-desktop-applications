@@ -259,7 +259,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       handlers.openIntegration(target.dataset.destination);
     }
     if (action === 'open-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
-      handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId);
+      void handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId);
     }
     if (action === 'open-integration-ready-checks' && target.dataset.integrationId && target.dataset.pageId) handlers.openIntegrationReadyChecks(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'cancel-integration-ready-checks') handlers.cancelIntegrationReadyChecks();

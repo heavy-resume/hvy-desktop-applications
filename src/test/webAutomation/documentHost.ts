@@ -120,6 +120,10 @@ function createFormApi(live: LiveFormState): ScriptingFormApi {
     clear_error: (label) => {
       delete live.errors[label];
     },
+    set_submit_disabled: (disabled, reason) => {
+      live.submit = { disabled: disabled === true, reason: disabled === true ? String(reason ?? '') : '' };
+    },
+    get_submit_disabled: () => live.submit.disabled,
   };
 }
 
@@ -189,14 +193,18 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       return spec.initialScript ? runFormScript(blockId, spec.initialScript, 'initial') : null;
     },
 
-    /** The user fills in fields and submits: the submit script runs with doc.form over the form's live state. */
-    submitForm(blockId: FormRef, values: Record<string, FormFieldValue> = {}): Promise<ScriptingRunResult> {
+    /**
+     * The user fills in fields and submits: the submit script runs with doc.form over the form's live state. A disabled
+     * submit button cannot be pressed, as the form plugin refuses it.
+     */
+    async submitForm(blockId: FormRef, values: Record<string, FormFieldValue> = {}): Promise<ScriptingRunResult> {
       const { spec, live } = liveForm(blockId);
+      if (live.submit.disabled) throw new Error(`The form's submit is disabled: ${live.submit.reason}`);
       Object.assign(live.values, values);
       return runFormScript(blockId, spec.submitScript, 'submit');
     },
 
-    /** What the form shows: field values, options, and errors. */
+    /** What the form shows: field values, options, errors, and whether its submit is disabled (and why). */
     form(blockId: FormRef): LiveFormState {
       return structuredClone(liveForm(blockId).live);
     },

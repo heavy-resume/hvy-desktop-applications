@@ -5,15 +5,23 @@ import { resolveSitePattern, type SitePatternDefinition } from './sitePatterns';
  * Site setups in a collection: how to read a kind of page, as a named group
  * of patterns. A start page is read by whichever setup's
  * patterns match its address, so nothing ties the two together. Setups copy
- * as text, so they can be pasted into another collection, shared, or
- * published (a distributed document's publisher lists the sites it supports).
+ * as text with the pages they read, so pasting one into another collection
+ * adds both (shared, or published: a distributed document's publisher lists
+ * the sites it supports).
  */
 export interface SiteSetup extends CollectionSite {
   patterns: SitePatternDefinition[];
+  /** The pages it reads, as text carries them: pasting adds the ones the collection doesn't have. */
+  pages?: SiteSetupPage[];
 }
+
+/** A start page in a setup's text, without the collection's id for it. */
+export type SiteSetupPage = Omit<StartPage, 'id'>;
 
 /** What marks text as site setups. */
 export const SITE_SETUP_FORMAT = 'site-setup/1';
+/** Pasted text larger than this is not read as a site setup. */
+export const MAX_SITE_SETUP_TEXT = 1_000_000;
 
 export function patternsOf(collection: CollectionDefinition, siteId: string): SitePatternDefinition[] {
   return collection.patterns.filter((pattern) => pattern.siteId === siteId);
@@ -21,7 +29,7 @@ export function patternsOf(collection: CollectionDefinition, siteId: string): Si
 
 export function siteSetupOf(collection: CollectionDefinition, siteId: string): SiteSetup | null {
   const site = collection.sites.find((candidate) => candidate.id === siteId);
-  return site ? { ...site, patterns: patternsOf(collection, site.id) } : null;
+  return site ? { ...site, patterns: patternsOf(collection, site.id), pages: startPagesReadBy(collection, site.id).map(({ id: _id, ...page }) => page) } : null;
 }
 
 /** What reads an address: the best-matching list pattern (else an item page's), and its site setup when it has one. */
@@ -49,6 +57,16 @@ export function fieldsNotRead(collection: CollectionDefinition, patterns: SitePa
 /** Where a setup reads, in words: its hosts, and "anywhere its platform appears" for a fingerprint. */
 export function websitesOf(setup: SiteSetup): string[] {
   return [...new Set(setup.patterns.flatMap((pattern) => pattern.appliesTo.map((rule) => (rule.target === 'fingerprint' ? 'anywhere its platform appears' : rule.host))))];
+}
+
+/** A new start page's id from its address, unique in the block. */
+export function startPageId(collection: Pick<CollectionDefinition, 'startPages'>, url: string): string {
+  const parsed = new URL(url);
+  const base = `${parsed.host}${parsed.pathname}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'page';
+  const taken = new Set(collection.startPages.map((page) => page.id));
+  let id = base;
+  for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
+  return id;
 }
 
 /** A new setup's id from the address it is set up on, unique in the block. */
@@ -80,7 +98,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
  * a collection is the integrity check's to say, when they are saved.
  */
 export function readSiteSetupText(text: string): SiteSetup[] | null {
+  if (text.length > MAX_SITE_SETUP_TEXT) throw new Error('This is too large to be a site setup.');
   const start = text.indexOf('{');
+  // Another version of the format: one this version cannot read, rather than not a site setup at all.
+  const format = /"hvy"\s*:\s*"site-setup\/(\d+)"/.exec(text);
+  if (format && `site-setup/${format[1]}` !== SITE_SETUP_FORMAT) throw new Error('This site setup is in a format from another version of Galaxy, which this one can’t read.');
   if (start < 0 || !text.includes(`"${SITE_SETUP_FORMAT}"`)) return null;
   let value: unknown;
   try {
@@ -99,25 +121,38 @@ export function readSiteSetupText(text: string): SiteSetup[] | null {
       name: typeof site.name === 'string' && site.name.trim() ? site.name.trim() : id,
       ...(from ? { from } : {}),
       patterns: (site.patterns as SitePatternDefinition[]).map((pattern) => ({ ...pattern, siteId: id })),
+      // Whether they are start pages this collection takes is the integrity check's to say, as for the patterns.
+      ...(Array.isArray(site.pages) ? { pages: site.pages.filter(isRecord).map(({ id: _id, ...page }) => page as unknown as SiteSetupPage) } : {}),
     };
   });
 }
 
-/** A pasted site setup, and the one in the collection it updates. */
+/** A pasted site setup, the one in the collection it updates, and the pages it adds (those the collection lacks). */
 export interface SiteSetupPaste {
   setup: SiteSetup;
   replaces: CollectionSite | null;
+  pages: SiteSetupPage[];
+}
+
+function newPages(collection: Pick<CollectionDefinition, 'startPages'>, setup: SiteSetup): SiteSetupPage[] {
+  return (setup.pages ?? []).filter((page) => !collection.startPages.some((existing) => existing.url === page.url));
 }
 
 export function planSiteSetupPaste(collection: CollectionDefinition, setups: SiteSetup[]): SiteSetupPaste[] {
-  return setups.map((setup) => ({ setup, replaces: collection.sites.find((site) => site.id === setup.id) ?? null }));
+  return setups.map((setup) => ({ setup, replaces: collection.sites.find((site) => site.id === setup.id) ?? null, pages: newPages(collection, setup) }));
 }
 
-/** The collection's setups with these added; one with an existing id replaces it in place, with its patterns. */
-export function withSiteSetups(collection: CollectionDefinition, setups: SiteSetup[]): Pick<CollectionDefinition, 'sites' | 'patterns'> {
+/**
+ * The collection's setups with these added; one with an existing id replaces it in place, with its patterns. The
+ * pages they carry are added after the collection's own, except those it already has (by address).
+ */
+export function withSiteSetups(collection: CollectionDefinition, setups: SiteSetup[]): Pick<CollectionDefinition, 'sites' | 'patterns' | 'startPages'> {
   const byId = new Map(setups.map((setup) => [setup.id, setup]));
-  const site = ({ patterns: _patterns, ...rest }: SiteSetup): CollectionSite => rest;
+  const site = ({ patterns: _patterns, pages: _pages, ...rest }: SiteSetup): CollectionSite => rest;
+  const startPages = [...collection.startPages];
+  for (const page of setups.flatMap((setup) => newPages({ startPages }, setup))) startPages.push({ id: startPageId({ startPages }, page.url), ...page });
   return {
+    startPages,
     sites: [
       ...collection.sites.map((existing) => (byId.has(existing.id) ? site(byId.get(existing.id)!) : existing)),
       ...setups.filter((setup) => !collection.sites.some((existing) => existing.id === setup.id)).map(site),
@@ -129,7 +164,7 @@ export function withSiteSetups(collection: CollectionDefinition, setups: SiteSet
   };
 }
 
-/** A site setup and its patterns, removed; start pages stay. */
+/** A site setup and its patterns, removed; start pages stay (removing a setup's last page removes it, in the reader). */
 export function withoutSiteSetup(collection: CollectionDefinition, siteId: string): Pick<CollectionDefinition, 'sites' | 'patterns'> {
   return {
     sites: collection.sites.filter((site) => site.id !== siteId),

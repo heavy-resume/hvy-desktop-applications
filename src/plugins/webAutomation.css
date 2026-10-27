@@ -178,3 +178,32 @@
   display: grid;
   gap: 0.6rem;
 }
+
+/* Paste site setup: where the clipboard cannot be read directly, a place to paste into that is not a text box. */
+.hvy-web-paste-zone {
+  display: grid;
+  place-items: center;
+  min-height: 5rem;
+  padding: 1rem;
+  border: 2px dashed var(--hvy-border, #c9c3b8);
+  border-radius: 0.6rem;
+  color: var(--hvy-text-alt, #394744);
+  text-align: center;
+  cursor: default;
+}
+
+.hvy-web-paste-zone:focus {
+  border-color: var(--hvy-accent-1, #477d7c);
+  outline: none;
+}
+
+.hvy-web-paste-zone[hidden] {
+  display: none;
+}
+
+/* What a pasted setup holds, behind "Show details". */
+.hvy-web-paste-details .hvy-web-json {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre;
+}

@@ -1,4 +1,5 @@
 import { getActiveStateRuntime, getRefreshReaderBlock, getRenderApp, runWithStateRuntime } from '../../../heavy-file-format/src/state';
+import { runPluginDocumentHooks } from '../../../heavy-file-format/src/plugins/hooks';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { saveAppSettings } from '../backend';
 import { state } from '../state';
@@ -97,10 +98,12 @@ setDocumentAutomationOpener((rawDocument) => {
     stateRuntime,
     // A record sink wrote items outside any script: redraw just the list it wrote to, as the reader's own controls do,
     // so the rest of the document (and where you are in it) stays as it is. The whole document is redrawn when the
-    // list is not on screen to refresh (another view, or not shown).
+    // list is not on screen to refresh (another view, or not shown). Redrawing just the list skips the document hooks a
+    // full redraw ends with, so they run after it: the document's scripts see the new items, as after any other change.
     onDocumentChange: (current, listPath) => runWithStateRuntime(current, () => {
       const list = componentListAt(document, listPath);
       if (!list || !getRefreshReaderBlock()(window.document, list.sectionKey, list.blockId)) getRenderApp()();
+      else void runPluginDocumentHooks('unknown');
     }),
   });
   openedByDocument.set(document, opened);

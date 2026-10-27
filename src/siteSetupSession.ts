@@ -1,3 +1,4 @@
+import { controlIntegrationBrowser } from './integrationBrowser';
 import { fetchIntegrationRecords } from './integrationRecords';
 import { createCustomPageIntegration, onIntegrationRegistrySaved, saveIntegrationRegistry, type IntegrationDefinition } from './integrationRegistry';
 import { handlers, rerender } from './main';
@@ -66,7 +67,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
 /** Builds (or rebuilds) a page's record type in the existing builder, named for its role, with its page open to pick from. */
 function buildRecordType(integration: IntegrationDefinition, name: string): void {
   state.selectedIntegrationId = integration.id;
-  handlers.openIntegrationPage(integration.id, integration.pages[0].id);
+  const opened = handlers.openIntegrationPage(integration.id, integration.pages[0].id);
   const action = integration.actions[0];
   if (action) {
     handlers.editIntegrationAction(integration.id, action.id);
@@ -75,6 +76,10 @@ function buildRecordType(integration: IntegrationDefinition, name: string): void
   handlers.addActionForIntegrationPage(integration.id, integration.pages[0].id);
   state.integrationActionDraftName = name;
   rerender({ preserveMountedDocument: true });
+  // A new record type has nothing picked yet: the page goes straight into picking the first example, as the step
+  // says ("point at…"), instead of waiting for the builder's Add example. It starts once the open is done, as
+  // Add example would: one busy task at a time.
+  void opened.then(() => handlers.addIntegrationActionAnchor());
 }
 
 /** The first item link the picked rows find on the list page, as the item page to point at. */
@@ -167,11 +172,16 @@ export function adoptIntoSiteSetup(integration: IntegrationDefinition): Integrat
   return { ...integration, siteSetup: true };
 }
 
-/** Closing the Integrations manager ends the setup: its pages leave memory. Only Done saved anything. */
+/**
+ * Closing the Integrations manager ends the setup: its pages leave memory, and the browser window it pointed in
+ * closes. Only Done saved anything. Switching documents during a setup leaves both open: Done saves into the document
+ * the setup came from.
+ */
 export function endSiteSetup(): void {
   if (!active) return;
   const ids = active.integrationIds;
   active = null;
+  void controlIntegrationBrowser('close', state.selectedIntegrationProfileId);
   state.siteSetup = null;
   state.integrationRegistry = { ...state.integrationRegistry, integrations: state.integrationRegistry.integrations.filter((integration) => !ids.has(integration.id)) };
   if (ids.has(state.selectedIntegrationId)) state.selectedIntegrationId = state.integrationRegistry.integrations[0]?.id ?? '';

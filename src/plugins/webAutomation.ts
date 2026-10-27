@@ -1,5 +1,6 @@
 import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
 import type { HvyPluginContext, HvyPluginFactory, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
+import { readSystemClipboardText } from '../backend';
 import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
@@ -14,7 +15,7 @@ import { DEFAULT_QUEUE_CONFIG, type QueueEntry } from '../webAutomation/queue';
 import type { DocumentAutomationLookup } from '../webAutomation/scripting';
 import { canSetUpSites, setUpSite } from '../webAutomation/siteSetupOpener';
 import {
-  fieldsNotRead, newSiteId, patternsOf, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, websitesOf, withSiteSetups, withoutSiteSetup,
+  fieldsNotRead, newSiteId, patternsOf, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, startPageId, websitesOf, withSiteSetups, withoutSiteSetup,
   type SiteSetup, type SiteSetupPaste,
 } from '../webAutomation/siteSetups';
 import { capabilityOrigin, type WebApiCapability } from '../webAutomation/webApi';
@@ -1099,23 +1100,18 @@ function openModal(title: string, className: string): { form: HTMLFormElement; b
   form.append(heading, body, errors, row);
   backdrop.appendChild(form);
   document.body.appendChild(backdrop);
-  return { form, body, errors, row, close: () => backdrop.remove() };
-}
-
-/** An explicit confirmation modal; a refused change shows its reason in place. */
-function openConfirmDialog(options: { title: string; message: string; confirm: string; onConfirm(): string[] }): void {
-  const { body, errors, row, close } = openModal(options.title, 'hvy-web-confirm-dialog');
-  body.append(paragraph(options.message));
-  const cancel = button('Cancel');
-  cancel.addEventListener('click', close);
-  const confirm = button(options.confirm, true);
-  confirm.addEventListener('click', () => {
-    const problems = options.onConfirm();
-    if (problems.length) errors.textContent = problems.join(' ');
-    else close();
+  const close = () => backdrop.remove();
+  // Clicking off the dialog closes it, as the app's own dialogs do: only a press that also started off it, so
+  // selecting text in a field and releasing outside keeps it open.
+  let pressedOff = false;
+  backdrop.addEventListener('pointerdown', (event) => {
+    pressedOff = event.target === backdrop;
   });
-  row.append(cancel, confirm);
-  cancel.focus();
+  backdrop.addEventListener('click', (event) => {
+    if (pressedOff && event.target === backdrop) close();
+    pressedOff = false;
+  });
+  return { form, body, errors, row, close };
 }
 
 function labelled(text: string, input: HTMLElement, hint?: string): HTMLLabelElement {
@@ -1149,16 +1145,6 @@ function valueInputs(fields: CollectionField[], values: Record<string, string> =
     element: fieldset,
     read: () => Object.fromEntries(inputs.flatMap(({ field, input }) => (input.value.trim() ? [[field.id, input.value.trim()]] : []))),
   };
-}
-
-/** A new start page's id from its address, unique in the block. */
-function startPageId(collection: CollectionDefinition, url: string): string {
-  const parsed = new URL(url);
-  const base = `${parsed.host}${parsed.pathname}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'page';
-  const taken = new Set(collection.startPages.map((page) => page.id));
-  let id = base;
-  for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
-  return id;
 }
 
 function withPage(collection: CollectionDefinition, url: string, values: Record<string, string>): StartPage[] {
@@ -1228,31 +1214,131 @@ function trustworthyAddress(value: string): string | null {
 
 /** A pasted site setup, in a few lines: what it is, what it reads, where, and whether it updates one here. */
 function setupPlanText(collection: CollectionDefinition, plan: SiteSetupPaste): HTMLElement {
-  const { setup, replaces } = plan;
+  const { setup, replaces, pages } = plan;
   const labels = [...new Set(setup.patterns.flatMap((pattern) => pattern.fields.filter((field) => field.kind === 'text').map((field) => field.id)))]
     .map((id) => collection.fields.find((field) => field.id === id)?.label ?? id);
   const change = !replaces
-    ? 'New here.'
+    ? 'Not in this document yet.'
     : !replaces.from || !setup.from
-      ? 'Replaces the one here.'
+      ? 'Replaces the one in this document.'
       : setup.from.version > replaces.from.version
-        ? `Updates the one here (v${replaces.from.version}).`
+        ? `Newer than the one in this document (v${replaces.from.version} to v${setup.from.version}).`
         : setup.from.version === replaces.from.version
-          ? 'The one here is the same version; it is replaced.'
-          : `The one here is newer (v${replaces.from.version}); it is replaced with this older one.`;
+          ? `Same version as the one in this document (v${replaces.from.version}); it is replaced.`
+          : `Older than the one in this document (v${replaces.from.version}); it is replaced with v${setup.from.version}.`;
   const element = document.createElement('div');
   element.className = 'hvy-web-page-setup';
   element.append(
     paragraph(setupName(setup), 'hvy-web-page-name'),
-    paragraph(`Reads ${labels.join(', ') || 'nothing yet'}, on ${websitesOf(setup).join(', ')}.`, 'hvy-web-page-hint'),
+    paragraph(pages.length
+      ? `Adds ${pages.length === 1 ? 'the page' : 'the pages'} ${pages.map((page) => shortAddress(page.url)).join(', ')}`
+      : setup.pages?.length ? 'Its pages are already here.' : 'Adds no pages.', 'hvy-web-page-hint'),
+    paragraph(`Website: ${websitesOf(setup).join(', ')}`, 'hvy-web-page-hint'),
+    paragraph(`Reads: ${labels.join(', ') || 'nothing yet'}`, 'hvy-web-page-hint'),
     paragraph(change, 'hvy-web-page-hint'),
   );
   return element;
 }
 
 /**
- * Add a page: an address, or a pasted site setup. An address a setup reads asks only for the fields that
- * setup doesn't read; one nothing reads goes on to setting its site up. Cancelling at any point adds nothing.
+ * "Paste site setup": a site setup copied from a site (its Copy button) or another document, read from the clipboard
+ * and reviewed before anything changes: what each setup reads, on which sites, whether it is new or replaces one here,
+ * and whether this collection takes it (the check saving runs). Where the clipboard cannot be read directly, a paste
+ * area takes ⌘V instead of a text box. Wrong or broken text adds nothing, and says why.
+ */
+function openPasteSetupDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
+  const { body, errors, row, close } = openModal('Paste a site setup', 'hvy-web-page-dialog wide-dialog');
+  const review = document.createElement('div');
+  review.className = 'hvy-web-page-result';
+  review.setAttribute('role', 'status');
+  // Where the clipboard cannot be read directly: a place to paste into, not a text box.
+  const zone = document.createElement('div');
+  zone.className = 'hvy-web-paste-zone';
+  zone.tabIndex = 0;
+  zone.setAttribute('role', 'button');
+  zone.textContent = `Press ${/Mac/.test(navigator.userAgent) ? '⌘V' : 'Ctrl+V'} here to paste the site setup.`;
+  zone.hidden = true;
+  body.append(review, zone);
+  const cancel = button('Cancel');
+  cancel.addEventListener('click', close);
+  const again = button('Read clipboard again');
+  const add = button('Add', true);
+  row.append(cancel, again, add);
+  let accept: (() => string[]) | null = null;
+
+  const show = (text: string) => {
+    review.replaceChildren();
+    errors.textContent = '';
+    accept = null;
+    add.disabled = true;
+    add.textContent = 'Add';
+    let setups: SiteSetup[] | null;
+    try {
+      setups = readSiteSetupText(text);
+    } catch (error) {
+      review.append(paragraph(errorMessage(error), 'hvy-web-error'));
+      return;
+    }
+    if (!setups) {
+      review.append(paragraph(trustworthyAddress(text.trim())
+        ? 'That’s a page’s address. Use Add a page for it.'
+        : 'The clipboard doesn’t have a site setup. Copy one, then paste again.', 'hvy-web-page-hint'));
+      return;
+    }
+    const now = currentCollection(ctx, collection);
+    const plans = planSiteSetupPaste(now, setups);
+    review.append(paragraph('From your clipboard:', 'hvy-web-page-hint'));
+    for (const plan of plans) review.append(setupPlanText(now, plan));
+    // Everything it holds, for anyone who wants to read it before adding it.
+    const details = document.createElement('details');
+    details.className = 'hvy-web-paste-details';
+    const summary = document.createElement('summary');
+    summary.textContent = 'Show details';
+    const raw = document.createElement('pre');
+    raw.className = 'hvy-web-json';
+    raw.textContent = JSON.stringify(setups, null, 2);
+    details.append(summary, raw);
+    review.append(details);
+    // Checked as saving checks it: all of it is added, or none.
+    const problems = checkCollection(ctx, withSiteSetups(now, setups));
+    if (problems.length) {
+      review.append(paragraph(`This collection can’t take it: ${problems.join(' ')}`, 'hvy-web-error'));
+      return;
+    }
+    const pasted = setups;
+    add.textContent = plans.every((plan) => plan.replaces && !plan.pages.length) ? 'Update' : 'Add';
+    accept = () => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), pasted));
+    add.disabled = false;
+  };
+  zone.addEventListener('paste', (event) => {
+    event.preventDefault();
+    show(event.clipboardData?.getData('text/plain') ?? '');
+  });
+  const readClipboard = () => readSystemClipboardText().then(show, () => {
+    // This host cannot read the clipboard directly: the paste area takes it.
+    zone.hidden = false;
+    again.textContent = 'Paste again';
+    review.replaceChildren(paragraph('Copy a site setup, then paste it below.', 'hvy-web-page-hint'));
+    zone.focus();
+  });
+  again.addEventListener('click', () => {
+    if (zone.hidden) void readClipboard();
+    else zone.focus();
+  });
+  add.addEventListener('click', () => {
+    if (!accept) return;
+    const problems = accept();
+    if (problems.length) errors.textContent = problems.join(' ');
+    else close();
+  });
+  add.disabled = true;
+  void readClipboard();
+}
+
+/**
+ * Add a page: its address. An address a setup reads asks only for the fields that setup doesn't read; one nothing
+ * reads goes on to setting its site up. Cancelling at any point adds nothing. Site setups come in through Paste site
+ * setup.
  */
 function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
   const { form, body, errors, row, close } = openModal('Add a page', 'hvy-web-page-dialog wide-dialog');
@@ -1263,7 +1349,7 @@ function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefiniti
   result.className = 'hvy-web-page-result';
   result.setAttribute('role', 'status');
   let values = valueInputs([]);
-  body.append(labelled('Address', input, `Paste the address of a list of ${items(collection)}: a careers page, or a search on a job board. Or paste a site setup you copied.`), result, values.element);
+  body.append(labelled('Address', input, `Paste the address of a list of ${items(collection)}: a careers page, or a search on a job board.`), result, values.element);
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
   const submit = button('Add', true);
@@ -1277,13 +1363,15 @@ function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefiniti
     action = null;
     submit.textContent = 'Add';
     const entered = input.value.trim();
-    let setups: SiteSetup[] | null = null;
-    try {
-      setups = readSiteSetupText(entered);
-    } catch (error) {
-      result.append(paragraph(errorMessage(error), 'hvy-web-error'));
-    }
-    const url = setups || !entered ? null : trustworthyAddress(entered);
+    // A site setup pasted here belongs to Paste site setup, which reviews it.
+    const isSetup = (() => {
+      try {
+        return readSiteSetupText(entered) !== null;
+      } catch {
+        return entered.includes('"hvy"');
+      }
+    })();
+    const url = isSetup || !entered ? null : trustworthyAddress(entered);
     const now = currentCollection(ctx, collection);
     const duplicate = url !== null && now.startPages.some((page) => page.url === url);
     const known = url && !duplicate ? recognizeAddress(now, url) : null;
@@ -1291,13 +1379,10 @@ function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefiniti
     const next = valueInputs(known ? fieldsNotRead(now, known.site ? patternsOf(now, known.site.id) : [known.pattern]) : []);
     values.element.replaceWith(next.element);
     values = next;
-    if (setups) {
-      const plans = planSiteSetupPaste(now, setups);
-      for (const plan of plans) result.append(setupPlanText(now, plan));
-      submit.textContent = plans.every((plan) => plan.replaces) ? 'Update' : setups.length === 1 ? 'Add site setup' : 'Add site setups';
-      action = () => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), setups));
+    if (isSetup) {
+      result.append(paragraph('That’s a site setup. Use Paste site setup for it.', 'hvy-web-page-hint'));
     } else if (entered && !url) {
-      if (!result.childElementCount) result.append(paragraph('That isn’t an address or a site setup.', 'hvy-web-page-hint'));
+      result.append(paragraph('That isn’t an address.', 'hvy-web-page-hint'));
     } else if (duplicate) {
       result.append(paragraph('Already one of the pages.', 'hvy-web-page-hint'));
     } else if (url && recognized) {
@@ -1370,18 +1455,7 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   if (site) {
     const copy = button('Copy site setup');
     copy.addEventListener('click', () => copySetup(currentCollection(ctx, collection), site.id, copy, errors));
-    const remove = button('Remove site setup');
-    remove.addEventListener('click', () => {
-      close();
-      const others = startPagesReadBy(collection, site.id).filter((page) => page.id !== startPage.id);
-      openConfirmDialog({
-        title: 'Remove this site setup?',
-        message: `${setupName(site)} is removed from this document. ${others.length ? `It also reads ${others.map((page) => pageName(collection, page)).join(', ')}. ` : ''}The pages stay, and runs skip them until a setup reads them.`,
-        confirm: 'Remove',
-        onConfirm: () => saveCollection(ctx, withoutSiteSetup(currentCollection(ctx, collection), site.id)),
-      });
-    });
-    setupActions.append(copy, remove);
+    setupActions.append(copy);
   }
   if (setupActions.childElementCount) setupBox.append(setupActions);
   // This page's own limits; blank fields use the default limits.
@@ -1394,7 +1468,14 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   body.append(setupBox, limitsBox);
   const removePage = button('Remove page');
   removePage.addEventListener('click', () => {
-    const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.filter((page) => page.id !== startPage.id) });
+    // The page's site setup goes with it when it reads no other page here.
+    const now = currentCollection(ctx, collection);
+    const reader = recognizeAddress(now, startPage.url)?.site;
+    const lastRead = reader && startPagesReadBy(now, reader.id).every((page) => page.id === startPage.id);
+    const problems = saveCollection(ctx, {
+      ...(lastRead ? withoutSiteSetup(now, reader.id) : {}),
+      startPages: now.startPages.filter((page) => page.id !== startPage.id),
+    });
     if (problems.length) errors.textContent = problems.join(' ');
     else close();
   });
@@ -1614,12 +1695,15 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   if (collection.startPages.length) section.append(list);
   const add = button('+ Add a page');
   add.addEventListener('click', () => openAddPageDialog(ctx, collection));
+  // A site setup copied from a site or another document: read from the clipboard and reviewed before it is added.
+  const paste = button('Paste site setup');
+  paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
   // How far a run goes at each page that doesn't set its own limits.
   const limits = button('Default limits…');
   limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
   section.append(
     paragraph(`Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} new ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already listed' : ''}.`, 'hvy-web-page-hint'),
-    actions(add, limits),
+    actions(add, paste, limits),
   );
   return section;
 }

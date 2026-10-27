@@ -1104,14 +1104,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.selectedIntegrationProfileId = profile.id;
     if (page.id === 'gmail' || page.id === 'google-calendar') {
       const destination = page.id === 'gmail' ? 'gmail' : 'calendar';
-      void runBusy(`Opening ${page.name}...`, async () => {
+      return runBusy(`Opening ${page.name}...`, async () => {
         await openIntegrationBrowser(destination, profile.id, profile.browserStoreId, false, undefined, true, profile.name);
         state.integrationVaultStatus = await loadIntegrationVaultStatus();
         state.status = `Opened ${page.name}`;
       }, { preserveMountedDocument: true });
-      return;
     }
-    void runBusy(`Opening ${page.name}...`, async () => {
+    return runBusy(`Opening ${page.name}...`, async () => {
       await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
       state.integrationVaultStatus = await loadIntegrationVaultStatus();
       state.status = `Opened ${page.name}`;
