@@ -259,7 +259,8 @@ export async function boot(): Promise<void> {
           state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
           state.integrationActionExamples[fieldIndex] = state.integrationActionTargetVariants[fieldIndex].find(Boolean) ?? result;
           const nextFieldIndex = fieldIndex + 1;
-          if (nextFieldIndex < state.integrationActionExamples.length) {
+          // Picking an example's fields one by one goes on to the next; a range's boundary picked again is one change.
+          if (state.integrationActionSelectionKind === 'target' && nextFieldIndex < state.integrationActionExamples.length) {
             state.integrationActionTargetSelectionFieldIndex = nextFieldIndex;
             state.integrationActionSelectionPending = true;
             state.status = `Select ${state.integrationActionTargetLabels[nextFieldIndex] || `field ${nextFieldIndex + 1}`} in this example`;

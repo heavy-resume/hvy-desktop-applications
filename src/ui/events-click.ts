@@ -297,6 +297,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'confirm-discard-integration-action') handlers.confirmDiscardIntegrationAction();
     if (action === 'cancel-integration-action-selection') handlers.cancelIntegrationActionSelection();
     if (action === 'add-another-integration-action-example') handlers.addAnotherIntegrationActionExample(Number(target.dataset.parentIndex ?? 0), target.dataset.fieldIndex === undefined ? null : Number(target.dataset.fieldIndex));
+    if (action === 'change-integration-action-range') handlers.changeIntegrationActionRange(Number(target.dataset.parentIndex), Number(target.dataset.fieldIndex), target.dataset.boundary === 'end' ? 'end' : 'start');
     if (action === 'select-integration-action-example') handlers.selectIntegrationActionExample(Number(target.dataset.index));
     if (action === 'set-integration-target-absent') handlers.setIntegrationTargetAbsent(Number(target.dataset.fieldIndex), Number(target.dataset.parentIndex), true);
     if (action === 'clear-integration-target-absent') handlers.setIntegrationTargetAbsent(Number(target.dataset.fieldIndex), Number(target.dataset.parentIndex), false);

@@ -1626,6 +1626,24 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = fieldIndex === null ? 'Select fields inside the parent, then choose Done' : 'Select replacement data inside the parent';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
+  // A range field's start or end picked again in one example, keeping the other boundary.
+  changeIntegrationActionRange: (parentIndex, fieldIndex, boundary) => {
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderStep = 'define';
+    state.integrationActionSelectionKind = 'range';
+    state.integrationActionRangeBoundary = boundary;
+    state.integrationActionTargetSelectionParentIndex = parentIndex;
+    state.integrationActionTargetSelectionFieldIndex = fieldIndex;
+    state.integrationActionSelectedParentIndex = parentIndex;
+    state.integrationActionSelectionPending = true;
+    void runBusy(`Starting to pick where the range ${boundary === 'end' ? 'ends' : 'starts'}...`, async () => {
+      const parentSnapshot = state.integrationActionAnchors[parentIndex];
+      const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
+      const snapshot = state.integrationActionTargetVariants[fieldIndex]?.[parentIndex];
+      await startIntegrationActionInspection('target', { parentCssPath, parentSnapshot, multiSelect: false, rangeEdit: { boundary, snapshot } });
+      state.status = `Select where the range ${boundary === 'end' ? 'ends' : 'starts'}`;
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
   addIntegrationActionAnchor: () => {
     const selectingFirstExample = state.integrationActionAnchors.length === 0;
     state.integrationActionBuilderOpen = true;

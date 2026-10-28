@@ -255,15 +255,26 @@ export function saveIntegrationRegistry(registry: IntegrationRegistry): void {
   registrySaved?.(registry);
 }
 
+/** A field picked as a range: its example is where it starts, with where it ends and whether each boundary is part of it. */
+export interface InspectionRange {
+  includeStart: boolean;
+  includeEnd: boolean;
+  end: unknown;
+  /** How the range read when it was picked, for the record type builder; not saved. */
+  summary?: string;
+}
+
 export function matcherSnapshot(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown; pagePath?: unknown } }).selected;
+  const range = (value as { range?: InspectionRange }).range;
   return {
     selected: {
       shape: selected?.shape,
       relativePath: selected?.relativePath ?? null,
       ...(selected?.pagePath ? { pagePath: selected.pagePath } : {}),
     },
+    ...(range ? { range: { includeStart: range.includeStart === true, includeEnd: range.includeEnd === true, end: matcherSnapshot(range.end) } } : {}),
   };
 }
 
@@ -358,6 +369,8 @@ export function matchingInspectionPrivacyRules(value: unknown, path: string, act
 
 export function selectedInspectionContent(value: unknown): string {
   if (!value || typeof value !== 'object') return '';
+  const range = (value as { range?: InspectionRange }).range;
+  if (range) return `Range · ${range.summary ?? 'Saved start and end'}`;
   const selected = (value as { selected?: unknown }).selected;
   if (!selected || typeof selected !== 'object') return '';
   const item = selected as Record<string, unknown>;

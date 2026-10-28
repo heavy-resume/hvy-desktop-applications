@@ -18,6 +18,12 @@
   let targetCollection = null;
   let commandRecorder = null;
   let commandRecordElements = null;
+  // A range field being picked: where it starts, and whether the start is part of it. The next pick is where it ends.
+  let rangeStart = null;
+  let rangeStatus = null;
+  // Changing one boundary of a range field picked before: the end it keeps while its start is picked again.
+  let rangeKeptEnd = null;
+  let rangeEditing = false;
   let toolbarControl = null;
   let inspectionContext = null;
   let captureSequence = 0;
@@ -126,10 +132,14 @@
     return true;
   };
 
-  /** Visible text only, keeping paragraph, list, and heading breaks; no scripts, hidden sections, or form controls. */
-  const readableText = (element) => {
+  /**
+   * Visible text only, keeping paragraph, list, and heading breaks; no scripts, hidden sections, or form controls. With a
+   * range, only the text inside it: a range field reads everything between its start and end, in page order.
+   */
+  const readableText = (element, range = null) => {
     const parts = [];
     const visit = (node) => {
+      if (range && !range.intersectsNode(node)) return;
       if (node.nodeType === Node.TEXT_NODE) {
         parts.push(node.textContent ?? '');
         return;
@@ -139,8 +149,22 @@
       node.childNodes.forEach(visit);
       if (/^(P|DIV|SECTION|ARTICLE|LI|H[1-6])$/.test(node.tagName)) parts.push('\n');
     };
-    visit(element);
+    visit(range ? range.commonAncestorContainer : element);
     return parts.join('').replace(/[\t ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 40000);
+  };
+
+  // A range field's boundaries: the end comes after the start and is not inside it, so whatever is between them is read.
+  const followsStart = (start, element) => {
+    const position = start.compareDocumentPosition(element);
+    return Boolean(position & Node.DOCUMENT_POSITION_FOLLOWING) && !(position & Node.DOCUMENT_POSITION_CONTAINED_BY);
+  };
+  const textRangeBetween = (start, end, includeStart, includeEnd) => {
+    const range = document.createRange();
+    if (includeStart) range.setStartBefore(start);
+    else range.setStartAfter(start);
+    if (includeEnd) range.setEndAfter(end);
+    else range.setEndBefore(end);
+    return range;
   };
 
   const previewText = (text, fromEnd = false) => {
@@ -155,6 +179,13 @@
     const pseudo = pseudoElements(element);
     return [pseudo.before.text, pseudo.after.text].filter(Boolean).join(' ');
   };
+
+  // How a range field reads in the record type builder: 'Starts after "Job description" · Ends before "Apply now" · 3,812 characters'.
+  const boundaryLabel = (element) => {
+    const text = visibleText(element);
+    return text.length > 40 ? `${text.slice(0, 39)}…` : text || element.tagName.toLowerCase();
+  };
+  const rangeSummary = (start, end, includeStart, includeEnd, text) => `${includeStart ? 'Starts at' : 'Starts after'} “${boundaryLabel(start)}” · ${includeEnd ? 'Ends at' : 'Ends before'} “${boundaryLabel(end)}” · ${text.length.toLocaleString()} characters`;
 
   const imageFor = (element) => {
     const image = element.matches('img') ? element : element.querySelector('img');
@@ -918,7 +949,7 @@
 
   const snapshotByteLength = (element) => new TextEncoder().encode(JSON.stringify(snapshot(element))).byteLength;
 
-  const highlight = (element) => {
+  const highlight = (element, textRange = null) => {
     highlighted = element;
     let box = document.getElementById('hvy-galaxy-inspector-highlight');
     if (!box) {
@@ -927,7 +958,7 @@
       box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:3px solid #e0563f;background:#e0563f2b;box-sizing:border-box;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 0 0 1px #fff8 inset';
       document.documentElement.append(box);
     }
-    const rect = element.getBoundingClientRect();
+    const rect = textRange ? textRange.getBoundingClientRect() : element.getBoundingClientRect();
     const left = Math.max(2, rect.left);
     const top = Math.max(2, rect.top);
     const right = Math.min(innerWidth - 2, rect.right);
@@ -938,7 +969,9 @@
       width: `${Math.max(2, right - left)}px`,
       height: `${Math.max(2, bottom - top)}px`,
     });
-    box.textContent = `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`;
+    box.textContent = textRange
+      ? `Range · ${readableText(null, textRange).length.toLocaleString()} characters`
+      : `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`;
     box.style.padding = '3px 5px';
   };
 
@@ -1038,7 +1071,9 @@
         return true;
       })
       .slice(0, 4);
-    const candidates = [...elementCandidates, ...containerCandidates];
+    const candidates = [...elementCandidates, ...containerCandidates]
+      .filter((element) => !rangeStart || followsStart(rangeStart.element, element))
+      .filter((element) => !rangeKeptEnd || followsStart(element, rangeKeptEnd.element));
     const describe = (element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -1071,7 +1106,14 @@
     const heading = document.createElement('div');
     heading.textContent = commandRecorder
       ? inspectionKind === 'parent' ? 'Choose the record for this command' : 'Choose the interaction target'
-      : inspectionKind === 'scope' ? 'Choose the section that should contain matching items' : inspectionKind === 'parent' ? 'Choose the parent containing one complete item' : 'Choose data inside the selected parent';
+      : inspectionKind === 'scope' ? 'Choose the section that should contain matching items' : inspectionKind === 'parent' ? 'Choose the parent containing one complete item'
+        : rangeStart ? candidates.length ? 'Choose where the range ends' : 'Pick something after the start'
+          : rangeKeptEnd ? candidates.length ? 'Choose where the range starts' : 'Pick something before the end' : 'Choose data inside the selected parent';
+    // A field can be a range: everything from one element to another, for text split across sections with no container
+    // of its own. Its start and end are picked from this list too, and apply to the highlighted choice.
+    const offersRange = inspectionKind === 'target' && !commandRecorder;
+    let chosen = candidates[0] || null;
+    const rangeTo = (element, includeEnd) => textRangeBetween(rangeStart.element, element, rangeStart.includeStart, includeEnd);
     heading.style.cssText = 'padding:7px 8px;font-weight:700;border-bottom:1px solid #c5cec8';
     picker.append(heading);
     candidates.forEach((element) => {
@@ -1101,12 +1143,22 @@
           return row;
         }));
       }
+      choice.dataset.pickerChoice = 'true';
       choice.addEventListener('mouseenter', () => {
-        picker.querySelectorAll('button').forEach((button) => { button.style.background = 'transparent'; });
+        picker.querySelectorAll('[data-picker-choice]').forEach((button) => { button.style.background = 'transparent'; });
         choice.style.background = '#dce8e1';
-        highlight(element);
+        chosen = element;
+        highlight(element, rangeStart ? rangeTo(element, true) : null);
       });
       choice.addEventListener('click', () => {
+        if (rangeStart) {
+          finishRange(element, true);
+          return;
+        }
+        if (rangeKeptEnd) {
+          beginRange(element, true);
+          return;
+        }
         if (inspectionKind === 'parent') scopeElement = element;
         const result = snapshot(element);
         if (inspectionKind === 'parent' && inspectionPattern) {
@@ -1127,6 +1179,26 @@
       });
       picker.append(choice);
     });
+    if (offersRange && candidates.length) {
+      const rangeActions = document.createElement('div');
+      rangeActions.style.cssText = 'display:flex;gap:6px;padding:7px 8px;border-top:1px solid #c5cec8';
+      const rangeAction = (label, onChoose) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.style.cssText = 'flex:1;padding:6px 8px;border:1px solid #9aa9a1;border-radius:6px;background:#fff;color:#31413e;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+        button.addEventListener('click', () => { if (chosen) onChoose(chosen); });
+        rangeActions.append(button);
+      };
+      if (rangeStart) {
+        rangeAction('End here', (element) => finishRange(element, true));
+        rangeAction('End before this', (element) => finishRange(element, false));
+      } else {
+        rangeAction('Start a range here', (element) => beginRange(element, true));
+        rangeAction('Start after this', (element) => beginRange(element, false));
+      }
+      picker.append(rangeActions);
+    }
     const diagnostics = document.createElement('details');
     diagnostics.style.cssText = 'padding:7px 8px;border-top:1px solid #c5cec8';
     const diagnosticsSummary = document.createElement('summary');
@@ -1139,16 +1211,76 @@
     picker.append(diagnostics);
     document.documentElement.append(picker);
     if (candidates[0]) {
-      const firstChoice = picker.querySelector('button');
+      const firstChoice = picker.querySelector('[data-picker-choice]');
       if (firstChoice) firstChoice.style.background = '#dce8e1';
-      highlight(candidates[0]);
+      highlight(candidates[0], rangeStart ? rangeTo(candidates[0], true) : null);
     }
+  };
+
+  const setRangeStatus = (text) => {
+    if (rangeStart) rangeStart.status = text;
+    rangeStatus?.();
+  };
+
+  const beginRange = (element, includeStart) => {
+    document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+    rangeStart = { element, includeStart, status: '' };
+    if (rangeKeptEnd) {
+      const { element: end, includeEnd } = rangeKeptEnd;
+      rangeKeptEnd = null;
+      finishRange(end, includeEnd);
+      return;
+    }
+    setRangeStatus('Galaxy: pick where the range ends · Esc cancels the range');
+  };
+
+  /**
+   * Where a boundary of a range picked before is on the page now: the element inside the record that best fits its
+   * example, as a field is matched.
+   */
+  const rangeBoundaryElement = (selected) => {
+    const parent = resolvedScope();
+    if (!parent || !selected?.shape) return null;
+    return structuralTargetsWithin(parent)
+      .map((candidate) => ({ element: candidate, score: targetCandidateSimilarity(selected, candidate, parent).score }))
+      .sort((left, right) => right.score - left.score)[0]?.element || null;
+  };
+
+  // The range becomes one field: its start's example, with where it ends and whether each boundary is part of it.
+  const finishRange = (end, includeEnd) => {
+    document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+    const { element: start, includeStart } = rangeStart;
+    rangeStart = null;
+    rangeStatus?.();
+    const textRange = textRangeBetween(start, end, includeStart, includeEnd);
+    const result = snapshot(start);
+    result.range = { includeStart, includeEnd, end: snapshot(end), summary: rangeSummary(start, end, includeStart, includeEnd, readableText(null, textRange)) };
+    if (targetCollection) {
+      targetCollection.add(start, result, textRange);
+      return;
+    }
+    publish(result);
+    window.__hvyGalaxyInspector.stop();
   };
 
   const pointerMove = (event) => {
     if (!active || pickingPaused || !(event.target instanceof Element)) return;
     if (event.target.closest('#hvy-galaxy-inspector-picker')) return;
     const candidate = candidatesAt(event.clientX, event.clientY, event.target, event.composedPath())[0];
+    if (rangeStart) {
+      if (!candidate) {
+        document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+        highlighted = null;
+        setRangeStatus('Galaxy: pick something after the start');
+        return;
+      }
+      if (candidate === highlighted) return;
+      const textRange = textRangeBetween(rangeStart.element, candidate, rangeStart.includeStart, true);
+      const text = readableText(null, textRange);
+      highlight(candidate, textRange);
+      setRangeStatus(`Galaxy: pick where the range ends · Ends ${previewText(text, true)} · ${text.length.toLocaleString()} characters`);
+      return;
+    }
     if (candidate && candidate !== highlighted) highlight(candidate);
   };
   const click = (event) => {
@@ -1158,6 +1290,17 @@
     showPicker(event);
   };
   const keydown = (event) => {
+    // Escape while picking a range's end cancels the range; the fields already picked are kept.
+    if (active && rangeStart && !rangeEditing && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      rangeStart = null;
+      document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+      document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+      highlighted = null;
+      rangeStatus?.();
+      return;
+    }
     if (active && event.key === 'Escape') {
       window.location.href = 'hvy-integration://inspection-cancel';
       window.__hvyGalaxyInspector.stop();
@@ -1198,6 +1341,27 @@
     return { shapeScore, relativePathScore, score: shapeScore * 0.74 + relativePathScore * 0.26 };
   };
 
+  /**
+   * Where a range field ends in a record: the element after its start that best fits the saved end. When the end appears
+   * more than once, such as an Apply button above and below a posting, the first of the closest fits is taken.
+   */
+  const rangeEndFor = (range, start, parent, minimumTargetConfidence) => {
+    const expected = range?.end?.selected;
+    if (!expected?.shape) return null;
+    const ends = structuralTargetsWithin(parent)
+      .filter((candidate) => followsStart(start, candidate))
+      .map((candidate) => ({ element: candidate, score: targetCandidateSimilarity(expected, candidate, parent).score }))
+      .filter((candidate) => candidate.score >= minimumTargetConfidence);
+    if (!ends.length) return null;
+    const best = Math.max(...ends.map((candidate) => candidate.score));
+    return ends.find((candidate) => best - candidate.score < 0.035);
+  };
+
+  // Whether a matched field is the only one on its element. A range field reads between its boundaries, so it may start
+  // at another field (the title it starts after) and is not counted.
+  const uniqueTargetElement = (target, matchedTargets) => Boolean(target.textRange)
+    || matchedTargets.filter((other) => !other.textRange && other.element === target.element).length === 1;
+
   const patternScopes = (pattern = {}) => {
     const expected = pattern.scope?.selected?.shape;
     if (!expected) return [{ element: document, score: 1 }];
@@ -1235,6 +1399,10 @@
       .sort((left, right) => right.score - left.score || left.fieldIndex - right.fieldIndex || left.candidateIndex - right.candidateIndex)
       .forEach((match) => {
         if (assigned.has(match.fieldIndex)) return;
+        if (match.matchedSnapshot?.range) {
+          assigned.set(match.fieldIndex, match);
+          return;
+        }
         const conflicts = occupied.filter((entry) => elementsOverlap(entry.element, match.element));
         if (conflicts.some((entry) => entry.element === match.element
           || !learnedNestedRelationship(targets[entry.fieldIndex], targets[match.fieldIndex]))) return;
@@ -1245,6 +1413,15 @@
       const best = assigned.get(fieldIndex);
       const cardinality = target.cardinality === 'list' ? 'list' : 'single';
       const optional = target.optional === true;
+      const range = best?.matchedSnapshot?.range;
+      if (range) {
+        // A range field is its start and end: without an end in this record it is missing, not cut short.
+        const end = rangeEndFor(range, best.element, element, minimumTargetConfidence);
+        if (!end) return { label: target.label, cardinality: 'single', optional, score: 0, elements: [] };
+        const score = (best.score + end.score) / 2;
+        const textRange = textRangeBetween(best.element, end.element, range.includeStart === true, range.includeEnd === true);
+        return { label: target.label, cardinality: 'single', optional, ...best, score, end: end.element, textRange, elements: [{ ...best, score }] };
+      }
       const elements = best ? [best] : [];
       if (cardinality === 'list' && best && best.score >= minimumTargetConfidence) {
         matches.forEach((match) => {
@@ -1290,28 +1467,35 @@
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
     const evaluated = evaluateParentCandidate(element, parentScore, targets, minimumTargetConfidence);
     return evaluated.matchedTargets.map((target) => {
-      const unique = evaluated.matchedTargets.filter((other) => other.element === target.element).length === 1;
-      if (!target.element || target.score < minimumTargetConfidence || !unique) return { label: target.label, score: target.score || 0, snapshot: null };
+      if (!target.element || target.score < minimumTargetConfidence || !uniqueTargetElement(target, evaluated.matchedTargets)) return { label: target.label, score: target.score || 0, snapshot: null };
       const previousKind = inspectionKind;
       const previousScope = scopeElement;
       inspectionKind = 'target';
       scopeElement = element;
-      const fullSnapshot = snapshot(target.element);
+      const suggestedSnapshot = (suggested) => {
+        const fullSnapshot = snapshot(suggested);
+        return {
+          kind: fullSnapshot.kind,
+          inspectionKind: fullSnapshot.inspectionKind,
+          selected: {
+            tag: fullSnapshot.selected.tag,
+            role: fullSnapshot.selected.role,
+            directText: fullSnapshot.selected.directText,
+            descendantText: fullSnapshot.selected.descendantText,
+            cssPath: fullSnapshot.selected.cssPath,
+            shape: fullSnapshot.selected.shape,
+            relativePath: fullSnapshot.selected.relativePath,
+          },
+        };
+      };
+      const targetSnapshot = suggestedSnapshot(target.element);
+      // A range field's example in this record is its start and end here.
+      if (target.textRange) {
+        const { includeStart, includeEnd } = target.matchedSnapshot.range;
+        targetSnapshot.range = { includeStart, includeEnd, end: suggestedSnapshot(target.end), summary: rangeSummary(target.element, target.end, includeStart, includeEnd, readableText(null, target.textRange)) };
+      }
       inspectionKind = previousKind;
       scopeElement = previousScope;
-      const targetSnapshot = {
-        kind: fullSnapshot.kind,
-        inspectionKind: fullSnapshot.inspectionKind,
-        selected: {
-          tag: fullSnapshot.selected.tag,
-          role: fullSnapshot.selected.role,
-          directText: fullSnapshot.selected.directText,
-          descendantText: fullSnapshot.selected.descendantText,
-          cssPath: fullSnapshot.selected.cssPath,
-          shape: fullSnapshot.selected.shape,
-          relativePath: fullSnapshot.selected.relativePath,
-        },
-      };
       return { label: target.label, score: target.score, snapshot: targetSnapshot };
     });
   };
@@ -1327,7 +1511,7 @@
       .filter((candidate) => candidate.parentScore >= Math.max(0.5, minimumConfidence - 0.13))
       .map((candidate) => {
         const evaluated = evaluateParentCandidate(candidate.element, candidate.parentScore, targets, minimumTargetConfidence);
-        const presentTargets = evaluated.matchedTargets.filter((target) => !target.optional || target.element && target.score >= minimumTargetConfidence);
+        const presentTargets = evaluated.matchedTargets.filter((target) => !target.textRange && (!target.optional || target.element && target.score >= minimumTargetConfidence));
         const targetElements = presentTargets.map((target) => target.element).filter(Boolean);
         const distinctTargets = new Set(targetElements).size === targetElements.length;
         const targetsPass = evaluated.matchedTargets.every((target) => target.optional || target.element && target.score >= minimumTargetConfidence);
@@ -1956,11 +2140,13 @@
           ...(includeValues ? {
             value: missing
               ? target.cardinality === 'list' ? [] : null
-              : target.cardinality === 'list'
-                ? target.elements.map((item) => extractedValue(item.element))
-                : extractedValue(target.element),
+              : target.textRange
+                ? readableText(null, target.textRange)
+                : target.cardinality === 'list'
+                  ? target.elements.map((item) => extractedValue(item.element))
+                  : extractedValue(target.element),
             // The link a field points at, such as a job title linking to its posting.
-            href: missing || target.cardinality === 'list' ? null : linkHref(target.element),
+            href: missing || target.cardinality === 'list' || target.textRange ? null : linkHref(target.element),
           } : {}),
         };
       }),
@@ -2280,8 +2466,7 @@
 
           if (!match.accepted) return;
           match.matchedTargets.forEach((target) => {
-            const uniqueTarget = match.matchedTargets.filter((other) => other.element === target.element).length === 1;
-            const passes = Boolean(target.element) && target.score >= match.minimumTargetConfidence && uniqueTarget;
+            const passes = Boolean(target.element) && target.score >= match.minimumTargetConfidence && uniqueTargetElement(target, match.matchedTargets);
             if (target.optional && !passes) return;
             const targetColor = passes ? '#27865f' : '#d33f49';
             const targetElements = target.cardinality === 'list' && target.elements.length ? target.elements.map((item) => item.element) : target.element ? [target.element] : [];
@@ -2292,11 +2477,11 @@
               targetBox.dataset.existingMatchLabel = target.label;
               targetBox.style.cssText = `position:fixed;border:2px ${passes ? 'solid' : 'dashed'} ${targetColor};box-sizing:border-box;background:${targetColor}18;color:#fff;font:10px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif`;
               const targetCaption = document.createElement('span');
-              targetCaption.textContent = `${target.label}${target.cardinality === 'list' ? ` ${targetIndex + 1}` : ''} · ${Math.round((target.score || 0) * 100)}%`;
+              targetCaption.textContent = `${target.label}${target.cardinality === 'list' ? ` ${targetIndex + 1}` : ''}${target.textRange ? ` · ${readableText(null, target.textRange).length.toLocaleString()} characters` : ''} · ${Math.round((target.score || 0) * 100)}%`;
               targetCaption.style.cssText = `display:inline-block;padding:1px 4px;background:${targetColor};color:#fff`;
               targetBox.append(targetCaption);
               existingLayer.append(targetBox);
-              trackedBoxes.push({ element, box: targetBox });
+              trackedBoxes.push({ element, box: targetBox, ...(target.textRange ? { rect: () => target.textRange.getBoundingClientRect() } : {}) });
             });
           });
         });
@@ -2314,12 +2499,12 @@
       let selectionFrame = 0;
       const updateSelectionBoxes = () => {
         selectionFrame = 0;
-        trackedBoxes.forEach(({ element, box }) => {
+        trackedBoxes.forEach(({ element, box, rect: rangeRect }) => {
           if (!element.isConnected) {
             box.style.display = 'none';
             return;
           }
-          const rect = element.getBoundingClientRect();
+          const rect = rangeRect ? rangeRect() : element.getBoundingClientRect();
           Object.assign(box.style, { display: 'block', left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
         });
         if (scopeBox && scope?.isConnected) {
@@ -2353,6 +2538,26 @@
           ? options.existingPattern ? 'Galaxy: add example · green passes · orange/red needs attention' : 'Galaxy: select a parent'
           : 'Galaxy: select target data';
       statusText.textContent = activeStatusText;
+      rangeStart = null;
+      rangeKeptEnd = null;
+      rangeEditing = false;
+      rangeStatus = () => { statusText.textContent = rangeStart?.status || activeStatusText; };
+      const rangeEdit = inspectionKind === 'target' && options.rangeEdit?.snapshot?.range ? options.rangeEdit : null;
+      if (rangeEdit) {
+        const { snapshot: edited, boundary } = rangeEdit;
+        const kept = rangeBoundaryElement(boundary === 'end' ? edited.selected : edited.range.end.selected);
+        if (!kept) {
+          statusText.textContent = `Galaxy: the range's ${boundary === 'end' ? 'start' : 'end'} is not in this item · pick the field again`;
+        } else if (boundary === 'end') {
+          rangeEditing = true;
+          rangeStart = { element: kept, includeStart: edited.range.includeStart === true, status: 'Galaxy: pick where the range ends' };
+          statusText.textContent = rangeStart.status;
+        } else {
+          rangeEditing = true;
+          rangeKeptEnd = { element: kept, includeEnd: edited.range.includeEnd === true };
+          statusText.textContent = 'Galaxy: pick where the range starts';
+        }
+      }
       const navigationButton = document.createElement('button');
       navigationButton.type = 'button';
       navigationButton.textContent = 'Navigate page';
@@ -2686,9 +2891,9 @@
         undoButton.disabled = true;
         undoButton.style.cssText = doneButton.style.cssText;
         const updateCollectionStatus = () => {
-          statusText.textContent = selectedItems.length
+          statusText.textContent = rangeStart?.status || (selectedItems.length
             ? `Galaxy: ${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
-            : 'Galaxy: select fields, or choose Done to cancel';
+            : 'Galaxy: select fields, or choose Done to cancel');
           undoButton.disabled = selectedItems.length === 0;
           if (externalToolbar) {
             publishToolbarState({
@@ -2699,19 +2904,21 @@
             });
           }
         };
+        rangeStatus = updateCollectionStatus;
         targetCollection = {
-          add(element, result) {
-            if (selectedElements.has(element)) return;
-            selectedElements.add(element);
+          // A range is boxed over its text. It may start at an element already picked as a field (the title it starts after).
+          add(element, result, textRange = null) {
+            if (!textRange && selectedElements.has(element)) return;
+            if (!textRange) selectedElements.add(element);
             const box = document.createElement('div');
             box.dataset.collectionSelection = 'true';
             box.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;border:3px solid #27865f;background:#27865f1f;box-sizing:border-box;color:#fff;font:11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
             box.textContent = `${selectedItems.length + 1}`;
             box.style.padding = '3px 5px';
             document.documentElement.append(box);
-            const tracked = { element, box };
+            const tracked = { element, box, ...(textRange ? { rect: () => textRange.getBoundingClientRect() } : {}) };
             trackedBoxes.push(tracked);
-            selectedItems.push({ element, result, tracked });
+            selectedItems.push({ element, result, tracked, textRange });
             updateSelectionBoxes();
             updateCollectionStatus();
           },
@@ -2721,7 +2928,7 @@
           event.stopPropagation();
           const removed = selectedItems.pop();
           if (!removed) return;
-          selectedElements.delete(removed.element);
+          if (!removed.textRange) selectedElements.delete(removed.element);
           removed.tracked.box.remove();
           const trackedIndex = trackedBoxes.indexOf(removed.tracked);
           if (trackedIndex >= 0) trackedBoxes.splice(trackedIndex, 1);
@@ -2750,6 +2957,10 @@
     },
     stop() {
       active = false;
+      rangeStart = null;
+      rangeStatus = null;
+      rangeKeptEnd = null;
+      rangeEditing = false;
       inspectionPattern = null;
       targetCollection = null;
       commandRecorder = null;
@@ -2916,12 +3127,12 @@
       let updateFrame = 0;
       const updateOverlays = () => {
         updateFrame = 0;
-        overlays.forEach(({ element, box }) => {
+        overlays.forEach(({ element, box, rect: rangeRect }) => {
           if (!element.isConnected) {
             box.style.display = 'none';
             return;
           }
-          const rect = element.getBoundingClientRect();
+          const rect = rangeRect ? rangeRect() : element.getBoundingClientRect();
           box.style.display = rect.width && rect.height ? 'block' : 'none';
           Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
         });
@@ -2987,7 +3198,7 @@
           const position = left.element.compareDocumentPosition(right.element);
           return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
         });
-        const addBox = (element, color, label, width, kind, recordIndex) => {
+        const addBox = (element, color, label, width, kind, recordIndex, textRange = null) => {
           const box = document.createElement('div');
           box.dataset.matchKind = kind;
           box.dataset.matchIndex = String(recordIndex + 1);
@@ -2997,14 +3208,17 @@
           caption.style.cssText = `display:inline-block;padding:2px 5px;background:${color};color:#fff`;
           box.append(caption);
           layer.append(box);
-          overlays.push({ element, box });
+          overlays.push({ element, box, ...(textRange ? { rect: () => textRange.getBoundingClientRect() } : {}) });
           return box;
         };
         visualMatches.forEach((match, recordIndex) => {
           addBox(match.element, '#3478d4', `Match ${recordIndex + 1} · ${Math.round(match.score * 100)}%`, 2, 'parent', recordIndex);
           match.matchedTargets
             .filter((target) => target.element && target.score >= match.minimumTargetConfidence)
-            .forEach((target) => target.elements.forEach((item) => addBox(item.element, '#e0563f', target.label || 'Unlabeled target', 3, 'target', recordIndex)));
+            .forEach((target) => target.textRange
+              // A range field is one box over its text, with its length, so a range that swallowed the footer stands out.
+              ? addBox(target.element, '#e0563f', `${target.label || 'Unlabeled target'} · ${readableText(null, target.textRange).length.toLocaleString()} characters`, 3, 'target', recordIndex, target.textRange)
+              : target.elements.forEach((item) => addBox(item.element, '#e0563f', target.label || 'Unlabeled target', 3, 'target', recordIndex)));
         });
         confidenceOutput.textContent = `${slider.value}%`;
         statusText.textContent = currentAccepted.length

@@ -53,6 +53,7 @@ interface InspectorSnapshot {
     pagePath?: Array<{ tag: string }>;
     scopeLabel?: string;
   };
+  range?: { includeStart: boolean; includeEnd: boolean; end: InspectorSnapshot; summary?: string };
 }
 
 interface InspectorApi {
@@ -69,6 +70,7 @@ interface InspectorApi {
     multiSelect?: boolean;
     externalToolbar?: boolean;
     context?: Record<string, unknown>;
+    rangeEdit?: { boundary: 'start' | 'end'; snapshot: InspectorSnapshot };
     commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0] };
   }): void;
   control(action: 'navigate' | 'undo' | 'done'): void;
@@ -625,6 +627,206 @@ describe('integration structural inspector', () => {
       }).records[0].targets[0].value;
     });
     expect(value).toBe("Build the operator console.\n\nWhat you'll do\n\nWork with the team.\n\nShip every week.");
+    expect(pageErrors).toEqual([]);
+  });
+
+  // Postings whose description is their sections, beside the title, details, and Apply button, with no element of its own.
+  const sectionedPostings = `
+    <style>.posting { width: 640px; padding: 16px; } .apply-button { display: inline-block; padding: 6px 12px; }</style>
+    <main class="postings">
+      <article class="posting" data-record="first">
+        <h1 class="posting-title">Senior TypeScript Engineer</h1>
+        <p class="posting-meta"><span class="location">Remote (US)</span> · Full-time</p>
+        <h2>About the role</h2>
+        <p>Build the dispatch console.</p>
+        <h2>Responsibilities</h2>
+        <ul><li>Own the route planning screens.</li><li>Mentor two engineers.</li></ul>
+        <div class="apply-bar"><a class="apply-button" href="#apply">Apply now</a></div>
+        <h2>Similar jobs</h2>
+        <ul class="similar"><li><a href="#other">Data Analyst</a></li></ul>
+      </article>
+      <article class="posting" data-record="second">
+        <h1 class="posting-title">Data Analyst</h1>
+        <p class="posting-meta"><span class="location">Denver, CO</span> · Full-time</p>
+        <h2>About the role</h2>
+        <p>Turn shipment data into reports.</p>
+        <h2>Requirements</h2>
+        <ul><li>SQL and Python.</li></ul>
+        <h2>Benefits</h2>
+        <ul><li>Learning budget.</li></ul>
+        <div class="apply-bar"><a class="apply-button" href="#apply">Apply now</a></div>
+        <h2>Similar jobs</h2>
+        <ul class="similar"><li><a href="#other">Senior TypeScript Engineer</a></li></ul>
+      </article>
+      <article class="posting" data-record="closed">
+        <h1 class="posting-title">Warehouse Systems Engineer</h1>
+        <p class="posting-meta"><span class="location">Reno, NV</span> · Contract</p>
+        <h2>About the role</h2>
+        <p>This position has been filled.</p>
+        <h2>Similar jobs</h2>
+        <ul class="similar"><li><a href="#other">Data Analyst</a></li></ul>
+      </article>
+    </main>`;
+
+  it('picks a field as a range from one element to another, and returns it as one field', async () => {
+    await page.setContent(sectionedPostings);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+    }), parentSnapshot);
+    const status = page.locator('[data-inspector-status-text]');
+    const picker = page.locator('#hvy-galaxy-inspector-picker');
+
+    // The title is a field of its own; the description starts after the details line.
+    await clickPointerAt(page, '[data-record="first"] .posting-title');
+    await picker.locator('button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    await clickPointerAt(page, '[data-record="first"] .posting-meta');
+    await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).hover();
+    await picker.getByRole('button', { name: 'Start after this' }).click();
+    expect(await status.textContent()).toBe('Galaxy: pick where the range ends · Esc cancels the range');
+
+    // Hovering previews the range up to the element under the pointer.
+    await movePointerTo(page, '[data-record="first"] .apply-button');
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toMatch(/^Range · \d+ characters$/);
+    expect(await status.textContent()).toMatch(/^Galaxy: pick where the range ends · Ends …?.*Apply now · \d+ characters$/);
+    // Only what comes after the start can end it.
+    await movePointerTo(page, '[data-record="first"] .posting-title');
+    expect(await status.textContent()).toBe('Galaxy: pick something after the start');
+
+    await clickPointerAt(page, '[data-record="first"] .apply-button');
+    expect(await picker.locator('div').first().textContent()).toBe('Choose where the range ends');
+    await picker.locator('button', { hasText: 'a — Apply now' }).hover();
+    await picker.getByRole('button', { name: 'End before this' }).click();
+    expect(await status.textContent()).toBe('Galaxy: 2 fields selected');
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(2);
+
+    await page.getByRole('button', { name: 'Done' }).click();
+    const published = await page.evaluate(() => window.__commandRecordingResult) as { items: InspectorSnapshot[] };
+    expect(published.items).toHaveLength(2);
+    expect(published.items[0].range).toBeUndefined();
+    expect(published.items[1].selected.directText).toBe('· Full-time');
+    expect(published.items[1].range).toMatchObject({
+      includeStart: false,
+      includeEnd: false,
+      end: { selected: { directText: 'Apply now' } },
+      summary: expect.stringMatching(/^Starts after “Remote \(US\) · Full-time” · Ends before “Apply now” · \d+ characters$/),
+    });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('cancels a range with Escape and keeps the fields already picked', async () => {
+    await page.setContent(sectionedPostings);
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+    }), parentSnapshot);
+    await clickPointerAt(page, '[data-record="first"] .posting-title');
+    await page.locator('#hvy-galaxy-inspector-picker button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    await clickPointerAt(page, '[data-record="first"] .posting-meta');
+    await page.getByRole('button', { name: 'Start a range here' }).click();
+    await page.keyboard.press('Escape');
+
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(1);
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('picks a range field\'s start or end again, keeping the other boundary', async () => {
+    await page.setContent(sectionedPostings);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const { parentSnapshot, rangeSnapshot } = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      const target = (selector: string) => window.__hvyGalaxyInspector.snapshotElement(parent.querySelector(selector)!, parent, 'target');
+      return {
+        parentSnapshot: window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent'),
+        rangeSnapshot: { ...target('.posting-meta'), range: { includeStart: false, includeEnd: false, end: target('.apply-button') } },
+      };
+    });
+    const startEdit = (boundary: 'start' | 'end') => page.evaluate(([snapshot, range, which]) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      rangeEdit: { boundary: which, snapshot: range },
+    }), [parentSnapshot, rangeSnapshot, boundary] as const);
+    const status = page.locator('[data-inspector-status-text]');
+    const picker = page.locator('#hvy-galaxy-inspector-picker');
+    const published = () => page.evaluate(() => window.__commandRecordingResult) as Promise<InspectorSnapshot>;
+
+    // A new end: the start after the details line is kept.
+    await startEdit('end');
+    expect(await status.textContent()).toBe('Galaxy: pick where the range ends');
+    await clickPointerAt(page, '[data-record="first"] .similar a');
+    expect(await picker.locator('div').first().textContent()).toBe('Choose where the range ends');
+    await picker.locator('button', { hasText: 'a — Data Analyst' }).click();
+    expect((await published()).selected.directText).toBe('· Full-time');
+    expect((await published()).range).toMatchObject({ includeStart: false, includeEnd: true, end: { selected: { directText: 'Data Analyst' } } });
+
+    // A new start: the end before Apply now is kept, and only what comes before it can start the range.
+    await startEdit('start');
+    expect(await status.textContent()).toBe('Galaxy: pick where the range starts');
+    await clickPointerAt(page, '[data-record="first"] .similar a');
+    expect(await picker.locator('div').first().textContent()).toBe('Pick something before the end');
+    await page.locator('#hvy-galaxy-inspector-picker').evaluate((element) => element.remove());
+    await clickPointerAt(page, '[data-record="first"] h2:first-of-type');
+    expect(await picker.locator('div').first().textContent()).toBe('Choose where the range starts');
+    await picker.locator('button', { hasText: 'h2 — About the role' }).hover();
+    await picker.getByRole('button', { name: 'Start a range here' }).click();
+    expect((await published()).selected.directText).toBe('About the role');
+    expect((await published()).range).toMatchObject({
+      includeStart: true,
+      includeEnd: false,
+      end: { selected: { directText: 'Apply now' } },
+      summary: expect.stringMatching(/^Starts at “About the role” · Ends before “Apply now” · \d+ characters$/),
+    });
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('reads a range field between its boundaries in each record, however many sections it has', async () => {
+    await page.setContent(sectionedPostings);
+    await page.addScriptTag({ content: inspectorSource });
+    const pattern = await page.evaluate(() => {
+      const parent = document.querySelector('[data-record="first"]')!;
+      const target = (selector: string) => window.__hvyGalaxyInspector.snapshotElement(parent.querySelector(selector)!, parent, 'target');
+      return {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [
+          { label: 'title', snapshot: target('.posting-title') },
+          { label: 'description', snapshot: { ...target('.posting-meta'), range: { includeStart: false, includeEnd: false, end: target('.apply-button') } } },
+        ],
+        minimumConfidence: 0.7,
+      };
+    });
+    const result = await page.evaluate((value) => window.__hvyGalaxyInspector.extractPattern(value), pattern);
+
+    // The closed posting has no Apply button, so its description has no end: it is missing rather than running on into
+    // Similar jobs, and the field is required.
+    expect(result.records.map((record) => record.targets.map((target) => target.value)), JSON.stringify(result.records, null, 2)).toEqual([
+      ['Senior TypeScript Engineer', 'About the role\n\nBuild the dispatch console.\n\nResponsibilities\n\nOwn the route planning screens.\n\nMentor two engineers.'],
+      ['Data Analyst', 'About the role\n\nTurn shipment data into reports.\n\nRequirements\n\nSQL and Python.\n\nBenefits\n\nLearning budget.'],
+    ]);
+
+    // Highlight matches boxes each range over its text, with its length.
+    await page.evaluate((value) => window.__hvyGalaxyInspector.matchAndHighlight(value), pattern);
+    const captions = await page.locator('#hvy-galaxy-pattern-matches [data-match-kind="target"] span').allTextContents();
+    expect(captions.filter((caption) => caption.startsWith('description'))).toEqual([
+      expect.stringMatching(/^description · \d+ characters$/),
+      expect.stringMatching(/^description · \d+ characters$/),
+    ]);
     expect(pageErrors).toEqual([]);
   });
 

@@ -109,6 +109,7 @@ export interface UiHandlers {
   confirmDiscardIntegrationAction(): void;
   cancelIntegrationActionSelection(): void;
   addAnotherIntegrationActionExample(parentIndex?: number, fieldIndex?: number | null): void;
+  changeIntegrationActionRange(parentIndex: number, fieldIndex: number, boundary: 'start' | 'end'): void;
   addIntegrationActionAnchor(): void;
   limitIntegrationActionToSection(): void;
   removeIntegrationActionScope(): void;

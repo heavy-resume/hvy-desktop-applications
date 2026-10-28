@@ -171,7 +171,9 @@ export interface AppState {
   integrationActionScope: unknown | null;
   integrationActionAnchors: unknown[];
   integrationActionAnchorRules: InspectionPrivacyRule[][];
-  integrationActionSelectionKind: 'parent' | 'target' | 'example' | 'scope';
+  integrationActionSelectionKind: 'parent' | 'target' | 'example' | 'scope' | 'range';
+  /** While the selection kind is 'range': which boundary of the range field is being picked again. */
+  integrationActionRangeBoundary: 'start' | 'end';
   integrationActionSelectionPending: boolean;
   integrationActionDraftIntegrationId: string | null;
   integrationActionDraftPageId: string | null;
@@ -545,6 +547,7 @@ export const state: AppState = {
   integrationActionAnchors: [],
   integrationActionAnchorRules: [],
   integrationActionSelectionKind: 'parent',
+  integrationActionRangeBoundary: 'start',
   integrationActionSelectionPending: false,
   integrationActionDraftIntegrationId: null,
   integrationActionDraftPageId: null,

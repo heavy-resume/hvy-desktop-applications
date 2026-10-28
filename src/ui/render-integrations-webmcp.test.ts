@@ -191,6 +191,39 @@ describe('record type retrieval settings', () => {
     expect(html).not.toContain('data-field="integration-action-scroll-page" checked');
     expect(html).toContain('<span class="integration-record-scroll-heading"><input type="checkbox" data-field="integration-action-scroll-page" ><strong>Scroll to load records</strong></span>');
   });
+
+  it('shows a range field as its summary, with Change start and Change end in its cell', () => {
+    const range = { selected: { directText: 'Full-time' }, range: { includeStart: false, includeEnd: false, end: { selected: { directText: 'Apply now' } }, summary: 'Starts after “Full-time” · Ends before “Apply now” · 120 characters' } };
+    const html = renderIntegrationActionBuilderDialog({
+      ...state,
+      integrationActionBuilderOpen: true,
+      integrationActionBuilderStep: 'define',
+      integrationActionAnchors: [{ selected: {} }],
+      integrationActionExamples: [{ selected: { directText: 'Engineer' } }, range],
+      integrationActionTargetLabels: ['title', 'description'],
+      integrationActionTargetVariants: [[{ selected: { directText: 'Engineer' } }], [range]],
+      integrationActionTargetAbsentExamples: [[false], [false]],
+      integrationActionLiveExampleRecords: [],
+    });
+    expect(html).toContain('<span class="integration-example-value">Range · Starts after “Full-time” · Ends before “Apply now” · 120 characters</span>');
+    expect(html).toContain('data-action="change-integration-action-range" data-parent-index="0" data-field-index="1" data-boundary="start" >Change start</button>');
+    expect(html).toContain('data-boundary="end" >Change end</button>');
+    // Only the range field's cell offers them.
+    expect(html.match(/change-integration-action-range/g)).toHaveLength(2);
+  });
+
+  it('asks for the boundary being picked again while the browser is showing', () => {
+    const html = renderIntegrationActionBuilderDialog({
+      ...state,
+      integrationActionBuilderOpen: true,
+      integrationActionSelectionPending: true,
+      integrationActionSelectionKind: 'range',
+      integrationActionRangeBoundary: 'end',
+      integrationActionTargetSelectionFieldIndex: 1,
+    });
+    expect(html).toContain('<h2>Select where the range ends</h2>');
+    expect(html).toContain('Choose where the range ends. Its start stays as it is.');
+  });
 });
 
 describe('WebMCP result dialog', () => {
