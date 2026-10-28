@@ -14,6 +14,7 @@ import { WebAutomationError } from './errors';
 import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
+import { createSqlRecordConsumer, type OpenedDatabase } from './sqlSink';
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
 import { capabilityOrigin } from './webApi';
 // Registers the blocks' checks with hvy lint.
@@ -133,6 +134,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
    * redraws that list in the document's state runtime.
    */
   onDocumentChange?(stateRuntime: StateRuntime, listPath: string): void;
+  /** The document's database changed outside a script: a record sink wrote rows into one of its tables. */
+  onDatabaseChange?(stateRuntime: StateRuntime): void;
 }) {
   const { document } = options;
   let stateRuntime = options.stateRuntime;
@@ -173,6 +176,20 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   // Blocks are read when used, not when the document opened: a block's configuration changes while it is open (start
   // pages added in the reader, site setups saved into it, the AI editing plugin.json).
   const collectionBlock = (capabilityId: string) => readWebAutomationBlocks(document).collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.config ?? null;
+  // A fresh copy of the document's database for each use, in the document's own state runtime, as its scripts' doc.db is:
+  // the reference implementation tells the live document (whose table views reload) by it.
+  const openDatabase = async (): Promise<OpenedDatabase> => {
+    // Loaded when first used, as the reference implementation loads its database runtime.
+    const { createScriptingDbRuntime } = await import('../../../heavy-file-format/src/plugins/db-table');
+    const runtime = await runWithStateRuntime(stateRuntime, () => createScriptingDbRuntime(document));
+    return {
+      api: {
+        query: (sql, params) => runWithStateRuntime(stateRuntime, () => runtime.api.query(sql, params)),
+        execute: (sql, params) => runWithStateRuntime(stateRuntime, () => runtime.api.execute(sql, params)),
+      },
+      dispose: runtime.dispose,
+    };
+  };
   const lookup: DocumentAutomationLookup = {
     automation,
     webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capabilityId)?.config.capability ?? null,
@@ -180,11 +197,13 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     sink: (capabilityId) => {
       const output = collectionBlock(capabilityId)?.output;
       if (!output) return null;
-      const sink = createRecordSink(createCliItemStore(document, output.store), output.policy);
+      const { store, policy } = output;
+      if ('kind' in store) return createSqlRecordConsumer(document, openDatabase, store, policy, () => options.onDatabaseChange?.(stateRuntime));
+      const sink = createRecordSink(createCliItemStore(document, store), policy);
       return {
         onRecord: (record) => {
           sink.onRecord(record);
-          options.onDocumentChange?.(stateRuntime, output.store.listPath);
+          options.onDocumentChange?.(stateRuntime, store.listPath);
         },
         isKnown: sink.isKnown,
       };

@@ -75,7 +75,8 @@ export function findWebAutomationProblems(document: VisualDocument): WebAutomati
   }
 
   for (const { block, config } of blocks.collections) {
-    if (!config.output) continue;
+    // A table in the document's database is checked when a run opens it: reading the database is asynchronous.
+    if (!config.output || 'kind' in config.output.store) continue;
     problems.push(...validateCliItemStore(document, config.output.store).map((message) => ({ blocks: [block], message })));
   }
 

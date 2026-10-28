@@ -21,6 +21,10 @@ import { patternFingerprints, resolveSitePattern, urlMatchesRule, type SitePatte
 export interface RecordConsumer {
   onRecord(record: CollectedRecord): void;
   isKnown?(key: string): boolean;
+  /** Gets ready before the run reads anything (a database to open and check); failing fails the run with its reason. */
+  open?(): Promise<void>;
+  /** After the run: the records it was given are written, or the run fails with why one wasn't. */
+  close?(): Promise<void>;
 }
 
 /**
@@ -231,24 +235,40 @@ export class CollectionService {
     for (const startPage of startPages) {
       run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, read: 0, collected: 0, problems: 0, current: null };
     }
-    const done = Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
+    const done = this.withConsumer(run, () => Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
       { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
       (lease) => this.collectFrom(run, lease, startPage),
-    ))).then((results) => this.finish(run, results));
+    )))).then((results) => this.finish(run, results));
     return { runId: run.state.runId, done };
   }
 
   extract(definition: CollectionDefinition, profileId: string, url: string, consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
-    const done = Promise.allSettled([this.deps.scheduler.run(
+    const done = this.withConsumer(run, () => Promise.allSettled([this.deps.scheduler.run(
       { profileId, kind: 'collection', origin: new URL(url).origin, label: `${definition.name}: ${url}`, interactive: true, signal: run.controller.signal },
       async (lease) => {
         this.assertAllowed(run, url, false);
         await lease.paced(url, () => this.deps.host.navigate(lease.workerId, url));
         await this.writeDetail(run, lease, url, await this.inspectAt(run, lease), {});
       },
-    )]).then((results) => this.finish(run, results));
+    )])).then((results) => this.finish(run, results));
     return { runId: run.state.runId, done };
+  }
+
+  /** A run between its consumer's open and close: either failing is the run's failure. */
+  private async withConsumer(run: ActiveRun, collect: () => Promise<PromiseSettledResult<unknown>[]>): Promise<PromiseSettledResult<unknown>[]> {
+    try {
+      await run.consumer.open?.();
+    } catch (reason) {
+      return [{ status: 'rejected', reason }];
+    }
+    const results = await collect();
+    try {
+      await run.consumer.close?.();
+    } catch (reason) {
+      return [...results, { status: 'rejected', reason }];
+    }
+    return results;
   }
 
   async show(runId: string): Promise<void> {

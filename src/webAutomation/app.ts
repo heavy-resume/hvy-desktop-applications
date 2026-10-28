@@ -105,6 +105,9 @@ setDocumentAutomationOpener((rawDocument) => {
       if (!list || !getRefreshReaderBlock()(window.document, list.sectionKey, list.blockId)) getRenderApp()();
       else void runPluginDocumentHooks('unknown');
     }),
+    // A record sink wrote rows into the document's database: its table views read it again on a redraw, which ends
+    // with the document hooks, so its scripts see the new rows.
+    onDatabaseChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
   });
   openedByDocument.set(document, opened);
   return opened.lookup;

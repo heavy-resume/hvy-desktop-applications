@@ -4,6 +4,7 @@ import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type A
 import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntryStatus, type QueueState } from './queue';
 import type { ServedDocumentDefinition } from './servedDocuments';
 import type { RecordSinkConfig } from './recordSink';
+import { SQL_IDENTIFIER, type SqlItemStoreConfig } from './sqlItemStore';
 import { publishedService, SERVICE_MANIFEST_FORMAT } from './serviceManifests';
 import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
 import type { SessionDefinition, WebApiCapability } from './webApi';
@@ -38,8 +39,8 @@ export interface WebApiBlockConfig {
 export interface CollectionBlockConfig {
   collection: CollectionDefinition;
   mcp: { collect: boolean };
-  /** Where the collection's records go: a component-list in this document, and the record sink's policy. */
-  output?: { store: CliItemStoreConfig; policy: RecordSinkConfig };
+  /** Where the collection's records go (a component-list in this document, or a table of its database), and the record sink's policy. */
+  output?: { store: CliItemStoreConfig | SqlItemStoreConfig; policy: RecordSinkConfig };
 }
 
 function readFieldBinding(name: string, value: unknown, errors: string[]): ItemFieldBinding | null {
@@ -89,6 +90,35 @@ function readOutput(value: unknown, errors: string[]): CollectionBlockConfig['ou
     return undefined;
   }
   const store = value.store;
+  const policy = isRecord(value.policy) ? value.policy : {};
+  const ownedFields = Array.isArray(policy.ownedFields) ? strings(policy.ownedFields) : undefined;
+  const readPolicy = (): RecordSinkConfig => ({
+    onExisting: policy.onExisting === 'refresh' ? 'refresh' : 'keep',
+    keepGoodOnFailure: policy.keepGoodOnFailure !== false,
+    ...(ownedFields ? { ownedFields } : {}),
+  });
+  if (store.kind === 'sql') {
+    // A table of the document's database. Its columns are checked against the table when a run opens it.
+    const identifier = (name: unknown, role: string): string => {
+      const read = text(name);
+      if (!SQL_IDENTIFIER.test(read)) errors.push(`The output's ${role} must be a plain name (letters, digits, and _), not "${read}".`);
+      return read;
+    };
+    const columns = Object.fromEntries(Object.entries(isRecord(store.columns) ? store.columns : {})
+      .map(([name, column]) => [name, identifier(column, `column for "${name}"`)]));
+    if (ownedFields?.some((field) => !(field in columns))) errors.push('The output owns fields that have no column in the table.');
+    return {
+      store: {
+        kind: 'sql',
+        table: identifier(store.table, 'table'),
+        keyColumn: identifier(store.keyColumn, 'key column'),
+        recordColumn: identifier(store.recordColumn, 'record column'),
+        columns,
+        ...(store.collectedAtColumn !== undefined ? { collectedAtColumn: identifier(store.collectedAtColumn, 'column for when an item was found') } : {}),
+      },
+      policy: readPolicy(),
+    };
+  }
   const listPath = text(store.listPath);
   const componentName = text(store.componentName);
   const recordPath = text(store.recordPath);
@@ -100,16 +130,10 @@ function readOutput(value: unknown, errors: string[]): CollectionBlockConfig['ou
       const read = readFieldBinding(name, binding, errors);
       return read ? [[name, read]] : [];
     }));
-  const policy = isRecord(value.policy) ? value.policy : {};
-  const ownedFields = Array.isArray(policy.ownedFields) ? strings(policy.ownedFields) : undefined;
   if (ownedFields?.some((field) => !(field in fields))) errors.push('The output owns fields that have no place in the template.');
   return {
     store: { listPath, componentName, recordPath, fields },
-    policy: {
-      onExisting: policy.onExisting === 'refresh' ? 'refresh' : 'keep',
-      keepGoodOnFailure: policy.keepGoodOnFailure !== false,
-      ...(ownedFields ? { ownedFields } : {}),
-    },
+    policy: readPolicy(),
   };
 }
 

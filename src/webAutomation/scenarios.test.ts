@@ -139,6 +139,26 @@ describe('mock integration: job search flow', () => {
     expect(flow!.item(ACME)).toBeNull();
   });
 
+  it('4c. where records go isn\'t ready, or a write fails: the run fails with why', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const written: string[] = [];
+    const unopened = await flow!.collect(boards, undefined, {
+      open: async () => { throw new Error('Table "jobs" has no column "url" for field "url".'); },
+      onRecord: (record) => written.push(record.key),
+    });
+    // Nothing is read when the records would have nowhere to go.
+    expect(unopened).toMatchObject({ status: 'failed', error: 'Table "jobs" has no column "url" for field "url".', page: 0, collected: 0 });
+    expect(written).toEqual([]);
+
+    const failedWrite = await flow!.collect(boards, undefined, {
+      onRecord: (record) => written.push(record.key),
+      close: async () => { throw new Error('The database is locked.'); },
+    });
+    expect(failedWrite).toMatchObject({ status: 'failed', error: 'The database is locked.', collected: 5 });
+    expect(written).toHaveLength(5);
+  });
+
   it('5. challenge: the run pauses for attention, the user solves it, and the run resumes', async () => {
     const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`]);
     await signedInFlow(boards);

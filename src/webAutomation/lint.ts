@@ -32,7 +32,7 @@ registerHvyCliPluginCommands({
   pluginId: WEB_COLLECTION_PLUGIN_ID,
   helpTopic: 'hvy plugin galaxy-web-collection',
   componentHints: [
-    'This plugin collects records from web pages: start pages, site patterns, limits, and an optional output into a component-list, in plugin.json pluginConfig.',
+    'This plugin collects records from web pages: start pages, site patterns, limits, and an optional output (into a component-list, or with "kind": "sql" into a table of the document database), in plugin.json pluginConfig.',
     'Scripts start a run with doc.plugins.call("galaxy.web-collection", "collect", {"capabilityId": ..., "on_complete": handler}).',
   ],
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.web-collection', description: 'Create a web collection block. Edit plugin.json for start pages, patterns, and output.' }],

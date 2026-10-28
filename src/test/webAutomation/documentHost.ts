@@ -161,9 +161,14 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
   resetPluginDocumentHookState();
   const runtime = options.stateRuntime;
   let renders = 0;
+  // Hook runs a render started. A call made while one is running is skipped as nested and returns at once, so waiting
+  // for the hooks means waiting for these.
+  const hookRuns = new Set<Promise<unknown>>();
   runtime.callbacks.renderApp = () => {
     renders += 1;
-    void runPluginDocumentHooks('unknown');
+    const run = runPluginDocumentHooks('unknown');
+    hookRuns.add(run);
+    void run.finally(() => hookRuns.delete(run));
   };
   activateStateRuntime(runtime);
   const loaded = runPluginDocumentHooks('load');
@@ -179,6 +184,7 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
     /** Resolves when the load hooks, and any hook runs they caused, have finished. */
     async idle(): Promise<void> {
       await loaded;
+      while (hookRuns.size) await Promise.allSettled([...hookRuns]);
       await runWithStateRuntimeAsync(runtime, () => runPluginDocumentHooks('unknown'));
     },
 

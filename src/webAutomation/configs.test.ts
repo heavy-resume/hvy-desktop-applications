@@ -113,6 +113,23 @@ describe('block configuration readers', () => {
     ]);
   });
 
+  it('reads an output into a table of the document\'s database, with plain names only', () => {
+    const acme = `${ATS_ORIGIN}/acme/jobs`;
+    const store = { kind: 'sql', table: 'jobs', keyColumn: 'job_key', recordColumn: 'record', columns: { title: 'title', company: 'company' }, collectedAtColumn: 'collected_at' };
+    const result = readCollectionBlockConfig({ schemaVersion: 1, ...listingCollection([acme]), output: { store, policy: { onExisting: 'refresh', ownedFields: ['title'] } } });
+    expect(result.ok && result.value.output).toEqual({ store, policy: { onExisting: 'refresh', keepGoodOnFailure: true, ownedFields: ['title'] } });
+
+    expect(errorsOf(readCollectionBlockConfig({
+      schemaVersion: 1,
+      ...listingCollection([acme]),
+      output: { store: { ...store, table: 'jobs; DROP TABLE jobs', columns: { title: 'job title' } }, policy: { ownedFields: ['company'] } },
+    }))).toEqual([
+      'The output\'s column for "title" must be a plain name (letters, digits, and _), not "job title".',
+      'The output owns fields that have no column in the table.',
+      'The output\'s table must be a plain name (letters, digits, and _), not "jobs; DROP TABLE jobs".',
+    ]);
+  });
+
   it('reads queue blocks with bounded defaults and refuses queue-to-queue targets', () => {
     const result = readQueueBlockConfig({
       schemaVersion: 1,

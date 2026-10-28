@@ -1,11 +1,11 @@
 import { canonicalUrl } from '../../webAutomation/records';
-import { deserializeDocument, serializeDocument } from '../../../../heavy-file-format/src/serialization';
+import { deserializeDocumentBytes, serializeDocument, serializeDocumentBytes } from '../../../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
 import type { VisualBlock } from '../../../../heavy-file-format/src/editor/types';
 import { createCliItemStore, type CliItemStoreConfig } from '../../webAutomation/cliItemStore';
 import { createMemoryItemStore, createRecordSink, DEFAULT_RECORD_SINK_CONFIG, updateItemFields, type DocumentItem, type RecordSinkConfig } from '../../webAutomation/recordSink';
 import { seededRandom } from '../../webAutomation/clock';
-import type { CollectionDefinition, CollectionRunState } from '../../webAutomation/collection';
+import type { CollectionDefinition, CollectionRunState, RecordConsumer } from '../../webAutomation/collection';
 import { createWebAutomationRuntime, type WebAutomation, type WebAutomationRuntimeDeps } from '../../webAutomation/entryPoints';
 import { openDocumentAutomation, registerWebAutomationPlugins, type DocumentAutomation } from '../../webAutomation/documentAutomation';
 import { executeHvyCliCommandSync } from '../../../../heavy-file-format/src/cli-core';
@@ -63,7 +63,7 @@ export interface MockFlowOptions<State> {
     store?: CliItemStoreConfig;
     /** The document's own load script, run on every open in place of the flow's stand-in. */
     load?(document: VisualDocument, clock: VirtualClock, stateRuntime: StateRuntime): void;
-    /** The document changed outside a script (collection wrote items); a host that renders reruns its hooks. */
+    /** The document changed outside a script (collection wrote items or rows); a host that renders reruns its hooks. */
     changed?(): void;
   };
 }
@@ -100,8 +100,9 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   const stamp = () => `+${(clock.now() / 1000).toFixed(1)}s`.padStart(9);
   host.log = (message) => timeline.push(`${stamp()} [host] ${message}`);
 
-  // The document as last saved to disk: what an app restart reopens.
-  let savedText = serializeDocument(document);
+  // The document as last saved to disk, as the app saves it (its attachments, such as its database, in the bytes): what
+  // an app restart reopens.
+  let saved = serializeDocumentBytes(document);
   let entryIds = 0;
   const random = seededRandom(options.seed ?? 7);
   let runtime = startRuntime();
@@ -120,18 +121,18 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     return runtime;
   }
   let stateRuntime = documentState(document);
-  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.() });
+  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.() });
   let automation: WebAutomation = opened.automation;
   loadDocument();
 
-  function reopen(text = serializeDocument(document)): void {
-    document = deserializeDocument(text, '.hvy');
+  function reopen(bytes = serializeDocumentBytes(document)): void {
+    document = deserializeDocumentBytes(bytes, '.hvy');
     if (options.document?.store) {
       items = createCliItemStore(document, options.document.store);
       sink = createRecordSink(items, options.sink ?? DEFAULT_RECORD_SINK_CONFIG);
     }
     stateRuntime = documentState(document);
-    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.() });
+    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.() });
     automation = opened.automation;
     loadDocument();
   }
@@ -225,7 +226,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       container.schema.containerBlocks!.push(service);
       automation.profileChosen(PROFILE_NAMES[SERVICE_PROFILE], 'a web profile context');
       opened.saveQueues();
-      savedText = serializeDocument(document);
+      saved = serializeDocumentBytes(document);
     },
 
     // UI: a web profile context's "Choose a browser profile…" (the first in the document): the web blocks around it use it.
@@ -322,8 +323,8 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
 
     // UI: galaxy.web-collection reader, "Collect".
     // UI: "Collect jobs", or a start page's own "Collect" (onlyUrls).
-    async collect(collection: CollectionDefinition, onlyUrls?: string[]): Promise<CollectionRunState> {
-      const run = automation.startCollection(collection, sink, onlyUrls);
+    async collect(collection: CollectionDefinition, onlyUrls?: string[], consumer: RecordConsumer = sink): Promise<CollectionRunState> {
+      const run = automation.startCollection(collection, consumer, onlyUrls);
       await settle();
       return automation.getState().runs.find((candidate) => candidate.runId === run.runId)!;
     },
@@ -433,9 +434,9 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     // UI: File > Save. Each queue block takes its queue's state, then the document is serialized.
     save(): string {
       opened.saveQueues();
-      savedText = serializeDocument(document);
+      saved = serializeDocumentBytes(document);
       timeline.push(`${stamp()} [document] saved`);
-      return savedText;
+      return serializeDocument(document);
     },
 
     // UI: document closed (tab closed or document switched off).
@@ -447,7 +448,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     // UI: document opened again from its saved text.
     openDocument(): void {
       timeline.push(`${stamp()} [document] opened`);
-      reopen(savedText);
+      reopen(saved);
     },
 
     /**
@@ -459,7 +460,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       opened.close();
       runtime = startRuntime();
       timeline.push(`${stamp()} [app] restarted`);
-      reopen(savedText);
+      reopen(saved);
     },
 
     settle,

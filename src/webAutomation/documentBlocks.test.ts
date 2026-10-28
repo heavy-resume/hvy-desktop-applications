@@ -23,7 +23,7 @@ describe('web automation blocks in a document', () => {
     const blocks = readWebAutomationBlocks(document);
     expect(blocks.problems).toEqual([]);
     expect(blocks.webApis.map(({ blockId }) => blockId)).toEqual(['service']);
-    expect(blocks.collections[0].config.output?.store.componentName).toBe('listing-item');
+    expect(blocks.collections[0].config.output?.store).toMatchObject({ componentName: 'listing-item' });
     expect(blocks.queues.map(({ config }) => config.queueId)).toEqual(['evaluate', 'status']);
     expect(checkWebAutomationDocument(document)).toEqual([]);
 
