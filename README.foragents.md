@@ -23,6 +23,17 @@ open the same folder on another device. A future provider-backed path can add
 Google Drive or Microsoft OneDrive sign-in for devices that do not already have
 a desktop sync client installed.
 
+## Waiting on the integration browser
+
+Anything that sends work to a browser profile's window and waits for the page's
+answer goes through `src/browserRequests.ts` (`requestFromBrowser`): put the
+request's id in the context sent (`browserRequestId`) and await the answer,
+clearing any pending state in `finally`. The request ends when the page answers,
+on its time limit, when stopped, or when the window closes: both runtimes report
+every close (`integration-browser-closed`), which fails every request still
+waiting on that profile. Don't add a pending flag that a case in the result
+switch (`mainStartup.ts`) clears; it is left set when the window closes first.
+
 ## Development
 
 Prerequisites:

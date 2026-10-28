@@ -165,7 +165,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   function busy(): boolean {
     const state = automation.getState();
     return state.runs.some((run) => run.status === 'running')
-      || ![EVALUATE_QUEUE, STATUS_QUEUE].every((queueId) => automation.isQueueIdle(queueId));
+      || !Object.keys(state.queues).every((queueId) => automation.isQueueIdle(queueId));
   }
 
   /** Runs virtual time until no collection is running and the queues are idle, paused, or waiting for resume. */

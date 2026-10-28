@@ -210,6 +210,14 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       return runFormScript(blockId, spec.submitScript, 'submit');
     },
 
+    /** The user changes one field, such as ticking a checkbox: the field's change script runs, as the form plugin runs it. */
+    async changeField(blockId: FormRef, label: string, value: FormFieldValue): Promise<ScriptingRunResult | null> {
+      const { spec, live } = liveForm(blockId);
+      live.values[label] = value;
+      const script = spec.fields.find((field) => field.label === label)?.triggers.change;
+      return script ? runFormScript(blockId, script, `change:${label}`) : null;
+    },
+
     /** What the form shows: field values, options, errors, and whether its submit is disabled (and why). */
     form(blockId: FormRef): LiveFormState {
       return structuredClone(liveForm(blockId).live);
