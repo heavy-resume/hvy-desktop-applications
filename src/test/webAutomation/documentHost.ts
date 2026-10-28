@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { runInThisContext } from 'node:vm';
+import { compileFunction, runInThisContext } from 'node:vm';
 import { visitBlocks } from '../../../../heavy-file-format/src/block-traversal';
 import type { VisualBlock } from '../../../../heavy-file-format/src/editor/types';
 import { FORM_PLUGIN_VERSION, parseFormSpec, type FormFieldValue } from '../../../../heavy-file-format/src/plugins/form';
@@ -8,6 +9,7 @@ import { createLiveState, reconcileLiveState, type LiveFormState } from '../../.
 import { resetPluginDocumentHookState, runPluginDocumentHooks } from '../../../../heavy-file-format/src/plugins/hooks';
 import { FORM_PLUGIN_ID, registerHostPlugin } from '../../../../heavy-file-format/src/plugins/registry';
 import { createBrythonMinimalVfsPlugin } from '../../../../heavy-file-format/src/plugins/scripting/brython-minimal-vfs-plugin';
+import { applyBrythonSourcePatches } from '../../../../heavy-file-format/src/plugins/scripting/brython-source-patches';
 import type { ScriptingFormApi } from '../../../../heavy-file-format/src/plugins/scripting/runtime';
 import { scriptingPlugin } from '../../../../heavy-file-format/src/plugins/scripting/scripting';
 import { runUserScript, type ScriptingRunResult } from '../../../../heavy-file-format/src/plugins/scripting/wrapper';
@@ -50,8 +52,12 @@ export function installBrythonForNode(): void {
   const global = globalThis as Record<string, unknown>;
   global.self = globalThis;
   global.addEventListener = () => undefined;
-  // In Node, Brython loads as a CommonJS module and publishes global.__BRYTHON__.
-  createRequire(BRYTHON)(BRYTHON);
+  // In Node, Brython loads as a CommonJS module and publishes global.__BRYTHON__. Its source is patched first, as the
+  // reference loader does for a page.
+  const module = { exports: {} };
+  compileFunction(applyBrythonSourcePatches(readFileSync(BRYTHON, 'utf8')), ['exports', 'require', 'module', '__filename', '__dirname'], { filename: BRYTHON })(
+    module.exports, createRequire(BRYTHON), module, BRYTHON, fileURLToPath(new URL('.', `file://${BRYTHON}`)),
+  );
   // Generated code refers to the global $B, which a script tag would have defined.
   global.$B = global.__BRYTHON__;
   // Node mode removes browser.window, which the scripting wrapper imports. Restore it as a page build defines it.
