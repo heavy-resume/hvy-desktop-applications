@@ -23,6 +23,11 @@ function job(slug: string, title: string, skills: string): MockJob {
   };
 }
 
+/** A posting that says where it is and what it pays, as a description states pay: "$150,000 – $180,000 a year". */
+function placedJob(slug: string, title: string, location: string, pay: string): MockJob {
+  return { slug, title, location, description: `We are hiring a ${title}. You will build reliable systems using TypeScript. ${pay}`.trim() };
+}
+
 /** One company's board on a mock ATS: listing pages plus one detail page per job, all with the same markup. */
 export function atsCompany(company: string, displayName: string, pages: MockJob[][], options: { challenge?: boolean; restoresOnBack?: boolean; jobPageWall?: boolean } = {}): Record<string, MockPage> {
   const result: Record<string, MockPage> = {};
@@ -90,6 +95,13 @@ export function mockAtsSite(): MockSite {
         [job('eng-3', 'Frontend Engineer', 'TypeScript'), job('data-1', 'Data Engineer', 'SQL')],
       ]),
       ...atsCompany('globex', 'Globex', [[job('eng-1', 'Backend Engineer', 'TypeScript'), job('ops-1', 'SRE', 'Kubernetes')]]),
+      ...atsCompany('acme-robotics', 'Acme Robotics', [[
+        placedJob('eng-1', 'Staff Engineer', 'Denver, CO', 'The salary is $150,000 – $180,000 a year.'),
+        placedJob('eng-2', 'Backend Engineer', 'Austin, TX; Denver, CO', 'The salary is $120,000 a year.'),
+        placedJob('contract-1', 'Contract Developer', 'Remote (US)', 'This contract pays $60–$75 an hour.'),
+        placedJob('design-1', 'Product Designer', 'Remote', 'This is a project budget of $8,000.'),
+        placedJob('pm-1', 'Product Manager', 'Boston, MA', ''),
+      ]]),
       ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
       ...atsCompany('cyberdyne', 'Cyberdyne', [[job('eng-1', 'Engineer', 'C++')]], { challenge: true }),
       ...atsCompany('wonka', 'Wonka', [[job('eng-1', 'Engineer', 'Rust'), job('eng-2', 'Senior Engineer', 'Rust')]], { jobPageWall: true }),
