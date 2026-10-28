@@ -37,12 +37,12 @@ const PROFILE_NAMES: Record<string, string> = { [BOARDS_PROFILE]: 'Boards', [SER
 export const EVALUATE_QUEUE = 'evaluate';
 export const STATUS_QUEUE = 'status';
 
-/** The flow's queue blocks: evaluations, then status polls, both calling the service's web API block. */
+/** The flow's queue blocks: evaluations, then status polls when the service has them, calling its web API block. */
 export function mockQueueBlocks<State>(api: MockApiIntegration<State>) {
   const target = (endpointId: string) => ({ pluginId: 'galaxy.web-api', method: 'call', args: { capabilityId: api.capability.capabilityId, endpointId } });
   return [
     { queueId: EVALUATE_QUEUE, target: target(api.createEndpointId), config: { minIntervalMs: 5_000, jitterMs: 2_000 } },
-    { queueId: STATUS_QUEUE, target: target(api.statusEndpointId), config: { minIntervalMs: 15_000, jitterMs: 2_000 } },
+    ...(api.statusEndpointId ? [{ queueId: STATUS_QUEUE, target: target(api.statusEndpointId), config: { minIntervalMs: 15_000, jitterMs: 2_000 } }] : []),
   ];
 }
 
@@ -144,7 +144,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       return;
     }
     automation.onQueueResult(EVALUATE_QUEUE, (result) => handleResult(result));
-    automation.onQueueResult(STATUS_QUEUE, (result) => handleResult(result));
+    if (api.statusEndpointId) automation.onQueueResult(STATUS_QUEUE, (result) => handleResult(result));
   }
 
   function handleResult(result: QueueResult): void {

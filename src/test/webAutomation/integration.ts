@@ -13,9 +13,9 @@ export interface MockApiIntegration<State> {
   state: State;
   /** The galaxy.web-api block snapshot for this service. */
   capability: WebApiCapability;
-  /** Endpoint that starts an evaluation, and endpoint that polls it. */
+  /** Endpoint that starts an evaluation, and endpoint that polls it, for a service whose evaluations finish later. */
   createEndpointId: string;
-  statusEndpointId: string;
+  statusEndpointId?: string;
   /** Session cookie value that signs in as a second account. */
   secondAccountSession: string;
   /** Create input for one item. The source document's text and revision are filled when the call runs. */

@@ -101,6 +101,7 @@ export function mockAtsSite(): MockSite {
         placedJob('contract-1', 'Contract Developer', 'Remote (US)', 'This contract pays $60–$75 an hour.'),
         placedJob('design-1', 'Product Designer', 'Remote', 'This is a project budget of $8,000.'),
         placedJob('pm-1', 'Product Manager', 'Boston, MA', ''),
+        placedJob('tech-1', 'Robotics Technician', 'Boston, MA', 'The salary is starting at $140,000 a year.'),
       ]]),
       ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
       ...atsCompany('cyberdyne', 'Cyberdyne', [[job('eng-1', 'Engineer', 'C++')]], { challenge: true }),

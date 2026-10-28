@@ -10,6 +10,11 @@ function settleMicrotasks(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+/** Lets real timers that are due run, such as the HVY scripting cycle coordinator's setTimeout(0) settle. */
+function runDueRealTimers(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 1));
+}
+
 /** Virtual time: sleeps resolve only when the scenario runs the clock forward. */
 export class VirtualClock implements Clock {
   private current = 0;
@@ -52,6 +57,8 @@ export class VirtualClock implements Clock {
     await settleMicrotasks();
     const next = [...this.timers].sort((left, right) => left.at - right.at || left.sequence - right.sequence)[0];
     if (!next || next.at > limitAt) return false;
+    // Moving time forward stands for time passing, and real time passing runs the real timers that are due first.
+    if (next.at > this.current) await runDueRealTimers();
     this.timers = this.timers.filter((candidate) => candidate !== next);
     this.current = Math.max(this.current, next.at);
     next.fire();
