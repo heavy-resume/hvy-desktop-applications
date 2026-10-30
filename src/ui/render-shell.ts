@@ -2,6 +2,7 @@ import { getFileActionAvailability, isWorkspaceTemplatePath } from '../fileActio
 import type { HvyMode } from '../hvy';
 import { type AppState } from '../state';
 import { getDocumentColorsEnabled } from './render-theme';
+import { renderBackgroundActivityIndicator } from './render-background-activity';
 import { escapeAttr, escapeHtml } from './shared';
 
 export function renderDocumentTabs(state: AppState): string {
@@ -54,6 +55,7 @@ export function renderToolbar(state: AppState): string {
         <span>${escapeHtml(state.workspaceChat.scopeLabel || 'Workspace chat')}</span>
       </div>
       <div class="toolbar-actions">
+        ${renderBackgroundActivityIndicator(state)}
         <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
         <button class="hvy-galaxy-button" type="button" data-action="save-workspace-chat" ${state.workspaceChat.messages.length === 0 || state.busy ? 'disabled' : ''}>Save Chat</button>
         <button class="hvy-galaxy-button" type="button" data-action="close-workspace-chat">Close</button>
@@ -71,6 +73,7 @@ export function renderToolbar(state: AppState): string {
       <span>${document.readOnly ? 'Read-only document' : document.virtual === 'versionHistory' ? 'History snapshot — saves as new document' : document.virtual === 'recoveryDraft' ? 'Recovered unsaved copy' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
+      ${renderBackgroundActivityIndicator(state)}
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       <label class="document-color-toggle">
         <input class="hvy-galaxy-input" type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${documentColorsEditable ? '' : 'disabled'}>

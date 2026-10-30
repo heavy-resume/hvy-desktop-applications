@@ -19,7 +19,7 @@ import type { BrowserHost } from './host';
 import { resolveProfile, type BrowserProfile } from './profiles';
 import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResult, type QueueState, type QueueTarget } from './queue';
 import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './scheduler';
-import { SessionService, type SessionState } from './session';
+import { SessionService, type SessionState, type SessionStatus } from './session';
 import { loadPublishedService, type PublishedService } from './serviceManifests';
 import type { AutomationSettingsStore } from './settings';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
@@ -82,10 +82,17 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     exportDocumentText: documentText,
   });
   const documentQueues = new Map<string, DurableQueue>();
+  const heardSessions = new Map<string, SessionStatus>();
   return {
     deps,
     /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
     queues: documentQueues,
+    /**
+     * The account status each document's session handler last heard, by document path, capability, and key. It outlives
+     * a mount: coming back to a document's tab mounts it again (a fresh copy, if it was saved), and its scripts register
+     * their handlers again, but they have already heard this status, and what they did with it is in the document.
+     */
+    heardSessions,
     events,
     emit,
     scheduler,
@@ -97,11 +104,18 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     // next open reattaches them.
     relocateDocument(previousPath: string, nextPath: string): void {
       const prefix = `${previousPath}\u0000`;
-      for (const [key, queue] of [...documentQueues]) {
-        if (!key.startsWith(prefix)) continue;
-        documentQueues.delete(key);
-        documentQueues.set(`${nextPath}\u0000${key.slice(prefix.length)}`, queue);
+      for (const map of [documentQueues, heardSessions] as Array<Map<string, unknown>>) {
+        for (const [key, value] of [...map]) {
+          if (!key.startsWith(prefix)) continue;
+          map.delete(key);
+          map.set(`${nextPath}\u0000${key.slice(prefix.length)}`, value);
+        }
       }
+    },
+
+    // Document close: its tab closed, so opening it again is a fresh start, and its handlers hear the account again.
+    forgetDocument(documentPath: string): void {
+      for (const key of [...heardSessions.keys()]) if (key.startsWith(`${documentPath}\u0000`)) heardSessions.delete(key);
     },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".
@@ -135,6 +149,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   // Each script handler's handover of the account's current state, by capability and key: run again once the document
   // may use the account (its service approved), since what the handler did before that was refused.
   const sessionHandovers = new Map<string, () => void>();
+  // Script handlers told when a collection's output writes records, by capability and key.
+  const recordWatchers = new Map<string, (keys: string[]) => void>();
 
   // The plugin must be allowed in this file (the reference implementation's per-file plugin authorization).
   function requirePlugin(pluginId: string, displayName: string): void {
@@ -214,7 +230,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return webApi.review(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name));
     },
 
-    // UI: "Allow [service]…" modal, "Allow", for a galaxy.web-api block; signing in follows if the profile is not signed in.
+    // UI: "Web API - Allow [service]…" modal, "Allow", for a galaxy.web-api block; signing in follows if the profile is not signed in.
     authorizeWebApi(capability: WebApiCapability): void {
       const profileId = profileFor(capability.capabilityId, capability.name);
       deps.settings.update((settings) => ({
@@ -250,21 +266,43 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
 
     // UI: scripting doc.plugins.call("galaxy.web-api", "on_session", { key, handler }), registered by a form's initial
     // script, such as a resume list that fills in once you sign in. The same key replaces an earlier handler. A known
-    // state is handed over at once: the script may register after the account check that signed it in.
+    // state is handed over at once: the script may register after the account check that signed it in. A state the
+    // document's handler already heard is not handed over again when the document is mounted again (see heardSessions);
+    // an unsaved document has no path to remember it by, so it always hears it.
     onSessionChange(capability: WebApiCapability, key: string, handler: (state: SessionState) => void): void {
       const watcherKey = `${capability.capabilityId}\0${key}`;
       const boundProfile = () => profileOf(capability.capabilityId)?.id;
+      const heardKey = () => (deps.documentPath() ? `${deps.documentPath()}\0${watcherKey}` : null);
+      const tell = (state: SessionState) => {
+        const heard = heardKey();
+        if (heard) runtime.heardSessions.set(heard, state.status);
+        handler(state);
+      };
       sessionWatchers.get(watcherKey)?.();
       sessionWatchers.set(watcherKey, sessions.onChange((state) => {
-        if (state.origin === capabilityOrigin(capability) && state.profileId === boundProfile()) handler(state);
+        if (state.origin === capabilityOrigin(capability) && state.profileId === boundProfile()) tell(state);
       }));
-      const handOver = () => {
+      const handOver = (again: boolean) => {
         const profileId = boundProfile();
         const current = profileId ? sessions.stateFor(capability, profileId) : null;
-        if (current && current.status !== 'unknown') handler(current);
+        const heard = heardKey();
+        if (current && current.status !== 'unknown' && (again || !heard || runtime.heardSessions.get(heard) !== current.status)) tell(current);
       };
-      sessionHandovers.set(watcherKey, handOver);
-      handOver();
+      // Approving the service hands it over again: what the handler did before that was refused.
+      sessionHandovers.set(watcherKey, () => handOver(true));
+      handOver(false);
+    },
+
+    // UI: scripting doc.plugins.call("galaxy.web-collection", "on_records", { capabilityId, key, handler }), registered by
+    // the document's load script: told the keys of the records a collection's output wrote, as it writes them, so the
+    // script reads what changed when it changed. The same key replaces an earlier handler.
+    onRecordsWritten(capabilityId: string, key: string, handler: (keys: string[]) => void): void {
+      recordWatchers.set(`${capabilityId}\0${key}`, handler);
+    },
+
+    // A collection block's output wrote records (documentAutomation's sink).
+    recordsWritten(capabilityId: string, keys: string[]): void {
+      for (const [watcherKey, handler] of recordWatchers) if (watcherKey.startsWith(`${capabilityId}\0`)) handler(keys);
     },
 
     // UI: galaxy.web-api reader, "Sign out" button.
@@ -414,6 +452,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       for (const stop of sessionWatchers.values()) stop();
       sessionWatchers.clear();
       sessionHandovers.clear();
+      recordWatchers.clear();
     },
 
     isQueueIdle(queueId: string): boolean {

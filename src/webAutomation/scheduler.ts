@@ -241,7 +241,9 @@ export class WorkerScheduler {
         record.id = await record.creating;
         record.creating = null;
         this.options.emit('scheduler', `worker created (${record.kind})`, { workerId: record.id, profileId: record.profileId });
-      } else {
+      } else if (record.kind === 'collection') {
+        // Only collections go back through a page's history. An API job stays on the page it needs, and resetting would
+        // reload that page (Tauri rebuilds the webview) before every request.
         await this.options.host.resetWorker(record.id);
       }
     } catch (error) {

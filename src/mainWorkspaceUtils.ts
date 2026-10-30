@@ -5,7 +5,7 @@ import { documentEncryptionKeyring } from './documentKeys';
 import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderImportedDocumentMutation, workspaceHasLogicalName } from './encryptedFolders';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
-import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
+import { getTemplateById, isBlankBundledTemplate, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, relocateDocumentSettings } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, documentSessions, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
@@ -430,6 +430,15 @@ export function creationTemplate(
   }
   const template = getTemplateById(templatesForCurrentWorkspaceDocumentType(workspacePath, documentType), templateId);
   return applyTemplateTitle(template.content, title);
+}
+
+export function isBlankCreationTemplate(
+  workspacePath: string | null | undefined,
+  documentType: DocumentCreationType,
+  templateId: string,
+): boolean {
+  if (documentType === 'hvy' && !hasDocumentExtension(templateId)) return true;
+  return isBlankBundledTemplate(getTemplateById(templatesForCurrentWorkspaceDocumentType(workspacePath, documentType), templateId));
 }
 
 export function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): void {

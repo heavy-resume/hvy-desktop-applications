@@ -417,6 +417,12 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'confirm-document-encryption') handlers.confirmDocumentEncryption();
     if (action === 'review-plugin-approvals') handlers.openPluginApprovals();
     if (action === 'cancel-plugin-approvals') handlers.cancelPluginApprovals();
+    if (action === 'open-background-activity') handlers.openBackgroundActivity();
+    if (action === 'close-background-activity') handlers.closeBackgroundActivity();
+    if (action === 'stop-background-run') handlers.stopBackgroundRun(target.dataset.path ?? '', target.dataset.runId ?? '');
+    if (action === 'pause-background-queue') handlers.pauseBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
+    if (action === 'resume-background-queue') handlers.resumeBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
+    if (action === 'pause-all-background-queues') handlers.pauseAllBackgroundQueues();
     if (action === 'confirm-plugin-approvals') {
       const dialog = target.closest<HTMLElement>('.plugin-approval-dialog');
       handlers.allowPlugins([...(dialog?.querySelectorAll<HTMLInputElement>('input[data-plugin-acceptance-key]:checked') ?? [])].map((input) => input.dataset.pluginAcceptanceKey ?? ''));

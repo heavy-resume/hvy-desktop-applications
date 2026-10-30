@@ -5,6 +5,7 @@ import { saveAppSettings } from '../backend';
 import { state } from '../state';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
+import type { CollectionRunState } from './collection';
 import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { BrowserHost } from './host';
@@ -71,8 +72,17 @@ function appRuntime(): WebAutomationRuntime {
     // How many pages are collected at once (App Settings): read as each page's turn comes, so a change applies next.
     scheduler: { navigationDelayScale: developmentDelayScale(), collectionLimits: () => state.appSettings.webCollectionLimits },
   });
+  recentEvents.length = 0;
+  runtime.events.subscribe((event) => {
+    recentEvents.push(event);
+    if (recentEvents.length > RECENT_EVENT_LIMIT) recentEvents.splice(0, recentEvents.length - RECENT_EVENT_LIMIT);
+  });
   return runtime;
 }
+
+// The last automation events, oldest first: what Background activity lists, so a stall shows what it was doing.
+const RECENT_EVENT_LIMIT = 200;
+const recentEvents: AutomationEvent[] = [];
 
 /** The section and block of the component-list a CLI path such as /body/jobs/job-list names (top-level sections). */
 function componentListAt(document: VisualDocument, listPath: string): { sectionKey: string; blockId: string } | null {
@@ -91,7 +101,16 @@ export function subscribeWebAutomation(listener: (event: AutomationEvent) => voi
 setDocumentAutomationOpener((rawDocument) => {
   const document = rawDocument as VisualDocument;
   const stateRuntime = getActiveStateRuntime();
-  documentPaths.set(document, state.document?.source.path ?? '');
+  const path = state.document?.source.path ?? '';
+  // Coming back to a saved document's tab reads a fresh copy of it: the copy it replaces closes, so the file has one
+  // automation, and one set of script handlers. Its queues and what its handlers heard are the file's, kept by path.
+  for (const [replaced, replacedPath] of [...documentPaths]) {
+    if (!path || replaced === document || replacedPath !== path) continue;
+    openedByDocument.get(replaced)?.close();
+    openedByDocument.delete(replaced);
+    documentPaths.delete(replaced);
+  }
+  documentPaths.set(document, path);
   const opened = openDocumentAutomation(appRuntime(), {
     documentPath: () => documentPaths.get(document) ?? '',
     document,
@@ -143,9 +162,12 @@ export function setOpenDocumentCheck(check: (document: object) => boolean): void
 export function releaseWebAutomation(document: object): void {
   setTimeout(() => {
     if (isDocumentOpen(document)) return;
+    const path = documentPaths.get(document);
     openedByDocument.get(document)?.close();
     openedByDocument.delete(document);
     documentPaths.delete(document);
+    // The file's tab closed (no copy of it is open): opening it again starts afresh.
+    if (path && ![...documentPaths.values()].includes(path)) runtime?.forgetDocument(path);
   }, 0);
 }
 
@@ -176,4 +198,105 @@ export function documentsNeedingYou(): string[] {
     if (runWaits || queueWaits) paths.push(documentPath);
   }
   return paths;
+}
+
+export interface BackgroundQueueSummary {
+  queueId: string;
+  queued: number;
+  running: number;
+  retrying: number;
+  failed: number;
+  paused: boolean;
+  pauseReason: string | null;
+  awaitingResume: boolean;
+}
+
+export interface BackgroundRunSummary {
+  runId: string;
+  name: string;
+  status: CollectionRunState['status'];
+  collected: number;
+  skipped: number;
+  problems: number;
+}
+
+/** What Background activity shows. Plain data, so the app can keep it in its state and render it. */
+export interface BackgroundActivity {
+  /** Each browser worker: its profile, kind, and the job it is running (null when idle). */
+  workers: Array<{ workerId: string; profile: string; kind: 'collection' | 'api'; label: string | null }>;
+  /** Jobs waiting for a worker, in the order they will get one. */
+  waitingJobs: Array<{ profile: string; kind: 'collection' | 'api'; label: string }>;
+  /** Labels running or waiting more than once at the same time: the same call made twice. */
+  duplicates: string[];
+  /** Each open document with collection runs going or queued work. */
+  documents: Array<{ path: string; runs: BackgroundRunSummary[]; queues: BackgroundQueueSummary[] }>;
+  /** Newest first. */
+  events: AutomationEvent[];
+}
+
+const ACTIVE_RUN_STATUSES = new Set<CollectionRunState['status']>(['running', 'needs-attention']);
+
+export function backgroundActivity(): BackgroundActivity {
+  if (!host) return { workers: [], waitingJobs: [], duplicates: [], documents: [], events: [] };
+  const scheduler = appRuntime().scheduler.getState();
+  const profileName = (profileId: string) => state.integrationRegistry.profiles.find(({ id }) => id === profileId)?.name ?? profileId;
+  const labels = [...scheduler.workers.flatMap(({ label }) => (label ? [label] : [])), ...scheduler.waitingJobs.map(({ label }) => label)];
+  const documents: BackgroundActivity['documents'] = [];
+  for (const [document, path] of documentPaths) {
+    const lookup = openedByDocument.get(document)?.lookup;
+    if (!lookup) continue;
+    const automationState = lookup.automation.getState();
+    const runs = automationState.runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).map((run): BackgroundRunSummary => ({
+      runId: run.runId,
+      name: lookup.collection(run.capabilityId)?.name ?? run.capabilityId,
+      status: run.status,
+      collected: run.collected,
+      skipped: run.skipped,
+      problems: run.problems,
+    }));
+    const queues = Object.entries(automationState.queues).map(([queueId, queue]): BackgroundQueueSummary => {
+      const count = (status: string) => queue.entries.filter((entry) => entry.status === status).length;
+      return {
+        queueId,
+        queued: count('queued'),
+        running: count('running'),
+        retrying: count('waiting-retry'),
+        failed: count('failed'),
+        paused: queue.paused,
+        pauseReason: queue.pauseReason,
+        awaitingResume: queue.awaitingResume,
+      };
+    }).filter((queue) => queue.queued + queue.running + queue.retrying + queue.failed > 0);
+    if (runs.length || queues.length) documents.push({ path, runs, queues });
+  }
+  return {
+    workers: scheduler.workers.map(({ workerId, profileId, kind, busy, label }) => ({ workerId, profile: profileName(profileId), kind, label: busy ? label : null })),
+    waitingJobs: scheduler.waitingJobs.map(({ profileId, kind, label }) => ({ profile: profileName(profileId), kind, label })),
+    duplicates: [...new Set(labels.filter((label, index) => labels.indexOf(label) !== index))],
+    documents,
+    events: [...recentEvents].reverse(),
+  };
+}
+
+function openDocumentAt(path: string): DocumentAutomation | null {
+  for (const [document, documentPath] of documentPaths) if (documentPath === path) return openedByDocument.get(document) ?? null;
+  return null;
+}
+
+// UI: Background activity, a collection run's "Stop".
+export function stopBackgroundRun(path: string, runId: string): void {
+  openDocumentAt(path)?.automation.stopCollection(runId);
+}
+
+// UI: Background activity, a queue's "Pause" and "Resume", and "Pause all".
+export function pauseBackgroundQueue(path: string, queueId: string): void {
+  openDocumentAt(path)?.automation.pauseQueue(queueId);
+}
+
+export function resumeBackgroundQueue(path: string, queueId: string): void {
+  openDocumentAt(path)?.automation.resumeQueue(queueId);
+}
+
+export function pauseAllBackgroundQueues(): void {
+  for (const { path, queues } of backgroundActivity().documents) for (const { queueId, paused } of queues) if (!paused) pauseBackgroundQueue(path, queueId);
 }

@@ -1,6 +1,7 @@
 import { type AppState } from '../state';
 import { commitImportTagEditorDrafts } from './events-controls';
 import { readAiSettingsForm, readAppSettingsForm, readMcpSettingsForm } from './render-ai-mcp';
+import { syncSaveAsRenamePopover } from './render-workspace-dialogs';
 import { isImportOutputMode, isNewWorkspaceLocation, isTemplateExtension, isTemplateScope } from './render-workspaces';
 import { UiHandlers } from './types';
 
@@ -224,12 +225,19 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
       }
     }
   }, { signal });
+  root.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || target.name !== 'workspaceDestination') return;
+    const form = target.closest<HTMLFormElement>('form[data-form="save-as-document"]');
+    if (form) syncSaveAsRenamePopover(form, state);
+  }, { signal });
   root.addEventListener('input', (event) => {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.name === 'fileName') {
       const form = target.closest<HTMLFormElement>('form[data-form="save-as-document"]');
       const submit = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
       if (submit) submit.disabled = target.value.trim().length === 0 || state.busy;
+      if (form) syncSaveAsRenamePopover(form, state);
       return;
     }
     if (!(target instanceof HTMLTextAreaElement)) return;

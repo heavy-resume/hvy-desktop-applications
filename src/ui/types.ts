@@ -205,6 +205,12 @@ export interface UiHandlers {
   openPluginApprovals(): void;
   cancelPluginApprovals(): void;
   allowPlugins(acceptanceKeys: string[]): void;
+  openBackgroundActivity(): void;
+  closeBackgroundActivity(): void;
+  stopBackgroundRun(path: string, runId: string): void;
+  pauseBackgroundQueue(path: string, queueId: string): void;
+  resumeBackgroundQueue(path: string, queueId: string): void;
+  pauseAllBackgroundQueues(): void;
   cancelDocumentEncryption(): void;
   closeAbout(): void;
   openDebugLog(): void;

@@ -5,7 +5,7 @@ import { attachMatchingSidecarEmbeddingIndex, deleteDocumentEmbeddingSidecar, de
 import { deserializeHvy, getMountedDocument, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, profileHvySerializationCosts, serializeHvy, serializeMountedDocumentAsync, type VisualDocument } from './hvy';
 import { state } from './state';
 import { availableRecoveryBackups, recoveryDraftIdentity, recoverySaveConflictKind, type SaveConflictKind } from './recoveryDocuments';
-import { pdfFileName, savedVersionDocumentName } from './mainUtilities';
+import { documentNameFromFirstTextLine, pdfFileName, savedVersionDocumentName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
 import { activateWorkspaceChatDocument, adoptSavedAsDocument, captureMountScrollRatio, documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, mountRoot, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, restoreMountScrollRatio, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
 import { clearWebRecordResults } from './webRecordResults';
@@ -205,9 +205,13 @@ export function openSaveAsDialog(): void {
     ? 'template' : 'document';
   state.saveAsScope = currentDocumentWorkspacePath(state) || (state.document.isNew && state.workspaces.length > 0)
     ? 'workspace' : savedTemplate?.scope === 'app' ? 'app' : 'anywhere';
+  state.saveAsSuggestedName = state.document.isNew ? documentNameFromFirstTextLine(getMountedDocument(state.document.mounted)) : '';
   state.error = null;
   state.status = 'Ready';
   rerender({ preserveMountedDocument: true });
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLInputElement>('.save-as-dialog input[name="fileName"], .save-as-dialog input[name="templateName"]')?.select();
+  });
 }
 
 export async function saveCurrentDocumentAsAnywhere(): Promise<void> {
@@ -276,9 +280,10 @@ export async function performSaveCurrentDocumentAs(): Promise<void> {
   const previousMode = state.document.mode;
   const previousUseDocumentColors = readDocumentColorPreference(previousPath);
   const document = getMountedDocument(state.document.mounted);
+  const firstLineName = state.document.isNew ? documentNameFromFirstTextLine(document) : '';
   const suggestedName = state.document.virtual === 'versionHistory'
     ? savedVersionDocumentName(state.document.historySourceName ?? state.document.source.name)
-    : state.document.source.name;
+    : firstLineName ? `${firstLineName}${state.document.source.extension}` : state.document.source.name;
   const sourcePath = state.document.historySourcePath ?? state.document.source.path;
   const directory = state.document.isNew ? '' : sourcePath.replace(/\\/g, '/').slice(0, sourcePath.replace(/\\/g, '/').lastIndexOf('/') + 1);
   const file = await saveDocumentAsDialog({ suggestedName: `${directory}${suggestedName}`, bytes });

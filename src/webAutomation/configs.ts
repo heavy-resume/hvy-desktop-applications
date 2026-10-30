@@ -5,7 +5,7 @@ import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntr
 import type { ServedDocumentDefinition } from './servedDocuments';
 import type { RecordSinkConfig } from './recordSink';
 import { SQL_IDENTIFIER, type SqlItemStoreConfig } from './sqlItemStore';
-import { publishedService, SERVICE_MANIFEST_FORMAT } from './serviceManifests';
+import { PUBLISHED_SERVICES_OFF, publishedService, publishedServices, SERVICE_MANIFEST_FORMAT } from './serviceManifests';
 import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
 import type { SessionDefinition, WebApiCapability } from './webApi';
 
@@ -302,6 +302,7 @@ function readSession(value: unknown, origin: string, endpoints: ApiEndpointDefin
  * the sign-in), checked as an inline block's is, on the service's own site; until then the block has no capability.
  */
 function readPublishedWebApiBlockConfig(value: Record<string, unknown>): ConfigResult<WebApiBlockConfig> {
+  if (!publishedServices.enabled) return { ok: false, errors: [PUBLISHED_SERVICES_OFF] };
   const errors: string[] = [];
   const capabilityId = text(value.capabilityId);
   if (!capabilityId) errors.push('The block needs a capability id.');

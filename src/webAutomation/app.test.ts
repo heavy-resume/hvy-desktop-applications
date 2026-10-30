@@ -9,6 +9,8 @@ import { mockAnalysisService } from '../test/webAutomation/analysisService';
 import { createDocumentState } from '../test/webAutomation/documentHost';
 import { EVALUATE_QUEUE, mockQueueBlocks } from '../test/webAutomation/flow';
 import { buildSearchDocument } from '../test/webAutomation/listingDocument';
+import { mockWebSites } from '../test/webAutomation/sites';
+import { capabilityOrigin } from './webApi';
 import { MockHost } from '../test/webAutomation/mockHost';
 import { relocatedDocumentSettings } from '../documentSettingsRelocation';
 import { relocateWebAutomationDocument, releaseWebAutomation, saveWebAutomationQueues, setOpenDocumentCheck, setWebAutomationHost } from './app';
@@ -114,6 +116,45 @@ describe('web automation in the app', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mountedDocument(saved).open().automation.listQueue(EVALUATE_QUEUE)).toMatchObject([{ key: 'job-1', idempotencyKey }]);
   });
+  it('switching tabs away and back calls nothing again: the file\'s script handlers already heard it is signed in', async () => {
+    state.appSettings = defaultAppSettings();
+    state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
+    const host = new MockHost(mockWebSites(api));
+    setWebAutomationHost(host);
+    host.completeLogin('service', capabilityOrigin(api.capability));
+    const first = mountedDocument();
+    const { automation } = first.open();
+    automation.authorizeWebApi(api.capability);
+    await expect(automation.probeSession(api.capability)).resolves.toMatchObject({ status: 'signed-in' });
+    // The document's load script registers its handler on each mount, and on signed-in loads the account's data.
+    const heard: string[] = [];
+    const load = (opened: { automation: typeof automation }) => opened.automation.onSessionChange(api.capability, 'resume-list', (session) => heard.push(session.status));
+    load(first.open());
+    expect(heard).toEqual(['signed-in']);
+
+    // UI: another tab, then back. The saved file is read again, so a fresh copy mounts, and its load script runs again.
+    setOpenDocumentCheck((document) => document === first.document);
+    releaseWebAutomation(first.document);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = mountedDocument(serializeDocument(first.document));
+    const back = second.open();
+    expect(back.automation).not.toBe(automation);
+    load(back);
+    expect(heard).toEqual(['signed-in']);
+
+    // UI: the tab closed, and the file opened again: a fresh start, so it hears again.
+    setOpenDocumentCheck(() => false);
+    releaseWebAutomation(second.document);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reopened = mountedDocument(serializeDocument(second.document)).open();
+    load(reopened);
+    expect(heard).toEqual(['signed-in', 'signed-in']);
+
+    // The copies it replaced are closed, so a change is heard once.
+    await reopened.automation.signOut(api.capability);
+    expect(heard).toEqual(['signed-in', 'signed-in', 'signed-out']);
+  });
+
   it('drops queued work the file never saved when it is closed without saving and opened again', async () => {
     const mounted = mountedDocument();
     const { automation } = mounted.open();

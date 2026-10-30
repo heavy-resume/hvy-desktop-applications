@@ -476,3 +476,34 @@
 .document-tab.needs-you .document-tab-main {
   grid-template-columns: 10px minmax(0, 1fr) auto;
 }
+
+/* The toolbar's Background activity indicator (render-background-activity.ts): before the save state, while work runs. */
+.background-activity-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 120px;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  padding: 4px 6px;
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-activity-indicator-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hvy-accent, #326b60);
+}
+
+.background-activity-indicator:hover {
+  border-color: var(--hvy-border-input, #b8c2bd);
+  background: var(--hvy-surface-alt, #f7f8f4);
+}

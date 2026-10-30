@@ -598,6 +598,30 @@
   line-height: 1.4;
 }
 
+.save-as-name-field {
+  position: relative;
+}
+
+.save-as-rename-popover {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  border: 1px solid var(--hvy-border, #b7c1bc);
+  border-radius: 6px;
+  background: var(--hvy-surface, #fffefb);
+  box-shadow: 0 8px 20px var(--hvy-shadow-md, rgb(40 51 47 / 16%));
+  padding: 6px 8px;
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.save-as-rename-popover[hidden] {
+  display: none;
+}
+
 .save-as-dialog .dialog-actions {
   position: sticky;
   bottom: -18px;
@@ -1221,4 +1245,98 @@
   font-weight: 400;
   color: var(--hvy-text-muted, #697571);
   font-size: 12px;
+}
+
+.background-activity-dialog {
+  width: min(720px, 100%);
+}
+
+.background-activity-section {
+  display: grid;
+  gap: 6px;
+}
+
+.background-activity-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.background-activity-heading {
+  margin: 0;
+  font-size: 13px;
+}
+
+.background-activity-document {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.background-activity-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.background-activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.background-activity-row.is-waiting {
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
+.background-activity-row-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.background-activity-duplicate {
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--hvy-warning, #d47a00);
+  padding: 1px 6px;
+  color: var(--hvy-warning-on, #ffffff);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.background-activity-events {
+  display: grid;
+  max-height: 260px;
+  gap: 2px;
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.background-activity-event {
+  display: grid;
+  grid-template-columns: auto 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.background-activity-event-time,
+.background-activity-event-source {
+  color: var(--hvy-text-muted, #5f6a66);
+  font-variant-numeric: tabular-nums;
+}
+
+.background-activity-event-message {
+  overflow-wrap: anywhere;
 }

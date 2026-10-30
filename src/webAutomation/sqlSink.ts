@@ -41,7 +41,7 @@ export function createSqlRecordConsumer(
   open: () => Promise<OpenedDatabase>,
   config: SqlItemStoreConfig,
   policy: RecordSinkConfig,
-  onWritten: () => void,
+  onWritten: (key: string) => void,
 ): RecordConsumer {
   // What the table held when the run opened it, and what the run wrote since: a run asks this for every listed link.
   const states = new Map<string, string>();
@@ -61,7 +61,7 @@ export function createSqlRecordConsumer(
         createRecordSink(store, policy).onRecord(record);
         const state = store.get(record.key)?.state;
         if (state) states.set(record.key, state);
-      }).then(onWritten));
+      }).then(() => onWritten(record.key)));
     },
     close: async () => {
       const results = await Promise.allSettled(writes.splice(0));

@@ -9,7 +9,7 @@ import { type DocumentCreationType, type DocumentExtension, type WorkspaceFileNo
 import { currentDocumentWorkspacePath } from '../fileActions';
 import type { VisualDocument } from '../hvy';
 import { type AppState } from '../state';
-import { mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from '../templates';
+import { isBlankBundledTemplate, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from '../templates';
 import { MIN_PASTED_IMPORT_CHARS } from './core';
 import { revealMenuLabel } from './events-workspace';
 import { renderWorkspaceFolderSelect } from './render-workspace-dialogs';
@@ -379,10 +379,6 @@ export function renderTemplateOption(template: ReturnType<typeof mergeSavedTempl
   const name = isBlankBundledTemplate(template) ? 'None' : template.name;
   const label = template.scope === 'bundled' ? name : `${name} (${template.scope})`;
   return `<option value="${escapeAttr(template.id)}">${escapeHtml(label)}</option>`;
-}
-
-export function isBlankBundledTemplate(template: ReturnType<typeof mergeSavedTemplates>[number]): boolean {
-  return template.scope === 'bundled' && /^blank\.(thvy|phvy)$/i.test(template.fileName);
 }
 
 export function renderAboutDialog(state: AppState): string {

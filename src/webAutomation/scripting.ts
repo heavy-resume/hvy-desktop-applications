@@ -138,6 +138,17 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       resolve(ctx).automation.stopCollection(String(args.runId ?? ''));
       return null;
     },
+    /**
+     * Calls `handler` with `{ keys }` each time the collection block's output writes records, however the run was
+     * started. Registered by the document's load script; the same `key` replaces an earlier handler.
+     */
+    on_records: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const capabilityId = collection(lookup, args).capabilityId;
+      const handler = required(callback(args.handler), 'on_records needs a handler function.');
+      lookup.automation.onRecordsWritten(capabilityId, String(args.key ?? 'default'), (keys) => handler({ keys }));
+      return null;
+    },
   };
 }
 

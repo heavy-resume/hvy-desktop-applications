@@ -193,6 +193,10 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     get sink() {
       return sink;
     },
+    /** A collection block's own output, the consumer its runs are given when a script passes no on_record. */
+    output(capabilityId: string): RecordConsumer {
+      return opened.lookup.sink(capabilityId)!;
+    },
     settings,
     timeline,
     api,
@@ -239,7 +243,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       automation.profileChosen(name, 'a web profile context');
     },
 
-    // UI: first use: "Allow in this file" on both web plugins, then "Allow [service]…" and its modal's "Allow".
+    // UI: first use: "Allow in this file" on both web plugins, then "Web API - Allow [service]…" and its modal's "Allow".
     approve(capability: WebApiCapability = api.capability): void {
       opened.authorizePlugin(WEB_COLLECTION_PLUGIN_ID);
       opened.authorizePlugin(WEB_API_PLUGIN_ID);

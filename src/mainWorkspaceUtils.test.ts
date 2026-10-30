@@ -60,10 +60,12 @@ const mainMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./main', () => mainMocks);
+vi.mock('./ui/core', () => ({ MIN_PASTED_IMPORT_CHARS: 250 }));
 
 import { decryptFolderManifest, encryptFolderManifest } from './encryptedFolders';
-import { copyOpenWorkspaceFileToWorkspace, applyArchivedFileRelocations, creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
-import { state } from './state';
+import { copyOpenWorkspaceFileToWorkspace, applyArchivedFileRelocations, creationTemplate, isBlankCreationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
+import { state, type AppState } from './state';
+import { renderNewDocumentDialog } from './ui/render-import';
 import { decryptDocumentEnvelopeBytes, encryptDocumentBytes, isEncryptedDocumentBytes } from '../../heavy-file-format/src/encryption';
 
 beforeEach(() => {
@@ -71,6 +73,45 @@ beforeEach(() => {
   backendMocks.readDocumentFile.mockReset();
   backendMocks.saveDocumentToWorkspace.mockReset();
   mainMocks.refreshRecents.mockReset();
+});
+
+describe('isBlankCreationTemplate', () => {
+  const dialogTemplateIds = (): string[] => [...renderNewDocumentDialog({
+    ...state,
+    newDocumentWorkspacePath: '/workspace',
+    newDocumentDirectory: '',
+    newDocumentType: 'hvy',
+    workspaces: [{ path: '/workspace', manifest: { name: 'Work' }, files: [] }],
+  } as unknown as AppState).matchAll(/<option value="([^"]*)">([^<]*)<\/option>/g)].map((match) => `${match[1]}|${match[2]}`);
+
+  beforeEach(() => {
+    state.workspaces = [{ path: '/workspace', manifest: { schemaVersion: 1, name: 'Work', createdAt: '', updatedAt: '' }, files: [] }];
+    state.savedTemplates = [{
+      id: '/workspace/templates/Resume.thvy',
+      path: '/workspace/templates/Resume.thvy',
+      name: 'Resume.thvy',
+      scope: 'workspace',
+      extension: '.thvy',
+      bytes: Array.from(new TextEncoder().encode('---\nhvy_version: 0.1\ntitle: Resume\n---\n')),
+    }];
+  });
+
+  it('treats the New Document dialog default None option as blank', () => {
+    const [defaultOption] = dialogTemplateIds();
+    const [templateId, label] = defaultOption!.split('|');
+
+    expect(label).toBe('None');
+    expect(isBlankCreationTemplate('/workspace', 'hvy', templateId!)).toBe(true);
+  });
+
+  it('does not treat bundled or saved templates as blank', () => {
+    const ids = dialogTemplateIds().map((option) => option.split('|')[0]!);
+
+    expect(ids).toContain('meeting-minutes.thvy');
+    expect(ids).toContain('/workspace/templates/Resume.thvy');
+    expect(isBlankCreationTemplate('/workspace', 'hvy', 'meeting-minutes.thvy')).toBe(false);
+    expect(isBlankCreationTemplate('/workspace', 'hvy', '/workspace/templates/Resume.thvy')).toBe(false);
+  });
 });
 
 describe('creationTemplate', () => {

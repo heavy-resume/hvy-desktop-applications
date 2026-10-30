@@ -14,6 +14,7 @@ import { WebAutomationError } from './errors';
 import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
+import { publishedServices } from './serviceManifests';
 import { createSqlRecordConsumer, type OpenedDatabase } from './sqlSink';
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
 import { capabilityOrigin } from './webApi';
@@ -198,12 +199,19 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       const output = collectionBlock(capabilityId)?.output;
       if (!output) return null;
       const { store, policy } = output;
-      if ('kind' in store) return createSqlRecordConsumer(document, openDatabase, store, policy, () => options.onDatabaseChange?.(stateRuntime));
+      // Each record written is told to the document's on_records handlers, which decide what to read again.
+      if ('kind' in store) {
+        return createSqlRecordConsumer(document, openDatabase, store, policy, (key) => {
+          options.onDatabaseChange?.(stateRuntime);
+          automation.recordsWritten(capabilityId, [key]);
+        });
+      }
       const sink = createRecordSink(createCliItemStore(document, store), policy);
       return {
         onRecord: (record) => {
           sink.onRecord(record);
           options.onDocumentChange?.(stateRuntime, store.listPath);
+          automation.recordsWritten(capabilityId, [record.key]);
         },
         isKnown: sink.isKnown,
       };
@@ -221,7 +229,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   // document opens (again if it failed before), and the readers redraw when it arrives.
   visitBlocks(document.sections, (block) => {
     const service = block.schema.plugin === WEB_API_PLUGIN_ID ? block.schema.pluginConfig.service : undefined;
-    if (typeof service !== 'string') return;
+    if (typeof service !== 'string' || !publishedServices.enabled) return;
     let origin: string;
     try {
       origin = new URL(service).origin;

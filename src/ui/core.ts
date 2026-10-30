@@ -13,6 +13,7 @@ import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTab
 import { renderColorThemeDialog } from './render-theme';
 import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
 import { renderPluginApprovalBar, renderPluginApprovalDialog } from './render-plugin-approval';
+import { renderBackgroundActivityDialog } from './render-background-activity';
 import { renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
 import { bindWorkspaceManagerReordering, renderEmptyState, renderNewWorkspaceDialog, renderWorkspaceInitializationDialog, renderWorkspaceManagerDialog, renderWorkspaces, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
@@ -309,6 +310,7 @@ export function renderModals(state: AppState): void {
       ${renderDocumentKeyDeleteDialog(state)}
       ${renderDocumentEncryptionDialog(state)}
       ${renderPluginApprovalDialog(state)}
+      ${renderBackgroundActivityDialog(state)}
     ${renderRecoveryDialog(state)}
     ${renderExternalFileChangeDialog(state)}
     ${renderTabStackPopover(state)}

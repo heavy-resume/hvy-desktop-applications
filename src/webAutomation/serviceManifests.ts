@@ -19,6 +19,13 @@ import { errorMessage } from './errors';
  * }
  */
 export const SERVICE_MANIFEST_PATH = '/.well-known/hvy-galaxy.json';
+
+/**
+ * Off: documents carry their services inline, so what a document does is all in the file. A block that names a
+ * service is refused, and no published file is fetched. Tests of this feature turn it on.
+ */
+export const publishedServices = { enabled: false };
+export const PUBLISHED_SERVICES_OFF = 'Services’ published files are turned off: list the service’s endpoints in the block.';
 export const SERVICE_MANIFEST_FORMAT = 'galaxy-service/1';
 export const MAX_SERVICE_MANIFEST_BYTES = 1_000_000;
 

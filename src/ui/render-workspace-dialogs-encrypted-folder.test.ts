@@ -1,16 +1,21 @@
 import { currentDocumentWorkspacePath } from '../fileActions';
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('../fileActions', () => ({ currentDocumentWorkspacePath: vi.fn(() => null) }));
-vi.mock('../mainUtilities', () => ({ savedVersionDocumentName: () => '' }));
+vi.mock('../mainUtilities', () => ({
+  savedVersionDocumentName: () => '',
+  documentTypeForExtension: () => 'hvy',
+  documentFileName: (name: string) => (name.trim() ? `${name.trim()}.hvy` : null),
+}));
 vi.mock('../state', () => ({ workspacePathForFileInWorkspaces: () => null }));
 vi.mock('./core', () => ({ MIN_PASTED_IMPORT_CHARS: 250 }));
 vi.mock('../templates', () => ({
   workspaceTemplateVisibility: () => ({ hvyDocuments: true, thvyTemplates: true, phvyTemplates: true, archivedFiles: false }),
   mergeSavedTemplates: () => [],
   templatesForDocumentType: () => [{ id: 'blank.thvy', name: 'None', scope: 'bundled', extension: '.thvy' }],
+  isBlankBundledTemplate: () => true,
 }));
 import type { AppState } from '../state';
-import { renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderSaveAsDialog } from './render-workspace-dialogs';
+import { renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderSaveAsDialog, saveAsRenamedFileName } from './render-workspace-dialogs';
 import { renderNewDocumentDialog } from './render-import';
 import { renderNode } from './render-workspaces';
 
@@ -102,6 +107,7 @@ describe('save as destination', () => {
       saveAsDialogOpen: true,
       saveAsKind: 'document',
       saveAsScope: 'workspace',
+      saveAsSuggestedName: '',
       selectedWorkspacePath: '/workspace',
       workspaces: [{
         path: '/workspace',
@@ -131,6 +137,57 @@ describe('save as destination', () => {
     expect(html).toContain('name="fileName" type="text" autocomplete="off" value="" required');
     expect(html).not.toContain('placeholder=');
     expect(html).toContain('type="submit" disabled>Save</button>');
+  });
+
+  it('fills a new document name from its first text line and enables Save', () => {
+    const html = renderSaveAsDialog({
+      saveAsDialogOpen: true,
+      saveAsKind: 'document',
+      saveAsScope: 'workspace',
+      saveAsSuggestedName: 'Weekly plan',
+      selectedWorkspacePath: '/workspace',
+      workspaces: [{ path: '/workspace', manifest: { name: 'Plans' }, files: [] }],
+      document: {
+        source: { name: 'Untitled.hvy', extension: '.hvy', path: '' },
+        virtual: null,
+        isNew: true,
+      },
+      busy: false,
+    } as unknown as AppState);
+
+    expect(html).toContain('name="fileName" type="text" autocomplete="off" value="Weekly plan" required');
+    expect(html).toContain('type="submit" >Save</button>');
+    expect(html).toContain('<span class="save-as-rename-popover" role="status" hidden></span>');
+  });
+
+  it('warns under the name when the destination folder already has that file', () => {
+    const file = (name: string) => ({ kind: 'file', name, path: `/workspace/drafts/${name}`, relativePath: `drafts/${name}` });
+    const state = {
+      saveAsDialogOpen: true,
+      saveAsKind: 'document',
+      saveAsScope: 'workspace',
+      saveAsSuggestedName: 'Weekly plan',
+      selectedWorkspacePath: '/workspace',
+      workspaces: [{
+        path: '/workspace',
+        manifest: { name: 'Plans' },
+        files: [
+          { kind: 'folder', name: 'drafts', path: '/workspace/drafts', relativePath: 'drafts', children: [file('Weekly plan.hvy'), file('weekly plan 2.hvy')] },
+          { kind: 'file', name: 'Notes.hvy', path: '/workspace/Notes.hvy', relativePath: 'Notes.hvy' },
+        ],
+      }],
+      document: { source: { name: 'Untitled.hvy', extension: '.hvy', path: '' }, virtual: null, isNew: true },
+      busy: false,
+    } as unknown as AppState;
+
+    expect(saveAsRenamedFileName(state.workspaces, '/workspace', 'drafts', 'Weekly plan', '.hvy'))
+      .toEqual({ fileName: 'Weekly plan.hvy', renamed: 'Weekly plan 3.hvy' });
+    expect(saveAsRenamedFileName(state.workspaces, '/workspace', '', 'Weekly plan', '.hvy')).toBeNull();
+    expect(saveAsRenamedFileName(state.workspaces, '/workspace', '', 'Notes', '.hvy'))
+      .toEqual({ fileName: 'Notes.hvy', renamed: 'Notes 2.hvy' });
+
+    expect(renderSaveAsDialog({ ...state, saveAsSuggestedName: 'Notes' } as AppState))
+      .toContain('<span class="save-as-rename-popover" role="status" >Notes.hvy already exists here. It will be saved as Notes 2.hvy.</span>');
   });
 });
 

@@ -61,6 +61,10 @@ export function getTemplateById(templates: HvyTemplate[], id: string): HvyTempla
   return templates.find((template) => template.id === id) ?? templates[0] ?? fallbackTemplate;
 }
 
+export function isBlankBundledTemplate(template: HvyTemplate): boolean {
+  return template.scope === 'bundled' && /^blank\.(thvy|phvy)$/i.test(template.fileName);
+}
+
 export function mergeSavedTemplates(savedTemplates: SavedTemplate[]): HvyTemplate[] {
   const saved = savedTemplates
     .map(templateFromSaved)

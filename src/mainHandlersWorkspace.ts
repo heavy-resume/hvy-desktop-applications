@@ -9,7 +9,7 @@ import { documentEncryptionKeyring, generateStoredDocumentKey } from './document
 import { encryptedFolderIdFromPhysicalName, encryptFolderManifest, findEncryptedFolder, prepareEncryptedFolderChildMutation, prepareEncryptedFolderDocumentMutation, prepareEncryptedFolderEntryAIAccessMutation, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename, prepareEncryptedFolderImportedDocumentMutation, prepareEncryptedFolderSelfAIAccessMutation, prepareEncryptedFolderSelfRename, workspaceHasLogicalName } from './encryptedFolders';
 import { findFileInWorkspace, state } from './state';
 import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
-import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncOpenDocumentAiAccess, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
+import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, isBlankCreationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncOpenDocumentAiAccess, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
 import type { UiHandlers } from './ui';
 import { saveWorkspaceExpansionState } from './workspaceExpansionState';
 
@@ -496,6 +496,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const extension = state.newDocumentType === 'phvy' ? '.phvy' : state.newDocumentType === 'thvy' ? '.thvy' : '.hvy';
     const fileName = `Untitled${extension}`;
     const template = creationTemplate(workspacePath, state.newDocumentType, templateId, 'Untitled');
+    const blank = isBlankCreationTemplate(workspacePath, state.newDocumentType, templateId);
     state.newDocumentWorkspacePath = null;
     state.newDocumentDirectory = '';
     state.selectedWorkspacePath = workspacePath;
@@ -504,7 +505,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       name: fileName,
       extension,
       bytes: Array.from(new TextEncoder().encode(template)),
-    }, { isNew: true, deferMount: true });
+    }, { isNew: true, deferMount: true, ...(blank ? { initialMode: 'editor' as const } : {}) });
     state.status = 'Created untitled document';
   }),
   cancelNewDocument: () => {

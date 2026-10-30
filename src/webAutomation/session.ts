@@ -49,8 +49,15 @@ export class SessionService {
     return () => this.listeners.delete(listener);
   }
 
+  /**
+   * Every account known in this run, and every saved one: a saved account is signed in until a call says otherwise
+   * (a signed-out status from any call signs it out), so it is not checked again on each start.
+   */
   getState(): SessionState[] {
-    return [...this.states.values()].map((state) => ({ ...state }));
+    const saved = Object.entries(this.deps.settings.get().accounts)
+      .filter(([key]) => !this.states.has(key))
+      .map(([, { origin, profileId }]): SessionState => ({ origin, profileId, status: 'signed-in', error: null }));
+    return [...saved, ...[...this.states.values()].map((state) => ({ ...state }))];
   }
 
   stateFor(capability: WebApiCapability, profileId: string): SessionState {
@@ -81,7 +88,9 @@ export class SessionService {
         this.markSignedOut(capability, profileId);
       } else if (response.status >= 200 && response.status < 300) {
         // Only access is checked here. Who is signed in, if the service says, is for the document's scripts to ask it.
+        // The state is recorded before the account is saved, so listeners hear of a change from what they knew.
         const origin = capabilityOrigin(capability);
+        this.setState(capability, profileId, { status: 'signed-in', error: null });
         this.deps.settings.update((settings) => ({
           ...settings,
           accounts: {
@@ -89,7 +98,6 @@ export class SessionService {
             [accountKey(origin, profileId)]: { origin, profileId, checkedAt: this.deps.clock.now() },
           },
         }));
-        this.setState(capability, profileId, { status: 'signed-in', error: null });
         this.deps.emit('session', 'signed in', { origin, profileId });
       } else {
         this.setState(capability, profileId, { error: `The session check returned ${response.status}.` });
@@ -149,15 +157,13 @@ export class SessionService {
   }
 
   /**
-   * Records an account's state and tells listeners when its status changes. The first state recorded in a run is
-   * always told: until then listeners have heard nothing, even when a saved account already said "signed in" (a probe
-   * saves the account before it records the state).
+   * Records an account's state and tells listeners when its status changes from what they knew: a saved account is
+   * already "signed in" (a session handover gives them that), so checking it again tells them nothing new.
    */
   private setState(capability: WebApiCapability, profileId: string, patch: Partial<Omit<SessionState, 'origin' | 'profileId'>>): void {
-    const key = accountKey(capabilityOrigin(capability), profileId);
-    const recorded = this.states.get(key);
-    const next = { ...this.stateFor(capability, profileId), ...patch };
-    this.states.set(key, next);
-    if (!recorded || next.status !== recorded.status) for (const listener of this.listeners) listener({ ...next });
+    const previous = this.stateFor(capability, profileId);
+    const next = { ...previous, ...patch };
+    this.states.set(accountKey(previous.origin, profileId), next);
+    if (next.status !== previous.status) for (const listener of this.listeners) listener({ ...next });
   }
 }

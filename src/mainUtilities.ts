@@ -8,6 +8,8 @@ import { normalizeIntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizeCapabilityAuthorizations, normalizeCollectionWorkerLimits } from './webAutomation/settings';
 import { relocatedDocumentSettings } from './documentSettingsRelocation';
 import { relocateWebAutomationDocument } from './webAutomation/app';
+import { isDefaultUntitledSectionTitle, visitBlocksInList } from '../../heavy-file-format/src/section-ops';
+import { markdownToPlainText } from '../../heavy-file-format/src/markdown-plain-text';
 
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40_000;
 const AI_MIN_CONTEXT_CHARS = 1_000;
@@ -46,6 +48,25 @@ export function workspaceRootDocumentFileName(name: string, documentType: Docume
   const trimmed = name.trim();
   if (hasInvalidDocumentNameSyntax(trimmed)) return null;
   return documentFileName(trimmed, documentType);
+}
+
+/** The document's first visible line of text, cleaned up for use as a file name. */
+export function documentNameFromFirstTextLine(document: VisualDocument): string {
+  const lines: string[] = [];
+  for (const section of document.sections) {
+    if (!isDefaultUntitledSectionTitle(section.title)) lines.push(section.title);
+    visitBlocksInList(section.blocks, (block) => lines.push(...block.text.split('\n')));
+  }
+  for (const line of lines) {
+    const name = markdownToPlainText(line)
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+      .replace(/^[.\s]+/, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 24)
+      .trim();
+    if (name) return name;
+  }
+  return '';
 }
 
 export function hasInvalidDocumentNameSyntax(name: string): boolean {

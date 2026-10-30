@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
-import { loadPublishedService } from './serviceManifests';
+import { loadPublishedService, publishedServices } from './serviceManifests';
 import { analysisServiceCapability, analysisServiceManifest } from '../test/webAutomation/analysisService';
 import { ATS_ORIGIN, atsDetailPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
 
@@ -28,6 +28,10 @@ describe('block configuration readers', () => {
   });
 
   it('switches an inline block to the service\'s published file, keeping AI tools on what its permissions grant', async () => {
+    publishedServices.enabled = true;
+    onTestFinished(() => {
+      publishedServices.enabled = false;
+    });
     const manifest = analysisServiceManifest();
     // A service the test publishes itself, so no other test's fetch of the mock service is reused.
     const origin = 'https://switch.mock-analysis.test';

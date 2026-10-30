@@ -9,6 +9,7 @@ vi.hoisted(() => {
     removeItem: (key: string) => values.delete(key),
   });
   vi.stubGlobal('window', {});
+  vi.stubGlobal('requestAnimationFrame', vi.fn());
 });
 
 const backendMocks = vi.hoisted(() => ({
@@ -432,6 +433,38 @@ describe('openSavedVersionPreview', () => {
     expect(state.saveAsKind).toBe('template');
     expect(state.saveAsScope).toBe(scope);
     state.savedTemplates = [];
+  });
+
+  it('names a new document after its first text line and selects the name for editing', () => {
+    state.document!.virtual = undefined;
+    state.document!.isNew = true;
+    state.document!.readOnly = false;
+    state.document!.source.extension = '.hvy';
+    state.document!.mounted = {
+      document: {
+        sections: [
+          { title: 'Unnamed Section', blocks: [{ text: '\n  \n', schema: {} }] },
+          { title: '', blocks: [{ text: '', schema: { containerBlocks: [{ text: '## Weekly *plan*: Q4/Q1 goals and reviews\nSecond line', schema: {} }] } }] },
+        ],
+      },
+      mount: {},
+    } as never;
+    state.workspaces = [];
+    state.savedTemplates = [];
+    vi.mocked(requestAnimationFrame).mockClear();
+
+    openSaveAsDialog();
+
+    expect(state.saveAsSuggestedName).toBe('Weekly plan Q4 Q1 goals');
+    const input = { select: vi.fn() };
+    const querySelector = vi.fn(() => input);
+    const originalDocument = globalThis.document;
+    vi.stubGlobal('document', { querySelector });
+    vi.mocked(requestAnimationFrame).mock.calls[0]![0](0);
+    vi.stubGlobal('document', originalDocument);
+    expect(querySelector).toHaveBeenCalledWith('.save-as-dialog input[name="fileName"], .save-as-dialog input[name="templateName"]');
+    expect(input.select).toHaveBeenCalled();
+    state.document!.isNew = false;
   });
 
   it('opens a saved version with the source AI policy and preserves history scroll position', async () => {

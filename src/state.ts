@@ -10,6 +10,8 @@ import type { IntegrationStructuredSource } from './integrationBrowser';
 import type { IntegrationWebMcpToolDescriptor } from './integrationWebMcp';
 import type { RuntimeDocument } from './runtimeDocuments';
 import type { ReviewedDocumentKey } from './documentKeys';
+import type { BackgroundActivity } from './webAutomation/app';
+import type { BackgroundActivityLabel } from './ui/render-background-activity';
 import type { DocumentKeyUsage } from './documentKeyUsage';
 export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
@@ -98,6 +100,7 @@ export interface AppState {
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
   saveAsKind: 'document' | 'template';
+  saveAsSuggestedName: string;
   saveAsScope: 'workspace' | 'anywhere' | 'app';
   exportPdfSavePromptOpen: boolean;
   exportPdfPlaintextConfirmed: boolean;
@@ -228,6 +231,11 @@ export interface AppState {
   /** Setting up a site for a document's collection: what the Integrations manager shows while it does. */
   /** Paths of open documents whose background work waits for the user: their tabs are marked (backgroundActivity.ts). */
   documentsNeedingYou: string[];
+  /** Background work across open documents, as last read (backgroundActivity.ts): the toolbar indicator and its panel. */
+  backgroundActivity: BackgroundActivity | null;
+  backgroundActivityOpen: boolean;
+  /** What the indicator says; null hides it. */
+  backgroundActivityLabel: BackgroundActivityLabel | null;
   siteSetup: {
     collectionName: string;
     documentName: string;
@@ -480,6 +488,7 @@ export const state: AppState = {
   saveTemplateScope: 'app',
   saveAsDialogOpen: false,
   saveAsKind: 'document',
+  saveAsSuggestedName: '',
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   exportPdfPlaintextConfirmed: false,
@@ -602,6 +611,9 @@ export const state: AppState = {
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
   documentsNeedingYou: [],
+  backgroundActivity: null,
+  backgroundActivityOpen: false,
+  backgroundActivityLabel: null,
   siteSetup: null,
   integrationCommandDraftIntegrationId: null,
   integrationCommandDraftActionId: null,

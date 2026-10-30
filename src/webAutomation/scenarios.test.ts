@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createCliItemStore } from './cliItemStore';
@@ -6,7 +6,7 @@ import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { ANALYSIS_ORIGIN, analysisServiceCapability, analysisServiceManifest, mockAnalysisService, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
 import { buildSearchDocument } from '../test/webAutomation/listingDocument';
 import { readWebAutomationBlocks } from './documentBlocks';
-import { loadPublishedService } from './serviceManifests';
+import { loadPublishedService, PUBLISHED_SERVICES_OFF, publishedServices } from './serviceManifests';
 import { readWebApiBlockConfig, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, mockQueueBlocks, type MockFlow } from '../test/webAutomation/flow';
 import { ignoredProfileContexts } from './profileContexts';
@@ -42,6 +42,7 @@ let flow: MockFlow | null = null;
 afterEach((context) => {
   if (context.task.result?.state === 'fail' && flow) console.log(`Timeline:\n${flow.print()}`);
   flow = null;
+  publishedServices.enabled = false;
 });
 
 async function signedInFlow(collection = listingCollection([ACME])): Promise<MockFlow> {
@@ -673,7 +674,40 @@ describe('mock integration: job search flow', () => {
     expect(heard).toEqual(['signed-in']);
   });
 
-  it('32. a delayed entry waits its turn, and its context comes back with the result without reaching the service', async () => {
+  it('31d. an account signed in on an earlier run stays signed in without a check, until a call is refused', async () => {
+    flow = createMockFlow();
+    flow.bindProfiles(listingCollection([ACME]));
+    flow.approve();
+    await flow.signIn();
+    await flow.completeLogin();
+    flow.restartApp();
+    const restarted = flow.print().length;
+    // The block reads this state: signed in, so it does not check the account.
+    expect(flow.automation.getState().sessions).toMatchObject([{ status: 'signed-in', error: null }]);
+    const heard: string[] = [];
+    flow.automation.onSessionChange(flow.api.capability, 'resume-list', (state) => heard.push(state.status));
+    // A script checking anyway hears nothing new, so it loads the account's data once.
+    await flow.probe();
+    expect(heard).toEqual(['signed-in']);
+    expect(flow.print().slice(restarted).match(/GET \/api\/session/g)).toHaveLength(1);
+
+    // The session ends at the site; the next call says so, and the block offers to sign in.
+    flow.expireSession();
+    await expect(flow.callEndpoint('profile')).rejects.toMatchObject({ code: 'not_authenticated' });
+    expect(heard).toEqual(['signed-in', 'signed-out']);
+    expect(flow.automation.getState().sessions).toMatchObject([{ status: 'signed-out' }]);
+  });
+
+  it('31e. the profile\'s API worker is kept as it is between calls: only collection workers have their history cleared', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const reset = vi.spyOn(flow!.host, 'resetWorker');
+    await flow!.callEndpoint('profile');
+    await flow!.callEndpoint('profile');
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('32.a delayed entry waits its turn, and its context comes back with the result without reaching the service', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
     await flow!.collect(boards);
@@ -876,6 +910,7 @@ describe('mock integration: job search flow', () => {
     expect(flow!.openLink('https://elsewhere.test/page')).toBe(false);
   });
   it('42. a service that publishes what documents may do: the block asks for permissions, and gets only their endpoints', async () => {
+    publishedServices.enabled = true;
     // The document names the service and one of its permissions; the service's published file says what that allows.
     flow = createMockFlow({
       document: { build: () => buildSearchDocument({ webApi: { capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] }, queues: mockQueueBlocks(mockAnalysisService()) }) },
@@ -910,6 +945,7 @@ describe('mock integration: job search flow', () => {
     expect(readWebApiBlockConfig(block.schema.pluginConfig)).toEqual({ ok: false, errors: ['app.mock-analysis.test’s published file offers no permission "billing".'] });
   });
   it('43. a service\'s published file that could not be read: the block says why, and reads it on Try again', async () => {
+    publishedServices.enabled = true;
     flow = createMockFlow({
       document: { build: () => buildSearchDocument({ webApi: { capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] }, queues: mockQueueBlocks(mockAnalysisService()) }) },
     });
@@ -927,5 +963,40 @@ describe('mock integration: job search flow', () => {
     expect(await flow.automation.fetchPublishedService(ANALYSIS_ORIGIN, true)).toMatchObject({ status: 'loaded' });
     expect(readWebAutomationBlocks(flow.document).webApis[0].config.capability?.published?.permissions.map((permission) => permission.id)).toEqual(['analyses']);
     expect(flow.print()).toContain('read app.mock-analysis.test’s published file');
+  });
+  it('44. services\' published files turned off: a block that names a service is refused, and nothing is fetched', async () => {
+    flow = createMockFlow({
+      document: { build: () => buildSearchDocument({ webApi: { capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] }, queues: mockQueueBlocks(mockAnalysisService()) }) },
+    });
+    await flow.settle();
+    expect(readWebApiBlockConfig({ schemaVersion: 1, capabilityId: 'analysis', service: ANALYSIS_ORIGIN, permissions: ['analyses'] })).toEqual({ ok: false, errors: [PUBLISHED_SERVICES_OFF] });
+    expect(readWebAutomationBlocks(flow.document).webApis).toEqual([]);
+    // Opening the document asked the service for nothing.
+    expect(flow.print()).not.toContain('published file');
+  });
+
+  it('45. a script that shows a collection\'s output hears the key of each record the output writes, and a handler with the same key replaces the earlier one', async () => {
+    const boards = listingCollection([ACME]);
+    const api = mockAnalysisService();
+    flow = createMockFlow({
+      document: {
+        build: () => buildSearchDocument({
+          webApi: structuredClone(api.capability),
+          collection: { ...structuredClone(boards), output: { store: LISTING_STORE_CONFIG, policy: { onExisting: 'keep', keepGoodOnFailure: true } } },
+          queues: mockQueueBlocks(api),
+        }),
+        store: LISTING_STORE_CONFIG,
+      },
+    });
+    flow.bindProfiles(boards);
+    flow.approve();
+    const replaced: string[] = [];
+    const heard: string[] = [];
+    flow.automation.onRecordsWritten(boards.capabilityId, 'job-list', (keys) => replaced.push(...keys));
+    flow.automation.onRecordsWritten(boards.capabilityId, 'job-list', (keys) => heard.push(...keys));
+    await flow.collect(boards, undefined, flow.output(boards.capabilityId));
+    expect(replaced).toEqual([]);
+    expect(heard.length).toBeGreaterThan(0);
+    expect([...heard].sort()).toEqual(flow.items.list().map((item) => item.key).sort());
   });
 });

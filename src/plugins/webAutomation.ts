@@ -9,7 +9,7 @@ import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig,
 import { createWebAutomationPlugins, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
 import { isIgnoredProfileContext, profileContextFor } from '../webAutomation/profileContexts';
-import { publishedService, SERVICE_MANIFEST_FORMAT, SERVICE_MANIFEST_PATH } from '../webAutomation/serviceManifests';
+import { publishedService, publishedServices, SERVICE_MANIFEST_FORMAT, SERVICE_MANIFEST_PATH } from '../webAutomation/serviceManifests';
 import { documentProfileName, resolveProfile, withDocumentProfile, type BrowserProfile } from '../webAutomation/profiles';
 import { DEFAULT_QUEUE_CONFIG, type QueueEntry } from '../webAutomation/queue';
 import type { DocumentAutomationLookup } from '../webAutomation/scripting';
@@ -34,6 +34,11 @@ function heading(text: string): HTMLElement {
   const element = document.createElement('strong');
   element.textContent = text;
   return element;
+}
+
+/** A Web API block, its modal, or its button: says it is the Web API plugin, not the service itself. */
+function webApiLabel(text: string): string {
+  return `Web API - ${text}`;
 }
 
 function status(text: string): HTMLElement {
@@ -204,7 +209,7 @@ function profileLine(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, ca
  */
 function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApiCapability, profile: BrowserProfile, onOutcome: (problem: string) => void): void {
   if (!state.document) return;
-  const { form, body, row, close } = openModal(capability.session ? `Let this file use your ${capability.name} account?` : `Let this file use ${capability.name}?`, 'hvy-web-authorization-dialog wide-dialog');
+  const { form, body, row, close } = openModal(webApiLabel(capability.session ? `Let this file use your ${capability.name} account?` : `Let this file use ${capability.name}?`), 'hvy-web-authorization-dialog wide-dialog');
   const details = document.createElement('dl');
   const rows: Array<[string, string]> = [
     ['Document', state.document.source.name],
@@ -467,7 +472,8 @@ function publishedServiceEditor(ctx: HvyPluginContext, root: HTMLElement, { conf
     })
     : published?.status === 'failed'
       ? [paragraph(`Couldn’t read its published file: ${published.error}`, 'hvy-web-error'), tryAgain(resolveDocumentAutomation(ctx), origin!)]
-      : [paragraph('Reading its published file…', 'hvy-web-page-hint')];
+      // Turned off, the block's problem says so.
+      : publishedServices.enabled ? [paragraph('Reading its published file…', 'hvy-web-page-hint')] : [];
   // The endpoints the permissions asked for grant, once the file is read.
   const read = readWebApiBlockConfig(config);
   const endpoints = read.ok && read.value.capability ? read.value.capability.endpoints : [];
@@ -475,7 +481,7 @@ function publishedServiceEditor(ctx: HvyPluginContext, root: HTMLElement, { conf
     draft.mcp = { ...(isObject(draft.mcp) ? draft.mcp : {}), endpointIds: on ? [...exposed, endpoint.id] : exposed.filter((candidate) => candidate !== endpoint.id) };
   })));
   root.append(
-    heading(read.ok && read.value.capability ? read.value.capability.name : (origin ? new URL(origin).host : 'Web API')),
+    heading(read.ok && read.value.capability ? webApiLabel(read.value.capability.name) : (origin ? webApiLabel(new URL(origin).host) : 'Web API')),
     paragraph(`Id: ${String(config.capabilityId ?? '')}. Uses what the service publishes about itself (${SERVICE_MANIFEST_PATH} on its site): the file asks for permissions, and the service decides what they allow.`, 'hvy-web-page-hint'),
     problem,
     fieldset('Service', labelled('Service address', service, 'The service’s site.')),
@@ -502,7 +508,7 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
     const pageOrigin = originOf(config.pageUrl) ?? '';
     // Whether the page's service publishes what documents may do (asked once); if it does, the offer to use that.
     const publishedHere = pageOrigin ? publishedService(pageOrigin) : null;
-    if (pageOrigin && !publishedHere) void resolveDocumentAutomation(ctx).automation.fetchPublishedService(pageOrigin);
+    if (pageOrigin && !publishedHere && publishedServices.enabled) void resolveDocumentAutomation(ctx).automation.fetchPublishedService(pageOrigin);
     const offer = publishedHere?.status === 'loaded' && publishedHere.manifest.hvy === SERVICE_MANIFEST_FORMAT
       ? publishedOffer(pageOrigin, publishedHere.manifest, endpoints, commit)
       : [];
@@ -599,7 +605,7 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
     add.addEventListener('click', () => openEndpointDialog(null));
 
     root.append(
-      heading(String(config.name ?? 'Web API')),
+      heading(config.name ? webApiLabel(String(config.name)) : 'Web API'),
       paragraph(`Id: ${String(config.capabilityId ?? '')}. Scripts and queues call it by this id. A changed configuration is approved again before the file uses the service.`, 'hvy-web-page-hint'),
       problem,
       ...offer,
@@ -919,7 +925,7 @@ const webApiReader: HvyPluginFactory = (ctx) => {
     const capability = result.value.capability;
     // A published service's capability is known once its file is fetched (the document opening fetches it).
     if (!capability) {
-      root.append(heading(new URL(result.value.service!.origin).host), status('Reading the service’s published permissions…'));
+      root.append(heading(webApiLabel(new URL(result.value.service!.origin).host)), status('Reading the service’s published permissions…'));
       return;
     }
     const showProblem = (message: string) => {
@@ -946,7 +952,7 @@ const webApiReader: HvyPluginFactory = (ctx) => {
       change.addEventListener('click', () => chooseFileProfile(ctx, lookup));
       return [change];
     };
-    root.append(heading(capability.name));
+    root.append(heading(webApiLabel(capability.name)));
     const profile = lookup.automation.profileOf(capability.capabilityId);
     const finish = () => {
       if (problem) root.append(paragraph(problem, 'hvy-web-error'));
@@ -959,7 +965,7 @@ const webApiReader: HvyPluginFactory = (ctx) => {
     }
     if (!profile || lookup.automation.reviewWebApi(capability).reason !== 'authorized') {
       // Whether the profile is signed in there is not checked before the file may use the site.
-      root.append(status(profile ? 'Not allowed in this file yet.' : 'No browser profile chosen yet.'), actions(openApproval(`Allow ${capability.name}…`, true)));
+      root.append(status(profile ? 'Not allowed in this file yet.' : 'No browser profile chosen yet.'), actions(openApproval(webApiLabel(`Allow ${capability.name}…`), true)));
       finish();
       return;
     }

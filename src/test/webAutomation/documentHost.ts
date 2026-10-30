@@ -16,6 +16,8 @@ import { runUserScript, type ScriptingRunResult } from '../../../../heavy-file-f
 import { activateStateRuntime, createStateRuntime, runWithStateRuntime, runWithStateRuntimeAsync, type StateRuntime } from '../../../../heavy-file-format/src/state';
 import { setPluginAuthorizationCallbacks, type HvyPluginAuthorizationRequest } from '../../../../heavy-file-format/src/plugins/authorization/plugin-authorization-policy';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
+import { serializeDocument } from '../../../../heavy-file-format/src/serialization';
+import { getDatabaseChangeRevision } from '../../../../heavy-file-format/src/database-change-tracker';
 import type { Clock } from '../../webAutomation/clock';
 import { createTestState } from '../../../../heavy-file-format/tests/serialization-test-helpers';
 
@@ -136,8 +138,9 @@ function createFormApi(live: LiveFormState): ScriptingFormApi {
 /**
  * Runs an HVY document headless the way the app runs it in the viewer: an
  * app state with the document open, the reference implementation's plugin
- * document hooks on load and after every render (the app's renderApp ends
- * with runPluginDocumentHooks), its scripting plugin, and its Python runtime.
+ * document hooks on load and after every render (the app mounts documents
+ * with heavy-file-format's embed-full, whose renderApp ends with
+ * runPluginDocumentHooks), its scripting plugin, and its Python runtime.
  * Form submits run the form's own submit script as the form plugin does;
  * that is the only UI stood in for.
  */
@@ -170,8 +173,16 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
   // Hook runs a render started. A call made while one is running is skipped as nested and returns at once, so waiting
   // for the hooks means waiting for these.
   const hookRuns = new Set<Promise<unknown>>();
+  // A script's edit runs the hooks itself, and the render waits for them (the scripting runtime's onMutationFlushed),
+  // so it comes after the script's run has resolved. Each script run that edited the document waits here for it.
+  const pendingRenders = new Set<Promise<void>>();
+  let renderWaiters: Array<() => void> = [];
+  const nextRender = () => new Promise<void>((resolve) => renderWaiters.push(resolve));
   runtime.callbacks.renderApp = () => {
     renders += 1;
+    const waiters = renderWaiters;
+    renderWaiters = [];
+    for (const resolve of waiters) resolve();
     const run = runPluginDocumentHooks('unknown');
     hookRuns.add(run);
     void run.finally(() => hookRuns.delete(run));
@@ -187,11 +198,13 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       return renders;
     },
 
-    /** Resolves when the load hooks, and any hook runs they caused, have finished. */
+    /**
+     * Resolves when the load hooks, the renders scripts' edits are waiting on, and any hook runs renders started, have
+     * finished. It runs no hooks of its own.
+     */
     async idle(): Promise<void> {
       await loaded;
-      while (hookRuns.size) await Promise.allSettled([...hookRuns]);
-      await runWithStateRuntimeAsync(runtime, () => runPluginDocumentHooks('unknown'));
+      while (hookRuns.size || pendingRenders.size) await Promise.allSettled([...hookRuns, ...pendingRenders]);
     },
 
     /** The host renders after a change made outside a script, such as a record sink writing items. */
@@ -202,7 +215,7 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
     /** The form appears on screen: its initial script runs, as the form plugin runs it once per document. */
     async mountForm(blockId: FormRef): Promise<ScriptingRunResult | null> {
       const { spec } = liveForm(blockId);
-      return spec.initialScript ? runFormScript(blockId, spec.initialScript, 'initial') : null;
+      return spec.initialScript ? runFormScript(blockId, spec.initialScript, 'initial', false) : null;
     },
 
     /**
@@ -213,7 +226,7 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       const { spec, live } = liveForm(blockId);
       if (live.submit.disabled) throw new Error(`The form's submit is disabled: ${live.submit.reason}`);
       Object.assign(live.values, values);
-      return runFormScript(blockId, spec.submitScript, 'submit');
+      return runFormScript(blockId, spec.submitScript, 'submit', true);
     },
 
     /** The user changes one field, such as ticking a checkbox: the field's change script runs, as the form plugin runs it. */
@@ -221,7 +234,7 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       const { spec, live } = liveForm(blockId);
       live.values[label] = value;
       const script = spec.fields.find((field) => field.label === label)?.triggers.change;
-      return script ? runFormScript(blockId, script, `change:${label}`) : null;
+      return script ? runFormScript(blockId, script, `change:${label}`, true) : null;
     },
 
     /** What the form shows: field values, options, errors, and whether its submit is disabled (and why). */
@@ -240,10 +253,15 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
     return { block, spec, live };
   }
 
-  /** Runs one of a form's named scripts with the options the form plugin's runFormScript uses. */
-  function runFormScript(blockId: FormRef, scriptName: string, reason: string): Promise<ScriptingRunResult> {
+  /**
+   * Runs one of a form's named scripts with the options the form plugin's runFormScript uses. A submit or field change
+   * is the user's (the form plugin passes the event's isTrusted), so the scripting loop watchdog starts afresh for it.
+   */
+  function runFormScript(blockId: FormRef, scriptName: string, reason: string, startedByUser: boolean): Promise<ScriptingRunResult> {
     const { block, spec, live } = liveForm(blockId);
-    return runWithStateRuntimeAsync(runtime, () => runUserScript({
+    const before = documentSignature();
+    const rendered = nextRender();
+    const run = runWithStateRuntimeAsync(runtime, () => runUserScript({
       document,
       source: spec.scripts[scriptName] ?? '',
       componentId: `${block.schema.id}:${scriptName}:${reason}`,
@@ -251,7 +269,19 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
       maxLines: spec.scriptStepBudget,
       form: createFormApi(live),
       libraries: spec.scriptLibraries,
+      startedByUser,
     }));
+    return run.then((result) => {
+      if (documentSignature() !== before) {
+        pendingRenders.add(rendered);
+        void rendered.then(() => pendingRenders.delete(rendered));
+      }
+      return result;
+    });
+  }
+
+  function documentSignature(): string {
+    return `${serializeDocument(document)}\u0000${getDatabaseChangeRevision(document)}`;
   }
 }
 
