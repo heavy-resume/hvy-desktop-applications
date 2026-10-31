@@ -7,7 +7,7 @@ import type { HvyPlugin, HvyPluginFactory } from '../../../heavy-file-format/src
 import { getActiveStateRuntime, runWithStateRuntime, type StateRuntime } from '../../../heavy-file-format/src/state';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { createCliItemStore } from './cliItemStore';
-import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
+import { QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
 import { readWebAutomationBlocks } from './documentBlocks';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
@@ -15,7 +15,7 @@ import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
 import { publishedServices } from './serviceManifests';
-import { createSqlRecordConsumer, type OpenedDatabase } from './sqlSink';
+import { createSqlRecordConsumer, useDocumentDatabase, type OpenedDatabase } from './sqlSink';
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
 import { capabilityOrigin } from './webApi';
 // Registers the blocks' checks with hvy lint.
@@ -23,6 +23,7 @@ import './lint';
 import {
   collectionScriptingMethods,
   queueScriptingMethods,
+  similarityScriptingMethods,
   webApiScriptingMethods,
   type DocumentAutomationLookup,
   type DocumentAutomationResolver,
@@ -65,8 +66,8 @@ export interface WebAutomationReaders {
  * The web automation plugins. The ones that reach the web are conditional
  * registrations: a document gets their implementation only after the user
  * allows the plugin in that file (the reference implementation's per-file
- * plugin authorization). The queue reaches nothing itself, so it needs no
- * authorization.
+ * plugin authorization). The queue and similarity reach nothing themselves (similarity reaches the web only through a
+ * web API block, under its approval), so they need no authorization.
  */
 export function createWebAutomationPlugins(readers?: WebAutomationReaders): HvyPlugin[] {
   const webApi: HvyPlugin = {
@@ -86,6 +87,10 @@ export function createWebAutomationPlugins(readers?: WebAutomationReaders): HvyP
       ...metadata(QUEUE_PLUGIN_ID, 'Queue'),
       ...(readers ? { create: readers.queue } : {}),
       scripting: { methods: queueScriptingMethods(resolveDocumentAutomation) },
+    },
+    {
+      ...metadata(SIMILARITY_PLUGIN_ID, 'Similarity'),
+      scripting: { methods: similarityScriptingMethods(resolveDocumentAutomation) },
     },
     // Names a browser profile for the web plugins around it; it reaches nothing itself.
     {
@@ -195,6 +200,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     automation,
     webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capabilityId)?.config.capability ?? null,
     collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
+    database: (use) => useDocumentDatabase(document, openDatabase, use),
+    databaseChanged: () => options.onDatabaseChange?.(stateRuntime),
     sink: (capabilityId) => {
       const output = collectionBlock(capabilityId)?.output;
       if (!output) return null;

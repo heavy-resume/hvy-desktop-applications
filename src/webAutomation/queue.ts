@@ -45,11 +45,15 @@ export interface QueueState {
   awaitingResume: boolean;
 }
 
+/** An entry that will not run again: its script hears of it through on_result. */
+const FINISHED: QueueEntry['status'][] = ['done', 'failed', 'cancelled'];
+
 export interface QueueResult {
   key: string;
   /** The context the entry was enqueued with. */
   context: unknown;
-  status: 'done' | 'failed';
+  /** Cancelled: someone took it out of the queue before it ran (or after it failed), so its script can put it back. */
+  status: 'done' | 'failed' | 'cancelled';
   result?: unknown;
   error?: string;
 }
@@ -90,13 +94,13 @@ export class DurableQueue {
 
   /**
    * What the document saves in the queue block: everything except entries
-   * that are finished and whose results were delivered, or were cancelled.
+   * that are finished or cancelled and were delivered as such.
    */
   savedState(): QueueState {
     const state = this.getState();
     return {
       ...state,
-      entries: state.entries.filter((entry) => entry.status !== 'cancelled' && !(entry.delivered && (entry.status === 'done' || entry.status === 'failed'))),
+      entries: state.entries.filter((entry) => !(entry.delivered && FINISHED.includes(entry.status))),
     };
   }
 
@@ -144,7 +148,9 @@ export class DurableQueue {
 
   /** Cancels an entry waiting its turn, or dismisses a failed one. */
   cancel(key: string): void {
-    this.update(key, (entry) => (['queued', 'waiting-retry', 'failed'].includes(entry.status) ? { ...entry, status: 'cancelled' } : entry));
+    const before = this.state.entries.find((entry) => entry.key === key)?.status;
+    const cancelled = this.update(key, (entry) => (['queued', 'waiting-retry', 'failed'].includes(entry.status) ? { ...entry, status: 'cancelled', delivered: false } : entry));
+    if (cancelled && before !== 'cancelled' && cancelled.status === 'cancelled') this.deliver(cancelled);
   }
 
   /**
@@ -181,7 +187,7 @@ export class DurableQueue {
 
   onResult(handler: (result: QueueResult) => void): void {
     this.handler = handler;
-    for (const entry of this.state.entries.filter((candidate) => !candidate.delivered && (candidate.status === 'done' || candidate.status === 'failed'))) {
+    for (const entry of this.state.entries.filter((candidate) => !candidate.delivered && FINISHED.includes(candidate.status))) {
       this.deliver(entry);
     }
   }
@@ -284,12 +290,15 @@ export class DurableQueue {
   }
 
   private deliver(entry: QueueEntry): void {
-    if (!this.handler || (entry.status !== 'done' && entry.status !== 'failed')) return;
+    if (!this.handler || !FINISHED.includes(entry.status)) return;
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
     this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}`);
+    const base = { key: entry.key, context: entry.context ?? null };
     this.handler(entry.status === 'done'
-      ? { key: entry.key, context: entry.context ?? null, status: 'done', result: entry.result }
-      : { key: entry.key, context: entry.context ?? null, status: 'failed', error: entry.lastError ?? 'Failed.' });
+      ? { ...base, status: 'done', result: entry.result }
+      : entry.status === 'failed'
+        ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.' }
+        : { ...base, status: 'cancelled' });
   }
 
   private update(key: string, change: (entry: QueueEntry) => QueueEntry): QueueEntry | null {

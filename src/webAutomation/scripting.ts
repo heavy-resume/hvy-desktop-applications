@@ -4,6 +4,8 @@ import type { CollectionDefinition, RecordConsumer } from './collection';
 import type { WebAutomation } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { WebApiCapability } from './webApi';
+import { rankRows, type EmbeddingSource, type UseDatabase } from './similarity';
+import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
 
 /** The subset of HvyPluginScriptingContext these methods use. */
 export interface ScriptingContext {
@@ -19,6 +21,10 @@ export interface DocumentAutomationLookup {
   collection(capabilityId: string): CollectionDefinition | null;
   /** The record sink a collection block's output is wired to, if it has one. */
   sink(capabilityId: string): RecordConsumer | null;
+  /** Uses the document's database, as its scripts' doc.db does: a fresh copy each use, one use at a time. */
+  database: UseDatabase;
+  /** The document's database changed outside a script: its views redraw, and its document hooks run. */
+  databaseChanged(): void;
 }
 
 export type DocumentAutomationResolver = (ctx: ScriptingContext) => DocumentAutomationLookup;
@@ -190,6 +196,72 @@ export function queueScriptingMethods(resolve: DocumentAutomationResolver): Reco
       const handler = required(callback(args.handler), 'on_result needs a handler function.');
       resolve(ctx).automation.onQueueResult(queueId(args), (result) => handler(result as unknown as Record<string, unknown>));
       return null;
+    },
+  };
+}
+
+/**
+ * Where ranking gets its vectors: an endpoint of one of the document's web API blocks that takes `{ input: [texts] }`
+ * and answers with `{ data: [{ embedding }] }` (Heavy Resume's embeddings), called as the block's other endpoints are,
+ * in its profile and under its approval.
+ */
+function endpointEmbeddingSource(lookup: DocumentAutomationLookup, value: unknown): EmbeddingSource {
+  const source = input(value);
+  const capabilityId = String(source.capabilityId ?? '');
+  const endpointId = String(source.endpointId ?? '');
+  const model = typeof source.model === 'string' && source.model ? source.model : null;
+  const capability = required(lookup.webApi(capabilityId), `This document has no web API block "${capabilityId}".`);
+  return {
+    id: `${capabilityId}/${endpointId}/${model ?? 'default'}`,
+    embed: async (texts) => {
+      const result = await lookup.automation.callEndpoint(capability, endpointId, { input: texts, ...(model ? { model } : {}) });
+      const data = input(result.body).data;
+      if (!Array.isArray(data)) throw new WebAutomationError('invalid_request', `"${endpointId}" did not answer with embeddings.`);
+      return data.map((entry) => {
+        const embedding = input(entry).embedding;
+        if (!Array.isArray(embedding)) throw new WebAutomationError('invalid_request', `"${endpointId}" did not answer with embeddings.`);
+        return embedding.map(Number);
+      });
+    },
+  };
+}
+
+/**
+ * The text to rank by: given as a string, or sections of a document a web API block serves (a resume's summary and
+ * skills), which Galaxy opens and reads itself. The script never sees that text; it goes only to the embedding source.
+ */
+async function queryText(lookup: DocumentAutomationLookup, value: unknown): Promise<string> {
+  if (typeof value === 'string') return value;
+  const source = input(value);
+  const capabilityId = String(source.capabilityId ?? '');
+  const capability = required(lookup.webApi(capabilityId), `This document has no web API block "${capabilityId}".`);
+  const sectionIds = Array.isArray(source.sections) ? source.sections.map(String) : [];
+  if (!sectionIds.length) throw new WebAutomationError('invalid_request', 'Name the sections of the document to rank by.');
+  const document = await lookup.automation.openServedDocument(capability, String(source.endpointId ?? ''), String(source.documentId ?? ''));
+  // The named sections, in the document's own order.
+  return exportDocumentSourceMarkdown({ ...document, sections: document.sections.filter((section) => sectionIds.includes(section.customId)) });
+}
+
+/**
+ * `rank` scores the rows a query returns by how similar a text column is to a query, and writes the scores into a
+ * column (similarity.ts). It reaches the web only through a web API block, so it needs no approval of its own.
+ */
+export function similarityScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  return {
+    rank: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(args, async () => {
+        const write = input(args.write);
+        const result = await rankRows(lookup.database, endpointEmbeddingSource(lookup, args.embeddings), {
+          rows: String(args.rows ?? ''),
+          key: String(args.key ?? ''),
+          text: String(args.text ?? ''),
+          query: await queryText(lookup, args.query),
+          write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
+        });
+        lookup.databaseChanged();
+        return result;
+      });
     },
   };
 }

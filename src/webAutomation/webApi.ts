@@ -180,26 +180,44 @@ export class WebApiService {
       if (!endpointId || documentId === undefined || documentId === '') {
         throw new WebAutomationError('invalid_request', `"${name}" needs a document ID in "${idInput ?? '(none declared)'}".`);
       }
-      const serving = findEndpoint(capability, endpointId);
-      if (!serving.servesDocument) throw new WebAutomationError('invalid_request', `"${serving.name}" does not serve a document.`);
-      const response = await this.send(capability, profileId, serving, { [onlyInput(serving)]: documentId });
-      const served = await readServedDocument(
-        { fetchFile: (url, options) => this.deps.fetchFile(url, options) },
-        serving as ApiEndpointDefinition & { servesDocument: ServedDocumentDefinition },
-        response.body,
-        [capabilityOrigin(capability), ...(capability.readOrigins ?? [])],
-      );
+      const served = await this.openServedDocument(capability, profileId, endpointId, documentId);
       filled[name] = this.deps.exportDocumentText(served.document);
       if (revisionInput && served.revision !== null) filled[revisionInput] = served.revision;
     }
     return filled;
   }
 
-  async call(documentPath: string, capability: WebApiCapability, profileId: string, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
+  /** Asks the endpoint that serves a document for it, and opens it: fetched from the read URL it names, and decrypted. */
+  private async openServedDocument(capability: WebApiCapability, profileId: string, endpointId: string, documentId: unknown) {
+    const serving = findEndpoint(capability, endpointId);
+    if (!serving.servesDocument) throw new WebAutomationError('invalid_request', `"${serving.name}" does not serve a document.`);
+    const response = await this.send(capability, profileId, serving, { [onlyInput(serving)]: documentId });
+    return readServedDocument(
+      { fetchFile: (url, options) => this.deps.fetchFile(url, options) },
+      serving as ApiEndpointDefinition & { servesDocument: ServedDocumentDefinition },
+      response.body,
+      [capabilityOrigin(capability), ...(capability.readOrigins ?? [])],
+    );
+  }
+
+  /**
+   * Opens a document the site serves (an endpoint with `servesDocument`), for Galaxy's own use: what it reads from it
+   * goes only where Galaxy sends it, never to the calling script.
+   */
+  async openDocument(documentPath: string, capability: WebApiCapability, profileId: string, endpointId: string, documentId: string): Promise<VisualDocument> {
+    this.requireReviewed(documentPath, capability, profileId);
+    return (await this.openServedDocument(capability, profileId, endpointId, documentId)).document;
+  }
+
+  private requireReviewed(documentPath: string, capability: WebApiCapability, profileId: string): void {
     const review = this.review(documentPath, capability, profileId);
     if (review.reason !== 'authorized') {
       throw new WebAutomationError('not_authorized', `"${capability.name}" must be reviewed before it can run (${review.reason}).`);
     }
+  }
+
+  async call(documentPath: string, capability: WebApiCapability, profileId: string, endpointId: string, input: Record<string, unknown>, options: CallOptions = {}): Promise<WebApiResult> {
+    this.requireReviewed(documentPath, capability, profileId);
     const endpoint = findEndpoint(capability, endpointId);
     // An endpoint whose key is not derived from inputs gets a fresh key per direct call; queued calls bring their own.
     const idempotencyKey = options.idempotencyKey ?? (endpoint.idempotency && !endpoint.idempotency.fromInputs ? this.deps.createId() : undefined);

@@ -316,6 +316,13 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return webApi.call(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name), endpointId, input, options);
     },
 
+    // Scripting galaxy.similarity rank: a query from a document the site serves (a resume's sections). Galaxy reads it;
+    // the script never sees it.
+    openServedDocument(capability: WebApiCapability, endpointId: string, documentId: string): Promise<VisualDocument> {
+      requirePlugin(WEB_API_PLUGIN_ID, 'Web API');
+      return webApi.openDocument(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name), endpointId, documentId);
+    },
+
     // UI: galaxy.web-collection reader, "Collect"; scripting collect({ … }). Records go to the consumer (usually a record sink).
     startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[]): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);

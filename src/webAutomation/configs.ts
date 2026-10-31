@@ -12,6 +12,8 @@ import type { SessionDefinition, WebApiCapability } from './webApi';
 export const WEB_API_PLUGIN_ID = 'galaxy.web-api';
 export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
 export const QUEUE_PLUGIN_ID = 'galaxy.queue';
+/** Ranks a document's rows by similarity (similarity.ts). Scripting only: it has no block. */
+export const SIMILARITY_PLUGIN_ID = 'galaxy.similarity';
 /** Sets the browser profile for the web plugins in its section or container (profileContexts.ts). */
 export const WEB_PROFILE_CONTEXT_PLUGIN_ID = 'galaxy.web-profile-context';
 /** The version a document's plugin authorization is recorded against; a new version asks again. */

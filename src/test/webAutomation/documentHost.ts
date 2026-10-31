@@ -183,6 +183,9 @@ export function openDocumentHost(document: VisualDocument, options: { stateRunti
     const waiters = renderWaiters;
     renderWaiters = [];
     for (const resolve of waiters) resolve();
+    // Each form on screen follows its definition on every render, as the form plugin reconciles it when it renders: a
+    // definition a script changes and changes back between two looks at the form still reaches it.
+    for (const ref of forms.keys()) liveForm(ref);
     const run = runPluginDocumentHooks('unknown');
     hookRuns.add(run);
     void run.finally(() => hookRuns.delete(run));

@@ -148,6 +148,8 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   }
 
   function handleResult(result: QueueResult): void {
+    // Taken out of the queue before it ran: the item stays as it was, never evaluated.
+    if (result.status === 'cancelled') return;
     if (result.status === 'failed') {
       updateItemFields(items, result.key, { evaluation: 'failed', evaluationError: result.error });
       return;
@@ -165,10 +167,17 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
   function busy(): boolean {
     const state = automation.getState();
     return state.runs.some((run) => run.status === 'running')
-      || !Object.keys(state.queues).every((queueId) => automation.isQueueIdle(queueId));
+      || !Object.keys(state.queues).every((queueId) => automation.isQueueIdle(queueId))
+      // A call made directly (a script's, not a queue's) holds an API worker, or waits for one. Collections are their
+      // runs (a run waiting on the user holds its worker).
+      || state.scheduler.workers.some((worker) => worker.kind === 'api' && worker.busy)
+      || state.scheduler.waitingJobs.some((job) => job.kind === 'api');
   }
 
-  /** Runs virtual time until no collection is running and the queues are idle, paused, or waiting for resume. */
+  /**
+   * Runs virtual time until no collection is running, the queues are idle, paused, or waiting for resume, and no call is
+   * in flight.
+   */
   async function settle(): Promise<void> {
     await pluginsReady;
     // Fetching files, decryption, and loading the document reader are real asynchronous work the virtual clock cannot

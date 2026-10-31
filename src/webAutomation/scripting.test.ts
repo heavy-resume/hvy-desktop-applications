@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createMockFlow, EVALUATE_QUEUE } from '../test/webAutomation/flow';
 import { analysisServiceCapability } from '../test/webAutomation/analysisService';
 import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
+import { createScriptingDbRuntime } from '../../../heavy-file-format/src/plugins/db-table';
+import { deserializeDocument } from '../../../heavy-file-format/src/serialization';
 import { collectionScriptingMethods, queueScriptingMethods, webApiScriptingMethods, type DocumentAutomationResolver } from './scripting';
 
 async function setup() {
@@ -11,11 +13,15 @@ async function setup() {
   flow.approve();
   await flow.signIn();
   await flow.completeLogin();
+  // A document's own database, as the app gives the methods.
+  const { api: db } = await createScriptingDbRuntime(deserializeDocument('---\nhvy_version: 0.1\n---\n', '.hvy'));
   const resolve: DocumentAutomationResolver = () => ({
     automation: flow.automation,
     webApi: (id) => (id === analysisServiceCapability.capabilityId ? analysisServiceCapability : null),
     collection: (id) => (id === boards.capabilityId ? boards : null),
     sink: (id) => (id === boards.capabilityId ? flow.sink : null),
+    database: async (use) => use(db),
+    databaseChanged: () => undefined,
   });
   return { flow, boards, resolve, ctx: { rawDocument: {} } };
 }
@@ -77,6 +83,12 @@ describe('scripting methods', () => {
     await flow.clock.runUntil(() => results.length === 1);
     expect(results[0]).toMatchObject({ key: 'eng-1', status: 'done', result: { body: { status: 'pending' } } });
     expect(queue.list({ queueId: EVALUATE_QUEUE }, ctx)).toEqual([expect.objectContaining({ key: 'eng-1', status: 'done' })]);
+    // An entry cancelled before it runs is delivered too, once, so the script can put back what it marked as queued.
+    queue.pause({ queueId: EVALUATE_QUEUE }, ctx);
+    queue.enqueue({ queueId: EVALUATE_QUEUE, key: 'eng-2', input, context: { row: 2 } }, ctx);
+    queue.cancel({ queueId: EVALUATE_QUEUE, key: 'eng-2' }, ctx);
+    queue.cancel({ queueId: EVALUATE_QUEUE, key: 'eng-2' }, ctx);
+    expect(results.slice(1)).toEqual([{ key: 'eng-2', context: { row: 2 }, status: 'cancelled' }]);
     expect(() => queue.on_result({ queueId: EVALUATE_QUEUE }, ctx)).toThrow(/handler/);
   });
   it('lets a script lower the limits, a page\'s own included, but not raise them', async () => {

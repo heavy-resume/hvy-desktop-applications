@@ -1,11 +1,11 @@
 import type { JsonObject } from '../../../heavy-file-format/src/hvy/types';
-import type { HvyPluginContext, HvyPluginFactory, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
+import type { HvyPlugin, HvyPluginContext, HvyPluginFactory, HvyPluginInstance } from '../../../heavy-file-format/src/plugins/types';
 import { openExternalUrl, readSystemClipboardText } from '../backend';
 import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
-import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from '../webAutomation/configs';
+import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
 import { createWebAutomationPlugins, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
 import { isIgnoredProfileContext, profileContextFor } from '../webAutomation/profileContexts';
@@ -1913,9 +1913,16 @@ const collectionReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? sta
 const queueReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(queueEditor(ctx), queueView(ctx)) : queueView(ctx));
 const profileContextReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(profileContextEditor(ctx), profileContextView(ctx)) : profileContextView(ctx));
 
-export const [webApiPlugin, webCollectionPlugin, queuePlugin, profileContextPlugin] = createWebAutomationPlugins({
+const plugins = createWebAutomationPlugins({
   webApi: webApiReader,
   collection: collectionReader,
   queue: queueReader,
   profileContext: profileContextReader,
 });
+// By id, so adding a plugin never shifts which one an export is (each is registered by its export's name).
+const pluginById = (id: string): HvyPlugin => plugins.find((plugin) => plugin.id === id)!;
+export const webApiPlugin = pluginById(WEB_API_PLUGIN_ID);
+export const webCollectionPlugin = pluginById(WEB_COLLECTION_PLUGIN_ID);
+export const queuePlugin = pluginById(QUEUE_PLUGIN_ID);
+export const profileContextPlugin = pluginById(WEB_PROFILE_CONTEXT_PLUGIN_ID);
+export const similarityPlugin = pluginById(SIMILARITY_PLUGIN_ID);

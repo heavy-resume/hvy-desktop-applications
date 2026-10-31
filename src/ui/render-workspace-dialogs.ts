@@ -238,7 +238,7 @@ export function renderArchiveFileDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <section class="dialog archive-file-dialog" role="dialog" aria-modal="true" aria-labelledby="archiveFileTitle">
         <h2 id="archiveFileTitle">Archive file?</h2>
-        <p class="dialog-note">${escapeHtml(state.archiveFileName)} will be archived and closed.</p>
+        <p class="dialog-note">${escapeHtml(state.archiveFileName)} will be archived.</p>
         ${state.archiveFileUnsaved ? '<p class="dialog-note">It has unsaved changes that will be discarded.</p>' : ''}
         <div class="dialog-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-archive-file">Cancel</button>
