@@ -326,6 +326,9 @@ export interface AppState {
   renameEncryptedFolderWorkspacePath: string | null;
   renameEncryptedFolderDirectory: string;
   renameEncryptedFolderCurrentName: string | null;
+  archiveFilePath: string | null;
+  archiveFileName: string | null;
+  archiveFileUnsaved: boolean;
   deleteFilePath: string | null;
   deleteFileName: string | null;
   deleteFolderWorkspacePath: string | null;
@@ -679,6 +682,9 @@ export const state: AppState = {
   renameEncryptedFolderWorkspacePath: null,
   renameEncryptedFolderDirectory: '',
   renameEncryptedFolderCurrentName: null,
+  archiveFilePath: null,
+  archiveFileName: null,
+  archiveFileUnsaved: false,
   deleteFilePath: null,
   deleteFileName: null,
   deleteFolderWorkspacePath: null,

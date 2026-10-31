@@ -230,6 +230,24 @@ export function renderRenameEncryptedFolderDialog(state: AppState): string {
     </div>`;
 }
 
+export function renderArchiveFileDialog(state: AppState): string {
+  if (!state.archiveFilePath || !state.archiveFileName) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog archive-file-dialog" role="dialog" aria-modal="true" aria-labelledby="archiveFileTitle">
+        <h2 id="archiveFileTitle">Archive file?</h2>
+        <p class="dialog-note">${escapeHtml(state.archiveFileName)} will be archived and closed.</p>
+        ${state.archiveFileUnsaved ? '<p class="dialog-note">It has unsaved changes that will be discarded.</p>' : ''}
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-archive-file">Cancel</button>
+          <button type="button" class="hvy-galaxy-button" data-action="archive-file" ${state.busy ? 'disabled' : ''}>Archive</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 export function renderDeleteFileDialog(state: AppState): string {
   if (!state.deleteFilePath || !state.deleteFileName) {
     return '';

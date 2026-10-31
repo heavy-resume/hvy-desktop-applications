@@ -258,7 +258,7 @@ export function showFileContextMenu(
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
     if (button.dataset.menuAction === 'convert-workspace-file' && conversion) handlers.convertWorkspaceFileKind(path, workspacePath, conversion.toTemplate);
-    if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
+    if (button.dataset.menuAction === 'archive') handlers.confirmArchiveFile(path, name);
     if (button.dataset.menuAction === 'restore') handlers.restoreFile(path, name);
     if (button.dataset.menuAction === 'lock') handlers.setFileLocked(path, name, true);
     if (button.dataset.menuAction === 'unlock') handlers.setFileLocked(path, name, false);

@@ -115,6 +115,11 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
       handlers.cancelNewFolder();
       return;
     }
+    if (root.querySelector('.archive-file-dialog')) {
+      event.preventDefault();
+      handlers.cancelArchiveFile();
+      return;
+    }
     if (root.querySelector('.delete-file-dialog')) {
       event.preventDefault();
       handlers.cancelDeleteFile();

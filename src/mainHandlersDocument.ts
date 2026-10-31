@@ -403,16 +403,45 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  archiveFile: (path, currentName) => void runBusy('Archiving file...', async () => {
-    const workspace = await archiveDocumentFile(path);
-    await clearHomepageDocumentPath(path);
-    await clearRecoveryDraftsForDocument(path, currentName);
-    upsertWorkspace(await loadWorkspace(workspace.path));
-    if (state.selectedFilePath === path) state.selectedFilePath = null;
-    syncOpenDocumentWorkspaceAccess(path);
-    await refreshSavedTemplates(workspace.path);
-    state.status = `Archived ${currentName}`;
-  }, { preserveMountedDocument: true }),
+  confirmArchiveFile: (path, currentName) => {
+    state.archiveFilePath = path;
+    state.archiveFileName = currentName;
+    state.archiveFileUnsaved = (state.document?.source.path === path && state.document.dirty)
+      || [...documentSessions.values()].some((session) => session.source.path === path && session.dirty);
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
+  archiveFile: () => {
+    const path = state.archiveFilePath;
+    const currentName = state.archiveFileName;
+    if (!path || !currentName) return;
+    state.archiveFilePath = null;
+    state.archiveFileName = null;
+    state.archiveFileUnsaved = false;
+    void runBusy('Archiving file...', async () => {
+      const workspace = await archiveDocumentFile(path);
+      if (state.document?.source.path === path) await closeCurrentDocument({ discard: true });
+      for (const session of [...documentSessions.values()]) {
+        if (session.source.path !== path) continue;
+        documentSessions.delete(session.versionId);
+        removeDocumentTabPath(session.versionId);
+        deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
+      }
+      await clearHomepageDocumentPath(path);
+      await clearRecoveryDraftsForDocument(path, currentName);
+      upsertWorkspace(await loadWorkspace(workspace.path));
+      if (state.selectedFilePath === path) state.selectedFilePath = null;
+      await refreshSavedTemplates(workspace.path);
+      state.status = `Archived ${currentName}`;
+    }, { preserveMountedDocument: true });
+  },
+  cancelArchiveFile: () => {
+    state.archiveFilePath = null;
+    state.archiveFileName = null;
+    state.archiveFileUnsaved = false;
+    state.status = 'Ready';
+    rerender({ preserveMountedDocument: true });
+  },
   restoreFile: (path, currentName) => void runBusy('Restoring file...', async () => {
     const workspace = await restoreDocumentFile(path);
     upsertWorkspace(await loadWorkspace(workspace.path));

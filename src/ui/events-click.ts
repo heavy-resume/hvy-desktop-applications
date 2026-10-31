@@ -142,6 +142,10 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.cancelNewFolder();
           return;
         }
+        if (backdrop.querySelector('.archive-file-dialog')) {
+          handlers.cancelArchiveFile();
+          return;
+        }
         if (backdrop.querySelector('.delete-file-dialog')) {
           handlers.cancelDeleteFile();
           return;
@@ -246,6 +250,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
+    if (action === 'archive-file') handlers.archiveFile();
+    if (action === 'cancel-archive-file') handlers.cancelArchiveFile();
     if (action === 'delete-file') handlers.deleteFile();
     if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
     if (action === 'delete-folder') handlers.deleteWorkspaceFolder(state.deleteFolderWorkspacePath ?? '', state.deleteFolderDirectory);

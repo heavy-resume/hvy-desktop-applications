@@ -306,7 +306,9 @@ export interface UiHandlers {
   retryWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
-  archiveFile(path: string, currentName: string): void;
+  confirmArchiveFile(path: string, currentName: string): void;
+  archiveFile(): void;
+  cancelArchiveFile(): void;
   restoreFile(path: string, currentName: string): void;
   setFileLocked(path: string, currentName: string, locked: boolean): void;
   setFileHiddenFromAI(path: string, currentName: string, hiddenFromAI: boolean): void;

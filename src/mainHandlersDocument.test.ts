@@ -31,6 +31,7 @@ const hvyMocks = vi.hoisted(() => ({
 }));
 
 const backendMocks = vi.hoisted(() => ({
+  archiveDocumentFile: vi.fn(async () => ({ path: '/workspace' })),
   listDocumentKeyMetadata: vi.fn(async (): Promise<DocumentKeyMetadata[]> => []),
   renameDocumentFile: vi.fn(),
   saveDocumentTemplate: vi.fn(async () => ({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
@@ -70,6 +71,12 @@ const mainMocks = vi.hoisted(() => ({
   copyOpenWorkspaceFileToWorkspace: vi.fn(),
   backupDocumentKey: vi.fn((path: string, name: string) => `${path}:${name}`),
   clearRecoveryDraftsForDocument: vi.fn(async () => undefined),
+  clearHomepageDocumentPath: vi.fn(async () => undefined),
+  closeCurrentDocument: vi.fn(async () => {
+    state.document = null;
+  }),
+  deleteBackupTracking: vi.fn(),
+  removeDocumentTabPath: vi.fn(),
   documentTitle: vi.fn((name: string) => name.replace(/\.[^.]+$/, '')),
   documentSessions: new Map(),
   ensureCurrentDocumentMounted: vi.fn(async () => undefined),
@@ -139,6 +146,7 @@ vi.mock('./backend', async (importOriginal) => ({
   saveDocumentTemplate: backendMocks.saveDocumentTemplate,
   saveDocumentToWorkspace: backendMocks.saveDocumentToWorkspace,
   saveDocumentAsDialog: backendMocks.saveDocumentAsDialog,
+  archiveDocumentFile: backendMocks.archiveDocumentFile,
 }));
 
 vi.mock('./main', () => mainMocks);
@@ -414,13 +422,54 @@ describe('document handlers', () => {
     mainMocks.runBusy.mockImplementationOnce(async () => undefined);
     const handlers = createDocumentHandlers(vi.fn());
 
-    handlers.archiveFile?.('/workspace/other.hvy', 'other.hvy');
+    handlers.confirmArchiveFile?.('/workspace/other.hvy', 'other.hvy');
+    handlers.archiveFile?.();
 
     expect(mainMocks.runBusy).toHaveBeenCalledWith(
       'Archiving file...',
       expect.any(Function),
       { preserveMountedDocument: true },
     );
+  });
+
+  it('asks before archiving and notes unsaved changes in the open document', () => {
+    state.document = testOpenDocument({ dirty: true });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmArchiveFile?.('/workspace/example.hvy', 'example.hvy');
+
+    expect(state.archiveFilePath).toBe('/workspace/example.hvy');
+    expect(state.archiveFileName).toBe('example.hvy');
+    expect(state.archiveFileUnsaved).toBe(true);
+    expect(backendMocks.archiveDocumentFile).not.toHaveBeenCalled();
+
+    handlers.cancelArchiveFile?.();
+
+    expect(state.archiveFilePath).toBeNull();
+    expect(state.archiveFileUnsaved).toBe(false);
+    expect(backendMocks.archiveDocumentFile).not.toHaveBeenCalled();
+  });
+
+  it('closes the open document and its tabs after archiving it', async () => {
+    state.document = testOpenDocument({ dirty: true });
+    mainMocks.documentSessions.set('version:other-tab', {
+      versionId: 'version:other-tab',
+      source: { path: '/workspace/example.hvy', name: 'example.hvy' },
+      dirty: false,
+    });
+    mainMocks.loadWorkspace.mockResolvedValueOnce({ path: '/workspace' });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmArchiveFile?.('/workspace/example.hvy', 'example.hvy');
+    handlers.archiveFile?.();
+
+    await vi.waitFor(() => expect(state.status).toBe('Archived example.hvy'));
+    expect(backendMocks.archiveDocumentFile).toHaveBeenCalledWith('/workspace/example.hvy');
+    expect(mainMocks.closeCurrentDocument).toHaveBeenCalledWith({ discard: true });
+    expect(state.document).toBeNull();
+    expect(mainMocks.documentSessions.has('version:other-tab')).toBe(false);
+    expect(mainMocks.removeDocumentTabPath).toHaveBeenCalledWith('version:other-tab');
+    expect(state.archiveFilePath).toBeNull();
   });
 
   it('persists plaintext immediately after removing document encryption', async () => {
