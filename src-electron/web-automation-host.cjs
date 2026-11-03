@@ -20,19 +20,36 @@ function createWebAutomationHost(deps) {
   const userWindows = new Map();
   let nextWorker = 1;
 
-  // One session per browser profile, shared by its workers and its sign-in window. It lasts for the app's run: sharing
-  // the integration vault's saved cookies with the integration browser is still to come.
+  // One session per browser profile, shared by its workers and its sign-in window, for the app's run. It starts with the
+  // profile's saved cookies, the integration browser's too (the integration vault, once it is set up), and saves back the
+  // cookies of the sites it changed (a sign-in, a check that you're human passed, cookies accepted) when one of its
+  // windows closes, so the integration browser and the next run of the app see them.
   function profileSession(profileId) {
-    let browserSession = profileSessions.get(profileId);
-    if (!browserSession) {
-      browserSession = session.fromPartition(`hvy-galaxy-web-automation-${profileId}`);
-      profileSessions.set(profileId, browserSession);
+    let entry = profileSessions.get(profileId);
+    if (!entry) {
+      const browserSession = session.fromPartition(`hvy-galaxy-web-automation-${profileId}`);
+      const changed = new Set();
+      const ready = (deps.profileCookies.available() ? deps.profileCookies.restore(browserSession, profileId) : Promise.resolve()).then(() => {
+        // Only changes made after the saved cookies are in.
+        browserSession.cookies.on('changed', (_event, cookie) => changed.add(String(cookie.domain || '').replace(/^\./, '')));
+      });
+      entry = { session: browserSession, changed, ready };
+      profileSessions.set(profileId, entry);
     }
-    return browserSession;
+    return entry;
+  }
+
+  async function saveProfileCookies(profileId) {
+    const entry = profileSessions.get(profileId);
+    if (!entry || !entry.changed.size || !deps.profileCookies.available()) return;
+    const domains = new Set(entry.changed);
+    entry.changed.clear();
+    await deps.profileCookies.save(entry.session, profileId, domains);
   }
 
   async function createWindow(profileId, show) {
-    const browserSession = profileSession(profileId);
+    const { session: browserSession, ready } = profileSession(profileId);
+    await ready;
     const window = new BrowserWindow({
       show,
       width: 1180,
@@ -49,7 +66,9 @@ function createWebAutomationHost(deps) {
       },
     });
     const contents = window.webContents;
-    contents.setUserAgent(contents.getUserAgent().replace(/\sElectron\/[^\s]+/g, '').replace(/\sHVY(?:[\s-]Galaxy)?\/[^\s]+/gi, ''));
+    // The browser's own user agent, without the app's tokens ("Electron/…", and "HVYGalaxy/…" or "HVY Galaxy/…"): sites
+    // treat an unfamiliar one as a bot.
+    contents.setUserAgent(contents.getUserAgent().replace(/\sElectron\/[^\s]+/g, '').replace(/\sHVY(?:[\s-]?Galaxy)?\/[^\s]+/gi, ''));
     // The inspector reports some results by navigating to hvy-integration:// URLs; workers read return values instead.
     contents.on('will-navigate', (event, url) => {
       if (url.startsWith('hvy-integration://')) event.preventDefault();
@@ -161,7 +180,10 @@ function createWebAutomationHost(deps) {
       const report = (_event, navigatedUrl) => deps.sendEvent({ profileId, window: 'user', url: navigatedUrl });
       window.webContents.on('did-navigate', report);
       window.webContents.on('did-navigate-in-page', report);
-      window.on('closed', () => userWindows.delete(profileId));
+      window.on('closed', () => {
+        userWindows.delete(profileId);
+        void saveProfileCookies(profileId);
+      });
     }
     await window.webContents.loadURL(url);
     window.show();
@@ -186,6 +208,7 @@ function createWebAutomationHost(deps) {
         const entry = workers.get(args.workerId);
         workers.delete(args.workerId);
         if (entry && !entry.window.isDestroyed()) entry.window.destroy();
+        if (entry) await saveProfileCookies(entry.profileId);
         return null;
       }
       case 'show-worker': worker(args.workerId).window.show(); return null;

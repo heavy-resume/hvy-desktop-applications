@@ -2,6 +2,7 @@ import { executeHvyCliCommandSync, writeHvyVirtualFileSync } from '../../../../h
 import { deserializeDocument } from '../../../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
 import type { CliItemStoreConfig } from '../../webAutomation/cliItemStore';
+import { SETTINGS_IN_TEXT, settingsText } from '../../webAutomation/blockSettings';
 
 export const LISTING_LIST_PATH = '/body/listings/listing-list';
 export const LISTING_COMPONENT = 'listing-item';
@@ -30,10 +31,15 @@ function run(document: VisualDocument, command: string): void {
   executeHvyCliCommandSync(document, command);
 }
 
-/** Inserts a host plugin block through the CLI and writes its configuration. */
+/** Inserts a host plugin block through the CLI and writes its configuration where the block keeps it (blockSettings.ts). */
 export function insertPluginBlock(document: VisualDocument, sectionPath: string, id: string, pluginId: string, pluginConfig: Record<string, unknown>): void {
   run(document, `hvy insert -1 plugin ${sectionPath} ${id} ${pluginId}`);
-  writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.json`, JSON.stringify({ id, plugin: pluginId, pluginConfig }));
+  if (SETTINGS_IN_TEXT.has(pluginId)) {
+    writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.json`, JSON.stringify({ id, plugin: pluginId, pluginConfig: {} }));
+    writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.txt`, settingsText(pluginConfig));
+  } else {
+    writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.json`, JSON.stringify({ id, plugin: pluginId, pluginConfig }));
+  }
 }
 
 /** Declares plugins in the document header with the scripting permission, so the document's scripts may call them. */

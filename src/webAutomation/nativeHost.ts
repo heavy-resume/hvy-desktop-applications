@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { BrowserHost, ExtractedRecord, HostResponse, NavigationEvent, PageInspection, PatternMatch } from './host';
-import { LINK_FIELD_ID, type IntegrationPatternMatcher } from './integrationPatterns';
+import { expandedPattern, LINK_FIELD_ID, type IntegrationPatternMatcher } from './integrationPatterns';
 import type { SitePatternDefinition } from './sitePatterns';
+import { state } from '../state';
 
 /**
  * Web automation's BrowserHost in the desktop apps: hidden worker windows
@@ -25,7 +26,7 @@ interface ElectronBridge {
 }
 
 /** A record as the integration inspector extracts it. */
-interface InspectorRecord {
+export interface InspectorRecord {
   parent: string;
   score: number;
   targets: Array<{ label: string; value: unknown; href?: string | null }>;
@@ -39,12 +40,14 @@ interface RawInspection {
 }
 
 
+// The matcher as the page's inspector matches it: a site setup keeps its fields' snapshots once (storedPattern).
 function matcherOf(pattern: SitePatternDefinition): IntegrationPatternMatcher | null {
-  return (pattern.matcher as IntegrationPatternMatcher | undefined) ?? null;
+  const matcher = pattern.matcher as IntegrationPatternMatcher | undefined;
+  return matcher ? { ...matcher, pattern: expandedPattern(matcher.pattern) } : null;
 }
 
-/** Field values by field ID, and the record's link: the first link among its fields. */
-function recordValues(record: InspectorRecord): Record<string, unknown> {
+/** Field values by field ID, and the record's link: the first link among its fields. As a run reads a row, so site setup too. */
+export function recordValues(record: InspectorRecord): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const target of record.targets) {
     // A picked field's label is the collection field it was assigned to.
@@ -85,10 +88,18 @@ export function createTauriBrowserHost(): BrowserHost {
   return createNativeBrowserHost(tauriTransport());
 }
 
+/**
+ * The browser store a profile's windows use: the one its integration browser uses (its registry entry's), so what was
+ * done in either holds in both. Tauri opens that store; Electron shares the profile's cookies through its vault instead.
+ */
+function browserStoreOf(profileId: string): string {
+  return state.integrationRegistry.profiles.find((profile) => profile.id === profileId)?.browserStoreId ?? profileId;
+}
+
 function createNativeBrowserHost(transport: HostTransport): BrowserHost {
   const call = <T>(command: string, args: Record<string, unknown> = {}) => transport.call<T>(command, args);
   return {
-    createWorker: (profileId) => call<string>('create-worker', { profileId }),
+    createWorker: (profileId) => call<string>('create-worker', { profileId, browserStoreId: browserStoreOf(profileId) }),
     resetWorker: async (workerId) => {
       await call('reset-worker', { workerId });
     },
@@ -130,6 +141,7 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
           command,
           pattern: matcher.pattern,
           ...(request.recordRef ? { recordParent: request.recordRef } : {}),
+          ...(request.pageNumber ? { pageNumber: request.pageNumber } : {}),
         },
       });
     },
@@ -137,7 +149,7 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
     request: (workerId, hostRequest) => call<HostResponse>('request', { workerId, request: hostRequest }),
     fetchFile: async (url, options) => new Uint8Array(await call<ArrayBuffer | Uint8Array>('fetch-file', { url, maxBytes: options.maxBytes })),
     openUserWindow: async (profileId, url) => {
-      await call('open-user-window', { profileId, url });
+      await call('open-user-window', { profileId, browserStoreId: browserStoreOf(profileId), url });
     },
     hideUserWindow: async (profileId) => {
       await call('hide-user-window', { profileId });

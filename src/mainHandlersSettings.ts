@@ -16,7 +16,7 @@ import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionK
 import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './documentKeyMigration';
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
-import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationNavigationResumeUrl, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, beginIntegrationWebMcpScan, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 import { analyzeWebMcpStructuredData, webMcpExtractionRecords, webMcpRecordSetAtPath } from './integrationWebMcpStructuredData';
@@ -48,6 +48,28 @@ function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'):
 function integrationCommandInputId(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
+
+/** The name a site setup's next page command is saved under. */
+export const PAGINATION_COMMAND_NAMES = { next: 'Next page', 'page-number': 'Page numbers' } as const;
+
+/**
+ * What the browser asks when a site setup configures its pagination: which way the list goes to its next page, then
+ * one click on it, with no interaction to choose.
+ */
+const PAGINATION_PICK = {
+  question: 'How does this list go to its next page?',
+  choices: [
+    { pagination: 'next', label: 'Next link or button', gesture: 'click', prompt: 'Select the Next link or button.', confirm: 'Found it. Galaxy will click this to go to the next page.' },
+    {
+      pagination: 'page-number',
+      label: 'Page numbers',
+      gesture: 'click',
+      pageNumber: true,
+      prompt: 'Select one of the page numbers, such as 2.',
+      confirm: 'Found it. On each page, Galaxy will click the number of the page after it.',
+    },
+  ],
+};
 
 async function persistAiSettings(settings: AiSettings): Promise<void> {
   state.aiSettings = await saveAiSettings(settings);
@@ -309,10 +331,12 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       ? JSON.stringify({ imageUrl: imageRecord.url, alt: typeof imageRecord.alt === 'string' ? imageRecord.alt : null })
       : '';
   };
-  const startIntegrationActionInspection = async (inspectionKind: 'parent' | 'target', options: unknown) => {
+  // With `openPage`, the record type's page is opened to pick on, and picking starts once it has loaded (or at once, when
+  // it is showing already): picking started while the browser is still on another page would stay on that one.
+  const startIntegrationActionInspection = async (inspectionKind: 'parent' | 'target', options: unknown, openPage = false) => {
     const command = inspectionKind === 'parent' ? 'inspect-parent' : 'inspect-target';
     const reopen = () => reopenIntegrationActionPage({ kind: 'command-target', inspectionKind, options }, true);
-    if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
+    if (openPage || !await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
       await reopen();
       return;
     }
@@ -361,6 +385,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       commandRecorder: {
         scope: state.integrationCommandDraftScope,
         ...(pattern ? { pattern } : {}),
+        ...(state.integrationCommandDraftPagination ? { pick: PAGINATION_PICK } : {}),
       },
     };
     const pendingSelection = {
@@ -458,7 +483,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       integrationId: integration.id,
       name,
       description: state.integrationActionDraftDescription.trim(),
-      pageIds: [state.integrationActionDraftPageId],
+      // The pages it was picked on: one more when an example is added on another page (one a run couldn't read).
+      pageIds: [...new Set([...(existing?.pageIds ?? []), state.integrationActionDraftPageId])],
       script: 'structural-pattern-v1',
       resultSchema: {
         type: 'array',
@@ -1366,7 +1392,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       pageId: page.id,
       requestedUrl,
       currentUrl,
-      navigationKind: request.navigationKind === 'frame-or-main' || request.navigationKind === 'new-window' || request.navigationKind === 'address'
+      navigationKind: request.navigationKind === 'new-window' || request.navigationKind === 'address'
         ? request.navigationKind
         : 'main-frame',
     };
@@ -1391,10 +1417,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationNavigationRequest = null;
     state.status = `Allowed navigation to ${new URL(request.requestedUrl).origin}`;
     rerender({ preserveMountedDocument: true });
-    const resumeUrl = integrationNavigationResumeUrl(request.navigationKind, request.currentUrl, request.requestedUrl);
     void runBusy(`Allowing navigation to ${new URL(request.requestedUrl).origin}...`, async () => {
-      await openIntegrationPage(resumeUrl, allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
-      if (request.navigationKind === 'frame-or-main') await controlIntegrationBrowser('reload', profile.id);
+      await openIntegrationPage(request.requestedUrl, allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
     }, { preserveMountedDocument: true });
   },
   rejectIntegrationNavigation: () => {
@@ -1505,10 +1529,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   addActionForIntegrationPage: (integrationId, pageId) => {
     startWebPageRecordType(integrationId, pageId);
   },
-  editIntegrationAction: (integrationId, actionId) => {
+  editIntegrationAction: (integrationId, actionId, example) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const action = integration?.actions.find((candidate) => candidate.id === actionId);
-    const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
+    // Adding an example on another page (one a run couldn't read) edits on that page, and picks its fields once it is open.
+    const page = integration?.pages.find((candidate) => candidate.id === (example?.pageId ?? action?.pageIds[0]));
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!integration || !action?.pattern || !page || !profile) throw new Error('The record type was not found.');
     const parents = [...action.pattern.parents];
@@ -1580,7 +1605,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = `Validated ${state.integrationActionLiveExampleRecords.filter(Boolean).length} live examples`;
     }, (error: unknown) => {
       state.error = integrationPageRequestFailed(error, `Couldn’t check ${action.name}’s examples`);
-    }).finally(() => rerender({ preserveMountedDocument: true }));
+    }).finally(() => {
+      rerender({ preserveMountedDocument: true });
+      // Once the saved examples were checked against it (in the page, as it loads): picking the new one starts there.
+      if (example) handlers.pickIntegrationRecordFields();
+    });
   },
   closeIntegrationActionBuilder: () => {
     if (state.integrationActionSelectionPending) {
@@ -1644,7 +1673,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = `Select where the range ${boundary === 'end' ? 'ends' : 'starts'}`;
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
-  addIntegrationActionAnchor: () => {
+  addIntegrationActionAnchor: (open) => {
     const selectingFirstExample = state.integrationActionAnchors.length === 0;
     state.integrationActionBuilderOpen = true;
     state.integrationActionBuilderStep = 'define';
@@ -1662,10 +1691,37 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const existingPattern = targets.length
         ? { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets }
         : null;
-      const options = { existingPattern, ...(state.integrationActionScope ? { selectionScope: state.integrationActionScope, minimumConfidence: state.integrationActionMinimumConfidence } : {}) };
-      await startIntegrationActionInspection('parent', options);
+      // A site setup says what the first example's box is ("the box around one job in the list").
+      const prompt = !existingPattern ? state.siteSetup?.prompts?.box : undefined;
+      const options = { existingPattern, ...(prompt ? { prompt } : {}), ...(state.integrationActionScope ? { selectionScope: state.integrationActionScope, minimumConfidence: state.integrationActionMinimumConfidence } : {}) };
+      await startIntegrationActionInspection('parent', options, open?.openPage);
       state.status = selectingFirstExample ? 'Select one complete example record' : 'Select another parent containing the same kind of data';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  // A page with one record: its fields are picked first, and the browser takes the box around them as the record's.
+  pickIntegrationRecordFields: (open) => {
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderStep = 'define';
+    state.integrationActionSelectionKind = 'target';
+    state.integrationActionSelectionPending = true;
+    state.integrationActionTargetSelectionParentIndex = state.integrationActionAnchors.length;
+    state.integrationActionTargetSelectionFieldIndex = null;
+    const prompt = state.siteSetup?.prompts?.fields;
+    const fieldChoices = state.siteSetup?.fields;
+    void runBusy('Starting field selection...', async () => {
+      await startIntegrationActionInspection('target', { multiSelect: true, deriveParent: true, ...(prompt ? { prompt } : {}), ...(fieldChoices ? { fieldChoices } : {}) }, open?.openPage);
+      state.status = 'Select the fields to read';
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  inspectIntegrationPage: (integrationId, pageId, inspectionKind, options) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!integration || !page || !profile) throw new Error('The integration page was not found.');
+    const pendingSelection = { kind: 'command-target', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, inspectionKind, options };
+    return runBusy(`Opening ${page.name}...`, async () => {
+      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name, integration.id, page.id);
+    }, { preserveMountedDocument: true });
   },
   limitIntegrationActionToSection: () => {
     const parentSnapshot = state.integrationActionAnchors[0];
@@ -1917,10 +1973,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftPageId = action.pageIds[0] ?? null;
     state.integrationCommandDraftScope = 'record';
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = false;
     rerender({ preserveMountedDocument: true });
     startIntegrationCommandRecording();
   },
-  addCommandForIntegrationPage: (integrationId, pageId) => {
+  addCommandForIntegrationPage: (integrationId, pageId, pagination) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     if (!integration || !page) throw new Error('The page was not found.');
@@ -1931,6 +1988,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftPageId = pageId;
     state.integrationCommandDraftScope = 'page';
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = pagination === true;
     rerender({ preserveMountedDocument: true });
     startIntegrationCommandRecording();
   },
@@ -1939,9 +1997,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandBuilderOpen = false;
     state.integrationCommandSelectionPending = false;
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = false;
     rerender({ preserveMountedDocument: true });
   },
-  saveIntegrationCommand: (name, inputNames) => {
+  saveIntegrationCommand: (name, inputNames, kind = {}) => {
+    const { pagination } = kind;
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
     const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
     const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDraftPageId);
@@ -1968,6 +2028,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       id: `command-${crypto.randomUUID()}`,
       name: commandName,
       scope: state.integrationCommandDraftScope,
+      ...(pagination ? { pagination } : {}),
       ...(inputs.length ? { inputs } : {}),
       steps: state.integrationCommandDraftSteps.map((step) => ({
         ...step,
@@ -1979,12 +2040,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       action!.commands ??= [];
       action!.commands!.push(command);
     } else {
-      page.commands ??= [];
-      page.commands.push(command);
+      // A list has one way to its next page: configuring it again replaces it.
+      page.commands = [...(page.commands ?? []).filter((existing) => !pagination || !existing.pagination), command];
     }
     saveIntegrationRegistry(state.integrationRegistry);
     state.integrationCommandBuilderOpen = false;
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = false;
     state.status = `Saved ${commandName}`;
     rerender({ preserveMountedDocument: true });
   },

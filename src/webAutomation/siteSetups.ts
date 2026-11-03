@@ -87,7 +87,8 @@ function describe(setup: SiteSetup): string {
 /** Site setups as text: a first line naming them, then the JSON. */
 export function siteSetupText(setups: SiteSetup[]): string {
   const title = setups.length === 1 ? `HVY site setup: ${describe(setups[0])}` : `HVY site setups: ${setups.map(describe).join(', ')}`;
-  return `${title}\n${JSON.stringify({ hvy: SITE_SETUP_FORMAT, sites: setups })}\n`;
+  // Indented, a value a line, as the blocks keep their settings (blockSettings.ts), so no line runs on.
+  return `${title}\n${JSON.stringify({ hvy: SITE_SETUP_FORMAT, sites: setups }, null, 2)}\n`;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

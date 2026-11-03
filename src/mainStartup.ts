@@ -21,7 +21,9 @@ import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
 import { installDevWebAutomationHost } from './webAutomation/devHost';
-import { installSiteSetup } from './siteSetupSession';
+import { installSiteSetup, itemPicked } from './siteSetupSession';
+import type { InspectorRecord } from './webAutomation/nativeHost';
+import { PAGINATION_COMMAND_NAMES } from './mainHandlersSettings';
 import { installBackgroundActivity } from './backgroundActivity';
 import { hasWebAutomationHost, setWebAutomationHost } from './webAutomation/app';
 import { createElectronBrowserHost, createTauriBrowserHost } from './webAutomation/nativeHost';
@@ -141,14 +143,21 @@ export async function boot(): Promise<void> {
         state.integrationCommandBuilderOpen = false;
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftSteps = [];
+        state.integrationCommandDraftPagination = false;
         state.status = 'Command recording cancelled';
         rerender({ preserveMountedDocument: true });
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-recording') {
-        const recording = result as { steps?: unknown };
+        const recording = result as { steps?: unknown; pagination?: unknown };
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftSteps = Array.isArray(recording.steps) ? recording.steps : [];
+        // A site setup's pagination is one click, of the kind chosen in the browser, with a known name: nothing to
+        // name or review, so it is saved as picked.
+        if (state.integrationCommandDraftPagination && (recording.pagination === 'next' || recording.pagination === 'page-number')) {
+          handlers.saveIntegrationCommand(PAGINATION_COMMAND_NAMES[recording.pagination], {}, { pagination: recording.pagination });
+          return;
+        }
         state.integrationCommandBuilderOpen = true;
         state.status = `Recorded ${state.integrationCommandDraftSteps.length} verified ${state.integrationCommandDraftSteps.length === 1 ? 'step' : 'steps'}`;
         rerender({ preserveMountedDocument: true });
@@ -167,14 +176,52 @@ export async function boot(): Promise<void> {
         rerender({ preserveMountedDocument: true });
         return;
       }
+      // A site setup's example item: the row picked on the list, to open as a run does.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-record-choice') {
+        const { record } = result as { record?: InspectorRecord };
+        if (record) itemPicked(record);
+        return;
+      }
+      // Undo last with no fields picked: the box just picked is taken back, and the page picks a box again.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-target-collection-undo-parent') {
+        handlers.removeIntegrationActionSelection('example', state.integrationActionTargetSelectionParentIndex);
+        handlers.addIntegrationActionAnchor();
+        return;
+      }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-target-collection') {
         const items = Array.isArray((result as { items?: unknown }).items) ? (result as { items: unknown[] }).items : [];
+        // Fields picked first, on a page with one record: the box the browser took around them is the record's example.
+        const derivedParent = (result as { parent?: unknown }).parent;
+        if (derivedParent) {
+          const derivedIndex = state.integrationActionAnchors.length;
+          state.integrationActionAnchors.push(derivedParent);
+          state.integrationActionAnchorRules.push([]);
+          state.integrationActionSelectedParentIndex = derivedIndex;
+          state.integrationActionTargetSelectionParentIndex = derivedIndex;
+          state.integrationInspectionResult = derivedParent;
+          state.inspectionPrivacyRules = [];
+          // Another example of a record type that has fields: each has nothing in it yet, until picked below.
+          state.integrationActionTargetVariants.forEach((variants, fieldIndex) => {
+            variants[derivedIndex] = null;
+            state.integrationActionTargetNegativeVariants[fieldIndex][derivedIndex] = null;
+            state.integrationActionTargetAbsentExamples[fieldIndex][derivedIndex] = false;
+          });
+        }
         const parentIndex = state.integrationActionTargetSelectionParentIndex;
         items.forEach((item) => {
+          // A field the record type already has, picked in another example: this example's of it, not a new field.
+          const named = (item as { fieldId?: unknown }).fieldId;
+          const existingField = derivedParent && typeof named === 'string' ? state.integrationActionTargetLabels.indexOf(named) : -1;
+          if (existingField >= 0) {
+            state.integrationActionTargetVariants[existingField][parentIndex] = item;
+            return;
+          }
           state.integrationActionExamples.push(item);
           state.integrationActionTargetIds.push(`field-${crypto.randomUUID()}`);
           state.integrationActionExampleRules.push([]);
-          state.integrationActionTargetLabels.push('');
+          // The field it was said to be, as it was picked (a site setup's collection field), or one to assign here.
+          const fieldId = (item as { fieldId?: unknown }).fieldId;
+          state.integrationActionTargetLabels.push(typeof fieldId === 'string' ? fieldId : '');
           state.integrationActionTargetCardinalities.push('single');
           state.integrationActionTargetOptional.push(true);
           state.integrationActionTargetParentIndexes.push(parentIndex);
@@ -282,7 +329,7 @@ export async function boot(): Promise<void> {
       rerender({ preserveMountedDocument: true });
       if (collectInitialFields) {
         const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
-        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true });
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true, undoParent: true, ...(state.siteSetup ? { prompt: state.siteSetup.prompts?.fields, fieldChoices: state.siteSetup.fields } : {}) });
         return;
       }
       if (collectExistingFields) {

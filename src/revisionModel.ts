@@ -1,4 +1,5 @@
 import * as Automerge from '@automerge/automerge';
+import { diffLines } from 'diff';
 import type { VisualDocument } from '../../heavy-file-format/src/types';
 import type { JsonObject } from '../../heavy-file-format/src/hvy/types';
 
@@ -85,6 +86,26 @@ export function createRevisionDocument(
   return Automerge.from(initial, { actor: actorIdForDevice(author.deviceId) });
 }
 
+/**
+ * The revision's saved text changed to `next`, a line at a time: the lines that differ are replaced whole, and the rest
+ * kept. Automerge's own `updateText` compares characters, which for a document with long lines (a collection block's
+ * settings are hundreds of thousands of characters on one line) and a large change never finished: saving froze the
+ * app. Lines are what change between saves, so comparing them is as fine as the history needs.
+ */
+function updateSourceText(draft: RevisionDoc, previous: string, next: string): void {
+  let index = 0;
+  for (const part of diffLines(previous, next)) {
+    if (part.added) {
+      Automerge.splice(draft, ['serializedSource'], index, 0, part.value);
+      index += part.value.length;
+    } else if (part.removed) {
+      Automerge.splice(draft, ['serializedSource'], index, part.value.length);
+    } else {
+      index += part.value.length;
+    }
+  }
+}
+
 export function updateRevisionSource(
   document: RevisionDoc,
   author: RevisionAuthor,
@@ -92,7 +113,7 @@ export function updateRevisionSource(
 ): RevisionDoc {
   if (document.serializedSource === serializedSource) return document;
   return changeRevisionDocument(document, author, 'update-serialized-source', (draft) => {
-    Automerge.updateText(draft, ['serializedSource'], serializedSource);
+    updateSourceText(draft, document.serializedSource, serializedSource);
   });
 }
 
@@ -105,7 +126,7 @@ export function updateRevisionSnapshot(
   const nextAttachments = Object.fromEntries(attachmentRefs.map((attachment) => [attachment.id, attachment]));
   return changeRevisionDocument(document, author, 'update-saved-document', (draft) => {
     if (draft.serializedSource !== serializedSource) {
-      Automerge.updateText(draft, ['serializedSource'], serializedSource);
+      updateSourceText(draft, String(draft.serializedSource), serializedSource);
     }
     for (const id of Object.keys(draft.attachments)) {
       if (!nextAttachments[id]) delete draft.attachments[id];

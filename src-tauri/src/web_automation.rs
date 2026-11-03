@@ -66,6 +66,7 @@ impl WebAutomationPageLoads {
 struct WebAutomationWorker {
     label: String,
     profile_id: String,
+    browser_store_id: String,
     loads: Arc<WebAutomationPageLoads>,
 }
 
@@ -84,24 +85,9 @@ fn web_automation_profile_label(profile_id: &str) -> String {
     profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect()
 }
 
-/// One persistent store per browser profile, shared by its workers and its sign-in window, apart from the integration browser's.
-#[cfg(target_os = "macos")]
-fn web_automation_data_store_id(profile_id: &str) -> [u8; 16] {
-    let half = |seed: u64| {
-        let mut hash = seed;
-        for byte in format!("hvy-galaxy-web-automation:{profile_id}").bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        hash.to_be_bytes()
-    };
-    let mut id = [0_u8; 16];
-    id[..8].copy_from_slice(&half(0xcbf2_9ce4_8422_2325));
-    id[8..].copy_from_slice(&half(0x8422_2325_cbf2_9ce4));
-    id
-}
-
-fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, visible: bool, loads: Arc<WebAutomationPageLoads>, user: bool) -> AppResult<tauri::WebviewWindow> {
+/// A profile's windows share its browser store with the integration browser (its `browserStoreId`), so what was done in
+/// either (a sign-in, a check that you're human passed, cookies accepted) holds in both.
+fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser_store_id: &str, visible: bool, loads: Arc<WebAutomationPageLoads>, user: bool) -> AppResult<tauri::WebviewWindow> {
     let blank = tauri::Url::parse("about:blank").map_err(|error| AppError::Message(error.to_string()))?;
     let event_app = app.clone();
     let event_profile_id = profile_id.to_string();
@@ -126,7 +112,9 @@ fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, visible
             }
         });
     #[cfg(target_os = "macos")]
-    let builder = builder.data_store_identifier(web_automation_data_store_id(profile_id));
+    let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id)?);
+    #[cfg(not(target_os = "macos"))]
+    let _ = browser_store_id;
     #[cfg(not(target_os = "macos"))]
     let builder = builder.data_directory(app.path().app_local_data_dir().map_err(|error| AppError::Message(error.to_string()))?
         .join("web-automation").join(web_automation_profile_label(profile_id)));
@@ -140,21 +128,22 @@ fn web_automation_worker(app: &AppHandle, worker_id: &str) -> AppResult<(tauri::
     Ok((window, worker.loads.clone()))
 }
 
-fn web_automation_create_worker(app: &AppHandle, worker_id: &str, profile_id: &str) -> AppResult<()> {
+fn web_automation_create_worker(app: &AppHandle, worker_id: &str, profile_id: &str, browser_store_id: &str) -> AppResult<()> {
     let loads = Arc::new(WebAutomationPageLoads::default());
     let label = format!("web-automation-worker-{}", web_automation_next_id());
-    web_automation_window(app, &label, profile_id, false, loads.clone(), false)?;
-    web_automation_workers()?.insert(worker_id.into(), WebAutomationWorker { label, profile_id: profile_id.into(), loads });
+    web_automation_window(app, &label, profile_id, browser_store_id, false, loads.clone(), false)?;
+    web_automation_workers()?.insert(worker_id.into(), WebAutomationWorker { label, profile_id: profile_id.into(), browser_store_id: browser_store_id.into(), loads });
     Ok(())
 }
 
-fn web_automation_close_worker(app: &AppHandle, worker_id: &str) -> AppResult<Option<String>> {
+/// Closes a worker; its profile and browser store, for a worker made again in its place.
+fn web_automation_close_worker(app: &AppHandle, worker_id: &str) -> AppResult<Option<(String, String)>> {
     let worker = web_automation_workers()?.remove(worker_id);
     let Some(worker) = worker else { return Ok(None) };
     if let Some(window) = app.get_webview_window(&worker.label) {
         window.destroy().map_err(|error| AppError::Message(error.to_string()))?;
     }
-    Ok(Some(worker.profile_id))
+    Ok(Some((worker.profile_id, worker.browser_store_id)))
 }
 
 /// Evaluates a script and returns its (synchronous) result, as the JSON the webview serializes it to.
@@ -222,7 +211,7 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
     match command {
         "create-worker" => {
             let worker_id = format!("worker-{}", web_automation_next_id());
-            web_automation_create_worker(app, &worker_id, web_automation_text(args, "profileId")?)?;
+            web_automation_create_worker(app, &worker_id, web_automation_text(args, "profileId")?, web_automation_text(args, "browserStoreId")?)?;
             Ok(serde_json::Value::String(worker_id))
         }
         // History cannot be cleared in a webview, so the worker gets a fresh window in the same profile, on the page
@@ -231,8 +220,8 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
             let worker_id = web_automation_text(args, "workerId")?;
             let (window, loads) = web_automation_worker(app, worker_id)?;
             let location = web_automation_location(&window, &loads)?;
-            if let Some(profile_id) = web_automation_close_worker(app, worker_id)? {
-                web_automation_create_worker(app, worker_id, &profile_id)?;
+            if let Some((profile_id, browser_store_id)) = web_automation_close_worker(app, worker_id)? {
+                web_automation_create_worker(app, worker_id, &profile_id, &browser_store_id)?;
                 if let Some(url) = location["url"].as_str().filter(|url| *url != "about:blank") {
                     let (window, loads) = web_automation_worker(app, worker_id)?;
                     let (_, finished) = loads.counts();
@@ -307,7 +296,7 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
             let label = web_automation_user_label(profile_id);
             let window = match app.get_webview_window(&label) {
                 Some(window) => window,
-                None => web_automation_window(app, &label, profile_id, true, Arc::new(WebAutomationPageLoads::default()), true)?,
+                None => web_automation_window(app, &label, profile_id, web_automation_text(args, "browserStoreId")?, true, Arc::new(WebAutomationPageLoads::default()), true)?,
             };
             window.navigate(web_automation_url(args, "url")?).map_err(|error| AppError::Message(error.to_string()))?;
             window.show().map_err(|error| AppError::Message(error.to_string()))?;

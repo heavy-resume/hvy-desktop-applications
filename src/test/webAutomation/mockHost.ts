@@ -70,6 +70,7 @@ interface MockWorker {
 
 export class MockHost implements BrowserHost {
   private heldRequests: Array<{ path: string; released: Promise<void> }> = [];
+  private heldNavigations: Array<{ path: string; reached: () => void; released: Promise<void> }> = [];
   private readonly sites = new Map<string, MockSite>();
   private readonly jars = new Map<string, Map<string, Record<string, string>>>();
   private readonly workers = new Map<string, MockWorker>();
@@ -114,6 +115,11 @@ export class MockHost implements BrowserHost {
   async navigate(workerId: string, url: string): Promise<PageLocation> {
     const worker = this.worker(workerId);
     const href = new URL(url).href;
+    const held = this.heldNavigations.find((hold) => new URL(href).pathname.startsWith(hold.path));
+    if (held) {
+      held.reached();
+      await held.released;
+    }
     worker.history = [...worker.history.slice(0, worker.index + 1), href];
     worker.index = worker.history.length - 1;
     worker.restored = true;
@@ -172,7 +178,7 @@ export class MockHost implements BrowserHost {
     }
     const next = this.page(url)?.nextPage;
     if (!next) return { status: 'no_match' };
-    this.log(`${workerId} click ${request.commandId}`);
+    this.log(`${workerId} click ${request.commandId}${request.pageNumber ? ` for page ${request.pageNumber}` : ''}`);
     await this.navigate(workerId, new URL(next, url).href);
     return { status: 'executed' };
   }
@@ -243,6 +249,26 @@ export class MockHost implements BrowserHost {
     const bytes = await file.bytes();
     if (bytes.byteLength > options.maxBytes) throw new WebAutomationError('invalid_request', `The file is larger than ${options.maxBytes} bytes.`);
     return new Uint8Array(bytes);
+  }
+
+  /** Holds page loads of paths under `path` until released, like a page that takes long to load: `reached` says one started. */
+  holdNavigation(path: string): { reached: Promise<void>; release: () => void } {
+    let reached = () => undefined as void;
+    let release = () => undefined as void;
+    const hold = {
+      path,
+      reached: () => reached(),
+      released: new Promise<void>((resolve) => { release = resolve; }),
+    };
+    const started = new Promise<void>((resolve) => { reached = resolve; });
+    this.heldNavigations.push(hold);
+    return {
+      reached: started,
+      release: () => {
+        this.heldNavigations = this.heldNavigations.filter((candidate) => candidate !== hold);
+        release();
+      },
+    };
   }
 
   /** Holds requests to paths under `path` until released, like a slow network: the call stays in flight. */

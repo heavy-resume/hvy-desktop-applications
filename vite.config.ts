@@ -127,6 +127,13 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/webAutomation.ts',
     root: 'app',
   },
+  {
+    id: 'galaxy.similarity',
+    key: 'galaxySimilarity',
+    exportName: 'similarityPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {

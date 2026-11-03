@@ -3,13 +3,15 @@
   const MAX_RESULT_CHARS = 1024 * 1024;
   const active = new Map();
   const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
+  // The browser's message token, as the inspector carries it (integration-inspector.js).
+  const MESSAGE_TOKEN = '__HVY_GALAXY_MESSAGE_TOKEN__';
 
   const publish = (value) => {
     if (nativePublish) return nativePublish(value);
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    window.location.href = `hvy-integration://inspection/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+    window.location.href = `hvy-integration://inspection/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}?t=${MESSAGE_TOKEN}`;
   };
 
   const stable = (value) => {

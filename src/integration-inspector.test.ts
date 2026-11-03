@@ -56,6 +56,8 @@ interface InspectorSnapshot {
   range?: { includeStart: boolean; includeEnd: boolean; end: InspectorSnapshot; summary?: string };
 }
 
+interface PickOptions { gesture: 'click'; pageNumber?: boolean; prompt: string; confirm: string }
+
 interface InspectorApi {
   discoverStructuredSources(): Array<{ kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string; title: string; authenticated: boolean; discoveredBy: 'link' | 'network' }>;
   fetchStructuredSource(source: { kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string }): Promise<{ value: unknown }>;
@@ -68,12 +70,18 @@ interface InspectorApi {
     minimumConfidence?: number;
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
     multiSelect?: boolean;
+    undoParent?: boolean;
+    deriveParent?: boolean;
+    recordChoice?: { refuse?: string };
+    fieldChoices?: Array<{ id: string; label: string }>;
     externalToolbar?: boolean;
     context?: Record<string, unknown>;
     rangeEdit?: { boundary: 'start' | 'end'; snapshot: InspectorSnapshot };
-    commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0] };
+    prompt?: string;
+    commandRecorder?: { scope: 'page' | 'record'; pattern?: Parameters<InspectorApi['extractPattern']>[0]; pick?: PickOptions | { question: string; choices: Array<PickOptions & { pagination: string; label: string }> } };
   }): void;
-  control(action: 'navigate' | 'undo' | 'done'): void;
+  /** Presses a button the picker put on the toolbar, by its id. */
+  control(buttonId: string): void;
   snapshotElement(element: Element, parent?: Element | null, kind?: 'parent' | 'target' | 'scope'): InspectorSnapshot;
   suggestTargets(element: Element, pattern: Parameters<InspectorApi['extractPattern']>[0]): Array<{ label: string; score: number; snapshot: InspectorSnapshot | null }>;
   matchAndHighlight(pattern: { parents: InspectorSnapshot[]; targets: Array<{ label: string; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number }): {
@@ -96,7 +104,7 @@ interface InspectorApi {
   pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
   validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown> };
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
-  executeCommand(payload: { requestId?: string; watchRecord?: boolean; recordIdentity?: string; readyChecks?: Parameters<InspectorApi['pageReadiness']>[0]; pattern: Parameters<InspectorApi['extractPattern']>[0]; command: { id: string; scope: 'page' | 'record'; inputs?: Array<{ id: string; name: string; required: boolean; options?: Array<{ value: string; label: string }>; allowCustom?: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type' | 'select'; target: InspectorSnapshot; inputId?: string; value?: string; valueLabel?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
+  executeCommand(payload: { requestId?: string; watchRecord?: boolean; recordIdentity?: string; readyChecks?: Parameters<InspectorApi['pageReadiness']>[0]; pattern: Parameters<InspectorApi['extractPattern']>[0]; pageNumber?: number; command: { id: string; scope: 'page' | 'record'; pagination?: 'next' | 'page-number'; inputs?: Array<{ id: string; name: string; required: boolean; options?: Array<{ value: string; label: string }>; allowCustom?: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type' | 'select'; target: InspectorSnapshot; inputId?: string; value?: string; valueLabel?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
 
 declare global {
@@ -108,7 +116,7 @@ declare global {
     __commandRecordingResult?: unknown;
     __readyCheckResult?: unknown;
     hvySetBrowserState(value: { url: string; allowed: string[] }): void;
-    hvySetInspectionState(value?: { active?: boolean; status?: string; navigationLabel?: string; canUndo?: boolean }): void;
+    hvySetInspectionState(value?: { active?: boolean; status?: string; buttons?: Array<{ id: string; label: string; primary?: boolean; disabled?: boolean }> }): void;
     __guideTitlePattern?: Parameters<InspectorApi['extractPattern']>[0];
   }
 }
@@ -213,11 +221,40 @@ describe('integration structural inspector', () => {
     await page.addScriptTag({ content: inspectorSource });
   });
 
+  it('pauses picking for a check that you\'re human, once, so the page takes clicks, and says why', async () => {
+    await page.evaluate(() => {
+      const check = document.createElement('div');
+      check.className = 'cf-turnstile';
+      check.style.cssText = 'width:300px;height:65px';
+      document.body.append(check);
+    });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
+    const shield = () => page.evaluate(() => document.getElementById('hvy-galaxy-inspector-shield')?.style.pointerEvents);
+    expect(await shield()).toBe('none');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('The page is checking you’re human · finish it, then Resume picking');
+    // Resumed by hand while the check still shows, picking stays resumed.
+    await page.locator('#hvy-galaxy-inspector-status button').filter({ hasText: 'Resume picking' }).click();
+    await page.waitForTimeout(1300);
+    expect(await shield()).toBe('auto');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('does not pause picking for an invisible reCAPTCHA', async () => {
+    await page.evaluate(() => {
+      const badge = document.createElement('iframe');
+      badge.src = 'about:blank#/recaptcha/api2/anchor?k=key&size=invisible';
+      badge.style.cssText = 'width:256px;height:60px';
+      document.body.append(badge);
+    });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
+    expect(await page.evaluate(() => document.getElementById('hvy-galaxy-inspector-shield')?.style.pointerEvents)).toBe('auto');
+  });
+
   it('highlights on hover and completes a parent choice without an exception', async () => {
     await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
     await movePointerTo(page, '[data-record="first"] .subject');
 
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: select a parent');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Select the box around one record');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
 
     await clickPointerAt(page, '[data-record="first"] .subject');
@@ -346,9 +383,12 @@ describe('integration structural inspector', () => {
     await page.setContent(integrationToolbarSource);
     await page.evaluate(() => window.hvySetInspectionState({
       active: true,
-      status: 'Galaxy: select fields, or choose Done to cancel',
-      navigationLabel: 'Navigate page',
-      canUndo: false,
+      status: 'Select fields, or choose Done to cancel',
+      buttons: [
+        { id: 'navigate', label: 'Navigate page' },
+        { id: 'undo', label: 'Undo last', disabled: true },
+        { id: 'done', label: 'Done', primary: true },
+      ],
     }));
 
     expect(await page.locator('[data-inspection-controls]').isVisible()).toBe(true);
@@ -378,7 +418,7 @@ describe('integration structural inspector', () => {
 
     await page.evaluate(() => window.__hvyGalaxyInspector.start('parent'));
     await movePointerTo(page, '[data-record="second"] .subject');
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: select a parent');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Select the box around one record');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
     await clickPointerAt(page, '[data-record="second"] .subject');
     expect(await page.locator('#hvy-galaxy-inspector-picker').textContent()).toContain('Choose the parent containing one complete item');
@@ -402,7 +442,7 @@ describe('integration structural inspector', () => {
     await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '#no-longer-present', parentSnapshot: snapshot }), parentSnapshot);
     await movePointerTo(page, '[data-record="first"] .subject');
 
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: select target data');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Select the data to read');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
     await clickPointerAt(page, '[data-record="first"] .subject');
     expect(await page.locator('#hvy-galaxy-inspector-picker').textContent()).toContain('Choose data inside the selected parent');
@@ -521,20 +561,168 @@ describe('integration structural inspector', () => {
     expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('Add field · span');
     await clickPointerAt(page, '[data-record="first"] .sender');
     await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'span' }).first().click();
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('1 field selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
 
     await movePointerTo(page, '[data-record="first"] .subject');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('Add field · a');
     await clickPointerAt(page, '[data-record="first"] .subject');
     await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'a — Project update' }).click();
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 2 fields selected');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('2 fields selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(2);
 
     await page.getByRole('button', { name: 'Undo last' }).click();
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('1 field selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
     expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('undoes the picked box with Undo last once no fields are left, when picking the first example\'s fields', async () => {
+    await page.setContent(mockInbox);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+      undoParent: true,
+    }), parentSnapshot);
+    const statusText = page.locator('[data-inspector-status-text]');
+    expect(await statusText.textContent()).toBe('Select fields, or Undo last to pick the box again');
+
+    // A field picked is undone first; then the box.
+    await clickPointerAt(page, '[data-record="first"] .sender');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'span' }).first().click();
+    await page.getByRole('button', { name: 'Undo last' }).click();
+    expect(await statusText.textContent()).toBe('Select fields, or Undo last to pick the box again');
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toBeUndefined();
+    await page.getByRole('button', { name: 'Undo last' }).click();
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toEqual({ kind: 'integration-target-collection-undo-parent' });
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('takes the box around fields picked first as the record, so a job shown beside the list reads from its pane', async () => {
+    await page.setContent(`<main class="board" style="display:flex;gap:20px;margin-top:140px">
+      <ul class="rows" style="width:300px">${['Data Analyst', 'Product Manager', 'Designer'].map((title) => `<li class="row"><h2 class="title">${title}</h2><p>Acme</p></li>`).join('')}</ul>
+      <section class="pane" style="flex:1"><h2 class="title">Senior Engineer</h2><div class="description"><p>Build the console.</p></div></section>
+    </main>`);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true, deriveParent: true, prompt: 'Pick what to read from the job.' }));
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Pick what to read from the job.');
+    await clickPointerAt(page, '.pane .title');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'h2 — Senior Engineer' }).click();
+    await clickPointerAt(page, '.pane .description p');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'p — Build the console.' }).click();
+    await page.getByRole('button', { name: 'Done' }).click();
+
+    const result = await page.evaluate(() => {
+      const collection = window.__commandRecordingResult as { kind: string; parent: InspectorSnapshot & { selected: { cssPath: string } }; items: InspectorSnapshot[] };
+      const extracted = window.__hvyGalaxyInspector.extractPattern({
+        parents: [collection.parent],
+        targets: collection.items.map((snapshot, index) => ({ label: ['TITLE', 'DESCRIPTION'][index], snapshot })),
+      });
+      return {
+        kind: collection.kind,
+        box: collection.parent.selected.cssPath,
+        isPane: document.querySelector(collection.parent.selected.cssPath) === document.querySelector('.pane'),
+        records: extracted.records.map((record: { targets: Array<{ value: unknown }> }) => record.targets.map((target) => target.value)),
+      };
+    });
+    expect(result.kind).toBe('integration-target-collection');
+    expect(result.isPane, result.box).toBe(true);
+    expect(result.records).toEqual([['Senior Engineer', 'Build the console.']]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('asks which field each pick is, and says what is picked and what is left, so the fields need no remembering', async () => {
+    await page.setContent(`<main class="board" style="display:flex;gap:20px">
+      <section class="pane" style="flex:1"><h2 class="title">Senior Engineer</h2><p class="pay">\$140,000 a year</p><div class="description"><p>Build the console.</p></div></section>
+    </main>`);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', {
+      multiSelect: true,
+      deriveParent: true,
+      externalToolbar: true,
+      prompt: 'Pick what to read from the job',
+      fieldChoices: [{ id: 'title', label: 'Title' }, { id: 'pay', label: 'Pay' }, { id: 'description', label: 'Description' }],
+    }));
+    type Toolbar = { status: string; buttons: Array<{ id: string; label: string }> };
+    const toolbar = () => page.evaluate(() => window.__toolbarState as Toolbar);
+    const settled = (status: string) => page.waitForFunction((expected) => (window.__toolbarState as Toolbar).status === expected, status);
+    const press = async (label: string) => {
+      const id = (await toolbar()).buttons.find((button) => button.label === label)!.id;
+      await page.evaluate((buttonId) => window.__hvyGalaxyInspector.control(buttonId), id);
+    };
+    expect((await toolbar()).status).toBe('Pick what to read from the job · Fields: Title, Pay, Description');
+
+    await clickPointerAt(page, '.pane .title');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'h2 — Senior Engineer' }).click();
+    await settled('Which field is this? “Senior Engineer”');
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Title', 'Pay', 'Description', 'Skip', 'Undo last']);
+    await press('Title');
+    await settled('Picked: Title · Still to pick: Pay, Description · then Done');
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Navigate page', 'Undo last', 'Done']);
+
+    await clickPointerAt(page, '.pane .pay');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'p — \$140,000 a year' }).click();
+    await settled('Which field is this? “\$140,000 a year”');
+    // A field already picked is not offered again.
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Pay', 'Description', 'Skip', 'Undo last']);
+    await press('Pay');
+    await settled('Picked: Title, Pay · Still to pick: Description · then Done');
+    await press('Done');
+
+    const published = await page.evaluate(() => window.__commandRecordingResult as { items: Array<{ fieldId?: string }> });
+    expect(published.items.map((item) => item.fieldId)).toEqual(['title', 'pay']);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('records a range picked first within the box taken around the fields, both of its ends', async () => {
+    await page.setContent(sectionedPostings);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true, deriveParent: true }));
+    const picker = page.locator('#hvy-galaxy-inspector-picker');
+    await clickPointerAt(page, '[data-record="first"] .posting-title');
+    await picker.locator('button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    await clickPointerAt(page, '[data-record="first"] .posting-meta');
+    await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).hover();
+    await picker.getByRole('button', { name: 'Start after this' }).click();
+    await clickPointerAt(page, '[data-record="first"] .apply-button');
+    await picker.locator('button', { hasText: 'a — Apply now' }).hover();
+    await picker.getByRole('button', { name: 'End before this' }).click();
+    await page.getByRole('button', { name: 'Done' }).click();
+
+    const result = await page.evaluate(() => {
+      const collection = window.__commandRecordingResult as { parent: InspectorSnapshot & { selected: { cssPath: string } }; items: Array<InspectorSnapshot & { selected: { scopeCssPath: string | null; relativePath: unknown } }> };
+      const range = collection.items[1].range as unknown as { end: { selected: { scopeCssPath: string | null; relativePath: unknown } }; summary: string };
+      return {
+        isRecord: document.querySelector(collection.parent.selected.cssPath) === document.querySelector('[data-record="first"]'),
+        withinBox: [collection.items[0].selected.scopeCssPath, collection.items[1].selected.scopeCssPath, range.end.selected.scopeCssPath].every((path) => path === collection.parent.selected.cssPath),
+        endPlaced: range.end.selected.relativePath !== null,
+        summary: range.summary,
+      };
+    });
+    expect(result).toMatchObject({ isRecord: true, withinBox: true, endPlaced: true });
+    expect(result.summary).toMatch(/^Starts after “Remote \(US\) · Full-time” · Ends before “Apply now”/);
     expect(pageErrors).toEqual([]);
   });
 
@@ -558,7 +746,10 @@ describe('integration structural inspector', () => {
     }), parentSnapshot);
 
     expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
-    expect(await page.evaluate(() => window.__toolbarState)).toMatchObject({ active: true, canUndo: false });
+    expect(await page.evaluate(() => window.__toolbarState)).toMatchObject({
+      active: true,
+      buttons: [{ id: 'navigate', label: 'Navigate page' }, { id: 'undo', label: 'Undo last', disabled: true }, { id: 'done', label: 'Done', primary: true }],
+    });
     await page.evaluate(() => window.__hvyGalaxyInspector.control('done'));
     expect(await page.evaluate(() => window.__commandRecordingResult)).toEqual({ kind: 'integration-target-collection', items: [] });
     expect(pageErrors).toEqual([]);
@@ -690,21 +881,21 @@ describe('integration structural inspector', () => {
     await clickPointerAt(page, '[data-record="first"] .posting-meta');
     await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).hover();
     await picker.getByRole('button', { name: 'Start after this' }).click();
-    expect(await status.textContent()).toBe('Galaxy: pick where the range ends · Esc cancels the range');
+    expect(await status.textContent()).toBe('Pick where the range ends · Esc cancels the range');
 
     // Hovering previews the range up to the element under the pointer.
     await movePointerTo(page, '[data-record="first"] .apply-button');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toMatch(/^Range · \d+ characters$/);
-    expect(await status.textContent()).toMatch(/^Galaxy: pick where the range ends · Ends …?.*Apply now · \d+ characters$/);
+    expect(await status.textContent()).toMatch(/^Pick where the range ends · Ends …?.*Apply now · \d+ characters$/);
     // Only what comes after the start can end it.
     await movePointerTo(page, '[data-record="first"] .posting-title');
-    expect(await status.textContent()).toBe('Galaxy: pick something after the start');
+    expect(await status.textContent()).toBe('Pick something after the start');
 
     await clickPointerAt(page, '[data-record="first"] .apply-button');
     expect(await picker.locator('div').first().textContent()).toBe('Choose where the range ends');
     await picker.locator('button', { hasText: 'a — Apply now' }).hover();
     await picker.getByRole('button', { name: 'End before this' }).click();
-    expect(await status.textContent()).toBe('Galaxy: 2 fields selected');
+    expect(await status.textContent()).toBe('2 fields selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(2);
 
     await page.getByRole('button', { name: 'Done' }).click();
@@ -736,7 +927,7 @@ describe('integration structural inspector', () => {
     await page.getByRole('button', { name: 'Start a range here' }).click();
     await page.keyboard.press('Escape');
 
-    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Galaxy: 1 field selected');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('1 field selected');
     expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(1);
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
     expect(pageErrors).toEqual([]);
@@ -768,7 +959,7 @@ describe('integration structural inspector', () => {
 
     // A new end: the start after the details line is kept.
     await startEdit('end');
-    expect(await status.textContent()).toBe('Galaxy: pick where the range ends');
+    expect(await status.textContent()).toBe('Pick where the range ends');
     await clickPointerAt(page, '[data-record="first"] .similar a');
     expect(await picker.locator('div').first().textContent()).toBe('Choose where the range ends');
     await picker.locator('button', { hasText: 'a — Data Analyst' }).click();
@@ -777,7 +968,7 @@ describe('integration structural inspector', () => {
 
     // A new start: the end before Apply now is kept, and only what comes before it can start the range.
     await startEdit('start');
-    expect(await status.textContent()).toBe('Galaxy: pick where the range starts');
+    expect(await status.textContent()).toBe('Pick where the range starts');
     await clickPointerAt(page, '[data-record="first"] .similar a');
     expect(await picker.locator('div').first().textContent()).toBe('Pick something before the end');
     await page.locator('#hvy-galaxy-inspector-picker').evaluate((element) => element.remove());
@@ -1628,6 +1819,170 @@ describe('integration structural inspector', () => {
 
     expect(result.execution.status).toBe('executed');
     expect(result.contextMenus).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('clicks the asked-for page number in the pager whose number was recorded, and finds none past its last', async () => {
+    await page.setContent(`<main><ol class="results"><li>Job</li></ol><nav class="pager" aria-label="pagination"><ul>
+      ${[1, 2, 3, 4, 5].map((number) => `<li><a href="#" data-testid="pagination-page-${number}" aria-label="${number}"${number === 1 ? ' aria-current="page"' : ''}>${number}</a></li>`).join('')}
+      <li><a href="#" data-testid="pagination-page-next" aria-label="Next Page">›</a></li></ul></nav></main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const result = await page.evaluate(async () => {
+      const clicked: string[] = [];
+      document.querySelectorAll('.pager a').forEach((link) => link.addEventListener('click', (event) => {
+        event.preventDefault();
+        clicked.push(link.textContent ?? '');
+      }));
+      const snapshot = window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-testid="pagination-page-2"]')!, null, 'target');
+      const command = { id: 'pages', scope: 'page' as const, pagination: 'page-number' as const, steps: [{ gesture: 'click' as const, target: snapshot }] };
+      const pattern = { minimumConfidence: 0.8, parents: [], targets: [] };
+      const third = await window.__hvyGalaxyInspector.executeCommand({ pattern, command, pageNumber: 3 });
+      const fifth = await window.__hvyGalaxyInspector.executeCommand({ pattern, command, pageNumber: 5 });
+      const sixth = await window.__hvyGalaxyInspector.executeCommand({ pattern, command, pageNumber: 6 });
+      return { third: third.status, fifth: fifth.status, sixth: sixth.status, clicked };
+    });
+
+    expect(result).toEqual({ third: 'executed', fifth: 'executed', sixth: 'no_match', clicked: ['3', '5'] });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('shows picking in the browser\'s toolbar, off the page, with what it was asked to say, and takes its buttons', async () => {
+    await page.setContent('<main><article class="job"><h1>Engineer</h1><p>Build things.</p></article></main>');
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true, externalToolbar: true, prompt: 'Pick the box around the whole job posting.' }));
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+    expect(await page.evaluate(() => window.__toolbarState)).toEqual({
+      active: true,
+      status: 'Pick the box around the whole job posting.',
+      buttons: [{ id: 'navigate', label: 'Navigate page', primary: false, disabled: false }],
+    });
+
+    await page.evaluate(() => window.__hvyGalaxyInspector.control('navigate'));
+    await page.waitForFunction(() => (window.__toolbarState as { buttons: Array<{ label: string }> }).buttons[0].label === 'Resume picking');
+    expect(await page.evaluate(() => (window.__toolbarState as { status: string }).status)).toBe('Page navigation enabled');
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('asks which way a list goes to its next page, in the toolbar, then picks it and says which', async () => {
+    await page.setContent('<main><nav class="pager"><a href="#" class="next">Next</a></nav></main>');
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', {
+      externalToolbar: true,
+      commandRecorder: {
+        scope: 'page',
+        pick: {
+          question: 'How does this list go to its next page?',
+          choices: [
+            { pagination: 'next', label: 'Next link or button', gesture: 'click', prompt: 'Select the Next link or button.', confirm: 'Found it.' },
+            { pagination: 'page-number', label: 'Page numbers', gesture: 'click', pageNumber: true, prompt: 'Select one of the page numbers.', confirm: 'Found it.' },
+          ],
+        },
+      },
+    }));
+    type Toolbar = { status: string; buttons: Array<{ id: string; label: string }> };
+    const toolbar = () => page.evaluate(() => window.__toolbarState as Toolbar);
+    const press = async (label: string) => {
+      const id = (await toolbar()).buttons.find((button) => button.label === label)!.id;
+      await page.evaluate((buttonId) => window.__hvyGalaxyInspector.control(buttonId), id);
+    };
+    expect(await toolbar()).toMatchObject({ status: 'How does this list go to its next page?' });
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Next link or button', 'Page numbers', 'Cancel']);
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+
+    await press('Next link or button');
+    await page.waitForFunction(() => (window.__toolbarState as Toolbar).status === 'Select the Next link or button.');
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Back', 'Pause to navigate', 'Cancel']);
+    await clickPointerAt(page, '.next');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'a — Next' }).click();
+    await page.waitForFunction(() => (window.__toolbarState as Toolbar).status === 'Found it.');
+    await press('Use this');
+    const recording = await page.evaluate(() => window.__commandRecordingResult as { kind: string; pagination: string; steps: unknown[] });
+    expect(recording).toMatchObject({ kind: 'integration-command-recording', pagination: 'next' });
+    expect(recording.steps).toHaveLength(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('picks one of a pattern\'s records, boxed, and gives it back as a run reads it, refusing a pick outside them', async () => {
+    await page.setContent(`<main style="margin-top:140px"><ul class="rows">${['Data Analyst', 'Product Manager', 'Designer'].map((title, index) => `<li class="row" data-row="${index}"><a href="https://jobs.test/jobs/${index}" class="open">${title}</a><p>Acme</p></li>`).join('')}</ul><p class="outside">Not a job</p></main>`);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const rowsPattern = await page.evaluate(() => {
+      const row = document.querySelector('[data-row="0"]')!;
+      return {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(row, null, 'parent')],
+        targets: [{ label: 'title', snapshot: window.__hvyGalaxyInspector.snapshotElement(row.querySelector('.open')!, row, 'target') }],
+      };
+    });
+    await page.evaluate((pattern) => window.__hvyGalaxyInspector.start('parent', {
+      existingPattern: pattern,
+      prompt: 'Pick a job from the list',
+      recordChoice: { refuse: 'Pick one of the jobs boxed in green.' },
+    }), rowsPattern);
+    const status = page.locator('[data-inspector-status-text]');
+    expect(await status.textContent()).toBe('Pick a job from the list');
+
+    await clickPointerAt(page, '.outside');
+    expect(await status.textContent()).toBe('Pick one of the jobs boxed in green.');
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toBeUndefined();
+
+    // Anywhere in a row picks it: its paragraph too.
+    await clickPointerAt(page, '[data-row="1"] p');
+    const chosen = await page.evaluate(() => window.__commandRecordingResult as { kind: string; record: { targets: Array<{ label: string; value: unknown; href?: string | null }> } });
+    expect(chosen.kind).toBe('integration-record-choice');
+    expect(chosen.record.targets).toEqual([expect.objectContaining({ label: 'title', value: 'Product Manager', href: expect.stringMatching(/\/jobs\/1$/) })]);
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('records a page number as one click pick, without choosing an interaction or clicking it', async () => {
+    await page.setContent(`<main><nav class="pager"><ul>
+      ${[1, 2, 3].map((number) => `<li><a href="#" class="page-${number}">${number}</a></li>`).join('')}
+      <li><a href="#" class="group-next" aria-label="Next">›</a></li></ul></nav></main>`);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      (window as { __pagerClicks?: number }).__pagerClicks = 0;
+      document.querySelectorAll('.pager a').forEach((link) => link.addEventListener('click', (event) => {
+        event.preventDefault();
+        (window as { __pagerClicks?: number }).__pagerClicks! += 1;
+      }));
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', {
+      commandRecorder: { scope: 'page', pick: { gesture: 'click', pageNumber: true, prompt: 'Select one of the page numbers.', confirm: 'Found it.' } },
+    }));
+    const statusText = page.locator('[data-inspector-status-text]');
+    expect(await statusText.textContent()).toBe('Select one of the page numbers.');
+    expect(await page.getByRole('button', { name: 'Click', exact: true }).count()).toBe(0);
+
+    await clickPointerAt(page, '.group-next');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: /^a — / }).first().click();
+    expect(await statusText.textContent()).toBe('Pick one of the page numbers, such as 2.');
+    expect(await page.getByRole('button', { name: 'Use this' }).count()).toBe(0);
+
+    await page.getByRole('button', { name: 'Pick again' }).click();
+    await clickPointerAt(page, '.page-2');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'a — 2' }).click();
+    expect(await statusText.textContent()).toBe('Found it.');
+    await page.getByRole('button', { name: 'Use this' }).click();
+
+    const recording = await page.evaluate(() => window.__commandRecordingResult as { kind: string; steps: Array<{ gesture: string }> });
+    expect(recording.kind).toBe('integration-command-recording');
+    expect(recording.steps.map((step) => step.gesture)).toEqual(['click']);
+    expect(await page.evaluate(() => (window as { __pagerClicks?: number }).__pagerClicks)).toBe(0);
     expect(pageErrors).toEqual([]);
   });
 

@@ -82,9 +82,8 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
   const list = find(setup.listIntegrationId);
   const listPage = list?.pages[0] ?? null;
   const rows = list?.actions[0]?.pattern ? list.actions[0] : null;
-  const next = listPage?.commands?.find((command) => command.scope === 'page') ?? null;
+  const next = listPage?.commands?.find((command) => command.pagination) ?? listPage?.commands?.find((command) => command.scope === 'page') ?? null;
   const itemIntegration = find(setup.itemIntegrationId);
-  const itemPage = itemIntegration?.pages[0] ?? null;
   const posting = itemIntegration?.actions[0]?.pattern ? itemIntegration.actions[0] : null;
   const fieldLabels = (action: NonNullable<typeof rows>) => action.pattern!.fields
     .map((field) => setup.fields.find((candidate) => candidate.id === field.label)?.label ?? field.label)
@@ -101,25 +100,31 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         <div class="site-setup-step-actions">${actions}</div>
       </div>
     </li>`;
-  const rowsStep = step(1, `Pick an example ${item} row`, Boolean(rows), false,
+  // First, the page as a person sees it, in the profile chosen below: a sign-in, a check that you're human, or a cookie
+  // wall dealt with there holds for picking, and for collecting.
+  const openStep = step(1, 'Open the page', false, true,
+    'If the site asks you to sign in, prove you’re human, or accept cookies, open the page and do that first. It opens in the browser profile chosen below, as you would see it.',
+    '',
+    button('Open the page', 'open-page'));
+  const rowsStep = step(2, `Pick an example ${item} row`, Boolean(rows), false,
     `On the list page, pick the box around one ${escapeHtml(item)}, with everything you want from it inside, then assign what it shows to fields. <strong>Highlight matches</strong> checks it finds the other rows. The link to each ${escapeHtml(item)} comes from the title.`,
     rows ? `Reads: ${escapeHtml(fieldLabels(rows))} · ${rows.pattern!.parents.length} ${rows.pattern!.parents.length === 1 ? 'example' : 'examples'}` : '',
     rows ? button('Edit examples', 'rows') : button('Pick an example', 'rows', true));
-  const nextStep = step(2, 'Record Next', Boolean(next), true,
-    'If the list has more pages, record clicking its Next link. Skip this when everything fits on one page.',
-    next ? `Recorded: ${escapeHtml(next.name)}` : '',
-    next && listPage && list
+  // Configured in the browser: which way the list goes to its next page (a Next link or button, or its page numbers,
+  // whose arrow often goes to the next group of numbers, not the next page), then one click on it.
+  const nextStep = step(3, 'Pagination', Boolean(next), true,
+    'If the list has more pages, configure how it goes to the next one. Skip this when everything fits on one page.',
+    next ? `Next page: ${next.pagination === 'page-number' ? 'page numbers' : next.pagination === 'next' ? 'the Next link or button' : escapeHtml(next.name)}` : '',
+    `${button('Configure', 'pagination', false, !rows)}${next && listPage && list
       ? `<button type="button" class="hvy-galaxy-button" data-action="request-delete-integration-page-command" data-integration-id="${escapeAttr(list.id)}" data-page-id="${escapeAttr(listPage.id)}" data-command-id="${escapeAttr(next.id)}">Remove</button>`
-      : button('Record Next', 'next', false, !rows));
-  const other = button(`Use a different ${item}…`, 'other-item-page', false, !rows);
-  const itemStep = step(3, `Pick an example ${item} page`, Boolean(posting), false,
-    `Galaxy opens the first ${escapeHtml(item)} from the list. Pick the whole posting, then assign its fields.`,
-    posting && itemPage ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${escapeHtml(shortAddress(itemPage.url))}` : itemPage ? `Page: ${escapeHtml(shortAddress(itemPage.url))}` : '',
-    posting
-      ? `${button('Edit example', 'item-page')}${other}`
-      : itemPage
-        ? `${button(`Pick the ${item} on this page`, 'item-page', true)}${other}`
-        : `${button(`Open the first ${item}`, 'open-item-page', Boolean(rows), !rows)}${other}`);
+      : ''}`);
+  // An example item: one of the list's rows picked in the browser, opened as a run opens it, and its fields picked there.
+  // Each one picked after the first is another example, for pages laid out differently.
+  const examples = posting?.pattern?.parents.length ?? 0;
+  const itemStep = step(4, `Pick an example ${item}`, Boolean(posting), false,
+    `Pick one of the ${escapeHtml(item)}s in the list. Galaxy opens it as a run does, then you pick what to read from it, such as its description and title. Pick another to add an example of a ${escapeHtml(item)} page laid out differently.`,
+    posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : '',
+    button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows));
   const profiles = state.integrationRegistry.profiles;
   return `
     <div class="modal-backdrop" role="presentation">
@@ -130,7 +135,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         </div>
         ${setup.pending ? `<p class="site-setup-pending" role="status">${escapeHtml(setup.pending)}</p>` : ''}
         ${setup.error ? `<p class="integration-fetch-error" role="alert">${escapeHtml(setup.error)}</p>` : ''}
-        <ol class="site-setup-steps">${rowsStep}${nextStep}${itemStep}</ol>
+        <ol class="site-setup-steps">${openStep}${rowsStep}${nextStep}${itemStep}</ol>
         <div class="dialog-actions site-setup-footer"><label class="integration-profile-select site-setup-profile"><span>Browser profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Browser profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button" data-action="close-integrations">Cancel</button>${button('Done', 'done', Boolean(rows && posting), !rows)}</div>
       </section>
     </div>`;
@@ -556,8 +561,7 @@ export function renderIntegrationNavigationDialog(state: AppState): string {
   if (!request) return '';
   const currentOrigin = new URL(request.currentUrl).origin;
   const requestedOrigin = new URL(request.requestedUrl).origin;
-  const frameAmbiguous = request.navigationKind === 'frame-or-main';
-  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog integration-navigation-dialog" role="dialog" aria-modal="true" aria-label="Allow integration navigation"><div class="modal-header"><div><p class="eyebrow">Integration navigation</p><h2>${frameAmbiguous ? 'Allow content from this origin?' : 'Allow this page to leave its configured site?'}</h2></div></div><p><strong>${escapeHtml(currentOrigin)}</strong> requested ${frameAmbiguous ? 'content' : 'navigation'} from a different origin:</p><div class="integration-navigation-destination"><strong>${escapeHtml(requestedOrigin)}</strong><span>${escapeHtml(request.requestedUrl)}</span></div><p class="dialog-note">Allowing saves this origin to the integration page. ${frameAmbiguous ? 'Galaxy will reload the integration page so embedded content remains in its own frame.' : 'Future redirects to it will remain inside Galaxy.'}</p><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="reject-integration-navigation">Reject</button><button type="button" class="hvy-galaxy-button primary-button" data-action="approve-integration-navigation">${frameAmbiguous ? 'Allow and reload' : 'Allow and continue'}</button></div></section></div>`;
+  return `<div class="modal-backdrop modal-backdrop-stacked" role="presentation"><section class="dialog integration-navigation-dialog" role="dialog" aria-modal="true" aria-label="Allow integration navigation"><div class="modal-header"><div><p class="eyebrow">Integration navigation</p><h2>Allow this page to leave its configured site?</h2></div></div><p><strong>${escapeHtml(currentOrigin)}</strong> requested navigation to a different origin:</p><div class="integration-navigation-destination"><strong>${escapeHtml(requestedOrigin)}</strong><span>${escapeHtml(request.requestedUrl)}</span></div><p class="dialog-note">Allowing saves this origin to the integration page. Future redirects to it will remain inside Galaxy.</p><div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="reject-integration-navigation">Reject</button><button type="button" class="hvy-galaxy-button primary-button" data-action="approve-integration-navigation">Allow and continue</button></div></section></div>`;
 }
 
 export function renderIntegrationReadyChecksDialog(state: AppState): string {

@@ -1,9 +1,17 @@
 (() => {
   if (window.top !== window || window.__hvyGalaxyInspector) return;
+  // Every message to Galaxy carries the browser's token, which the host puts here when it injects this script (as a
+  // CSRF token): Tauri's host hears navigations from every frame, and takes only messages with it, so a frame the page
+  // embeds cannot speak for the inspector. Electron hears only the top page, and does not check it.
+  const MESSAGE_TOKEN = '__HVY_GALAXY_MESSAGE_TOKEN__';
+  const messageUrl = (path) => `hvy-integration://${path}?t=${MESSAGE_TOKEN}`;
 
   const ids = ['hvy-galaxy-inspector-shield', 'hvy-galaxy-existing-matches', 'hvy-galaxy-inspector-scope', 'hvy-galaxy-inspector-highlight', 'hvy-galaxy-inspector-picker', 'hvy-galaxy-inspector-status', 'hvy-galaxy-pattern-matches', 'hvy-galaxy-ready-check-matches'];
   let active = false;
   let pickingPaused = false;
+  // While picking: the timer that looks for a check that you're human, and whether picking paused for the one showing.
+  let humanCheckTimer = null;
+  let humanCheckPaused = false;
   let inspectionKind = 'target';
   let highlighted = null;
   let lastDiagnostics = null;
@@ -18,6 +26,9 @@
   let targetCollection = null;
   let commandRecorder = null;
   let commandRecordElements = null;
+  // Picking one of a pattern's records (a site setup's example item: a row of the list): its matches, boxed, and what
+  // to say when a pick is outside them.
+  let recordChoice = null;
   // A range field being picked: where it starts, and whether the start is part of it. The next pick is where it ends.
   let rangeStart = null;
   let rangeStatus = null;
@@ -401,7 +412,18 @@
     return elements;
   };
 
+  // While a pattern is matched, each element's shape is taken once: matching compares every candidate box, and every
+  // element inside each, and nested boxes share what is inside them, so on a large page the same elements were measured
+  // over and over (seconds, in WebKit, on a board's results page). The page does not change while it is matched.
+  let matchingShapes = null;
   const shapeSignature = (element) => {
+    const known = matchingShapes?.get(element);
+    if (known) return known;
+    const shape = measureShape(element);
+    matchingShapes?.set(element, shape);
+    return shape;
+  };
+  const measureShape = (element) => {
     const descendants = deepElements(element, 300);
     const children = [...element.children];
     const ancestors = [];
@@ -715,6 +737,17 @@
     return sharedContainerScore * 0.8 + proximity(expectedDepthSpread, matchedDepthSpread, 3) * 0.2;
   };
 
+  // A check that you're human, as sites show them: Cloudflare's (its challenge page and Turnstile), hCaptcha, and reCAPTCHA,
+  // when it can be seen (not reCAPTCHA's invisible badge).
+  const HUMAN_CHECKS = 'iframe[src*="challenges.cloudflare.com"], iframe[src*="hcaptcha.com"], iframe[src*="/recaptcha/"], #challenge-form, #challenge-stage, .cf-turnstile, .h-captcha, .g-recaptcha';
+  const humanCheckOnPage = () => [...document.querySelectorAll(HUMAN_CHECKS)].some((element) => {
+    if (element instanceof HTMLIFrameElement && /[?&]size=invisible\b/.test(element.src)) return false;
+    if (element.getAttribute('data-size') === 'invisible') return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden';
+  });
+  const HUMAN_CHECK_STATUS = 'The page is checking you’re human · finish it, then Resume picking';
+
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
   const cssPath = (element) => {
     const parts = [];
@@ -856,7 +889,38 @@
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
     const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    window.location.href = `hvy-integration://inspection/${encoded}`;
+    window.location.href = messageUrl(`inspection/${encoded}`);
+  };
+
+  // With the browser's own toolbar, what picking says and its buttons are shown there, off the page, so they cover
+  // nothing on it: the status panel is built as usual, kept off the page, and copied to the toolbar each time it changes.
+  // The toolbar's buttons click the panel's (by `data-toolbar-id`). A step that takes typing (a sample value, a choice
+  // of option) shows the panel on the page while it lasts, beside what it is typed into.
+  let toolbarSession = 0;
+  const mirrorStatusToToolbar = (status, statusText) => {
+    const session = ++toolbarSession;
+    let pending = 0;
+    const sync = () => {
+      pending = 0;
+      if (!active || session !== toolbarSession) return;
+      const takesTyping = Boolean(status.querySelector('textarea,input,select,[data-command-recorder-input]'));
+      if (takesTyping && !status.isConnected) document.documentElement.append(status);
+      if (!takesTyping && status.isConnected) status.remove();
+      publishToolbarState({
+        active: true,
+        status: statusText.textContent,
+        buttons: [...status.querySelectorAll('button[data-toolbar-id]')].filter((button) => !button.hidden).map((button) => ({
+          id: button.dataset.toolbarId,
+          label: button.textContent,
+          primary: button.dataset.toolbarPrimary === 'true',
+          disabled: button.disabled,
+        })),
+      });
+    };
+    new MutationObserver(() => { if (!pending) pending = setTimeout(sync, 0); })
+      .observe(status, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden'] });
+    toolbarControl = (id) => status.querySelector(`button[data-toolbar-id="${CSS.escape(String(id))}"]`)?.click();
+    sync();
   };
 
   const publishToolbarState = (value) => {
@@ -868,14 +932,14 @@
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
     const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    window.location.href = `hvy-integration://toolbar-state/${encoded}`;
+    window.location.href = messageUrl(`toolbar-state/${encoded}`);
   };
 
   const browserChromeNavigate = (value) => {
     const bytes = new TextEncoder().encode(value);
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    window.location.href = `hvy-integration://navigate/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+    window.location.href = messageUrl(`navigate/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`);
   };
 
   const installBrowserChrome = (options = {}) => {
@@ -931,7 +995,7 @@
     };
     shadow.addEventListener('click', (event) => {
       const command = event.target.closest?.('[data-command]')?.dataset.command;
-      if (command) window.location.href = `hvy-integration://browser/${command}`;
+      if (command) window.location.href = messageUrl(`browser/${command}`);
     });
     shadow.querySelector('form').addEventListener('submit', (event) => {
       event.preventDefault();
@@ -1217,6 +1281,30 @@
     }
   };
 
+  /**
+   * A page with one record (a job's own page, or the pane a list shows it in): its fields are picked with no box first,
+   * and the box is the smallest one around them all (a range's end too). The pane, when the job shows in one beside
+   * the list: what tells its title from the rows' titles. Each field is then recorded within it, as if it had been
+   * picked first.
+   */
+  const recordAround = (fields) => {
+    const elements = fields.flatMap((field) => [field.selected, field.range?.end?.selected]).filter(Boolean).map(resolveCapturedElement).filter(Boolean);
+    const containing = [];
+    for (let node = elements[0]; node instanceof Element; node = composedParent(node)) {
+      if (elements.every((element) => composedContains(node, element))) containing.push(node);
+    }
+    const box = containing.find(isParentCandidate) || containing[0];
+    const within = (selected) => window.__hvyGalaxyInspector.snapshotElement(resolveCapturedElement(selected), box, 'target');
+    return {
+      parent: window.__hvyGalaxyInspector.snapshotElement(box, box, 'parent'),
+      items: fields.map((field) => ({
+        ...within(field.selected),
+        ...(field.range ? { range: { ...field.range, end: within(field.range.end.selected) } } : {}),
+        ...(field.fieldId ? { fieldId: field.fieldId } : {}),
+      })),
+    };
+  };
+
   const setRangeStatus = (text) => {
     if (rangeStart) rangeStart.status = text;
     rangeStatus?.();
@@ -1231,7 +1319,7 @@
       finishRange(end, includeEnd);
       return;
     }
-    setRangeStatus('Galaxy: pick where the range ends · Esc cancels the range');
+    setRangeStatus('Pick where the range ends · Esc cancels the range');
   };
 
   /**
@@ -1263,22 +1351,38 @@
     window.__hvyGalaxyInspector.stop();
   };
 
+  // The record the pointer is in, when picking a record: one of the matches (found again if the page replaced them).
+  const recordChoiceAt = (event) => {
+    if (recordChoice.matches.some((match) => !match.element.isConnected)) recordChoice.matches = findPatternMatches(inspectionPattern);
+    const under = elementsBehindInspector(event.clientX, event.clientY)[0] || event.target;
+    return recordChoice.matches.find((match) => composedContains(match.element, under)) || null;
+  };
+
   const pointerMove = (event) => {
     if (!active || pickingPaused || !(event.target instanceof Element)) return;
     if (event.target.closest('#hvy-galaxy-inspector-picker')) return;
+    if (recordChoice) {
+      const match = recordChoiceAt(event);
+      if (match) highlight(match.element);
+      else {
+        document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+        highlighted = null;
+      }
+      return;
+    }
     const candidate = candidatesAt(event.clientX, event.clientY, event.target, event.composedPath())[0];
     if (rangeStart) {
       if (!candidate) {
         document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
         highlighted = null;
-        setRangeStatus('Galaxy: pick something after the start');
+        setRangeStatus('Pick something after the start');
         return;
       }
       if (candidate === highlighted) return;
       const textRange = textRangeBetween(rangeStart.element, candidate, rangeStart.includeStart, true);
       const text = readableText(null, textRange);
       highlight(candidate, textRange);
-      setRangeStatus(`Galaxy: pick where the range ends · Ends ${previewText(text, true)} · ${text.length.toLocaleString()} characters`);
+      setRangeStatus(`Pick where the range ends · Ends ${previewText(text, true)} · ${text.length.toLocaleString()} characters`);
       return;
     }
     if (candidate && candidate !== highlighted) highlight(candidate);
@@ -1287,6 +1391,16 @@
     if (!active || pickingPaused || event.target instanceof Element && event.target.closest('#hvy-galaxy-inspector-picker, #hvy-galaxy-inspector-status')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (recordChoice) {
+      const match = recordChoiceAt(event);
+      if (!match) {
+        recordChoice.refuse();
+        return;
+      }
+      publish({ kind: 'integration-record-choice', ...(inspectionContext ? { context: inspectionContext } : {}), record: serializeMatches([match], true).records[0] });
+      window.__hvyGalaxyInspector.stop();
+      return;
+    }
     showPicker(event);
   };
   const keydown = (event) => {
@@ -1302,7 +1416,7 @@
       return;
     }
     if (active && event.key === 'Escape') {
-      window.location.href = 'hvy-integration://inspection-cancel';
+      window.location.href = messageUrl('inspection-cancel');
       window.__hvyGalaxyInspector.stop();
     }
   };
@@ -1501,6 +1615,15 @@
   };
 
   const evaluatePatternCandidates = (pattern = {}) => {
+    const outermost = matchingShapes === null;
+    if (outermost) matchingShapes = new WeakMap();
+    try {
+      return evaluatePatternCandidatesNow(pattern);
+    } finally {
+      if (outermost) matchingShapes = null;
+    }
+  };
+  const evaluatePatternCandidatesNow = (pattern = {}) => {
     const { minimumConfidence, minimumTargetConfidence } = patternThresholds(pattern);
     const parentShapes = (pattern.parents || []).map((sample) => sample?.selected?.shape).filter(Boolean);
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
@@ -1783,12 +1906,21 @@
     || isDataListControl(element)
     || isPopupSelectControl(element);
 
-  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture) => {
+  // A page number's text in a pager: "3", or nothing when the element shows something else.
+  const pageNumberText = (element) => {
+    const text = visibleText(element);
+    return /^\d+$/.test(text) ? Number(text) : null;
+  };
+
+  // With a page number, the target is the one like the recorded one (a link in the same pager) that shows that number:
+  // a recorded "2" finds "3" on page 2, as the pager's other numbers are its siblings.
+  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture, pageNumber = null) => {
     const expected = snapshotValue?.selected;
     if (!expected?.shape) return { status: 'no_match', reason: 'target_pattern_missing' };
     const candidates = structuralTargetsWithin(scope, scope instanceof Element && !expected.relativePath?.length)
       .filter((element) => gesture !== 'type' || isTextEntryElement(element))
       .filter((element) => gesture !== 'select' || isSelectControl(element))
+      .filter((element) => pageNumber === null || pageNumberText(element) === pageNumber)
       .map((element) => {
         if (scope instanceof Element) return { element, ...targetCandidateSimilarity(expected, element, scope) };
         const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
@@ -2087,7 +2219,7 @@
       if (step.gesture === 'select' && typeof selectionInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
       const initialScope = stepIndex === 0 && command.scope !== 'record' ? scopeForStep() : null;
       const resolved = stepIndex === 0 && command.scope !== 'record'
-        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture) : { status: 'no_match', reason: 'target_not_found' }
+        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture, command.pagination === 'page-number' ? payload.pageNumber ?? null : null) : { status: 'no_match', reason: 'target_not_found' }
         : await waitForInteractionTarget(scopeForStep, step, minimumTargetConfidence);
       if (resolved.status !== 'matched') return { ...resolved, stepIndex, stepsExecuted: stepIndex };
       if (payload.watchRecord && command.scope === 'record' && stepIndex === steps.length - 1 && record?.element) {
@@ -2532,35 +2664,40 @@
       const statusText = document.createElement('span');
       statusText.dataset.inspectorStatusText = 'true';
       statusText.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      const activeStatusText = inspectionKind === 'scope'
-        ? 'Galaxy: choose an optional page section'
+      // What is being picked: said by whoever asked (a site setup says "the box around one job"), or in general terms.
+      const activeStatusText = options.prompt || (inspectionKind === 'scope'
+        ? 'Choose an optional page section'
         : inspectionKind === 'parent'
-          ? options.existingPattern ? 'Galaxy: add example · green passes · orange/red needs attention' : 'Galaxy: select a parent'
-          : 'Galaxy: select target data';
+          ? options.existingPattern ? 'Add an example · green passes · orange or red needs attention' : 'Select the box around one record'
+          : 'Select the data to read');
       statusText.textContent = activeStatusText;
       rangeStart = null;
       rangeKeptEnd = null;
       rangeEditing = false;
       rangeStatus = () => { statusText.textContent = rangeStart?.status || activeStatusText; };
+      recordChoice = options.recordChoice && inspectionPattern
+        ? { matches: findPatternMatches(inspectionPattern), refuse: () => { statusText.textContent = options.recordChoice.refuse || 'Pick one of the records boxed in green.'; } }
+        : null;
       const rangeEdit = inspectionKind === 'target' && options.rangeEdit?.snapshot?.range ? options.rangeEdit : null;
       if (rangeEdit) {
         const { snapshot: edited, boundary } = rangeEdit;
         const kept = rangeBoundaryElement(boundary === 'end' ? edited.selected : edited.range.end.selected);
         if (!kept) {
-          statusText.textContent = `Galaxy: the range's ${boundary === 'end' ? 'start' : 'end'} is not in this item · pick the field again`;
+          statusText.textContent = `The range's ${boundary === 'end' ? 'start' : 'end'} is not in this item · pick the field again`;
         } else if (boundary === 'end') {
           rangeEditing = true;
-          rangeStart = { element: kept, includeStart: edited.range.includeStart === true, status: 'Galaxy: pick where the range ends' };
+          rangeStart = { element: kept, includeStart: edited.range.includeStart === true, status: 'Pick where the range ends' };
           statusText.textContent = rangeStart.status;
         } else {
           rangeEditing = true;
           rangeKeptEnd = { element: kept, includeEnd: edited.range.includeEnd === true };
-          statusText.textContent = 'Galaxy: pick where the range starts';
+          statusText.textContent = 'Pick where the range starts';
         }
       }
       const navigationButton = document.createElement('button');
       navigationButton.type = 'button';
       navigationButton.textContent = 'Navigate page';
+      navigationButton.dataset.toolbarId = 'navigate';
       navigationButton.style.cssText = 'height:36px;padding:0 10px;border:1px solid #ff806d;border-radius:7px;background:#5f2922;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap';
       navigationButton.addEventListener('click', (event) => {
         event.preventDefault();
@@ -2569,7 +2706,7 @@
         shield.style.pointerEvents = pickingPaused ? 'none' : 'auto';
         navigationButton.textContent = pickingPaused ? 'Resume picking' : 'Navigate page';
         statusText.textContent = pickingPaused
-          ? 'Galaxy: page navigation enabled'
+          ? 'Page navigation enabled'
           : activeStatusText;
         if (pickingPaused) {
           document.getElementById('hvy-galaxy-inspector-picker')?.remove();
@@ -2589,10 +2726,13 @@
         let currentResolution = null;
         let parameterStepCount = 0;
         let currentSelection = null;
+        let recorderButtonCount = 0;
         const recorderButton = (label, primary = false) => {
           const button = document.createElement('button');
           button.type = 'button';
           button.textContent = label;
+          button.dataset.toolbarId = `recorder-${++recorderButtonCount}`;
+          if (primary) button.dataset.toolbarPrimary = 'true';
           button.style.cssText = `min-height:34px;padding:6px 10px;border:1px solid ${primary ? '#ff8d79' : '#626974'};border-radius:7px;background:${primary ? '#d95640' : '#30343d'};color:#fff;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer`;
           return button;
         };
@@ -2623,32 +2763,80 @@
           const gestures = [['click', 'Click'], ['double-click', 'Double click'], ['right-click', 'Right click'], ['type', 'Enter text'], ['select', 'Choose option']];
           gestures.forEach(([gesture, label]) => {
             const button = recorderButton(label, gesture === 'click');
-            button.addEventListener('click', () => {
-              currentGesture = gesture;
-              inspectionKind = 'target';
+            button.addEventListener('click', () => startPicking(gesture, `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : gesture === 'select' ? 'dropdown or combobox' : `${label.toLocaleLowerCase()} target`}.`));
+            controls.append(button);
+          });
+          showCancel();
+        };
+        const startPicking = (gesture, prompt) => {
+          currentGesture = gesture;
+          inspectionKind = 'target';
+          setRecorderPicking(true);
+          controls.replaceChildren();
+          statusText.textContent = prompt;
+          const pause = recorderButton('Pause to navigate');
+          let navigating = false;
+          pause.addEventListener('click', () => {
+            navigating = !navigating;
+            if (navigating) {
+              pickingPaused = true;
+              shield.style.pointerEvents = 'none';
+              pause.textContent = 'Resume selecting';
+              statusText.textContent = 'Page navigation is enabled. Resume when the target is visible.';
+            } else {
               setRecorderPicking(true);
-              controls.replaceChildren();
-              statusText.textContent = `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : gesture === 'select' ? 'dropdown or combobox' : `${label.toLocaleLowerCase()} target`}.`;
-              const pause = recorderButton('Pause to navigate');
-              let navigating = false;
-              pause.addEventListener('click', () => {
-                navigating = !navigating;
-                if (navigating) {
-                  pickingPaused = true;
-                  shield.style.pointerEvents = 'none';
-                  pause.textContent = 'Resume selecting';
-                  statusText.textContent = 'Page navigation is enabled. Resume when the target is visible.';
-                } else {
-                  setRecorderPicking(true);
-                  pause.textContent = 'Pause to navigate';
-                  statusText.textContent = `Step ${steps.length + 1}: select the target.`;
-                }
-              });
-              controls.append(pause);
-              showCancel();
+              pause.textContent = 'Pause to navigate';
+              statusText.textContent = prompt;
+            }
+          });
+          controls.append(pause);
+          showCancel();
+        };
+        // A recording that is one known pick (the site setup's next page): the gesture is given, so there is nothing to
+        // choose, and the pick is the whole command. It is not performed: the list stays on its first page.
+        // It may first ask which kind of pick it is (a list's next page: its Next link, or its page numbers), from the
+        // asker's choices; the recording says which was chosen.
+        const pickOptions = options.commandRecorder.pick || null;
+        let singlePick = pickOptions && !pickOptions.choices ? pickOptions : null;
+        const renderPickChoices = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = pickOptions.question;
+          pickOptions.choices.forEach((choice) => {
+            const button = recorderButton(choice.label);
+            button.addEventListener('click', () => {
+              singlePick = choice;
+              startSinglePick();
             });
             controls.append(button);
           });
+          showCancel();
+        };
+        const startSinglePick = () => {
+          startPicking(singlePick.gesture, singlePick.prompt);
+          if (!pickOptions.choices) return;
+          const back = recorderButton('Back');
+          back.addEventListener('click', renderPickChoices);
+          controls.prepend(back);
+        };
+        const renderSinglePickConfirmation = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = currentResolution.status === 'matched'
+            ? singlePick.confirm
+            : currentResolution.status === 'ambiguous'
+              ? 'More than one control looks like this one. Pick another.'
+              : singlePick.pageNumber ? 'Pick one of the page numbers, such as 2.' : 'Galaxy could not find this again on the page. Pick another.';
+          if (currentResolution.status === 'matched') {
+            const use = recorderButton('Use this', true);
+            use.addEventListener('click', finishWithoutPerforming);
+            controls.append(use);
+          }
+          const retry = recorderButton('Pick again', currentResolution.status !== 'matched');
+          retry.addEventListener('click', startSinglePick);
+          controls.append(retry);
           showCancel();
         };
         const renderAfterStep = () => {
@@ -2688,7 +2876,7 @@
         };
         const finishWithoutPerforming = () => {
           appendRecordedStep();
-          publish({ kind: 'integration-command-recording', steps });
+          publish({ kind: 'integration-command-recording', steps, ...(singlePick?.pagination ? { pagination: singlePick.pagination } : {}) });
           window.__hvyGalaxyInspector.stop();
         };
         const renderSampleInput = () => {
@@ -2860,10 +3048,15 @@
             currentTarget = result;
             const scope = options.commandRecorder.scope === 'record' ? resolvedScope() : document;
             const minimumTargetConfidence = patternThresholds(options.commandRecorder.pattern || {}).minimumTargetConfidence;
-            currentResolution = scope
-              ? resolveInteractionTarget(scope, result, minimumTargetConfidence, currentGesture)
-              : { status: 'no_match', reason: 'record_not_found' };
-            renderTargetConfirmation();
+            // A page number is found again by its number, as runs find the next one.
+            const pageNumber = singlePick?.pageNumber ? pageNumberText(element) : null;
+            currentResolution = !scope
+              ? { status: 'no_match', reason: 'record_not_found' }
+              : singlePick?.pageNumber && pageNumber === null
+                ? { status: 'no_match', reason: 'not_a_page_number' }
+                : resolveInteractionTarget(scope, result, minimumTargetConfidence, currentGesture, pageNumber);
+            if (pickOptions) renderSinglePickConfirmation();
+            else renderTargetConfirmation();
           },
         };
         if (options.commandRecorder.scope === 'record') {
@@ -2871,6 +3064,10 @@
           statusText.textContent = 'Select one matching record to scope this command.';
           controls.replaceChildren();
           showCancel();
+        } else if (pickOptions?.choices) {
+          renderPickChoices();
+        } else if (pickOptions) {
+          startSinglePick();
         } else {
           renderChooseGesture();
         }
@@ -2890,20 +3087,68 @@
         undoButton.textContent = 'Undo last';
         undoButton.disabled = true;
         undoButton.style.cssText = doneButton.style.cssText;
+        // Picking the first example's fields, the box picked just before is the last thing to undo: with no fields
+        // picked, Undo last goes back to picking the box.
+        const undoesParent = Boolean(options.undoParent);
+        // With the fields there are to fill (a site setup's collection: Title, Company, Pay…), each pick is asked which it
+        // is, and what is picked and what is left is said as picking goes, so nothing has to be remembered. A pick can be
+        // skipped and assigned later, in the builder. The answer goes with the pick (`fieldId`).
+        const fieldChoices = Array.isArray(options.fieldChoices) ? options.fieldChoices.filter((choice) => choice?.id && choice?.label) : [];
+        const fieldButtons = document.createElement('span');
+        fieldButtons.style.cssText = 'display:contents';
+        let assigning = null;
+        const fieldLabel = (id) => fieldChoices.find((choice) => choice.id === id)?.label || id;
         const updateCollectionStatus = () => {
-          statusText.textContent = rangeStart?.status || (selectedItems.length
-            ? `Galaxy: ${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
-            : 'Galaxy: select fields, or choose Done to cancel');
-          undoButton.disabled = selectedItems.length === 0;
-          if (externalToolbar) {
-            publishToolbarState({
-              active: true,
-              status: statusText.textContent,
-              navigationLabel: pickingPaused ? 'Resume picking' : 'Navigate page',
-              canUndo: selectedItems.length > 0,
-            });
-          }
+          const picked = selectedItems.map((item) => item.result.fieldId).filter(Boolean);
+          const left = fieldChoices.filter((choice) => !picked.includes(choice.id)).map((choice) => choice.label);
+          statusText.textContent = rangeStart?.status || (assigning
+            ? `Which field is this? “${(assigning.result.range?.summary || visibleText(assigning.element)).slice(0, 80)}”`
+            : fieldChoices.length
+              ? selectedItems.length
+                ? `Picked: ${picked.map(fieldLabel).join(', ') || 'nothing named yet'}${left.length ? ` · Still to pick: ${left.join(', ')}` : ''} · then Done`
+                : `${options.prompt || 'Pick what to read'} · Fields: ${left.join(', ')}`
+              : selectedItems.length
+                ? `${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
+                : options.prompt || (undoesParent ? 'Select fields, or Undo last to pick the box again' : 'Select fields, or choose Done to cancel'));
+          undoButton.disabled = selectedItems.length === 0 && !undoesParent;
         };
+        const finishAssigning = () => {
+          assigning = null;
+          fieldButtons.replaceChildren();
+          navigationButton.hidden = false;
+          doneButton.hidden = false;
+          pickingPaused = false;
+          updateCollectionStatus();
+        };
+        // The page waits for the answer: picking is paused, and only the fields, Skip, and Undo last are offered.
+        const askField = (item) => {
+          assigning = item;
+          pickingPaused = true;
+          document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+          navigationButton.hidden = true;
+          doneButton.hidden = true;
+          const taken = new Set(selectedItems.map((selected) => selected.result.fieldId).filter(Boolean));
+          const fieldButton = (label, id, fieldId) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.dataset.toolbarId = id;
+            button.style.cssText = doneButton.style.cssText;
+            button.addEventListener('click', (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (fieldId) item.result.fieldId = fieldId;
+              finishAssigning();
+            });
+            return button;
+          };
+          fieldButtons.replaceChildren(
+            ...fieldChoices.filter((choice) => !taken.has(choice.id)).map((choice, index) => fieldButton(choice.label, `field-${index}`, choice.id)),
+            fieldButton('Skip', 'field-skip', null),
+          );
+          updateCollectionStatus();
+        };
+        navigationButton.addEventListener('click', () => { if (!pickingPaused) updateCollectionStatus(); });
         rangeStatus = updateCollectionStatus;
         targetCollection = {
           // A range is boxed over its text. It may start at an element already picked as a field (the title it starts after).
@@ -2918,16 +3163,24 @@
             document.documentElement.append(box);
             const tracked = { element, box, ...(textRange ? { rect: () => textRange.getBoundingClientRect() } : {}) };
             trackedBoxes.push(tracked);
-            selectedItems.push({ element, result, tracked, textRange });
+            const item = { element, result, tracked, textRange };
+            selectedItems.push(item);
             updateSelectionBoxes();
-            updateCollectionStatus();
+            if (fieldChoices.length) askField(item);
+            else updateCollectionStatus();
           },
         };
         undoButton.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
           const removed = selectedItems.pop();
+          if (!removed && undoesParent) {
+            publish({ kind: 'integration-target-collection-undo-parent' });
+            window.__hvyGalaxyInspector.stop();
+            return;
+          }
           if (!removed) return;
+          if (removed === assigning) finishAssigning();
           if (!removed.textRange) selectedElements.delete(removed.element);
           removed.tracked.box.remove();
           const trackedIndex = trackedBoxes.indexOf(removed.tracked);
@@ -2937,19 +3190,39 @@
         doneButton.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          publish({ kind: 'integration-target-collection', items: selectedItems.map((item) => item.result) });
+          if (options.deriveParent && selectedItems.length) {
+            publish({ kind: 'integration-target-collection', ...recordAround(selectedItems.map((item) => item.result)) });
+          } else {
+            publish({ kind: 'integration-target-collection', items: selectedItems.map((item) => item.result) });
+          }
           window.__hvyGalaxyInspector.stop();
         });
-        toolbarControl = (action) => {
-          if (action === 'navigate') navigationButton.click();
-          if (action === 'undo') undoButton.click();
-          if (action === 'done') doneButton.click();
-          if (action === 'navigate') updateCollectionStatus();
-        };
-        if (!externalToolbar) status.append(undoButton, doneButton);
+        undoButton.dataset.toolbarId = 'undo';
+        doneButton.dataset.toolbarId = 'done';
+        doneButton.dataset.toolbarPrimary = 'true';
+        status.append(fieldButtons, undoButton, doneButton);
         updateCollectionStatus();
       }
-      if (!externalToolbar || options.commandRecorder || inspectionKind !== 'target' || !options.multiSelect) document.documentElement.append(status);
+      if (externalToolbar) mirrorStatusToToolbar(status, statusText);
+      else document.documentElement.append(status);
+      // A check that you're human can come up at any time, and picking takes every click: picking pauses for it, once, so
+      // the page takes clicks again, and says why. Passing it usually loads the page again, where picking starts over.
+      // Resumed by hand while the check still shows, picking stays resumed until the next check.
+      const pauseForHumanCheck = () => {
+        if (!active || options.commandRecorder) return;
+        if (!humanCheckOnPage()) {
+          humanCheckPaused = false;
+          return;
+        }
+        if (humanCheckPaused || pickingPaused) return;
+        humanCheckPaused = true;
+        navigationButton.click();
+        statusText.textContent = HUMAN_CHECK_STATUS;
+      };
+      humanCheckPaused = false;
+      clearInterval(humanCheckTimer);
+      humanCheckTimer = setInterval(pauseForHumanCheck, 1000);
+      pauseForHumanCheck();
       document.addEventListener('pointermove', pointerMove, true);
       document.addEventListener('mousemove', pointerMove, true);
       document.addEventListener('click', click, true);
@@ -2957,6 +3230,8 @@
     },
     stop() {
       active = false;
+      clearInterval(humanCheckTimer);
+      humanCheckTimer = null;
       rangeStart = null;
       rangeStatus = null;
       rangeKeptEnd = null;
@@ -2965,6 +3240,7 @@
       targetCollection = null;
       commandRecorder = null;
       commandRecordElements = null;
+      recordChoice = null;
       toolbarControl = null;
       inspectionContext = null;
       document.removeEventListener('pointermove', pointerMove, true);

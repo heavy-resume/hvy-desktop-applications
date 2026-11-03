@@ -75,13 +75,6 @@ export function normalizeIntegrationPageAllowedOrigins(pageUrl: string, value: s
   return [...new Set([pageOrigin, ...origins])];
 }
 
-export function integrationNavigationResumeUrl(
-  navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address',
-  currentUrl: string,
-  requestedUrl: string,
-): string {
-  return navigationKind === 'frame-or-main' ? currentUrl : requestedUrl;
-}
 
 export interface IntegrationRetrievalSourceDefinition {
   id: string;
@@ -124,6 +117,11 @@ export interface IntegrationCommandDefinition {
   scope: 'page' | 'record';
   inputs?: IntegrationCommandInputDefinition[];
   steps: IntegrationInteractionStepDefinition[];
+  /**
+   * A list page's way to its next page, from a site setup: its Next link or button ('next'), or its page numbers
+   * ('page-number': the step is one page number, and a run clicks the number of the page after the one it is on).
+   */
+  pagination?: 'next' | 'page-number';
 }
 
 export interface IntegrationCommandInputDefinition {

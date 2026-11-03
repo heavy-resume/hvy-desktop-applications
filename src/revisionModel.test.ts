@@ -35,6 +35,30 @@ describe('revision model prototype', () => {
     expect(revision.attachments['attachment-1'].byteLength).toBe(45 * 1024 * 1024);
   });
 
+  it('updates a saved source with a long line that changed throughout, line by line, quickly and exactly', () => {
+    // A collection block's settings are one line of hundreds of thousands of characters; setting a site up rewrites it.
+    let seed = 7;
+    const noise = (length: number) => Array.from({ length }, () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return 'abcdefghijklmnopqrstuvwxyz0123456789{}":,'[seed % 42];
+    }).join('');
+    const lines = (long: string, accent: string) => [
+      '---',
+      ...Array.from({ length: 400 }, (_, index) => `<!--hvy:text {"id":"block-${index}"}-->`),
+      `<!--hvy:plugin {"pluginConfig":"${long}"}-->`,
+      `Café ${accent} — naïve 日本語 🙂`,
+      ...Array.from({ length: 400 }, (_, index) => `Paragraph ${index}`),
+    ].join('\n');
+    const before = lines(noise(300_000), 'one');
+    const after = lines(noise(300_000), 'two 🎉');
+    const revision = createRevisionDocument(sampleDocument(), alice, [], before);
+    const started = performance.now();
+    const updated = updateRevisionSource(revision, alice, after);
+    // Comparing characters took minutes here (it never finished on a real document); comparing lines takes about a second.
+    expect(performance.now() - started).toBeLessThan(15_000);
+    expect(updated.serializedSource).toBe(after);
+  }, 30_000);
+
   it('records small authored increments instead of whole-document snapshots', () => {
     let revision = createRevisionDocument(sampleDocument(), alice, []);
     saveRevisionIncrement(revision);

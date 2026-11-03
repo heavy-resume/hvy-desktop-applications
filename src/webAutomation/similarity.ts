@@ -8,7 +8,7 @@ import { SQL_IDENTIFIER, type SqlItemDatabase } from './sqlItemStore';
  */
 
 /** The table, in the document's database, where each text's vector is kept, so a text is embedded once per source. */
-export const SIMILARITY_VECTORS_TABLE = 'similarity_vectors';
+export const SIMILARITY_VECTORS_TABLE = '__galaxy_similarity_vectors';
 
 /**
  * Turns texts into vectors, one per text, in order. Its id names where the vectors come from and with what model:

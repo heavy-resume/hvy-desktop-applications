@@ -54,8 +54,8 @@ describe('site setups', () => {
 
   it('names the fields a setup does not read, for a start page to fill', () => {
     const jobs = collection();
-    expect(fieldsNotRead(jobs, siteSetupOf(jobs, 'boards')!.patterns).map((field) => field.id)).toEqual(['company']);
-    expect(fieldsNotRead(jobs, siteSetupOf(jobs, 'initech')!.patterns).map((field) => field.id)).toEqual(['location', 'description']);
+    expect(fieldsNotRead(jobs, siteSetupOf(jobs, 'boards')!.patterns).map((field) => field.id)).toEqual(['company', 'pay']);
+    expect(fieldsNotRead(jobs, siteSetupOf(jobs, 'initech')!.patterns).map((field) => field.id)).toEqual(['location', 'pay', 'description']);
   });
 
   it('copies as text and pastes into another collection, updating a setup with the same id in place', () => {

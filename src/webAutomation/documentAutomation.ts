@@ -9,6 +9,7 @@ import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { createCliItemStore } from './cliItemStore';
 import { QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
 import { readWebAutomationBlocks } from './documentBlocks';
+import { settingsText, storedSettings } from './blockSettings';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
 import { contextProfileName, profileContextFor } from './profileContexts';
@@ -30,6 +31,9 @@ import {
 } from './scripting';
 
 const openDocuments = new WeakMap<object, { lookup: DocumentAutomationLookup; adoptActiveRuntime(): void }>();
+
+/** How long a collection's records are gathered before the document is told of them and redraws (once for all). */
+const RECORD_BATCH_MS = 5000;
 let openOnDemand: ((rawDocument: object) => DocumentAutomationLookup) | null = null;
 
 /**
@@ -206,12 +210,40 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       const output = collectionBlock(capabilityId)?.output;
       if (!output) return null;
       const { store, policy } = output;
-      // Each record written is told to the document's on_records handlers, which decide what to read again.
+      // The records written are told to the document's on_records handlers, which decide what to read again, and the
+      // document redraws. Not once per record: each redraw runs the document's scripts, which usually draw every record
+      // again, so a run that writes many (a board's fifty jobs, each with its description) would keep the app busy
+      // drawing. The records written within RECORD_BATCH_MS of the first are told together, and the rest when the run
+      // ends.
       if ('kind' in store) {
-        return createSqlRecordConsumer(document, openDatabase, store, policy, (key) => {
+        let written: string[] = [];
+        let batching = false;
+        const tell = () => {
+          const keys = written;
+          written = [];
+          if (!keys.length) return;
           options.onDatabaseChange?.(stateRuntime);
-          automation.recordsWritten(capabilityId, [key]);
+          automation.recordsWritten(capabilityId, keys);
+        };
+        const consumer = createSqlRecordConsumer(document, openDatabase, store, policy, (key) => {
+          written.push(key);
+          if (batching) return;
+          batching = true;
+          void runtime.clock.sleep(RECORD_BATCH_MS).then(() => {
+            batching = false;
+            tell();
+          });
         });
+        return {
+          ...consumer,
+          close: async () => {
+            try {
+              await consumer.close?.();
+            } finally {
+              tell();
+            }
+          },
+        };
       }
       const sink = createRecordSink(createCliItemStore(document, store), policy);
       return {
@@ -235,7 +267,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   // A web API block that uses a service's published file has its capability once the file is fetched: fetched as the
   // document opens (again if it failed before), and the readers redraw when it arrives.
   visitBlocks(document.sections, (block) => {
-    const service = block.schema.plugin === WEB_API_PLUGIN_ID ? block.schema.pluginConfig.service : undefined;
+    const service = block.schema.plugin === WEB_API_PLUGIN_ID ? storedSettings(block).service : undefined;
     if (typeof service !== 'string' || !publishedServices.enabled) return;
     let origin: string;
     try {
@@ -266,11 +298,9 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     // Queue progress is not a document edit until then, so it adds no undo entries.
     saveQueues(): void {
       for (const { block, config } of blocks.queues) {
-        const { state: _previous, ...pluginConfig } = block.schema.pluginConfig;
+        const { state: _previous, ...settings } = storedSettings(block);
         const state = automation.savedQueueState(config.queueId);
-        block.schema.pluginConfig = state.entries.length || state.paused
-          ? { ...pluginConfig, state: state as unknown as JsonObject }
-          : pluginConfig;
+        block.text = settingsText(state.entries.length || state.paused ? { ...settings, state } : settings);
       }
     },
 

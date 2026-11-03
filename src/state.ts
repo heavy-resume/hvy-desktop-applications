@@ -148,7 +148,7 @@ export interface AppState {
     pageId?: string;
     requestedUrl: string;
     currentUrl: string;
-    navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address';
+    navigationKind: 'main-frame' | 'new-window' | 'address';
   } | null;
   integrationReadyCheckSelectionPending: boolean;
   integrationReadyCheckValidationPending: boolean;
@@ -249,6 +249,8 @@ export interface AppState {
     listIntegrationId: string;
     itemIntegrationId: string | null;
     fields: Array<{ id: string; label: string }>;
+    /** What the browser says to pick for the record type being built: the box around one item, then its fields. */
+    prompts: { box: string | null; fields: string } | null;
     /** Work in progress, such as finding an item on the list. */
     pending: string | null;
     error: string | null;
@@ -260,6 +262,8 @@ export interface AppState {
   integrationCommandDraftPageId: string | null;
   integrationCommandDraftScope: 'page' | 'record';
   integrationCommandDraftSteps: IntegrationInteractionStepDefinition[];
+  /** A site setup's pagination being recorded: its kind chosen in the browser, then one click pick, saved as picked. */
+  integrationCommandDraftPagination: boolean;
   integrationCommandRunRequest: { integrationId: string; actionId?: string; pageId?: string; commandId: string; recordParent?: string } | null;
   integrationCommandDeleteDialogOpen: boolean;
   integrationCommandDeleteIntegrationId: string | null;
@@ -623,6 +627,7 @@ export const state: AppState = {
   integrationCommandDraftPageId: null,
   integrationCommandDraftScope: 'record',
   integrationCommandDraftSteps: [],
+  integrationCommandDraftPagination: false,
   integrationCommandRunRequest: null,
   integrationCommandDeleteDialogOpen: false,
   integrationCommandDeleteIntegrationId: null,

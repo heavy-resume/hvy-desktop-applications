@@ -61,7 +61,8 @@ function developmentDelayScale(): number {
 
 function appRuntime(): WebAutomationRuntime {
   if (!host) throw new WebAutomationError('invalid_request', 'Web automation needs a browser host.');
-  runtime ??= createWebAutomationRuntime({
+  if (runtime) return runtime;
+  runtime = createWebAutomationRuntime({
     host,
     clock: systemClock,
     random: Math.random,
@@ -94,6 +95,20 @@ function componentListAt(document: VisualDocument, listPath: string): { sectionK
 }
 
 /** Readers rerender on every automation event (sessions, runs, queues). */
+/**
+ * UI: Set up this site, "Open the page". The page in its own window, in the profile's browser store (the integration
+ * browser's too), with nothing of Galaxy's in it: to sign in, pass a check that you're human, or accept its cookies
+ * before setting the site up.
+ */
+export function openProfilePage(profileId: string, url: string): Promise<void> {
+  return appRuntime().deps.host.openUserWindow(profileId, url);
+}
+
+/** UI: Set up this site, picking an example item: the row's item, opened as a run opens it. */
+export function openListedItem(profileId: string, listUrl: string, link: string): Promise<{ url: string }> {
+  return appRuntime().openListedItem(profileId, listUrl, link);
+}
+
 export function subscribeWebAutomation(listener: (event: AutomationEvent) => void): () => void {
   return appRuntime().events.subscribe(listener);
 }
@@ -124,8 +139,8 @@ setDocumentAutomationOpener((rawDocument) => {
       if (!list || !getRefreshReaderBlock()(window.document, list.sectionKey, list.blockId)) getRenderApp()();
       else void runPluginDocumentHooks('unknown');
     }),
-    // A record sink wrote rows into the document's database: its table views read it again on a redraw, which ends
-    // with the document hooks, so its scripts see the new rows.
+    // A plugin wrote rows into the document's database (a record sink, a ranking): its table views read it again on a
+    // redraw, which ends with the document hooks, so its scripts see the new rows.
     onDatabaseChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
   });
   openedByDocument.set(document, opened);

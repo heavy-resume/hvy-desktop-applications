@@ -72,6 +72,8 @@ export interface CommandRequest {
   pattern: SitePatternDefinition;
   commandId: string;
   recordRef?: string;
+  /** A pagination command's page to go to: page numbers click this one. */
+  pageNumber?: number;
 }
 
 export interface CommandResult {

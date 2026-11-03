@@ -5,6 +5,7 @@ import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
+import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
 import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
 import { createWebAutomationPlugins, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
@@ -183,6 +184,8 @@ function chooseFileProfile(ctx: HvyPluginContext, lookup: DocumentAutomationLook
   });
 }
 
+const OPEN_PAGE_HINT = 'Opens the page in this collection’s browser profile, as you would see it, to sign in, pass a check that you’re human, or accept its cookies. Collecting uses what you do there.';
+
 const WAITING_FOR_CONTEXT = 'Waiting for a browser profile from the web profile context of this section or container.';
 
 /**
@@ -360,6 +363,12 @@ interface ConfigEditing {
   problem: HTMLElement;
 }
 
+/** Writes a block's settings where it keeps them (blockSettings.ts): in its text, or in its pluginConfig. */
+function storeSettings(ctx: HvyPluginContext, settings: Record<string, unknown>): void {
+  if (SETTINGS_IN_TEXT.has(ctx.block.schema.plugin ?? '')) ctx.setText(settingsText(settings));
+  else ctx.setConfig(settings as JsonObject);
+}
+
 /**
  * A web plugin's configuration edited in place, in the editor. `render` draws it from the stored configuration; each
  * change is checked as the block's loader and `hvy lint` check it (`read`) and kept only when it passes, otherwise the
@@ -376,13 +385,13 @@ function configEditor(
   root.className = `hvy-web-capability hvy-web-automation hvy-web-config-editor ${className}`;
   // Why the last change was refused, kept across the redraw that follows it.
   let refused = '';
-  const stored = () => structuredClone(ctx.block.schema.pluginConfig) as Record<string, unknown>;
+  const stored = () => storedSettings(ctx.block);
   const commit = (change: (draft: Record<string, unknown>) => void): string[] => {
     const draft = stored();
     change(draft);
     const result = read(draft);
     refused = result.ok ? '' : result.errors.join(' ');
-    if (result.ok) ctx.setConfig(draft as JsonObject);
+    if (result.ok) storeSettings(ctx, draft);
     draw();
     return result.ok ? [] : result.errors;
   };
@@ -914,11 +923,11 @@ const webApiReader: HvyPluginFactory = (ctx) => {
   let problem = '';
   const probing = new Set<string>();
   return reader(ctx, (root, lookup, sync) => {
-    const result = readWebApiBlockConfig(ctx.block.schema.pluginConfig);
+    const result = readWebApiBlockConfig(blockSettings(ctx.block));
     if (!result.ok) {
       root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
       // A service whose published file could not be read: it can be fetched again.
-      const origin = originOf(ctx.block.schema.pluginConfig.service);
+      const origin = originOf(storedSettings(ctx.block).service);
       if (origin && publishedService(origin)?.status === 'failed') root.append(tryAgain(lookup, origin));
       return;
     }
@@ -1068,20 +1077,20 @@ type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites'
 
 /** Why the block would refuse a change, checked over the whole configuration as the loader and lint do. */
 function checkCollection(ctx: HvyPluginContext, patch: CollectionPatch): string[] {
-  const checked = readCollectionBlockConfig({ ...ctx.block.schema.pluginConfig, ...patch });
+  const checked = readCollectionBlockConfig({ ...storedSettings(ctx.block), ...patch });
   return checked.ok ? [] : checked.errors;
 }
 
 /** Writes a change into the block, after checking it. Returns why it was refused, if it was. */
 function saveCollection(ctx: HvyPluginContext, patch: CollectionPatch): string[] {
   const problems = checkCollection(ctx, patch);
-  if (!problems.length) ctx.setConfig(patch as unknown as JsonObject);
+  if (!problems.length) storeSettings(ctx, { ...storedSettings(ctx.block), ...patch });
   return problems;
 }
 
 /** The block's collection as it is now: a dialog open for a while, or a setup, saves onto the latest. */
 function currentCollection(ctx: HvyPluginContext, fallback: CollectionDefinition): CollectionDefinition {
-  const current = readCollectionBlockConfig(ctx.block.schema.pluginConfig);
+  const current = readCollectionBlockConfig(blockSettings(ctx.block));
   return current.ok ? current.value.collection : fallback;
 }
 
@@ -1180,11 +1189,12 @@ function openPageValuesDialog(url: string, fields: CollectionField[], save: (val
  * Sets up a site by pointing at it, on an address. A new setup is named for the address. `finish` saves it (Done);
  * until then nothing is saved, and `check` shows what the block would refuse.
  */
-function setUpSiteFor(ctx: HvyPluginContext, collection: CollectionDefinition, url: string, site: CollectionSite | null, finish: (setup: SiteSetup) => string[]): void {
+function setUpSiteFor(ctx: HvyPluginContext, collection: CollectionDefinition, url: string, site: CollectionSite | null, finish: (setup: SiteSetup) => string[], options: { itemExample?: boolean } = {}): void {
   const setup = site ?? { id: newSiteId(collection, url), name: shortAddress(new URL('.', url).href) };
   setUpSite({
     collection,
     url,
+    ...options,
     site: setup,
     patterns: site ? patternsOf(collection, site.id) : [],
     check: (patterns) => checkCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [{ ...setup, patterns }])),
@@ -1521,10 +1531,10 @@ function pageProgressText(progress: StartPageProgress, items: string, needsYou: 
  * A run's pages with problems, from its summary: each page (a start page by its name, an item by its title from the
  * list) and why it couldn't be read. Its address opens it in the browser window, signed in as the run was, to look at.
  */
-function openProblemsDialog(lookup: DocumentAutomationLookup, collection: CollectionDefinition, run: CollectionRunState): void {
+function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, collection: CollectionDefinition, run: CollectionRunState): void {
   const count = run.problemPages.length;
   const { body, row, close } = openModal(`${count} ${count === 1 ? 'page' : 'pages'} with problems`, 'hvy-web-page-dialog wide-dialog');
-  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it.', 'hvy-web-page-hint'));
+  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it, or add it to its site setup as another example, so the next run reads pages like it.', 'hvy-web-page-hint'));
   const list = document.createElement('div');
   list.className = 'hvy-web-problems';
   for (const problem of run.problemPages) {
@@ -1544,6 +1554,18 @@ function openProblemsDialog(lookup: DocumentAutomationLookup, collection: Collec
       address,
       paragraph(problem.problem, 'hvy-web-error'),
     );
+    // An item its site setup didn't read (a page laid out differently, or one it didn't cover): pick it as another
+    // example, keeping those it has; Done saves the setup.
+    const site = problem.kind === 'item' && problem.siteId ? collection.sites.find((candidate) => candidate.id === problem.siteId) : undefined;
+    if (site && canSetUpSites()) {
+      const addExample = button('Add as example');
+      addExample.classList.add('hvy-web-problem-action');
+      addExample.addEventListener('click', () => {
+        close();
+        setUpSiteFor(ctx, currentCollection(ctx, collection), problem.url, site, (setup) => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [setup])), { itemExample: true });
+      });
+      entry.append(addExample);
+    }
     list.append(entry);
   }
   body.append(list);
@@ -1659,9 +1681,10 @@ function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDe
 
 /**
  * Where a run looks: the block's start pages, each with what reads it, whether collecting everything includes it, its
- * progress (or how its last run went), and collecting it alone; and adding another.
+ * progress (or how its last run went), collecting it alone, and opening it; and adding another. `openPage` is null
+ * until the block has a browser profile.
  */
-function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPage: ((page: StartPage) => void) | null): HTMLElement {
+function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPage: ((page: StartPage) => void) | null, openPage: ((page: StartPage) => void) | null): HTMLElement {
   const progressByPage = latestPageProgress(runs);
   const busy = runs.some((run) => run.status === 'running' || run.status === 'needs-attention');
   const section = document.createElement('section');
@@ -1716,7 +1739,15 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
     const edit = button('Edit');
     edit.setAttribute('aria-label', `Edit ${name}`);
     edit.addEventListener('click', () => openPageDialog(ctx, collection, page));
-    const controls = actions(edit);
+    // Setting a page up for runs: the page in its own window, as a person sees it, in the block's browser profile and
+    // with nothing of Galaxy's in it, to sign in, pass a check that you're human, or accept its cookies. Runs use what
+    // was done there, as they share the profile.
+    const open = button('Open page');
+    open.setAttribute('aria-label', `Open ${name}`);
+    open.title = openPage ? OPEN_PAGE_HINT : 'Choose a browser profile first.';
+    open.disabled = !openPage;
+    open.addEventListener('click', () => openPage?.(page));
+    const controls = actions(open, edit);
     if (collectPage && reads) {
       const collect = button('Collect');
       collect.setAttribute('aria-label', `Collect ${name}`);
@@ -1754,7 +1785,7 @@ const collectionView: HvyPluginFactory = (ctx) => {
   // Why collecting one start page could not start, shown until the next try.
   let problem = '';
   return reader(ctx, (root, lookup, sync) => {
-    const result = readCollectionBlockConfig(ctx.block.schema.pluginConfig);
+    const result = readCollectionBlockConfig(blockSettings(ctx.block));
     if (!result.ok) {
       root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
       return;
@@ -1773,7 +1804,10 @@ const collectionView: HvyPluginFactory = (ctx) => {
       }
       sync();
     } : null;
-    root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPage));
+    const openPage = lookup.automation.profileOf(collection.capabilityId) ? (page: StartPage) => {
+      lookup.automation.openLink(page.url);
+    } : null;
+    root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPage, openPage));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
     const summary = status(`${RUN_STATUS[run.status]}: ${run.collected} new, ${run.skipped} already listed, `);
@@ -1783,7 +1817,7 @@ const collectionView: HvyPluginFactory = (ctx) => {
       problems.type = 'button';
       problems.className = 'hvy-web-link-button';
       problems.textContent = `${run.problems} with problems`;
-      problems.addEventListener('click', () => openProblemsDialog(lookup, collection, run));
+      problems.addEventListener('click', () => openProblemsDialog(ctx, lookup, collection, run));
       summary.append(problems, '.');
     } else {
       summary.append(`${run.problems} with problems.`);
@@ -1794,7 +1828,11 @@ const collectionView: HvyPluginFactory = (ctx) => {
       stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
       root.append(actions(stop));
     } else if (run.status === 'needs-attention' && run.attention) {
-      const show = button('Show', true);
+      // The page in its own window, as you would see it; Show is the window collecting it, Galaxy's scripts and all.
+      const open = button('Open page', true);
+      open.title = 'Opens the page as you would see it, to sign in, pass a check that you’re human, or accept its cookies. Resume loads it again.';
+      open.addEventListener('click', () => void lookup.automation.openAttentionPage(run.runId));
+      const show = button('Show');
       show.addEventListener('click', () => void lookup.automation.showAttention(run.runId));
       const resume = button('Resume');
       resume.addEventListener('click', () => lookup.automation.resumeAttention(run.runId));
@@ -1803,8 +1841,8 @@ const collectionView: HvyPluginFactory = (ctx) => {
       root.append(needsYouNotice(
         lookup,
         `${run.runId}\0${run.attention.workerId}\0${run.attention.url}`,
-        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'} (${new URL(run.attention.url).host}) Show it, deal with it there, then Resume.`),
-        actions(show, resume, stop),
+        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'} (${new URL(run.attention.url).host}) Open it, deal with it there, then Resume.`),
+        actions(open, show, resume, stop),
       ));
     }
     if (run.error) root.append(paragraph(run.error, 'hvy-web-error'));
@@ -1819,7 +1857,7 @@ const PAUSE_REASONS: Record<string, string> = {
 };
 
 const queueView: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) => {
-  const result = readQueueBlockConfig(ctx.block.schema.pluginConfig);
+  const result = readQueueBlockConfig(blockSettings(ctx.block));
   if (!result.ok) {
     root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
     return;

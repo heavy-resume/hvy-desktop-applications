@@ -160,23 +160,6 @@ describe('integration page navigation', () => {
     expect(html).toContain('data-action="reject-integration-navigation"');
     expect(html).toContain('data-action="approve-integration-navigation"');
   });
-
-  it('describes Tauri frame navigation as embedded content that will remain in its frame', () => {
-    const html = renderIntegrationNavigationDialog({
-      ...state,
-      integrationNavigationRequest: {
-        profileId: 'profile',
-        integrationId: 'integration',
-        pageId: 'page',
-        currentUrl: 'https://messages.google.com/web/',
-        requestedUrl: 'https://ogs.google.com/u/0/widget/app',
-        navigationKind: 'frame-or-main',
-      },
-    });
-    expect(html).toContain('Allow content from this origin?');
-    expect(html).toContain('embedded content remains in its own frame');
-    expect(html).toContain('Allow and reload');
-  });
 });
 
 describe('record type retrieval settings', () => {

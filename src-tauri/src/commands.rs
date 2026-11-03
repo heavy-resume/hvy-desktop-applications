@@ -524,6 +524,24 @@ static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>
 static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
 static INTEGRATION_ALLOWED_ORIGINS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>> = OnceLock::new();
 static INTEGRATION_CURRENT_URLS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<tauri::Url>>>>>> = OnceLock::new();
+static INTEGRATION_LAST_ALLOWED_URLS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<tauri::Url>>>>>> = OnceLock::new();
+static INTEGRATION_INSPECTION_STARTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+const DEFAULT_INTEGRATION_INSPECTION_START: &str = "window.__hvyGalaxyInspector?.start('parent', { primary: true, externalToolbar: true });";
+
+/// The picking the profile's browser last started (its `start` call), started again when a page loads while picking:
+/// a check that you're human passed, or a page that navigates on its own, keeps the same step and what it says.
+fn integration_inspection_start(profile_id: &str) -> String {
+    let starts = INTEGRATION_INSPECTION_STARTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let starts = starts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    starts.get(profile_id).cloned().unwrap_or_else(|| DEFAULT_INTEGRATION_INSPECTION_START.into())
+}
+
+fn remember_integration_inspection_start(profile_id: &str, start: String) {
+    let starts = INTEGRATION_INSPECTION_STARTS.get_or_init(|| Mutex::new(HashMap::new()));
+    starts.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(profile_id.into(), start);
+}
+static INTEGRATION_MESSAGE_TOKENS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 #[derive(Clone, Default)]
 struct IntegrationPageContext {
     integration_id: Option<String>,
@@ -547,6 +565,32 @@ fn integration_current_url(profile_id: &str) -> AppResult<Arc<Mutex<Option<tauri
     let mut urls = INTEGRATION_CURRENT_URLS.get_or_init(|| Mutex::new(HashMap::new())).lock()
         .map_err(|error| AppError::Message(error.to_string()))?;
     Ok(urls.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(None))).clone())
+}
+
+/// The last address the profile's integration browser's main page loaded inside its allowed origins: where it goes back
+/// to when the page heads off-site.
+fn integration_last_allowed_url(profile_id: &str) -> AppResult<Arc<Mutex<Option<tauri::Url>>>> {
+    let mut urls = INTEGRATION_LAST_ALLOWED_URLS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(urls.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(None))).clone())
+}
+
+/// The token the profile's integration browser takes messages with (hvy-integration:// navigations), as a CSRF token:
+/// the navigation handler hears every frame's navigations, and a frame the page embeds cannot read it. Random, for the
+/// app's run.
+fn integration_message_token(profile_id: &str) -> String {
+    let tokens = INTEGRATION_MESSAGE_TOKENS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut tokens = tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    tokens.entry(profile_id.into())
+        .or_insert_with(|| Aes256Gcm::generate_nonce(&mut OsRng).iter().map(|byte| format!("{byte:02x}")).collect())
+        .clone()
+}
+
+const INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER: &str = "__HVY_GALAXY_MESSAGE_TOKEN__";
+
+/// The inspector, with the profile's message token in it.
+fn integration_inspector_source(profile_id: &str) -> String {
+    INTEGRATION_INSPECTOR.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(profile_id))
 }
 
 fn integration_browser_label(profile_id: &str) -> String {
@@ -1462,26 +1506,27 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
         })
 }
 
-fn integration_extraction_script(extraction: &serde_json::Value) -> String {
+fn integration_extraction_script(profile_id: &str, extraction: &serde_json::Value) -> String {
+    let inspector = integration_inspector_source(profile_id);
     if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
         let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
-        format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", inspector, inspection_kind, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("ready-check-validation") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
         format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
         format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
     } else {
-        format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     }
 }
 
@@ -1506,6 +1551,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
     if command == "open" {
         let foreground = foreground.unwrap_or(true);
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
+        if action_mode.unwrap_or(false) {
+            remember_integration_inspection_start(&profile_id, DEFAULT_INTEGRATION_INSPECTION_START.into());
+        }
         *pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))? = payload.clone();
         #[cfg(not(target_os = "macos"))]
         if !load_integration_vault_status(app.clone())?.configured {
@@ -1531,10 +1579,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 .map_err(|error| AppError::Message(error.to_string()))?;
             if profile_current_url.lock().map(|current| current.as_ref() == Some(&url)).unwrap_or(false) {
                 if action_mode_pending.load(Ordering::SeqCst) {
-                    content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
+                    content.eval(format!("{}\n{}", integration_inspector_source(&profile_id), integration_inspection_start(&profile_id)))
                         .map_err(|error| AppError::Message(error.to_string()))?;
                 } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
-                    content.eval(integration_extraction_script(&extraction)).map_err(|error| AppError::Message(error.to_string()))?;
+                    content.eval(integration_extraction_script(&profile_id, &extraction)).map_err(|error| AppError::Message(error.to_string()))?;
                 }
             } else {
                 content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
@@ -1563,13 +1611,13 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let page_load_current_url = profile_current_url.clone();
         let navigation_action_mode = action_mode_pending.clone();
         let page_load_allowed_origins = profile_allowed_origins.clone();
+        let page_load_page_context = profile_page_context.clone();
+        let page_load_last_allowed_url = integration_last_allowed_url(&profile_id)?;
         let toolbar_allowed_origins = profile_allowed_origins.clone();
         let new_window_allowed_origins = profile_allowed_origins.clone();
         let navigation_allowed_origins = profile_allowed_origins.clone();
         let new_window_page_context = profile_page_context.clone();
-        let navigation_page_context = profile_page_context.clone();
         let new_window_current_url = profile_current_url.clone();
-        let navigation_current_url = profile_current_url.clone();
         let toolbar_page_context = profile_page_context.clone();
         let new_window_app = app.clone();
         let new_window_profile_id = profile_id.clone();
@@ -1577,10 +1625,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         #[cfg(target_os = "windows")]
         let integration_inspector = format!(
             "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\nwindow.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}",
-            WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR,
+            WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(&profile_id)), integration_inspector_source(&profile_id),
         );
         #[cfg(not(target_os = "windows"))]
-        let integration_inspector = format!("window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}", WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR);
+        let integration_inspector = format!("window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}", WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(&profile_id)), integration_inspector_source(&profile_id));
         let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
             .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
             .visible(false)
@@ -1601,6 +1649,39 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             }
         })
         .on_page_load(move |window, payload| {
+            // Where the main page goes: inside its allowed origins, or the user is asked (or, outside an integration
+            // page, the address opens in the default browser), and it goes back to where it was. Frames load freely,
+            // as in any browser; the navigation handler hears them too, and cannot tell them from the page.
+            if payload.event() == tauri::webview::PageLoadEvent::Started && payload.url().as_str() != "about:blank" {
+                let url = payload.url().clone();
+                let allowed = page_load_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                if allowed {
+                    if let Ok(mut last) = page_load_last_allowed_url.lock() { *last = Some(url.clone()); }
+                } else {
+                    let back = page_load_last_allowed_url.lock().ok().and_then(|last| last.clone());
+                    if url.scheme() == "https" || is_local_integration_http(&url) {
+                        let context = page_load_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                        if context.page_id.is_some() {
+                            let _ = window.app_handle().emit("integration-inspection-result", serde_json::json!({
+                                "kind": "integration-navigation-request",
+                                "profileId": page_load_profile_id,
+                                "integrationId": context.integration_id,
+                                "pageId": context.page_id,
+                                "currentUrl": back.as_ref().map(ToString::to_string).unwrap_or_default(),
+                                "requestedUrl": url.as_str(),
+                                "navigationKind": "main-frame",
+                            }));
+                            if let Some(main_window) = window.app_handle().get_webview_window("main") {
+                                let _ = raise_integration_window(&main_window.as_ref().window());
+                            }
+                        } else {
+                            let _ = open_external_url(url.to_string());
+                        }
+                    }
+                    let _ = window.navigate(back.unwrap_or_else(|| "about:blank".parse().expect("about:blank is a URL")));
+                    return;
+                }
+            }
             if let Ok(mut current_url) = page_load_current_url.lock() {
                 *current_url = Some(payload.url().clone());
             }
@@ -1612,7 +1693,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
                 if page_load_action_mode.load(Ordering::SeqCst) {
-                    let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR);
+                    let script = format!("{}\n{}", integration_inspector_source(&page_load_profile_id), integration_inspection_start(&page_load_profile_id));
                     let _ = window.eval(&script);
                 } else if let Ok(mut pending) = page_load_extraction.lock() {
                     let current_origin = payload.url().origin().ascii_serialization();
@@ -1627,7 +1708,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
-                        let script = integration_extraction_script(&extraction);
+                        let script = integration_extraction_script(&page_load_profile_id, &extraction);
                         let _ = window.eval(&script);
                       }
                     }
@@ -1668,6 +1749,21 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             if requested_url.as_str() == "about:blank" {
                 return true;
             }
+            // Every navigation in every frame comes here. A message to Galaxy counts only with the browser's token
+            // (integration-inspector.js), which a frame the page embeds cannot read; it is read without it.
+            let message;
+            let requested_url = if requested_url.scheme() == "hvy-integration" {
+                let token = requested_url.query_pairs().find(|(name, _)| name == "t").map(|(_, value)| value.into_owned());
+                if token.as_deref() != Some(integration_message_token(&result_profile_id).as_str()) {
+                    return false;
+                }
+                let mut stripped = requested_url.clone();
+                stripped.set_query(None);
+                message = stripped;
+                &message
+            } else {
+                requested_url
+            };
             if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
                 if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
                     if browser_command == "back" { let _ = window.eval("window.history.back()"); }
@@ -1675,7 +1771,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     if browser_command == "reload" { let _ = window.reload(); }
                     if browser_command == "inspect" {
                         navigation_action_mode.store(true, Ordering::SeqCst);
-                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR));
+                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", integration_inspector_source(&result_profile_id)));
                     }
                     if browser_command == "close" {
                         #[cfg(not(target_os = "macos"))]
@@ -1751,30 +1847,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 return false;
             }
-            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(requested_url, &origins)).unwrap_or(false);
-            if !allowed && (requested_url.scheme() == "https" || is_local_integration_http(requested_url)) {
-                let context = navigation_page_context.lock().map(|value| value.clone()).unwrap_or_default();
-                if context.page_id.is_some() {
-                    let current_url = navigation_current_url.lock().ok()
-                        .and_then(|url| url.as_ref().map(ToString::to_string))
-                        .unwrap_or_default();
-                    let _ = integration_app.emit("integration-inspection-result", serde_json::json!({
-                        "kind": "integration-navigation-request",
-                        "profileId": result_profile_id,
-                        "integrationId": context.integration_id,
-                        "pageId": context.page_id,
-                        "currentUrl": current_url,
-                        "requestedUrl": requested_url.as_str(),
-                        "navigationKind": "frame-or-main",
-                    }));
-                    if let Some(main_window) = integration_app.get_webview_window("main") {
-                        let _ = raise_integration_window(&main_window.as_ref().window());
-                    }
-                } else {
-                    let _ = open_external_url(requested_url.to_string());
-                }
-            }
-            allowed
+            // Any other Galaxy address is not one it takes; anything else loads (the page load guards the main page).
+            requested_url.scheme() != "hvy-integration"
         });
         #[cfg(target_os = "macos")]
         let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?);
@@ -1825,13 +1899,14 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 if browser_command == "reload" { let _ = toolbar_remote.reload(); }
                 if browser_command == "inspect" {
                     toolbar_action_mode.store(true, Ordering::SeqCst);
-                    let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
+                    let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", integration_inspector_source(&toolbar_profile_id)));
                 }
                 if browser_command == "close" { let _ = toolbar_window.close(); }
                 return false;
             }
             if let Some(control) = requested_url.as_str().strip_prefix("hvy-integration://inspector-control/") {
-                if matches!(control, "navigate" | "undo" | "done") {
+                // A button the page's picker put on the toolbar, by its id.
+                if !control.is_empty() && control.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-') {
                     let _ = toolbar_remote.eval(&format!("window.__hvyGalaxyInspector?.control({control:?})"));
                 }
                 return false;
@@ -1977,16 +2052,21 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         "back" => window.eval("window.history.back()"),
         "forward" => window.eval("window.history.forward()"),
         "reload" => window.reload(),
-        "inspect" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR)),
-        "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "check-page-ready" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "inspect" | "inspect-parent" | "inspect-target" => {
+            let start = match command.as_str() {
+                "inspect" => "window.__hvyGalaxyInspector.start('target', { externalToolbar: true });".to_string(),
+                kind => format!("window.__hvyGalaxyInspector.start('{}', Object.assign({{}}, {}, {{ externalToolbar: true }}));", if kind == "inspect-parent" { "parent" } else { "target" }, payload.unwrap_or_default()),
+            };
+            remember_integration_inspection_start(&profile_id, start.clone());
+            window.eval(&format!("{}\n{}", integration_inspector_source(&profile_id), start))
+        }
+        "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "check-page-ready" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "cancel-extraction" => window.eval("window.__hvyGalaxyInspector?.cancelExtraction()"),
-        "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
         "discover-webmcp-tools" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
         "invoke-webmcp-tool" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
         "cancel-webmcp-tool" => window.eval(&format!("window.__hvyGalaxyWebMcp?.cancel(({}).requestId)", payload.unwrap_or_default())),

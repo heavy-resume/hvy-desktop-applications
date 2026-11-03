@@ -372,7 +372,7 @@ function readPublishedWebApiBlockConfig(value: Record<string, unknown>): ConfigR
 
 export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockConfig> {
   const errors: string[] = [];
-  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported web API block configuration.'] };
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported web API block configuration.'] };
   if (value.service !== undefined) return readPublishedWebApiBlockConfig(value);
   const capabilityId = text(value.capabilityId);
   if (!capabilityId) errors.push('The block needs a capability id.');
@@ -537,7 +537,7 @@ function checkPatternReferences(pattern: SitePatternDefinition, fieldIds: Set<st
 
 export function readCollectionBlockConfig(value: unknown): ConfigResult<CollectionBlockConfig> {
   const errors: string[] = [];
-  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported collection block configuration.'] };
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported collection block configuration.'] };
   const capabilityId = text(value.capabilityId);
   if (!capabilityId) errors.push('The block needs a capability id.');
   const fields = readCollectionFields(value.fields, errors);
@@ -607,7 +607,7 @@ export function readProfileContextBlockConfig(value: unknown): ConfigResult<Prof
 }
 
 export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockConfig> {
-  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: ['Unsupported queue block configuration.'] };
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported queue block configuration.'] };
   const errors: string[] = [];
   const queueId = text(value.queueId);
   const target = isRecord(value.target) ? value.target : {};

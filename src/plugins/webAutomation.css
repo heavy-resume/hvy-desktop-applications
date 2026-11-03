@@ -243,3 +243,8 @@
 .hvy-web-problem-link:hover {
   color: var(--hvy-link-hover-color, var(--hvy-link-color, #2f6968));
 }
+
+/* Adding a problem page to its site setup: a button under its reason, not stretched across the entry. */
+.hvy-web-problem-action {
+  justify-self: start;
+}

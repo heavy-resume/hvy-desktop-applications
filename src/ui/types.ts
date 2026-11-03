@@ -103,14 +103,16 @@ export interface UiHandlers {
   chooseIntegrationWebMcpRecordType(): void;
   backIntegrationRecordTypeSource(): void;
   selectIntegrationWebMcpRecordTool(toolIndex: number): void;
-  editIntegrationAction(integrationId: string, actionId: string): void;
+  /** With `example`, on that page, going on to pick a new example's fields there. */
+  editIntegrationAction(integrationId: string, actionId: string, example?: { pageId: string }): void;
   closeIntegrationActionBuilder(): void;
   cancelDiscardIntegrationAction(): void;
   confirmDiscardIntegrationAction(): void;
   cancelIntegrationActionSelection(): void;
   addAnotherIntegrationActionExample(parentIndex?: number, fieldIndex?: number | null): void;
   changeIntegrationActionRange(parentIndex: number, fieldIndex: number, boundary: 'start' | 'end'): void;
-  addIntegrationActionAnchor(): void;
+  /** With `openPage`, opening the record type's page first, and picking once it has loaded. */
+  addIntegrationActionAnchor(open?: { openPage?: boolean }): void;
   limitIntegrationActionToSection(): void;
   removeIntegrationActionScope(): void;
   testIntegrationActionPattern(): void;
@@ -131,9 +133,9 @@ export interface UiHandlers {
   runIntegrationAction(integrationId: string, actionId: string): void;
   closeIntegrationActionResult(): void;
   addCommandForIntegrationAction(integrationId: string, actionId: string): void;
-  addCommandForIntegrationPage(integrationId: string, pageId: string): void;
+  addCommandForIntegrationPage(integrationId: string, pageId: string, pagination?: boolean): void;
   cancelIntegrationCommandBuilder(): void;
-  saveIntegrationCommand(name: string, inputNames: Record<string, string>): void;
+  saveIntegrationCommand(name: string, inputNames: Record<string, string>, kind?: { pagination?: 'next' | 'page-number' }): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;
   requestDeleteIntegrationPageCommand(integrationId: string, pageId: string, commandId: string): void;
   cancelDeleteIntegrationCommand(): void;
@@ -147,6 +149,9 @@ export interface UiHandlers {
   confirmDeleteIntegrationAction(): void;
   reviewIntegrationActionSelection(kind: 'target' | 'example', index: number): void;
   removeIntegrationActionSelection(kind: 'target' | 'example', index: number): void;
+  pickIntegrationRecordFields(open?: { openPage?: boolean }): void;
+  /** Opens an integration page to pick on it: the picking starts once it has loaded, or at once when it is showing. */
+  inspectIntegrationPage(integrationId: string, pageId: string, inspectionKind: 'parent' | 'target', options: Record<string, unknown>): Promise<void>;
   selectIntegration(integrationId: string): void;
   selectIntegrationProfile(profileId: string): void;
   requestAddIntegrationProfile(): void;

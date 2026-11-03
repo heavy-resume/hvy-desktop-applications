@@ -3,6 +3,7 @@ import type { Clock, Random } from './clock';
 import {
 
   CollectionService,
+  openListedItem,
   testSitePattern,
   type CollectionDefinition,
   type CollectionRunState,
@@ -95,6 +96,7 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     heardSessions,
     events,
     emit,
+    clock: deps.clock,
     scheduler,
     transport,
     sessions,
@@ -116,6 +118,11 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     // Document close: its tab closed, so opening it again is a fresh start, and its handlers hear the account again.
     forgetDocument(documentPath: string): void {
       for (const key of [...heardSessions.keys()]) if (key.startsWith(`${documentPath}\u0000`)) heardSessions.delete(key);
+    },
+
+    // UI: Set up this site, picking an example item: the row's item, opened as a run opens it.
+    openListedItem(profileId: string, listUrl: string, link: string): Promise<{ url: string }> {
+      return openListedItem({ scheduler, host: deps.host }, profileId, listUrl, link);
     },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".
@@ -366,6 +373,11 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: Needs attention item, "Show".
     showAttention(runId: string): Promise<void> {
       return collections.show(runId);
+    },
+
+    // UI: Needs attention item, "Open page".
+    openAttentionPage(runId: string): Promise<void> {
+      return collections.openPage(runId);
     },
 
     // UI: Needs attention window, "Resume".

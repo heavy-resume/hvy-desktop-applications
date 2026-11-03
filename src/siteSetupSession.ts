@@ -1,11 +1,13 @@
 import { controlIntegrationBrowser } from './integrationBrowser';
-import { fetchIntegrationRecords } from './integrationRecords';
-import { createCustomPageIntegration, onIntegrationRegistrySaved, saveIntegrationRegistry, type IntegrationDefinition } from './integrationRegistry';
+import { actionPatternPayload, createCustomPageIntegration, onIntegrationRegistrySaved, saveIntegrationRegistry, type IntegrationDefinition } from './integrationRegistry';
 import { handlers, rerender } from './main';
 import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
 import { setSiteSetupOpener, type SiteSetupRequest } from './webAutomation/siteSetupOpener';
+import { openListedItem, openProfilePage } from './webAutomation/app';
+import { itemLink } from './webAutomation/collection';
+import { recordValues, type InspectorRecord } from './webAutomation/nativeHost';
 
 /**
  * Setting up a site for a document's collection, by pointing at it in the
@@ -40,9 +42,10 @@ function startSiteSetup(request: SiteSetupRequest): void {
   endSiteSetup();
   const item = capitalized(itemName(request));
   const { integrations: existing, list: previousList } = setupIntegrations(request.patterns);
-  // Set up again on another place it reads: the list page is this place, keeping what was picked on the other.
+  // Set up again on another place it reads: the list page is this place, keeping what was picked on the other. An item
+  // page added as an example (one a run couldn't read) leaves the list where it was.
   const list = previousList
-    ? { ...previousList, pages: previousList.pages.map((page, index) => (index === 0 ? { ...page, url: request.url } : page)) }
+    ? request.itemExample ? previousList : { ...previousList, pages: previousList.pages.map((page, index) => (index === 0 ? { ...page, url: request.url } : page)) }
     : { ...createCustomPageIntegration(`${item} list`, request.url), siteSetup: true as const };
   const itemPage = existing.find((integration) => integration.id !== list.id) ?? null;
   for (const integration of [list, ...(itemPage ? [itemPage] : [])]) addToRegistry(integration);
@@ -52,47 +55,132 @@ function startSiteSetup(request: SiteSetupRequest): void {
     documentName: state.document?.source.name ?? '',
     itemName: itemName(request),
     siteName: request.site.name,
-    url: request.url,
+    url: list.pages[0].url,
     listIntegrationId: list.id,
     itemIntegrationId: itemPage?.id ?? null,
     fields: request.collection.fields.map((field) => ({ id: field.id, label: field.label })),
+    prompts: null,
     pending: null,
     error: null,
   };
   state.selectedIntegrationId = list.id;
   handlers.openIntegrations();
+  if (request.itemExample) addItemExample(request.url);
+}
+
+/**
+ * An item page a run couldn't read, as another example of the setup's item page: it is opened, one more page of the
+ * item's record type (so its setup reads that address too), and its fields are picked, as the first example's were.
+ * The examples picked before are kept. A setup with no item page yet starts it here.
+ */
+function addItemExample(url: string): void {
+  const session = active;
+  if (!session || !state.siteSetup) return;
+  const name = itemName(session.request);
+  const itemPage = sessionIntegration(session.itemId);
+  const posting = itemPage?.actions[0];
+  if (!itemPage || !posting?.pattern) {
+    setItemPage(createCustomPageIntegration(`${capitalized(name)} page`, url));
+    const started = sessionIntegration(session.itemId);
+    if (started) buildRecordType(started, `${capitalized(name)} page`, pagePrompts(name));
+    return;
+  }
+  const page = itemPage.pages.find((candidate) => candidate.url === url)
+    ?? { ...createCustomPageIntegration(`${capitalized(name)} page`, url).pages[0], id: `${itemPage.id}-page-${crypto.randomUUID()}` };
+  if (!itemPage.pages.includes(page)) {
+    itemPage.pages = [...itemPage.pages, page];
+    saveIntegrationRegistry(state.integrationRegistry);
+  }
+  state.selectedIntegrationId = itemPage.id;
+  state.siteSetup.prompts = pagePrompts(name);
+  handlers.editIntegrationAction(itemPage.id, posting.id, { pageId: page.id });
+}
+
+/**
+ * What the browser says to pick, on the list page and on one item's own page. A list's rows start with the box around
+ * one row (it is what finds the others); an item's page has one record, so its fields are picked first, and the box is
+ * the one around them (`box` null).
+ */
+function rowPrompts(item: string): { box: string | null; fields: string } {
+  return {
+    box: `Pick the box around one ${item} in the list, with everything you want from it inside.`,
+    fields: `Pick what to read from this ${item} (its title gives the link to it)`,
+  };
+}
+
+function pagePrompts(item: string): { box: string | null; fields: string } {
+  return {
+    box: null,
+    fields: `Pick what to read from the ${item}`,
+  };
 }
 
 /** Builds (or rebuilds) a page's record type in the existing builder, named for its role, with its page open to pick from. */
-function buildRecordType(integration: IntegrationDefinition, name: string): void {
+function buildRecordType(integration: IntegrationDefinition, name: string, prompts: { box: string | null; fields: string }): void {
   state.selectedIntegrationId = integration.id;
+  if (state.siteSetup) state.siteSetup.prompts = prompts;
   const action = integration.actions[0];
   if (action) {
     // Editing opens the page itself, behind the builder, as Edit does in the Integrations manager.
     handlers.editIntegrationAction(integration.id, action.id);
     return;
   }
-  const opened = handlers.openIntegrationPage(integration.id, integration.pages[0].id);
   handlers.addActionForIntegrationPage(integration.id, integration.pages[0].id);
   state.integrationActionDraftName = name;
   rerender({ preserveMountedDocument: true });
-  // A new record type has nothing picked yet: the page goes straight into picking the first example, as the step
-  // says ("pick an example…"), instead of waiting for the builder's Add example. It starts once the open is done, as
-  // Add example would: one busy task at a time.
-  void opened.then(() => handlers.addIntegrationActionAnchor());
+  // A new record type has nothing picked yet: its page opens straight into picking the first example, as the step says
+  // ("pick an example…"), instead of waiting for the builder's Add example. Picking starts once the page has loaded:
+  // started while the browser still shows the page before (the list, when this is an item), it stays on that page.
+  if (prompts.box) handlers.addIntegrationActionAnchor({ openPage: true });
+  else handlers.pickIntegrationRecordFields({ openPage: true });
 }
 
-/** The first item link the picked rows find on the list page, as the item page to pick from. */
-async function openFirstItemPage(session: NonNullable<typeof active>): Promise<void> {
+/**
+ * Picking an example item, first: the list page, with the rows its setup finds boxed, to pick one of them (anywhere in
+ * it). `itemPicked` hears which.
+ */
+function pickExampleItem(session: NonNullable<typeof active>): void {
   const list = sessionIntegration(session.listId);
-  const action = list?.actions[0];
-  const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
-  if (!list || !action || !profile) throw new Error('Pick an example row first.');
-  const result = await fetchIntegrationRecords(list.id, list.pages[0], action, profile);
-  const records = (result.records ?? []) as Array<{ targets?: Array<{ href?: string | null }> }>;
-  const href = records.flatMap((record) => record.targets ?? []).map((target) => target.href).find((value): value is string => Boolean(value));
-  if (!href) throw new Error(`No ${itemName(session.request)} link was found in the rows. Use a different page.`);
-  setItemPage(createCustomPageIntegration(`${capitalized(itemName(session.request))} page`, new URL(href, list.pages[0].url).href));
+  const pattern = list?.actions[0] ? actionPatternPayload(list.actions[0]) : null;
+  if (!list || !pattern || !state.siteSetup) return;
+  const name = itemName(session.request);
+  state.siteSetup.error = null;
+  void handlers.inspectIntegrationPage(list.id, list.pages[0].id, 'parent', {
+    existingPattern: pattern,
+    prompt: `Pick a ${name} from the list`,
+    recordChoice: { refuse: `Pick one of the ${name}s boxed in green.` },
+  });
+}
+
+/**
+ * The row picked: its item opened as a run opens it, in a worker (the list page, then the row's link, read as a run
+ * reads a row), and its fields picked where that ended up: the page runs will read. The first one is the setup's
+ * item page; each after it is one more example of it.
+ */
+export function itemPicked(record: InspectorRecord): void {
+  const session = active;
+  const list = session ? sessionIntegration(session.listId) : null;
+  const listing = session ? sessionPatterns(session).find((pattern) => pattern.role === 'listing') : null;
+  if (!session || !list || !listing || !state.siteSetup) return;
+  const name = itemName(session.request);
+  const link = itemLink(listing, recordValues(record), list.pages[0].url);
+  if (!link) {
+    state.siteSetup.error = `That ${name}'s row has no link to open it by. Pick its title (the link to it) as one of the rows' fields.`;
+    rerender({ preserveMountedDocument: true });
+    return;
+  }
+  state.siteSetup.pending = `Opening the ${name} as a run does…`;
+  rerender({ preserveMountedDocument: true });
+  void openListedItem(state.selectedIntegrationProfileId, list.pages[0].url, link).then(({ url }) => {
+    if (state.siteSetup) state.siteSetup.pending = null;
+    addItemExample(url);
+  }, (error: unknown) => {
+    if (state.siteSetup) {
+      state.siteSetup.pending = null;
+      state.siteSetup.error = error instanceof Error ? error.message : String(error);
+    }
+    rerender({ preserveMountedDocument: true });
+  });
 }
 
 /** The session's item page, replacing any earlier one (its patterns go with it). */
@@ -107,7 +195,7 @@ function sessionPatterns(session: NonNullable<typeof active>): SitePatternDefini
   return patternsFromSetup(session.request.site.id, integrations, session.listId);
 }
 
-export type SiteSetupStep = 'rows' | 'next' | 'item-page' | 'open-item-page' | 'other-item-page' | 'done';
+export type SiteSetupStep = 'open-page' | 'rows' | 'pagination' | 'item-page' | 'done';
 
 // UI: the site setup's steps in the Integrations manager, and Done.
 export function runSiteSetupStep(step: SiteSetupStep): void {
@@ -125,30 +213,10 @@ export function runSiteSetupStep(step: SiteSetupStep): void {
     }
     handlers.closeIntegrations();
   }
-  if (step === 'rows') buildRecordType(list, `${item} rows`);
-  if (step === 'next') handlers.addCommandForIntegrationPage(list.id, list.pages[0].id);
-  if (step === 'item-page') {
-    const itemPage = sessionIntegration(session.itemId);
-    if (itemPage) buildRecordType(itemPage, `${item} page`);
-  }
-  if (step === 'other-item-page') handlers.requestAddIntegrationPage();
-  if (step === 'open-item-page') {
-    state.siteSetup.pending = `Finding a ${itemName(session.request)} on the list…`;
-    state.siteSetup.error = null;
-    rerender({ preserveMountedDocument: true });
-    void openFirstItemPage(session).then(() => {
-      if (state.siteSetup) state.siteSetup.pending = null;
-      const itemPage = sessionIntegration(session.itemId);
-      if (itemPage) buildRecordType(itemPage, `${item} page`);
-      else rerender({ preserveMountedDocument: true });
-    }, (error: unknown) => {
-      if (state.siteSetup) {
-        state.siteSetup.pending = null;
-        state.siteSetup.error = error instanceof Error ? error.message : String(error);
-      }
-      rerender({ preserveMountedDocument: true });
-    });
-  }
+  if (step === 'open-page') void openProfilePage(state.selectedIntegrationProfileId, state.siteSetup.url);
+  if (step === 'rows') buildRecordType(list, `${item} rows`, rowPrompts(itemName(session.request)));
+  if (step === 'pagination') handlers.addCommandForIntegrationPage(list.id, list.pages[0].id, true);
+  if (step === 'item-page') pickExampleItem(session);
 }
 
 /** After each save in the session, what the block would refuse, shown before Done. */

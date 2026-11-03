@@ -132,6 +132,8 @@ export interface CollectionProblem {
   /** The item's title, when the list showed one. */
   title: string | null;
   problem: string;
+  /** An item's: the site setup whose list it was found on, so it can be added to that setup as another example. */
+  siteId?: string;
 }
 
 export interface CollectionRunState {
@@ -172,6 +174,31 @@ export interface SitePatternTestResult {
   attention: string | null;
 }
 
+/** A list row's item: its link field, against the list page's address. */
+export function itemLink(pattern: SitePatternDefinition, values: Record<string, unknown>, listingUrl: string): string | null {
+  const value = values[pattern.linkFieldId ?? ''];
+  return typeof value === 'string' ? new URL(value, listingUrl).href : null;
+}
+
+/**
+ * Site setup, picking an example item: the row's item opened as a run opens it, in a worker of the profile: the list
+ * page loaded, then the row's link (`itemLink`) followed from it, each in turn on the site. Its address is where the
+ * worker ended up (after any redirects), so the example is picked on the page runs read.
+ */
+export async function openListedItem(
+  deps: { scheduler: WorkerScheduler; host: BrowserHost },
+  profileId: string,
+  listUrl: string,
+  link: string,
+): Promise<{ url: string }> {
+  return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(listUrl).origin, label: `Open ${link}`, interactive: true }, async (lease) => {
+    await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl));
+    await lease.paced(link, () => deps.host.navigate(lease.workerId, link));
+    const opened = await deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} });
+    return { url: opened.url };
+  });
+}
+
 /**
  * Pattern builder "Test on another site": loads a URL in a worker of the
  * chosen profile and checks both scope and structural confidence there.
@@ -208,9 +235,13 @@ interface ActiveRun {
   definition: CollectionDefinition;
   controller: AbortController;
   resumeAttention: (() => void) | null;
+  /** The user opened the waiting page in its own window: the worker loads it again on Resume, to see what they did. */
+  reloadAfterAttention: boolean;
   /** The page waiting for the user now, and those waiting behind it: a run asks about one page at a time. */
   attentionTurn: Promise<void>;
   consumer: RecordConsumer;
+  /** Each item's site setup (its list's), for its problem. */
+  itemSites: Map<string, string>;
 }
 
 type ListingResolution = { pattern: SitePatternDefinition; match: PatternMatch } | null;
@@ -276,6 +307,19 @@ export class CollectionService {
     if (attention) await this.deps.host.showWorker(attention.workerId);
   }
 
+  /**
+   * Opens the page waiting for the user in its own window, in the run's profile, with nothing of Galaxy's in it (as a
+   * person sees it: a check that you're human may refuse a page our scripts are in). The worker, which shares the
+   * profile, loads the page again on Resume.
+   */
+  async openPage(runId: string): Promise<void> {
+    const run = this.runs.get(runId);
+    const attention = run?.state.attention;
+    if (!run || !attention) return;
+    run.reloadAfterAttention = true;
+    await this.deps.host.openUserWindow(run.state.profileId, attention.url);
+  }
+
   resume(runId: string): void {
     this.runs.get(runId)?.resumeAttention?.();
   }
@@ -293,8 +337,10 @@ export class CollectionService {
       definition,
       controller: new AbortController(),
       resumeAttention: null,
+      reloadAfterAttention: false,
       attentionTurn: Promise.resolve(),
       consumer,
+      itemSites: new Map(),
       state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, problemPages: [], startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
@@ -313,6 +359,28 @@ export class CollectionService {
     } else run.state.status = 'done';
     this.deps.emit('collection', `${run.state.runId} ${run.state.status}: ${run.state.collected} collected, ${run.state.skipped} skipped, ${run.state.problems} problems`);
     return structuredClone(run.state);
+  }
+
+  /**
+   * What Stop doesn't wait for: a page still loading or being read ends the run at once, as Stop is pressed, instead of
+   * when it is done. The page is left as it is; the worker's next use navigates it.
+   */
+  private stoppable<T>(run: ActiveRun, work: Promise<T>): Promise<T> {
+    const { signal } = run.controller;
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise<T>((resolve, reject) => {
+      const stopped = () => reject(signal.reason);
+      signal.addEventListener('abort', stopped, { once: true });
+      work.then(resolve, reject).finally(() => signal.removeEventListener('abort', stopped));
+    });
+  }
+
+  /** A load in its turn on the site (after the pause between loads there), stopped as `stoppable`; stopped while it waits, it never starts. */
+  private paced<T>(run: ActiveRun, lease: WorkerLease, url: string, load: () => Promise<T>): Promise<T> {
+    return this.stoppable(run, lease.paced(url, () => {
+      this.checkStopped(run);
+      return load();
+    }));
   }
 
   private checkStopped(run: ActiveRun): void {
@@ -351,7 +419,7 @@ export class CollectionService {
     const fixed: Record<string, unknown> = { ...(startPage.values ?? {}) };
     progress.status = 'reading';
     this.assertAllowed(run, startUrl, false);
-    await lease.paced(startUrl, () => host.navigate(lease.workerId, startUrl));
+    await this.paced(run, lease, startUrl, () => host.navigate(lease.workerId, startUrl));
     const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease), 'listing');
     if (start.kind !== 'match') {
       // Not a listing we know: the start page may be one item's own page. If nothing reads it as one, the site needs
@@ -371,7 +439,7 @@ export class CollectionService {
       this.checkStopped(run);
       progress.current = item.title;
       emit('collection', `${startPage.id}: reading ${item.title}`);
-      await lease.paced(item.link, () => host.navigate(lease.workerId, item.link));
+      await this.paced(run, lease, item.link, () => host.navigate(lease.workerId, item.link));
       await this.tracked(run, progress, async () => this.writeDetail(run, lease, item.link, await this.inspectAt(run, lease), item.values));
     }
   }
@@ -403,7 +471,7 @@ export class CollectionService {
       let knownOnPage = 0;
       for (const record of listing.match.records) {
         this.checkStopped(run);
-        const link = typeof record.values[pattern.linkFieldId ?? ''] === 'string' ? new URL(String(record.values[pattern.linkFieldId ?? '']), listingUrl).href : null;
+        const link = itemLink(pattern, record.values, listingUrl);
         if (!link) continue;
         const linkKey = canonicalUrl(link, run.definition.ignoredQueryParameters);
         if (seen.has(linkKey)) continue;
@@ -426,12 +494,13 @@ export class CollectionService {
           return queue;
         }
         const title = typeof listingValues.title === 'string' && listingValues.title ? listingValues.title : link;
+        if (pattern.siteId) run.itemSites.set(link, pattern.siteId);
         const itemCommandId = pattern.itemCommandId;
         if (itemCommandId) {
           // Side-pane board: the item opens beside the listing; there is no navigation to undo.
           progress.toCollect += 1;
           progress.current = title;
-          const opened = await lease.paced(listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: itemCommandId, recordRef: record.ref }));
+          const opened = await this.paced(run, lease, listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: itemCommandId, recordRef: record.ref }));
           await this.tracked(run, progress, async () => {
             if (opened.status !== 'executed') this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
             else await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
@@ -455,7 +524,7 @@ export class CollectionService {
         return queue;
       }
       this.checkStopped(run);
-      const result = await lease.paced(listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: paginationCommandId }));
+      const result = await this.paced(run, lease, listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: paginationCommandId, pageNumber: page + 1 }));
       if (result.status !== 'executed') {
         emit('collection', `no next page (${result.status})`);
         return queue;
@@ -489,12 +558,12 @@ export class CollectionService {
   private async inspectAt(run: ActiveRun, lease: WorkerLease): Promise<PageInspection> {
     for (;;) {
       this.checkStopped(run);
-      const { url } = await this.deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} });
+      const { url } = await this.stoppable(run, this.deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} }));
       const patterns = run.definition.patterns.filter((pattern) => pattern.appliesTo.some((rule) => rule.target !== 'page' || urlMatchesRule(rule, url)));
-      const inspection = await this.deps.host.inspect(lease.workerId, {
+      const inspection = await this.stoppable(run, this.deps.host.inspect(lease.workerId, {
         patterns,
         fingerprints: patternFingerprints(patterns),
-      });
+      }));
       if (inspection.ready) return inspection;
       await this.waitForAttention(run, lease.workerId, inspection.url, inspection.attention ?? 'page-not-ready');
     }
@@ -522,6 +591,10 @@ export class CollectionService {
       run.state.status = 'running';
       await this.deps.host.hideWorker(workerId);
       this.checkStopped(run);
+      if (run.reloadAfterAttention) {
+        run.reloadAfterAttention = false;
+        await this.stoppable(run, this.deps.host.navigate(workerId, url));
+      }
       this.deps.emit('collection', `${run.state.runId} resumed`);
     } finally {
       dealtWith();
@@ -549,7 +622,7 @@ export class CollectionService {
     if (resolution.via === 'frame') {
       this.assertAllowed(run, resolution.frameSrc, false);
       this.deps.emit('collection', `opening frame on its own: ${resolution.frameSrc}`);
-      await lease.paced(resolution.frameSrc, () => this.deps.host.navigate(lease.workerId, resolution.frameSrc));
+      await this.paced(run, lease, resolution.frameSrc, () => this.deps.host.navigate(lease.workerId, resolution.frameSrc));
       page = await this.inspectAt(run, lease);
     }
     const matched = this.matchPattern(page, resolution.pattern);
@@ -634,7 +707,8 @@ export class CollectionService {
     if (record.state === 'ok') run.state.collected += 1;
     else {
       run.state.problems += 1;
-      run.state.problemPages.push({ kind: 'item', url, title: typeof values.title === 'string' && values.title ? values.title : null, problem: record.problem ?? '' });
+      const siteId = run.itemSites.get(url);
+      run.state.problemPages.push({ kind: 'item', url, title: typeof values.title === 'string' && values.title ? values.title : null, problem: record.problem ?? '', ...(siteId ? { siteId } : {}) });
     }
     this.deps.emit('collection', `record ${record.state}${patternId ? ` (${patternId})` : ''} ${record.key}`);
     run.consumer.onRecord(record);

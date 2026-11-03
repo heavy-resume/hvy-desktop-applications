@@ -6,6 +6,7 @@ import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { ANALYSIS_ORIGIN, analysisServiceCapability, analysisServiceManifest, mockAnalysisService, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
 import { buildSearchDocument } from '../test/webAutomation/listingDocument';
 import { readWebAutomationBlocks } from './documentBlocks';
+import { blockSettings, settingsText, storedSettings } from './blockSettings';
 import { loadPublishedService, PUBLISHED_SERVICES_OFF, publishedServices } from './serviceManifests';
 import { readWebApiBlockConfig, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, mockQueueBlocks, type MockFlow } from '../test/webAutomation/flow';
@@ -79,6 +80,8 @@ describe('mock integration: job search flow', () => {
     const timeline = flow.print();
     expect(timeline.indexOf('start-1: page 2, 5 found, 0 already listed')).toBeLessThan(timeline.indexOf('record ok'));
     expect(timeline).not.toContain('← back');
+    // Pagination is asked for the page it goes to, which page numbers click.
+    expect(timeline).toContain('click next-page for page 2');
     expect(run.startPages['start-1']).toMatchObject({ status: 'done', pages: 2, found: 5, known: 0, toCollect: 5, read: 5, collected: 5, problems: 0, current: null });
 
     await flow.evaluate([acmeJob('eng-1'), acmeJob('eng-2'), acmeJob('pm-1')]);
@@ -176,6 +179,25 @@ describe('mock integration: job search flow', () => {
     // The clearance lives in the shared profile session, so a later run is not challenged.
     const again = await flow!.collect(listingCollection([`${ATS_ORIGIN}/initech/jobs`]));
     expect(again.status).toBe('done');
+  });
+
+  it('5c. challenge, opened as a person sees it: the page in its own window in the run\'s profile, then the worker loads it again', async () => {
+    const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`]);
+    await signedInFlow(boards);
+    const paused = await flow!.collect(boards);
+    expect(paused).toMatchObject({ status: 'needs-attention', attention: { reason: 'challenge' } });
+
+    // UI: "Open page": the page opens in the profile's own window, not the worker's, which stays hidden.
+    await flow!.openAttentionPage(paused.runId);
+    expect(flow!.host.isUserWindowVisible(paused.profileId)).toBe(true);
+    expect(flow!.host.isWorkerVisible(paused.attention!.workerId)).toBe(false);
+    flow!.solveChallenge(ATS_ORIGIN);
+    // UI: "Resume": the worker loads the page again (it shares the profile, so it is cleared too) and carries on.
+    const resumed = await flow!.resumeAttention(paused.runId);
+    expect(resumed).toMatchObject({ status: 'done', collected: 1, attention: null });
+    const loads = (window: RegExp) => flow!.timeline.filter((line) => window.test(line) && line.endsWith('→ boards.mock-ats.test/initech/jobs')).length;
+    expect(loads(/\[host\] user window /)).toBe(1);
+    expect(loads(/\[host\] w\d+ /)).toBe(2);
   });
 
   it('5a. a sign-in screen or human check shown as an ordinary page: the run asks a person, then carries on', async () => {
@@ -342,6 +364,19 @@ describe('mock integration: job search flow', () => {
     expect(await flow!.stop(paused.runId)).toMatchObject({ status: 'stopped', collected: 0 });
   });
 
+  it('12b. stop while a page is still loading: the run stops at once, not when the page is done', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const slow = flow!.host.holdNavigation('/acme/jobs/eng-1');
+    const run = flow!.automation.startCollection(boards, flow!.sink);
+    let loading = false;
+    void slow.reached.then(() => { loading = true; });
+    await flow!.clock.runUntil(() => loading);
+    expect(loading).toBe(true);
+    expect(await flow!.stop(run.runId)).toMatchObject({ status: 'stopped' });
+    slow.release();
+  });
+
   it('14. side pane: cards open beside the listing, with no navigation to undo', async () => {
     const board = listingCollection([`${SIDE_PANE_ORIGIN}/search`], { patterns: [sidePaneListingPattern, sidePaneDetailPattern] });
     await signedInFlow(board);
@@ -389,6 +424,26 @@ describe('mock integration: job search flow', () => {
     expect((await flow!.callEndpoint('session')).body).toEqual({ account: { id: 'a-2', name: 'Sam Other' } });
     expect(flow!.reviewWebApi()).toMatchObject({ reason: 'authorized' });
     expect((await flow!.callEndpoint('profile')).status).toBe(200);
+  });
+
+  it('19c. setup opens a picked row\'s item as a run does: the list page, then the row\'s link from it', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const link = `${ATS_ORIGIN}/acme/jobs/eng-2?utm_source=board`;
+    const opened = await flow!.openListedItem(ACME, link);
+    expect(opened.url).toBe(link);
+    const loads = flow!.print().split('\n').filter((line) => line.includes(' → '));
+    expect(loads.slice(-2).map((line) => line.split(' → ')[1])).toEqual([expect.stringContaining('/acme/jobs'), expect.stringContaining('/acme/jobs/eng-2')]);
+  });
+
+  it('19b. an item its site setup didn\'t read is listed with that setup, to add it there as another example', async () => {
+    const boards = listingCollection([ACME], { patterns: [] });
+    await signedInFlow(boards);
+    // The setup reads the list, but has no item page yet: every item is a problem of that setup.
+    const listOnly = flow!.addSiteSetups(boards, { id: 'acme-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'acme-ats' }] });
+    const run = await flow!.collect(listOnly);
+    expect(run.problemPages.length).toBeGreaterThan(0);
+    expect(run.problemPages.every((page) => page.kind === 'item' && page.siteId === 'acme-ats')).toBe(true);
   });
 
   it('19. site setups in the block: pasted setups apply on re-run, but fingerprints never widen where a run may go', async () => {
@@ -937,12 +992,12 @@ describe('mock integration: job search flow', () => {
 
     // The document asks for another permission: approved again, naming what changed.
     const block = readWebAutomationBlocks(flow.document).webApis[0].block;
-    block.schema.pluginConfig = { ...block.schema.pluginConfig, permissions: ['analyses', 'account'] };
+    block.text = settingsText({ ...storedSettings(block), permissions: ['analyses', 'account'] });
     expect(flow.reviewWebApi(capability())).toMatchObject({ reason: 'capability-changed', changedCategories: ['permissions'] });
 
     // A permission the service does not offer is refused, naming it.
-    block.schema.pluginConfig = { ...block.schema.pluginConfig, permissions: ['analyses', 'billing'] };
-    expect(readWebApiBlockConfig(block.schema.pluginConfig)).toEqual({ ok: false, errors: ['app.mock-analysis.test’s published file offers no permission "billing".'] });
+    block.text = settingsText({ ...storedSettings(block), permissions: ['analyses', 'billing'] });
+    expect(readWebApiBlockConfig(blockSettings(block))).toEqual({ ok: false, errors: ['app.mock-analysis.test’s published file offers no permission "billing".'] });
   });
   it('43. a service\'s published file that could not be read: the block says why, and reads it on Try again', async () => {
     publishedServices.enabled = true;

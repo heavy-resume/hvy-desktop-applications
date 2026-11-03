@@ -1,6 +1,7 @@
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import type { VisualBlock } from '../../../heavy-file-format/src/editor/types';
+import { blockSettings } from './blockSettings';
 import { validateCliItemStore } from './cliItemStore';
 import {
   QUEUE_PLUGIN_ID,
@@ -34,7 +35,7 @@ export function readWebAutomationBlocks(document: VisualDocument): WebAutomation
   visitBlocks(document.sections, (block) => {
     const pluginId = block.schema.plugin;
     const blockId = block.schema.id || '(unnamed plugin)';
-    const value = block.schema.pluginConfig;
+    const value = blockSettings(block);
     const report = (errors: string[]) => blocks.problems.push(...errors.map((message) => ({ blocks: [block], message })));
     if (pluginId === WEB_API_PLUGIN_ID) {
       const result = readWebApiBlockConfig(value);

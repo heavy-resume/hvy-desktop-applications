@@ -12,6 +12,8 @@ interface MockJob {
   title: string;
   location: string;
   description: string;
+  /** Pay shown in the job's row of the list, as some boards show it ("$95,000 – $110,000 a year"). */
+  listedPay?: string;
 }
 
 function job(slug: string, title: string, skills: string): MockJob {
@@ -24,8 +26,8 @@ function job(slug: string, title: string, skills: string): MockJob {
 }
 
 /** A posting that says where it is and what it pays, as a description states pay: "$150,000 – $180,000 a year". */
-function placedJob(slug: string, title: string, location: string, pay: string): MockJob {
-  return { slug, title, location, description: `We are hiring a ${title}. You will build reliable systems using TypeScript. ${pay}`.trim() };
+function placedJob(slug: string, title: string, location: string, pay: string, listedPay?: string): MockJob {
+  return { slug, title, location, description: `We are hiring a ${title}. You will build reliable systems using TypeScript. ${pay}`.trim(), ...(listedPay ? { listedPay } : {}) };
 }
 
 /** One company's board on a mock ATS: listing pages plus one detail page per job, all with the same markup. */
@@ -40,7 +42,7 @@ export function atsCompany(company: string, displayName: string, pages: MockJob[
       matches: {
         'ats-listing': {
           confidence: 0.93,
-          records: jobs.map((item) => ({ ref: `${company}-${item.slug}`, values: { title: item.title, link: `/${company}/jobs/${item.slug}?utm_source=board` } })),
+          records: jobs.map((item) => ({ ref: `${company}-${item.slug}`, values: { title: item.title, link: `/${company}/jobs/${item.slug}?utm_source=board`, ...(item.listedPay ? { pay: item.listedPay } : {}) } })),
         },
       },
     };
@@ -64,7 +66,7 @@ export const atsListingPattern: SitePatternDefinition = {
   name: 'Mock ATS job board',
   role: 'listing',
   appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/*/jobs' }],
-  fields: [{ id: 'title', kind: 'text' }, { id: 'link', kind: 'link' }],
+  fields: [{ id: 'title', kind: 'text' }, { id: 'link', kind: 'link' }, { id: 'pay', kind: 'text' }],
   minimumConfidence: 0.8,
   linkFieldId: 'link',
   paginationCommandId: 'next-page',
@@ -100,7 +102,8 @@ export function mockAtsSite(): MockSite {
         placedJob('eng-2', 'Backend Engineer', 'Austin, TX; Denver, CO', 'The salary is $120,000 a year.'),
         placedJob('contract-1', 'Contract Developer', 'Remote (US)', 'This contract pays $60–$75 an hour.'),
         placedJob('design-1', 'Product Designer', 'Remote', 'This is a project budget of $8,000.'),
-        placedJob('pm-1', 'Product Manager', 'Boston, MA', ''),
+        // Its posting says nothing of pay; its row in the list does.
+        placedJob('pm-1', 'Product Manager', 'Boston, MA', '', '$95,000 – $110,000 a year'),
         placedJob('tech-1', 'Robotics Technician', 'Boston, MA', 'The salary is starting at $140,000 a year.'),
       ]]),
       ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
@@ -256,6 +259,7 @@ export const LISTING_FIELDS: CollectionField[] = [
   { id: 'title', label: 'Title', kind: 'text' },
   { id: 'company', label: 'Company', kind: 'text' },
   { id: 'location', label: 'Location', kind: 'text' },
+  { id: 'pay', label: 'Pay', kind: 'text' },
   { id: 'description', label: 'Description', kind: 'long-text' },
 ];
 

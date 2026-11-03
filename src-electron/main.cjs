@@ -769,6 +769,15 @@ const INTEGRATION_TOOLBAR = fs.readFileSync(path.join(__dirname, '..', 'public',
 const INTEGRATION_TOOLBAR_HEIGHT = 52;
 // Web automation's browser host: workers, the sign-in window, and inspection (web-automation-host.cjs).
 const webAutomationHost = createWebAutomationHost({
+  // A profile's saved cookies, shared with the integration browser through the integration vault, once it is set up.
+  profileCookies: {
+    available: () => {
+      const status = loadIntegrationVaultStatus();
+      return status.configured && status.hasVault;
+    },
+    restore: restoreElectronIntegrationCookies,
+    save: (browserSession, profileId, domains) => mergeElectronProfileCookies(browserSession, profileId, (domain) => domains.has(domain)),
+  },
   inspectorSource: INTEGRATION_INSPECTOR,
   pageSource: fs.readFileSync(path.join(__dirname, '..', 'src', 'web-automation-page.js'), 'utf8'),
   sendEvent: (event) => mainWindow?.webContents.send('hvy:web-automation-navigation', event),
@@ -796,6 +805,9 @@ function requestIntegrationNavigationApproval(browser, requestedUrl, navigationK
   });
   raiseWindow(mainWindow);
 }
+
+/** Picking a record's box: what the browser starts when it opens to pick, until it is asked for another step. */
+const DEFAULT_INSPECTION_START = 'window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })';
 
 function integrationInspectorOptions(payload) {
   return { ...(payload && typeof payload === 'object' ? payload : {}), externalToolbar: true };
@@ -832,9 +844,11 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'focus-main') {
     raiseWindow(mainWindow);
   }
-  if (command === 'inspect') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
-  if (command === 'inspect-parent') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(integrationInspectorOptions(payload))})`);
-  if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target') {
+    // Kept, so a page that loads while picking (a check that you're human passed) starts the same step again.
+    browser.inspectionStart = `window.__hvyGalaxyInspector.start(${JSON.stringify(command === 'inspect-parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(payload))})`;
+    return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\n${browser.inspectionStart}`);
+  }
   if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
   if (command === 'check-page-ready') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(${JSON.stringify(payload?.readyChecks || {})}, ${JSON.stringify(payload?.context || {})})`);
   if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
@@ -929,15 +943,25 @@ async function restoreElectronIntegrationCookies(browserSession, profileId) {
 
 async function saveElectronIntegrationCookies(browserSession, profileId, allowedOrigins) {
   const allowedHosts = allowedOrigins ? new Set([...allowedOrigins].map((origin) => new URL(origin).hostname)) : null;
-  const cookies = (await browserSession.cookies.get({})).filter((cookie) => {
-    const domain = cookie.domain.replace(/^\./, '');
+  await mergeElectronProfileCookies(browserSession, profileId, (domain) => {
     if (allowedHosts) return [...allowedHosts].some((host) => domain === host || host.endsWith(`.${domain}`));
     return domain === 'google.com' || domain.endsWith('.google.com');
   });
+}
+
+/**
+ * Saves a session's cookies into its profile's vault entry, for the cookie domains `inScope` covers: the vault's cookies
+ * for those domains are replaced by the session's (so a sign-out there is saved too), and its cookies for other domains
+ * are kept. The integration browser and web automation's sessions share a profile's entry, each saving what it covers.
+ */
+async function mergeElectronProfileCookies(browserSession, profileId, inScope) {
+  const bare = (domain) => String(domain || '').replace(/^\./, '');
+  const cookies = (await browserSession.cookies.get({})).filter((cookie) => inScope(bare(cookie.domain)));
   const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
   const profiles = vault.profiles ?? {};
+  const kept = (profiles[profileId]?.cookies ?? (profileId === 'default-google' ? vault.cookies ?? [] : [])).filter((cookie) => !inScope(bare(cookie.domain)));
   profiles[profileId] = {
-    cookies: cookies.map((cookie) => ({
+    cookies: [...kept, ...cookies.map((cookie) => ({
       name: cookie.name,
       value: cookie.value,
       domain: cookie.domain,
@@ -948,7 +972,7 @@ async function saveElectronIntegrationCookies(browserSession, profileId, allowed
       hostOnly: cookie.hostOnly,
       session: cookie.session,
       expirationDate: cookie.expirationDate,
-    }))
+    }))],
   };
   delete vault.cookies;
   vault.profiles = profiles;
@@ -1447,7 +1471,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     buildMenu();
     const browserUserAgent = browser.contents.getUserAgent()
       .replace(/\sElectron\/[^\s]+/g, '')
-      .replace(/\sHVY(?:[\s-]Galaxy)?\/[^\s]+/gi, '');
+      .replace(/\sHVY(?:[\s-]?Galaxy)?\/[^\s]+/gi, '');
     browser.contents.setUserAgent(browserUserAgent);
     integrationWindow.removeMenu();
     browser.contents.on('before-input-event', (event, input) => {
@@ -1494,7 +1518,8 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       if (requestedUrl.startsWith(inspectorControlPrefix)) {
         event.preventDefault();
         const control = requestedUrl.slice(inspectorControlPrefix.length);
-        if (['navigate', 'undo', 'done'].includes(control)) {
+        // A button the page's picker put on the toolbar, by its id.
+        if (/^[a-z0-9-]+$/.test(control)) {
           void browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.control(${JSON.stringify(control)})`);
         }
         return;
@@ -1509,6 +1534,10 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       }
     });
     browser.contents.on('will-navigate', (event, requestedUrl) => {
+      // A message from the inspector carries the browser's token (integration-inspector.js), for Tauri's host, which
+      // hears every frame's navigations. Only the top page's reach this handler, so frames cannot send one here; the
+      // token is dropped, not checked.
+      if (requestedUrl.startsWith('hvy-integration://')) requestedUrl = requestedUrl.replace(/\?t=[^#]*$/, '');
       if (requestedUrl === 'hvy-integration://close') {
         event.preventDefault();
         integrationWindow.close();
@@ -1559,7 +1588,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
       void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
         void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
-        if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+        if (browser.actionModePending) return browser.contents.executeJavaScript(browser.inspectionStart || DEFAULT_INSPECTION_START);
         return executePendingIntegrationExtraction(browser);
       });
     });
@@ -1609,13 +1638,14 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.integrationId = integrationId;
   browser.pageId = pageId;
   browser.actionModePending = actionMode;
+  if (actionMode) browser.inspectionStart = DEFAULT_INSPECTION_START;
   browser.pendingExtraction = pendingExtraction || null;
   await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
   browser.window.removeMenu();
   if (browser.contents.getURL() === url && !browser.contents.isLoadingMainFrame()) {
     await browser.contents.executeJavaScript(INTEGRATION_INSPECTOR);
     if (browser.actionModePending) {
-      await browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+      await browser.contents.executeJavaScript(browser.inspectionStart || DEFAULT_INSPECTION_START);
     } else {
       await executePendingIntegrationExtraction(browser);
     }

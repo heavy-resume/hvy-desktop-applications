@@ -13,6 +13,8 @@ export interface SiteSetupRequest {
   url: string;
   /** The setup being done again, or the new one's id and name. */
   site: CollectionSite;
+  /** The address is one of its item pages, to add as another example (a page a run couldn't read), not its list. */
+  itemExample?: boolean;
   /** Its patterns now (none for a new setup), to continue from. */
   patterns: SitePatternDefinition[];
   /** Why the block would refuse these patterns, without saving them. */

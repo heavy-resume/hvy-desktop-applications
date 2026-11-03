@@ -325,6 +325,16 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".
+    // UI: Set up this site, picking an example item: the row picked, opened as a run opens it.
+    async openListedItem(listUrl: string, link: string) {
+      let result: Awaited<ReturnType<typeof runtime.openListedItem>> | null = null;
+      void runtime.openListedItem(BOARDS_PROFILE, listUrl, link).then((value) => {
+        result = value;
+      });
+      await clock.runUntil(() => result !== null);
+      return result!;
+    },
+
     async testPattern(pattern: SitePatternDefinition, url: string) {
       let result: Awaited<ReturnType<typeof runtime.testSitePattern>> | null = null;
       void runtime.testSitePattern(BOARDS_PROFILE, pattern, url).then((value) => {
@@ -357,6 +367,11 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     // UI: Needs attention item, "Show".
     showAttention(runId: string): Promise<void> {
       return automation.showAttention(runId);
+    },
+
+    // UI: Needs attention item, "Open page".
+    openAttentionPage(runId: string): Promise<void> {
+      return automation.openAttentionPage(runId);
     },
 
     /** User action: solves the bot challenge in the shown window. */

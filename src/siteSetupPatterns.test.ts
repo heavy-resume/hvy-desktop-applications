@@ -43,6 +43,47 @@ describe('setting up a site into a collection', () => {
     expect(source.integration).not.toHaveProperty('siteSetup');
   });
 
+  it('uses the page command recorded as the list\'s next page, whatever it is named', () => {
+    const list = setupPage('https://boards.test/acme/jobs', 1, ['title'], ['Open filters', 'Page numbers']);
+    list.pages[0].commands![1].pagination = 'page-number';
+    const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title', 'description']);
+    const [listing] = patternsFromSetup('acme', [list, job], list.id);
+    expect(listing.paginationCommandId).toBe('command-1');
+    expect((listing.matcher as { commands: Record<string, { pagination?: string }> }).commands['command-1'].pagination).toBe('page-number');
+  });
+
+  it('reads an item on every page it has an example from: one added from a page a run couldn\'t read widens it', () => {
+    const list = setupPage('https://boards.test/acme/jobs', 1, ['title']);
+    const job = setupPage('https://boards.test/acme/jobs/1', 2, ['title', 'description']);
+    const other = { ...createCustomPageIntegration('Job page', 'https://boards.test/viewjob?jk=2').pages[0], id: 'page-2' };
+    job.pages.push(other);
+    job.actions[0].pageIds.push(other.id);
+    const [, detail] = patternsFromSetup('acme', [list, job], list.id);
+    expect(detail.appliesTo).toEqual([
+      { target: 'page', host: 'boards.test', path: '/acme/jobs/*' },
+      // A page at the top of the site is its own kind of address, not every address on it.
+      { target: 'page', host: 'boards.test', path: '/viewjob' },
+    ]);
+  });
+
+  it('keeps a setup\'s picks once, in its patterns, and reopens it with them all', () => {
+    const list = setupPage('https://boards.test/acme/jobs', 2, ['title', 'location']);
+    // Two examples: the title picked in both, the location only in the first.
+    list.actions[0].pattern!.fields = list.actions[0].pattern!.fields.map((entry, index) => {
+      const examples = index === 0 ? [{ selected: { shape: 'title-1' } }, { selected: { shape: 'title-2' } }] : [{ selected: { shape: 'location-1' } }, null];
+      return { ...entry, snapshot: examples[0], snapshots: examples.filter(Boolean), exampleSnapshots: examples };
+    });
+    const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title', 'description']);
+    const patterns = patternsFromSetup('acme', [list, job], list.id);
+    const stored = JSON.stringify(patterns);
+    // Each pick once: in the matcher, as its examples, not again as the field's snapshot and snapshots, or in the source.
+    expect(stored.split('title-2').length - 1).toBe(1);
+    expect(stored.split('location-1').length - 1).toBe(1);
+
+    const reopened = setupIntegrations(patterns).integrations.find((integration) => integration.id === list.id)!;
+    expect(reopened.actions[0].pattern).toEqual({ ...list.actions[0].pattern, fields: list.actions[0].pattern!.fields.map((entry) => ({ ...entry, negativeSnapshots: [] })) });
+  });
+
   it('reopens a setup\'s own pages to set it up again', () => {
     const list = setupPage('https://boards.test/acme/jobs', 2, ['title']);
     const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title', 'description']);
