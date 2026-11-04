@@ -34,7 +34,6 @@
     "test:browser": "vitest run --config vitest.browser.config.ts"
   },
   "dependencies": {
-    "@mcp-b/webmcp-polyfill": "5.0.1",
     "@automerge/automerge": "^3.3.2",
     "@tauri-apps/api": "^2.9.0",
     "diff": "^9.0.0",
@@ -44,6 +43,7 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
+    "@mcp-b/webmcp-polyfill": "5.0.1",
     "@tauri-apps/cli": "^2.9.0",
     "@types/node": "^24.6.0",
     "brython": "^3.14.0",

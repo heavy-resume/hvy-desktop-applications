@@ -297,13 +297,13 @@ async function loadPluginBuilderRenderer(window, workspacePaths, selectedWorkspa
     ...(selectedWorkspacePath ? { selectedWorkspace: selectedWorkspacePath } : {}),
   };
   if (process.env.ELECTRON_RENDERER_URL) {
-    const url = new URL('/plugin-builder.html', process.env.ELECTRON_RENDERER_URL);
+    const url = new URL('/pages/plugin-builder.html', process.env.ELECTRON_RENDERER_URL);
     url.searchParams.set('workspaces', JSON.stringify(workspacePaths));
     if (selectedWorkspacePath) url.searchParams.set('selectedWorkspace', selectedWorkspacePath);
     await window.loadURL(url.toString());
     return;
   }
-  await window.loadFile(path.join(__dirname, '..', 'dist', 'plugin-builder.html'), { query });
+  await window.loadFile(path.join(__dirname, '..', 'dist', 'pages', 'plugin-builder.html'), { query });
 }
 
 function buildMenu() {
@@ -786,13 +786,13 @@ const webAutomationHost = createWebAutomationHost({
   sendEvent: (event) => mainWindow?.webContents.send('hvy:web-automation-navigation', event),
 });
 
-// The integration browser's toolbar: the app's built page (integration-toolbar.html), from the dev server or dist.
+// The integration browser's toolbar: the app's built page (pages/integration-toolbar.html), from the dev server or dist.
 async function loadIntegrationToolbar(contents) {
   if (process.env.ELECTRON_RENDERER_URL) {
-    await contents.loadURL(new URL('/integration-toolbar.html', process.env.ELECTRON_RENDERER_URL).toString());
+    await contents.loadURL(new URL('/pages/integration-toolbar.html', process.env.ELECTRON_RENDERER_URL).toString());
     return;
   }
-  await contents.loadFile(path.join(__dirname, '..', 'dist', 'integration-toolbar.html'));
+  await contents.loadFile(path.join(__dirname, '..', 'dist', 'pages', 'integration-toolbar.html'));
 }
 
 // What the toolbar asks (src/integrationToolbar/toolbar.ts): the browser's buttons and address, its page menu, and

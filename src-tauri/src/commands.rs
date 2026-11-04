@@ -208,7 +208,7 @@ fn open_plugin_builder_window(
     if let Some(window) = app.get_webview_window(PLUGIN_BUILDER_WINDOW_LABEL) {
         return raise_integration_window(&window.as_ref().window());
     }
-    let mut url = "plugin-builder.html".to_string();
+    let mut url = "pages/plugin-builder.html".to_string();
     if !workspace_paths.is_empty() || selected_workspace_path.is_some() {
         let mut query_url = tauri::Url::parse("http://plugin-builder.local/")
             .map_err(|error| AppError::Message(error.to_string()))?;
@@ -1980,7 +1980,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         }));
         let toolbar = tauri::webview::WebviewBuilder::new(
             toolbar_label,
-            tauri::WebviewUrl::App("integration-toolbar.html".into()),
+            tauri::WebviewUrl::App("pages/integration-toolbar.html".into()),
         );
         let toolbar_webview = native_window.add_child(
 

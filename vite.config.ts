@@ -173,7 +173,7 @@ export default defineConfig({
   },
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   optimizeDeps: {
-    entries: ['index.html', 'plugin-builder.html'],
+    entries: ['index.html', 'pages/plugin-builder.html', 'pages/integration-toolbar.html'],
   },
   test: {
     setupFiles: ['./src/test/vitest.setup.ts'],
@@ -198,7 +198,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve('index.html'),
-        pluginBuilder: resolve('plugin-builder.html'),
+        pluginBuilder: resolve('pages/plugin-builder.html'),
+        integrationToolbar: resolve('pages/integration-toolbar.html'),
       },
     },
   },
