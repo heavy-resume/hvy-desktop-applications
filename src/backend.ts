@@ -18,6 +18,7 @@ declare global {
       onOpenDocumentPath(callback: (path: string) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
       onIntegrationInspectionResult(callback: (result: unknown) => void): () => void;
+      onIntegrationBrowserEvent(callback: (browserEvent: unknown) => void): () => void;
       onWebMcpBrokerRequest(callback: (request: WebMcpBrokerRequest) => void): () => void;
     };
   }
@@ -549,7 +550,7 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
-export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'check-page-ready' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'check-page-ready' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export interface IntegrationStorageProbeResult {
   cookieName: string;
@@ -1607,6 +1608,16 @@ export function onIntegrationInspectionResult(handler: (result: unknown) => void
   if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationInspectionResult(handler));
   if (!isTauriRuntime()) return Promise.resolve(() => undefined);
   return listen<unknown>('integration-inspection-result', (event) => handler(event.payload));
+}
+
+/**
+ * What the integration browser's host reports (the browser closed, a toolbar action, a navigation to approve), apart from
+ * what the page's scripts send (`onIntegrationInspectionResult`): a site's own script can send those, never these.
+ */
+export function onIntegrationBrowserEvent(handler: (browserEvent: unknown) => void): Promise<() => void> {
+  if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationBrowserEvent(handler));
+  if (!isTauriRuntime()) return Promise.resolve(() => undefined);
+  return listen<unknown>('integration-browser-event', (event) => handler(event.payload));
 }
 
 export interface WebMcpBrokerRequest {

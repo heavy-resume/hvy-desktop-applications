@@ -102,9 +102,9 @@ function createWebAutomationHost(deps) {
     });
   }
 
-  // A call into the shared page script, after the inspector it uses.
+  // A call into the shared page script, after the inspector it uses, in their own isolated world, out of the page's reach.
   function pageCall(contents, name, argument) {
-    return contents.executeJavaScript(`${deps.inspectorSource}\n${deps.pageSource}\nwindow.__hvyGalaxyAutomation.${name}(${JSON.stringify(argument)})`);
+    return contents.executeJavaScriptInIsolatedWorld(deps.worldId, [{ code: `${deps.inspectorSource}\n${deps.pageSource}\nwindow.__hvyGalaxyAutomation.${name}(${JSON.stringify(argument)})` }]);
   }
 
   async function navigate(workerId, url) {

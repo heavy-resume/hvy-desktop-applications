@@ -466,6 +466,34 @@ fn integration_result_is_background(result: &serde_json::Value) -> bool {
             && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true))
 }
 
+/// What picking says, and its buttons, from the page's inspector, on the browser's toolbar.
+fn show_integration_toolbar_state(app: &AppHandle, profile_id: &str, state: &serde_json::Value) {
+    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+        let _ = toolbar.eval(format!("window.hvySetInspectionState?.({state})"));
+    }
+}
+
+/// Picking cancelled in the page (Escape): the toolbar is the browser's again, and Galaxy comes forward.
+fn cancel_integration_inspection(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str) {
+    action_mode.store(false, Ordering::SeqCst);
+    show_integration_toolbar_state(app, profile_id, &serde_json::json!({}));
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = raise_integration_window(&main_window.as_ref().window());
+    }
+}
+
+/// A message Galaxy's scripts send from their own world (integration_world.rs): what the inspector's navigations say.
+fn receive_integration_page_message(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, text: &str) {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(text) else { return };
+    let value = message.get("value").cloned().unwrap_or_default();
+    match message.get("kind").and_then(serde_json::Value::as_str) {
+        Some("publish") => emit_integration_result(app, action_mode, profile_id, value),
+        Some("toolbar-state") => show_integration_toolbar_state(app, profile_id, &value),
+        Some("cancel") => cancel_integration_inspection(app, action_mode, profile_id),
+        _ => {}
+    }
+}
+
 fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, mut result: serde_json::Value) {
     if let Some(object) = result.as_object_mut() {
         object.insert("profileId".into(), serde_json::Value::String(profile_id.into()));
@@ -588,6 +616,18 @@ fn integration_message_token(profile_id: &str) -> String {
 
 const INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER: &str = "__HVY_GALAXY_MESSAGE_TOKEN__";
 
+/// A message to Galaxy (an hvy-integration:// navigation) as it is read, without its token: none without the profile's
+/// token.
+fn integration_message(url: &tauri::Url, profile_id: &str) -> Option<tauri::Url> {
+    let token = url.query_pairs().find(|(name, _)| name == "t").map(|(_, value)| value.into_owned());
+    if token.as_deref() != Some(integration_message_token(profile_id).as_str()) {
+        return None;
+    }
+    let mut message = url.clone();
+    message.set_query(None);
+    Some(message)
+}
+
 /// The inspector, with the profile's message token in it.
 fn integration_inspector_source(profile_id: &str) -> String {
     INTEGRATION_INSPECTOR.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(profile_id))
@@ -595,6 +635,43 @@ fn integration_inspector_source(profile_id: &str) -> String {
 
 fn integration_browser_label(profile_id: &str) -> String {
     format!("{INTEGRATION_BROWSER_LABEL}-{}", profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect::<String>())
+}
+
+/// What the integration browser's toolbar asks (src/integrationToolbar/toolbar.ts).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum IntegrationToolbarMessage {
+    Browser { command: String },
+    Navigate { url: String },
+    ToolbarAction { action: String },
+    InspectorControl { id: String },
+}
+
+type IntegrationToolbarHandler = Arc<dyn Fn(IntegrationToolbarMessage) + Send + Sync>;
+
+/// Each open integration browser's toolbar handler, by the toolbar's webview label: it holds the browser it acts on.
+static INTEGRATION_TOOLBAR_HANDLERS: OnceLock<Mutex<HashMap<String, IntegrationToolbarHandler>>> = OnceLock::new();
+
+fn register_integration_toolbar_handler(label: &str, handler: IntegrationToolbarHandler) {
+    let handlers = INTEGRATION_TOOLBAR_HANDLERS.get_or_init(|| Mutex::new(HashMap::new()));
+    handlers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(label.into(), handler);
+}
+
+fn forget_integration_toolbar_handler(label: &str) {
+    if let Some(handlers) = INTEGRATION_TOOLBAR_HANDLERS.get() {
+        handlers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(label);
+    }
+}
+
+/// The toolbar's IPC: its message, to the handler its browser registered for it.
+#[tauri::command]
+fn integration_toolbar_message(webview: tauri::Webview, message: IntegrationToolbarMessage) -> AppResult<()> {
+    let handler = INTEGRATION_TOOLBAR_HANDLERS.get()
+        .and_then(|handlers| handlers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(webview.label()).cloned());
+    if let Some(handler) = handler {
+        handler(message);
+    }
+    Ok(())
 }
 
 fn integration_toolbar_label(profile_id: &str) -> String {
@@ -1470,8 +1547,6 @@ fn open_document_key_file_dialog() -> AppResult<Vec<DocumentKeyFileSource>> {
     }).collect()
 }
 const INTEGRATION_INSPECTOR: &str = include_str!("../../src/integration-inspector.js");
-const WEBMCP_POLYFILL: &str = include_str!("../../node_modules/@mcp-b/webmcp-polyfill/dist/index.iife.js");
-const INTEGRATION_WEBMCP_BRIDGE: &str = include_str!("../../src/integration-webmcp-bridge.js");
 
 fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
     let value = match destination {
@@ -1506,6 +1581,48 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
         })
 }
 
+const INTEGRATION_WEBMCP: &str = include_str!("../../src/integration-webmcp-bridge.js");
+
+/// A WebMCP request (integration-webmcp-bridge.js), run once in the page's own world, where the page's tools are. On
+/// macOS its result is the script's, so nothing of it stays in the page; elsewhere it goes to Galaxy as the inspector's
+/// results do, from the page's world, where the inspector is there.
+fn run_integration_webmcp(app: &AppHandle, webview: &tauri::Webview, action_mode: Arc<AtomicBool>, profile_id: &str, operation: &str, request: &serde_json::Value) -> tauri::Result<()> {
+    let call = format!("({INTEGRATION_WEBMCP})({operation:?}, {request})");
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        let profile_id = profile_id.to_string();
+        let request = request.clone();
+        integration_world::call_in_page(webview, format!("return await {call}.then(JSON.stringify);"), move |text| {
+            // The script answers its own failures: one that does not finish is a page that went away while it ran.
+            let result = text.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| serde_json::json!({
+                "kind": "integration-webmcp-error",
+                "requestId": request.get("requestId"),
+                "focusMainOnResult": request.get("focusMainOnResult").and_then(serde_json::Value::as_bool) == Some(true),
+                "code": "NavigationError",
+                "message": "The page navigated during WebMCP execution.",
+            }));
+            emit_integration_result(&app, &action_mode, &profile_id, result);
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, action_mode);
+        webview.eval(format!("{}\n{call}.then((result) => window.__hvyGalaxyInspector.publish(result));", integration_inspector_source(profile_id)))
+    }
+}
+
+/// What a browser waiting on its page does once the page is there: a WebMCP request, in the page's world, or the
+/// inspector's work, in its own.
+fn run_integration_extraction(app: &AppHandle, webview: &tauri::Webview, action_mode: Arc<AtomicBool>, profile_id: &str, extraction: &serde_json::Value) -> tauri::Result<()> {
+    let payload = extraction.get("payload").cloned().unwrap_or_else(|| serde_json::json!({}));
+    match extraction.get("kind").and_then(serde_json::Value::as_str) {
+        Some("webmcp-discovery") => run_integration_webmcp(app, webview, action_mode, profile_id, "discover", &payload),
+        Some("webmcp-invocation") => run_integration_webmcp(app, webview, action_mode, profile_id, "invoke", &payload),
+        _ => integration_world::eval(webview, integration_extraction_script(profile_id, extraction)),
+    }
+}
+
 fn integration_extraction_script(profile_id: &str, extraction: &serde_json::Value) -> String {
     let inspector = integration_inspector_source(profile_id);
     if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
@@ -1521,10 +1638,6 @@ fn integration_extraction_script(profile_id: &str, extraction: &serde_json::Valu
         format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
         format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
-    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
-        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
-    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
-        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
     } else {
         format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     }
@@ -1579,10 +1692,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 .map_err(|error| AppError::Message(error.to_string()))?;
             if profile_current_url.lock().map(|current| current.as_ref() == Some(&url)).unwrap_or(false) {
                 if action_mode_pending.load(Ordering::SeqCst) {
-                    content.eval(format!("{}\n{}", integration_inspector_source(&profile_id), integration_inspection_start(&profile_id)))
+                    integration_world::eval(&content, format!("{}\n{}", integration_inspector_source(&profile_id), integration_inspection_start(&profile_id)))
                         .map_err(|error| AppError::Message(error.to_string()))?;
                 } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
-                    content.eval(integration_extraction_script(&profile_id, &extraction)).map_err(|error| AppError::Message(error.to_string()))?;
+                    run_integration_extraction(&app, &content, action_mode_pending.clone(), &profile_id, &extraction).map_err(|error| AppError::Message(error.to_string()))?;
                 }
             } else {
                 content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
@@ -1603,7 +1716,6 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         }
         *profile_current_url.lock().map_err(|error| AppError::Message(error.to_string()))? = None;
         let integration_app = app.clone();
-        let integration_window_label = window_label.clone();
         let result_profile_id = profile_id.clone();
         let page_load_profile_id = result_profile_id.clone();
         let page_load_action_mode = action_mode_pending.clone();
@@ -1615,7 +1727,6 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let page_load_last_allowed_url = integration_last_allowed_url(&profile_id)?;
         let toolbar_allowed_origins = profile_allowed_origins.clone();
         let new_window_allowed_origins = profile_allowed_origins.clone();
-        let navigation_allowed_origins = profile_allowed_origins.clone();
         let new_window_page_context = profile_page_context.clone();
         let new_window_current_url = profile_current_url.clone();
         let toolbar_page_context = profile_page_context.clone();
@@ -1624,11 +1735,12 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
         #[cfg(target_os = "windows")]
         let integration_inspector = format!(
-            "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\nwindow.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}",
-            WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(&profile_id)), integration_inspector_source(&profile_id),
+            "window.__hvyGalaxyHost = {{ publish: value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }})) }};\n{}",
+            integration_inspector_source(&profile_id),
         );
+        // The inspector, in the page's own world where it has no world of its own (integration_world.rs): on macOS it has one.
         #[cfg(not(target_os = "windows"))]
-        let integration_inspector = format!("window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}", WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(&profile_id)), integration_inspector_source(&profile_id));
+        let integration_inspector = if integration_world::ISOLATED { String::new() } else { integration_inspector_source(&profile_id) };
         let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
             .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
             .visible(false)
@@ -1662,7 +1774,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     if url.scheme() == "https" || is_local_integration_http(&url) {
                         let context = page_load_page_context.lock().map(|value| value.clone()).unwrap_or_default();
                         if context.page_id.is_some() {
-                            let _ = window.app_handle().emit("integration-inspection-result", serde_json::json!({
+                            let _ = window.app_handle().emit("integration-browser-event", serde_json::json!({
                                 "kind": "integration-navigation-request",
                                 "profileId": page_load_profile_id,
                                 "integrationId": context.integration_id,
@@ -1691,10 +1803,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     let state = serde_json::json!({ "url": payload.url().as_str(), "allowed": allowed });
                     let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
                 }
-                let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
+                let _ = integration_world::eval(&window, format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({{ automatic: true }})", integration_inspector_source(&page_load_profile_id)));
                 if page_load_action_mode.load(Ordering::SeqCst) {
                     let script = format!("{}\n{}", integration_inspector_source(&page_load_profile_id), integration_inspection_start(&page_load_profile_id));
-                    let _ = window.eval(&script);
+                    let _ = integration_world::eval(&window, &script);
                 } else if let Ok(mut pending) = page_load_extraction.lock() {
                     let current_origin = payload.url().origin().ascii_serialization();
                     let expected_origins = pending.as_ref()
@@ -1708,8 +1820,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
-                        let script = integration_extraction_script(&page_load_profile_id, &extraction);
-                        let _ = window.eval(&script);
+                        let _ = run_integration_extraction(window.app_handle(), &window, page_load_action_mode.clone(), &page_load_profile_id, &extraction);
                       }
                     }
                 }
@@ -1727,7 +1838,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     let current_url = new_window_current_url.lock().ok()
                         .and_then(|url| url.as_ref().map(ToString::to_string))
                         .unwrap_or_default();
-                    let _ = new_window_app.emit("integration-inspection-result", serde_json::json!({
+                    let _ = new_window_app.emit("integration-browser-event", serde_json::json!({
                         "kind": "integration-navigation-request",
                         "profileId": new_window_profile_id,
                         "integrationId": context.integration_id,
@@ -1750,101 +1861,31 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 return true;
             }
             // Every navigation in every frame comes here. A message to Galaxy counts only with the browser's token
-            // (integration-inspector.js), which a frame the page embeds cannot read; it is read without it.
+            // (integration-inspector.js), which a frame the page embeds cannot read; it is read without it. The page's
+            // own scripts can read it, so this way comes only what the page says: what the host reports is its own
+            // event (integration-browser-event).
             let message;
             let requested_url = if requested_url.scheme() == "hvy-integration" {
-                let token = requested_url.query_pairs().find(|(name, _)| name == "t").map(|(_, value)| value.into_owned());
-                if token.as_deref() != Some(integration_message_token(&result_profile_id).as_str()) {
-                    return false;
-                }
-                let mut stripped = requested_url.clone();
-                stripped.set_query(None);
-                message = stripped;
+                let Some(checked) = integration_message(requested_url, &result_profile_id) else { return false };
+                message = checked;
                 &message
             } else {
                 requested_url
             };
-            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
-                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
-                    if browser_command == "back" { let _ = window.eval("window.history.back()"); }
-                    if browser_command == "forward" { let _ = window.eval("window.history.forward()"); }
-                    if browser_command == "reload" { let _ = window.reload(); }
-                    if browser_command == "inspect" {
-                        navigation_action_mode.store(true, Ordering::SeqCst);
-                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", integration_inspector_source(&result_profile_id)));
-                    }
-                    if browser_command == "close" {
-                        #[cfg(not(target_os = "macos"))]
-                        let _ = save_integration_cookies(&integration_app, &window);
-                        if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
-                    }
-                }
-                return false;
-            }
-            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(value) = String::from_utf8(bytes) {
-                        if let Ok(url) = value.parse::<tauri::Url>() {
-                            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
-                            if allowed {
-                                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
-                                    let _ = window.navigate(url);
-                                }
-                            }
-                        }
-                    }
-                }
-                return false;
-            }
-            if requested_url.as_str() == "hvy-integration://close" {
-                if let Some(_window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = save_integration_cookies(&integration_app, &_window);
-                    if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
-                }
-                return false;
-            }
             if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://inspection/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        if let Some(object) = result.as_object_mut() {
-                            object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
-                        }
-                        let is_background_result = integration_result_is_background(&result);
-                        if !is_background_result {
-                            navigation_action_mode.store(false, Ordering::SeqCst);
-                            if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                                let _ = toolbar.eval("window.hvySetInspectionState?.({})");
-                            }
-                        }
-                        let _ = integration_app.emit("integration-inspection-result", result);
-                        if !is_background_result {
-                            if let Some(main_window) = integration_app.get_webview_window("main") {
-                                let _ = raise_integration_window(&main_window.as_ref().window());
-                            }
-                        }
-                    }
+                if let Ok(result) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ()).and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| ())) {
+                    emit_integration_result(&integration_app, &navigation_action_mode, &result_profile_id, result);
                 }
                 return false;
             }
             if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://toolbar-state/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                            let _ = toolbar.eval(format!("window.hvySetInspectionState?.({state})"));
-                        }
-                    }
+                if let Ok(state) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ()).and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| ())) {
+                    show_integration_toolbar_state(&integration_app, &result_profile_id, &state);
                 }
                 return false;
             }
             if requested_url.as_str() == "hvy-integration://inspection-cancel" {
-                navigation_action_mode.store(false, Ordering::SeqCst);
-                if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                    let _ = toolbar.eval("window.hvySetInspectionState?.({})");
-                }
-                if let Some(main_window) = integration_app.get_webview_window("main") {
-                    let _ = raise_integration_window(&main_window.as_ref().window());
-                }
+                cancel_integration_inspection(&integration_app, &navigation_action_mode, &result_profile_id);
                 return false;
             }
             // Any other Galaxy address is not one it takes; anything else loads (the page load guards the main page).
@@ -1870,6 +1911,11 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             action_mode_pending.clone(),
             profile_id.clone(),
         )?;
+        let world_app = app.clone();
+        let world_action_mode = action_mode_pending.clone();
+        let world_profile_id = profile_id.clone();
+        integration_world::listen(&remote_webview, Arc::new(move |text: String| receive_integration_page_message(&world_app, &world_action_mode, &world_profile_id, &text)))
+            .map_err(|error| AppError::Message(error.to_string()))?;
         let toolbar_label = integration_toolbar_label(&profile_id);
         let toolbar_remote = remote_webview.clone();
         let toolbar_window = native_window.clone();
@@ -1877,13 +1923,11 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let toolbar_profile_id = profile_id.clone();
         let toolbar_origins = toolbar_allowed_origins;
         let toolbar_current_url = profile_current_url;
-        let toolbar_action_mode = action_mode_pending.clone();
-        let toolbar = tauri::webview::WebviewBuilder::new(
-            toolbar_label,
-            tauri::WebviewUrl::App("integration-browser-toolbar.html".into()),
-        ).on_navigation(move |requested_url| {
-            if let Some(action) = requested_url.as_str().strip_prefix("hvy-integration://toolbar/") {
-                let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
+        // What the toolbar asks (src/integrationToolbar/toolbar.ts) comes over IPC (integration_toolbar_message), to this
+        // browser's handler: the toolbar is known by its webview's label.
+        register_integration_toolbar_handler(&toolbar_label, Arc::new(move |message: IntegrationToolbarMessage| match message {
+            IntegrationToolbarMessage::ToolbarAction { action } => {
+                let _ = toolbar_app.emit("integration-browser-event", serde_json::json!({
                     "kind": "integration-toolbar-action",
                     "action": action,
                     "profileId": toolbar_profile_id,
@@ -1891,63 +1935,55 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 if let Some(main_window) = toolbar_app.get_webview_window("main") {
                     let _ = raise_integration_window(&main_window.as_ref().window());
                 }
-                return false;
             }
-            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
-                if browser_command == "back" { let _ = toolbar_remote.eval("window.history.back()"); }
-                if browser_command == "forward" { let _ = toolbar_remote.eval("window.history.forward()"); }
-                if browser_command == "reload" { let _ = toolbar_remote.reload(); }
-                if browser_command == "inspect" {
-                    toolbar_action_mode.store(true, Ordering::SeqCst);
-                    let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", integration_inspector_source(&toolbar_profile_id)));
-                }
-                if browser_command == "close" { let _ = toolbar_window.close(); }
-                return false;
-            }
-            if let Some(control) = requested_url.as_str().strip_prefix("hvy-integration://inspector-control/") {
+            IntegrationToolbarMessage::Browser { command } => match command.as_str() {
+                "back" => { let _ = integration_world::eval(&toolbar_remote, "window.history.back()"); }
+                "forward" => { let _ = integration_world::eval(&toolbar_remote, "window.history.forward()"); }
+                "reload" => { let _ = toolbar_remote.reload(); }
+                "close" => { let _ = toolbar_window.close(); }
+                _ => {}
+            },
+            IntegrationToolbarMessage::InspectorControl { id } => {
                 // A button the page's picker put on the toolbar, by its id.
-                if !control.is_empty() && control.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-') {
-                    let _ = toolbar_remote.eval(&format!("window.__hvyGalaxyInspector?.control({control:?})"));
+                if !id.is_empty() && id.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-') {
+                    let _ = integration_world::eval(&toolbar_remote, &format!("window.__hvyGalaxyInspector?.control({id:?})"));
                 }
-                return false;
             }
-            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(value) = String::from_utf8(bytes) {
-                        if let Ok(url) = value.parse::<tauri::Url>() {
-                            let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
-                            if allowed {
-                                let _ = toolbar_remote.navigate(url);
-                            } else if url.scheme() == "https" || is_local_integration_http(&url) {
-                                let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
-                                if context.page_id.is_some() {
-                                    let current_url = toolbar_current_url.lock().ok()
-                                        .and_then(|url| url.as_ref().map(ToString::to_string))
-                                        .unwrap_or_default();
-                                    let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
-                                        "kind": "integration-navigation-request",
-                                        "profileId": toolbar_profile_id,
-                                        "integrationId": context.integration_id,
-                                        "pageId": context.page_id,
-                                        "currentUrl": current_url,
-                                        "requestedUrl": url.as_str(),
-                                        "navigationKind": "address",
-                                    }));
-                                    if let Some(main_window) = toolbar_app.get_webview_window("main") {
-                                        let _ = raise_integration_window(&main_window.as_ref().window());
-                                    }
-                                } else {
-                                    let _ = open_external_url(url.to_string());
-                                }
-                            }
+            IntegrationToolbarMessage::Navigate { url } => {
+                let Ok(url) = url.parse::<tauri::Url>() else { return };
+                let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                if allowed {
+                    let _ = toolbar_remote.navigate(url);
+                } else if url.scheme() == "https" || is_local_integration_http(&url) {
+                    let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                    if context.page_id.is_some() {
+                        let current_url = toolbar_current_url.lock().ok()
+                            .and_then(|url| url.as_ref().map(ToString::to_string))
+                            .unwrap_or_default();
+                        let _ = toolbar_app.emit("integration-browser-event", serde_json::json!({
+                            "kind": "integration-navigation-request",
+                            "profileId": toolbar_profile_id,
+                            "integrationId": context.integration_id,
+                            "pageId": context.page_id,
+                            "currentUrl": current_url,
+                            "requestedUrl": url.as_str(),
+                            "navigationKind": "address",
+                        }));
+                        if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                            let _ = raise_integration_window(&main_window.as_ref().window());
                         }
+                    } else {
+                        let _ = open_external_url(url.to_string());
                     }
                 }
-                return false;
             }
-            true
-        });
+        }));
+        let toolbar = tauri::webview::WebviewBuilder::new(
+            toolbar_label,
+            tauri::WebviewUrl::App("integration-toolbar.html".into()),
+        );
         let toolbar_webview = native_window.add_child(
+
             toolbar,
             tauri::LogicalPosition::new(0.0, 0.0),
             tauri::LogicalSize::new(logical_size.width, toolbar_view_height),
@@ -1980,8 +2016,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let destroyed_profile_id = profile_id.clone();
         native_window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                forget_integration_toolbar_handler(&integration_toolbar_label(&destroyed_profile_id));
                 // Every close is reported: whatever was waiting on this window ends, not only a selection.
-                let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
+                let _ = menu_app.emit("integration-browser-event", serde_json::json!({
                     "kind": "integration-browser-closed",
                     "profileId": destroyed_profile_id,
                 }));
@@ -2049,8 +2086,8 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         }
     }
     match command.as_str() {
-        "back" => window.eval("window.history.back()"),
-        "forward" => window.eval("window.history.forward()"),
+        "back" => integration_world::eval(&window, "window.history.back()"),
+        "forward" => integration_world::eval(&window, "window.history.forward()"),
         "reload" => window.reload(),
         "inspect" | "inspect-parent" | "inspect-target" => {
             let start = match command.as_str() {
@@ -2058,23 +2095,22 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 kind => format!("window.__hvyGalaxyInspector.start('{}', Object.assign({{}}, {}, {{ externalToolbar: true }}));", if kind == "inspect-parent" { "parent" } else { "target" }, payload.unwrap_or_default()),
             };
             remember_integration_inspection_start(&profile_id, start.clone());
-            window.eval(&format!("{}\n{}", integration_inspector_source(&profile_id), start))
+            integration_world::eval(&window, &format!("{}\n{}", integration_inspector_source(&profile_id), start))
         }
-        "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
-        "check-page-ready" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "cancel-extraction" => window.eval("window.__hvyGalaxyInspector?.cancelExtraction()"),
-        "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
-        "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
-        "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "discover-webmcp-tools" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
-        "invoke-webmcp-tool" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
-        "cancel-webmcp-tool" => window.eval(&format!("window.__hvyGalaxyWebMcp?.cancel(({}).requestId)", payload.unwrap_or_default())),
+        "test-pattern" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "check-page-ready" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "extract-pattern" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "cancel-extraction" => integration_world::eval(&window, "window.__hvyGalaxyInspector?.cancelExtraction()"),
+        "execute-command" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "discover-sources" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "fetch-source" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "discover-webmcp-tools" => run_integration_webmcp(&app, &window, action_mode_pending.clone(), &profile_id, "discover", &payload.unwrap_or_else(|| serde_json::json!({}))),
+        "invoke-webmcp-tool" => run_integration_webmcp(&app, &window, action_mode_pending.clone(), &profile_id, "invoke", &payload.unwrap_or_else(|| serde_json::json!({}))),
         "cancel-inspect" => {
             if let Some(toolbar) = app.get_webview(&integration_toolbar_label(&profile_id)) {
                 let _ = toolbar.eval("window.hvySetInspectionState?.({})");
             }
-            window.eval("window.__hvyGalaxyInspector?.stop()")
+            integration_world::eval(&window, "window.__hvyGalaxyInspector?.stop()")
         },
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {

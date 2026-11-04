@@ -146,10 +146,11 @@ fn web_automation_close_worker(app: &AppHandle, worker_id: &str) -> AppResult<Op
     Ok(Some((worker.profile_id, worker.browser_store_id)))
 }
 
-/// Evaluates a script and returns its (synchronous) result, as the JSON the webview serializes it to.
+/// Evaluates an expression where Galaxy's scripts run in the page (integration_world.rs) and returns its (synchronous)
+/// result, as JSON.
 fn web_automation_eval(window: &tauri::WebviewWindow, script: String) -> AppResult<Option<serde_json::Value>> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    window.eval_with_callback(script, move |result| { let _ = sender.send(result); })
+    integration_world::eval_with_callback(window.as_ref(), script, move |result| { let _ = sender.send(result); })
         .map_err(|error| AppError::Message(error.to_string()))?;
     // No answer while the page is navigating: the caller tries again.
     match receiver.recv_timeout(StdDuration::from_secs(5)) {
@@ -167,7 +168,7 @@ enum WebAutomationPageResult {
 /// Calls a function of the shared page script, after the inspector it uses, and waits for its result.
 fn web_automation_page_call(window: &tauri::WebviewWindow, name: &str, argument: &serde_json::Value) -> AppResult<WebAutomationPageResult> {
     let call_id = format!("call-{}", web_automation_next_id());
-    window.eval(format!("{INTEGRATION_INSPECTOR}\n{WEB_AUTOMATION_PAGE}\nwindow.__hvyGalaxyAutomation.start({call_id:?}, {name:?}, {argument});"))
+    integration_world::eval(window.as_ref(), format!("{INTEGRATION_INSPECTOR}\n{WEB_AUTOMATION_PAGE}\nwindow.__hvyGalaxyAutomation.start({call_id:?}, {name:?}, {argument});"))
         .map_err(|error| AppError::Message(error.to_string()))?;
     let started = std::time::Instant::now();
     while started.elapsed() < WEB_AUTOMATION_CALL_TIMEOUT {
@@ -264,7 +265,7 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
         "back" => {
             let (window, loads) = web_automation_worker(app, web_automation_text(args, "workerId")?)?;
             let (started, finished) = loads.counts();
-            window.eval("window.history.back()").map_err(|error| AppError::Message(error.to_string()))?;
+            integration_world::eval(window.as_ref(), "window.history.back()").map_err(|error| AppError::Message(error.to_string()))?;
             // With no page to go back to, nothing loads.
             loads.wait(started, finished, Some(WEB_AUTOMATION_NAVIGATION_GRACE))?;
             web_automation_location(&window, &loads)

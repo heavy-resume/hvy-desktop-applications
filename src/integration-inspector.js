@@ -1,8 +1,8 @@
 (() => {
   if (window.top !== window || window.__hvyGalaxyInspector) return;
   // Every message to Galaxy carries the browser's token, which the host puts here when it injects this script (as a
-  // CSRF token): Tauri's host hears navigations from every frame, and takes only messages with it, so a frame the page
-  // embeds cannot speak for the inspector. Electron hears only the top page, and does not check it.
+  // CSRF token): hosts take only messages with it, so a frame the page embeds cannot speak for the inspector. The page's
+  // own scripts can see it, so hosts take only what the page says this way, never what they report themselves.
   const MESSAGE_TOKEN = '__HVY_GALAXY_MESSAGE_TOKEN__';
   const messageUrl = (path) => `hvy-integration://${path}?t=${MESSAGE_TOKEN}`;
 
@@ -38,42 +38,17 @@
   let toolbarControl = null;
   let inspectionContext = null;
   let captureSequence = 0;
-  let browserChromeHost = null;
-  const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
+  const host = window.__hvyGalaxyHost || {};
   const capturedElements = new Map();
-  const observedStructuredUrls = new Map();
-  const xhrStructuredUrls = new WeakMap();
-
-  const observeStructuredUrl = (value, contentType = '') => {
-    try {
-      const url = new URL(value instanceof Request ? value.url : String(value), location.href);
-      if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) return;
-      const normalizedType = contentType.toLowerCase();
-      const kind = normalizedType.includes('json') ? 'json-api' : normalizedType.includes('atom') ? 'atom' : normalizedType.includes('rss') || normalizedType.includes('xml') ? 'rss' : null;
-      if (kind) observedStructuredUrls.set(url.href, kind);
-    } catch (_) {}
-  };
-
-  const pageFetch = window.fetch.bind(window);
-  window.fetch = (input, init) => pageFetch(input, init).then((response) => {
-    observeStructuredUrl(response.url || input, response.headers.get('content-type') || '');
-    return response;
+  // The page's own requests (fetch and XMLHttpRequest), as the browser times them, for the APIs it reads: those from
+  // before this was here, and each one after, as the browser's buffer of them fills (250). Each with its type where the
+  // browser reports one (Chromium). Nothing of the page's is replaced to see them.
+  const timedRequests = new Map();
+  const timeRequests = (entries) => entries.forEach((entry) => {
+    if (['fetch', 'xmlhttprequest'].includes(entry.initiatorType)) timedRequests.set(entry.name, entry.contentType || '');
   });
-  const pageXhrOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    if (String(method).toUpperCase() === 'GET') {
-      try { xhrStructuredUrls.set(this, new URL(String(url), location.href).href); } catch (_) {}
-    }
-    return pageXhrOpen.call(this, method, url, ...rest);
-  };
-  const pageXhrSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.send = function(...args) {
-    this.addEventListener('load', () => {
-      const url = xhrStructuredUrls.get(this);
-      if (url) observeStructuredUrl(url, this.getResponseHeader('content-type') || '');
-    }, { once: true });
-    return pageXhrSend.apply(this, args);
-  };
+  timeRequests(performance.getEntriesByType('resource'));
+  new PerformanceObserver((list) => timeRequests(list.getEntries())).observe({ type: 'resource' });
 
   const composedParent = (element) => {
     if (element?.parentElement) return element.parentElement;
@@ -880,16 +855,20 @@
     };
   };
 
-  const publish = (value) => {
-    if (nativePublish) {
-      nativePublish(value);
-      return;
-    }
+  // A message to Galaxy, through the host's own channel where it gives one (`__hvyGalaxyHost`: Electron's preload, in the
+  // isolated world this runs in, out of the page's reach), or else as a navigation carrying the token, which the page
+  // can see.
+  const sendMessage = (path, value) => {
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
     const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    window.location.href = messageUrl(`inspection/${encoded}`);
+    window.location.href = messageUrl(`${path}/${encoded}`);
+  };
+
+  const publish = (value) => {
+    if (host.publish) host.publish(value);
+    else sendMessage('inspection', value);
   };
 
   // With the browser's own toolbar, what picking says and its buttons are shown there, off the page, so they cover
@@ -924,91 +903,8 @@
   };
 
   const publishToolbarState = (value) => {
-    if (typeof window.__hvyGalaxyToolbarPublish === 'function') {
-      window.__hvyGalaxyToolbarPublish(value);
-      return;
-    }
-    const bytes = new TextEncoder().encode(JSON.stringify(value));
-    let binary = '';
-    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    window.location.href = messageUrl(`toolbar-state/${encoded}`);
-  };
-
-  const browserChromeNavigate = (value) => {
-    const bytes = new TextEncoder().encode(value);
-    let binary = '';
-    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    window.location.href = messageUrl(`navigate/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`);
-  };
-
-  const installBrowserChrome = (options = {}) => {
-    if (browserChromeHost) {
-      if (!browserChromeHost.isConnected) document.documentElement.append(browserChromeHost);
-      return;
-    }
-    const host = document.createElement('div');
-    browserChromeHost = host;
-    host.id = 'hvy-galaxy-browser-chrome';
-    host.setAttribute('popover', 'manual');
-    host.style.cssText = 'all:initial;position:fixed;inset:0 0 auto 0;height:52px;z-index:2147483647;display:block';
-    const shadow = host.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `<style>
-      :host{color-scheme:dark}*{box-sizing:border-box}.bar{height:52px;padding:7px 10px;display:flex;align-items:center;gap:7px;background:#17191e;border-bottom:1px solid #555b64;color:#f4f4f5;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px #0008}
-      button{height:36px;min-width:36px;padding:0 10px;border:1px solid #5b6069;border-radius:7px;background:#23262d;color:inherit;font:inherit;cursor:pointer}button:hover{background:#30343d}button:focus-visible,input:focus-visible{outline:2px solid #ff5d47;outline-offset:1px}.address{height:36px;min-width:0;flex:1;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid #5b6069;border-radius:8px;background:#0f1115}.security{display:flex;align-items:center;gap:6px;white-space:nowrap}.security[data-secure="true"]{color:#9fd7b2}.security[data-allowed="false"]{color:#ffb19f}.host{font-weight:650}.url{min-width:0;flex:1;border:0;background:transparent;color:#dadce1;font:inherit;outline:0}.brand{font-weight:700;white-space:nowrap}.close{font-size:20px;line-height:1}slot[name="inspection"]{display:contents}
-    </style><div class="bar"><span class="brand">HVY Galaxy</span><button data-command="back" title="Back" aria-label="Back">←</button><button data-command="forward" title="Forward" aria-label="Forward">→</button><button data-command="reload" title="Reload" aria-label="Reload">↻</button><form class="address"><span class="security"><span class="lock"></span><span class="host"></span></span><input class="url" aria-label="Address"></form><slot name="inspection"><button data-command="inspect" title="Inspect data">Inspect</button></slot><button class="close" data-command="close" title="Close" aria-label="Close">×</button></div>`;
-    let reservedBody = null;
-    let reservedPadding = '';
-    const reservePageSpace = () => {
-      if (!document.body) return;
-      if (reservedBody !== document.body) {
-        reservedBody = document.body;
-        const originalPadding = getComputedStyle(document.body).paddingTop || '0px';
-        reservedPadding = `calc(${originalPadding} + 52px)`;
-      }
-      document.body.style.setProperty('padding-top', reservedPadding, 'important');
-      document.body.style.setProperty('box-sizing', 'border-box', 'important');
-    };
-    const mount = () => {
-      if (!host.isConnected) document.documentElement.append(host);
-      if (typeof host.showPopover === 'function') {
-        try { host.showPopover(); } catch (_) { host.removeAttribute('popover'); }
-      } else {
-        host.removeAttribute('popover');
-      }
-      reservePageSpace();
-    };
-    mount();
-    document.documentElement.style.setProperty('scroll-padding-top', '52px', 'important');
-    const allowedOrigins = new Set(options.allowedOrigins || []);
-    const update = () => {
-      const secure = location.protocol === 'https:';
-      const allowed = !allowedOrigins.size || allowedOrigins.has(location.origin);
-      const security = shadow.querySelector('.security');
-      security.dataset.secure = String(secure);
-      security.dataset.allowed = String(allowed);
-      shadow.querySelector('.lock').textContent = secure ? '●' : '▲';
-      shadow.querySelector('.host').textContent = location.hostname || location.protocol;
-      const input = shadow.querySelector('.url');
-      if (shadow.activeElement !== input) input.value = location.href;
-      security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${allowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
-    };
-    shadow.addEventListener('click', (event) => {
-      const command = event.target.closest?.('[data-command]')?.dataset.command;
-      if (command) window.location.href = messageUrl(`browser/${command}`);
-    });
-    shadow.querySelector('form').addEventListener('submit', (event) => {
-      event.preventDefault();
-      let value = shadow.querySelector('.url').value.trim();
-      if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) value = `https://${value}`;
-      browserChromeNavigate(value);
-    });
-    update();
-    window.addEventListener('popstate', update);
-    setInterval(() => {
-      mount();
-      update();
-    }, 500);
+    if (host.toolbarState) host.toolbarState(value);
+    else sendMessage('toolbar-state', value);
   };
 
   const snapshotByteLength = (element) => new TextEncoder().encode(JSON.stringify(snapshot(element))).byteLength;
@@ -1416,7 +1312,8 @@
       return;
     }
     if (active && event.key === 'Escape') {
-      window.location.href = messageUrl('inspection-cancel');
+      if (host.cancel) host.cancel();
+      else window.location.href = messageUrl('inspection-cancel');
       window.__hvyGalaxyInspector.stop();
     }
   };
@@ -2450,6 +2347,11 @@
   };
 
   window.__hvyGalaxyInspector = {
+    // A result found by another of Galaxy's scripts in the page (a WebMCP request's, integration-webmcp-bridge.js), sent as
+    // this sends its own, where the host does not wait for that script's own result (Tauri on Windows and Linux).
+    publish(value) {
+      publish(value);
+    },
     discoverStructuredSources() {
       const sources = [];
       document.querySelectorAll('link[rel~="alternate"][href]').forEach((link) => {
@@ -2458,17 +2360,14 @@
         if (!kind) return;
         sources.push({ kind, url: new URL(link.href, location.href).href, title: link.getAttribute('title') || `${kind.toUpperCase()} feed`, authenticated: false, discoveredBy: 'link' });
       });
-      performance.getEntriesByType('resource').forEach((entry) => {
-        if (!['fetch', 'xmlhttprequest'].includes(entry.initiatorType)) return;
+      timedRequests.forEach((contentType, name) => {
         let url;
-        try { url = new URL(entry.name, location.href); } catch (_) { return; }
+        try { url = new URL(name, location.href); } catch (_) { return; }
         if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) return;
-        if (!/\.json(?:$|\?)|[?&](?:format|output)=json(?:&|$)/i.test(url.href)) return;
-        sources.push({ kind: 'json-api', url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
-      });
-      observedStructuredUrls.forEach((kind, value) => {
-        const url = new URL(value);
-        sources.push({ kind, url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
+        const type = contentType.toLowerCase();
+        const kind = type.includes('json') ? 'json-api' : type.includes('atom') ? 'atom' : type.includes('rss') || type.includes('xml') ? 'rss'
+          : /\.json(?:$|\?)|[?&](?:format|output)=json(?:&|$)/i.test(url.href) ? 'json-api' : null;
+        if (kind) sources.push({ kind, url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
       });
       return [...new Map(sources.map((source) => [`${source.kind}|${source.url}`, source])).values()];
     },

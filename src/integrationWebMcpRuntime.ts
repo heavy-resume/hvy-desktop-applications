@@ -1,6 +1,6 @@
 import type { IntegrationPageDefinition, IntegrationProfileDefinition } from './integrationRegistry';
 import { approvalMatchesDescriptor, type IntegrationWebMcpApproval, type IntegrationWebMcpToolDescriptor } from './integrationWebMcp';
-import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationPage } from './integrationBrowser';
+import { isIntegrationBrowserOpen, openIntegrationPage } from './integrationBrowser';
 import { enqueueWebCapabilityForProfile } from './webCapabilityQueue';
 import { disableIntegrationWebMcpApproval } from './integrationWebMcpApprovalStore';
 import { answerBrowserRequest, failBrowserRequest, waitForBrowserAnswer } from './browserRequests';
@@ -27,9 +27,9 @@ function waitFor<T>(requestId: string, kind: OperationKind, profileId: string, c
     timeoutMs: TIMEOUT_MS,
     timeoutMessage: 'The WebMCP operation timed out while waiting for the page.',
     signal,
+    // Stopping ends the wait. A tool already running on the page finishes there: nothing of Galaxy's stays in the page to stop it
+    // (integration-webmcp-bridge.js).
     abortMessage: 'The WebMCP operation was cancelled.',
-    // Only an invocation runs on the page until it is cancelled.
-    onStop: kind === 'result' ? () => void controlIntegrationBrowser('cancel-webmcp-tool', profileId, { requestId }).catch(() => undefined) : undefined,
   });
 }
 

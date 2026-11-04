@@ -32,6 +32,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            integration_toolbar_message,
             load_recent_state,
             save_workspace_order,
             save_document_mode_preference,

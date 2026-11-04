@@ -1,18 +1,13 @@
-(() => {
-  if (window.top !== window || window.__hvyGalaxyWebMcp) return;
+// WebMCP, as Galaxy uses it: what the page's own WebMCP (`document.modelContext`, the browser's or one the site brings)
+// has. The host runs this once for each thing it asks, finding the page's tools or calling one, in the page's world,
+// where the tools are, and takes its result as the script's (src-electron/main.cjs, src-tauri/src/commands.rs). Nothing
+// of it stays in the page.
+(operation, request = {}) => {
   const MAX_RESULT_CHARS = 1024 * 1024;
-  const active = new Map();
-  const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
-  // The browser's message token, as the inspector carries it (integration-inspector.js).
-  const MESSAGE_TOKEN = '__HVY_GALAXY_MESSAGE_TOKEN__';
-
-  const publish = (value) => {
-    if (nativePublish) return nativePublish(value);
-    const bytes = new TextEncoder().encode(JSON.stringify(value));
-    let binary = '';
-    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    window.location.href = `hvy-integration://inspection/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}?t=${MESSAGE_TOKEN}`;
-  };
+  // The browser's own WebMCP, rather than a polyfill the site brought: it finds tools across origins, and takes a call's
+  // arguments as they are, where a polyfill takes them as JSON.
+  const pageContext = document.modelContext || navigator.modelContext;
+  const native = typeof pageContext?.getTools === 'function' && /\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.call(pageContext.getTools));
 
   const stable = (value) => {
     if (Array.isArray(value)) return value.map(stable);
@@ -63,7 +58,7 @@
     const seenTools = new Set();
     const topContext = context();
     const fromOrigins = Array.isArray(request.fromOrigins) ? request.fromOrigins.filter((origin) => typeof origin === 'string' && origin !== location.origin) : [];
-    if (window.__hvyGalaxyNativeWebMcp === true) {
+    if (native) {
       for (const tool of await topContext.getTools({ fromOrigins })) {
         if (!seenTools.has(tool)) entries.push({ tool, modelContext: topContext, descriptor: descriptor(tool, tool.origin || location.origin) });
         seenTools.add(tool);
@@ -107,60 +102,39 @@
     }
   };
 
-  window.addEventListener('pagehide', () => {
-    for (const [requestId, controller] of active) {
-      controller.abort(new DOMException('The page navigated during WebMCP execution.', 'AbortError'));
-      publish({ kind: 'integration-webmcp-error', requestId, code: 'NavigationError', message: 'The page navigated during WebMCP execution.' });
-    }
-    active.clear();
-  });
+  const page = { origin: location.origin, pathname: location.pathname };
+  const failure = (error) => ({ kind: 'integration-webmcp-error', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, code: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) });
 
-  window.__hvyGalaxyWebMcp = {
-    async discover(request = {}) {
-      try {
-        const tools = await getToolsForDiscovery(request);
-        publish({ kind: 'integration-webmcp-tools', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, tools: tools.map((entry) => entry.descriptor), page: { origin: location.origin, pathname: location.pathname } });
-      } catch (error) {
-        publish({ kind: 'integration-webmcp-error', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, message: error instanceof Error ? error.message : String(error) });
-      }
-    },
-    async invoke(request = {}) {
-      try {
-        const tools = await getToolsForDiscovery(request);
-        const found = tools.find((entry) => entry.descriptor.name === request.name && entry.descriptor.origin === request.origin);
-        if (!found) {
-          const error = new Error(`WebMCP tool ${String(request.name || '')} is no longer available on this page.`);
-          error.name = 'WebMcpDescriptorChangedError';
-          throw error;
-        }
-        if (JSON.stringify(stable(found.descriptor)) !== JSON.stringify(stable(request.descriptor))) {
-          const error = new Error('The WebMCP tool changed and must be reviewed again.');
-          error.name = 'WebMcpDescriptorChangedError';
-          throw error;
-        }
-        const modelContext = found.modelContext;
-        if (typeof modelContext.executeTool !== 'function') throw new Error('This WebMCP implementation cannot execute discovered tools.');
-        const controller = new AbortController();
-        active.set(request.requestId, controller);
-        const input = window.__hvyGalaxyNativeWebMcp === true ? (request.arguments || {}) : JSON.stringify(request.arguments || {});
-        const result = await modelContext.executeTool(found.tool, input, { signal: controller.signal });
-        const serialized = typeof result === 'string' ? result : JSON.stringify(result ?? null);
-        if (new TextEncoder().encode(serialized).byteLength > MAX_RESULT_CHARS) throw new Error('The WebMCP tool result exceeded the 1 MB limit.');
-        let value = result;
-        let isJson = typeof result !== 'string';
-        if (typeof result === 'string') {
-          try { value = JSON.parse(result); isJson = true; } catch (_) { value = result; }
-        }
-        publish({ kind: 'integration-webmcp-result', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, value, isJson, descriptor: found.descriptor, page: { origin: location.origin, pathname: location.pathname } });
-      } catch (error) {
-        publish({ kind: 'integration-webmcp-error', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, code: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) });
-      } finally {
-        active.delete(request.requestId);
-      }
-    },
-    cancel(requestId) {
-      active.get(requestId)?.abort(new DOMException('The WebMCP operation was cancelled.', 'AbortError'));
-      active.delete(requestId);
-    },
+  const discover = async () => {
+    const tools = await getToolsForDiscovery(request);
+    return { kind: 'integration-webmcp-tools', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, tools: tools.map((entry) => entry.descriptor), page };
   };
-})();
+
+  const invoke = async () => {
+    const tools = await getToolsForDiscovery(request);
+    const found = tools.find((entry) => entry.descriptor.name === request.name && entry.descriptor.origin === request.origin);
+    if (!found) {
+      const error = new Error(`WebMCP tool ${String(request.name || '')} is no longer available on this page.`);
+      error.name = 'WebMcpDescriptorChangedError';
+      throw error;
+    }
+    if (JSON.stringify(stable(found.descriptor)) !== JSON.stringify(stable(request.descriptor))) {
+      const error = new Error('The WebMCP tool changed and must be reviewed again.');
+      error.name = 'WebMcpDescriptorChangedError';
+      throw error;
+    }
+    if (typeof found.modelContext.executeTool !== 'function') throw new Error('This WebMCP implementation cannot execute discovered tools.');
+    const input = native ? (request.arguments || {}) : JSON.stringify(request.arguments || {});
+    const result = await found.modelContext.executeTool(found.tool, input);
+    const serialized = typeof result === 'string' ? result : JSON.stringify(result ?? null);
+    if (new TextEncoder().encode(serialized).byteLength > MAX_RESULT_CHARS) throw new Error('The WebMCP tool result exceeded the 1 MB limit.');
+    let value = result;
+    let isJson = typeof result !== 'string';
+    if (typeof result === 'string') {
+      try { value = JSON.parse(result); isJson = true; } catch (_) { value = result; }
+    }
+    return { kind: 'integration-webmcp-result', requestId: request.requestId, focusMainOnResult: request.focusMainOnResult === true, value, isJson, descriptor: found.descriptor, page };
+  };
+
+  return (operation === 'invoke' ? invoke() : discover()).catch(failure);
+}

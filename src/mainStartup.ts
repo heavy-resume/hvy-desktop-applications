@@ -1,5 +1,5 @@
 import { installAiChatClient } from './aiClient';
-import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
+import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationBrowserEvent, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nativeWindowTheme } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
@@ -76,7 +76,8 @@ export async function boot(): Promise<void> {
     await onAppCloseRequest(() => {
       void handleAppCloseRequest();
     });
-    await onIntegrationInspectionResult(async (result) => {
+    // What the integration browser's host reports, which no page can send (backend.ts).
+    await onIntegrationBrowserEvent((result) => {
       if (result && typeof result === 'object'
         && (result as { kind?: unknown }).kind === 'integration-navigation-request') {
         handlers.requestIntegrationNavigationApproval(result);
@@ -104,6 +105,17 @@ export async function boot(): Promise<void> {
         rerender({ preserveMountedDocument: true });
         return;
       }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
+        const action = (result as { action?: unknown }).action;
+        const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
+        const page = integration?.pages[0];
+        if (!integration || !page) throw new Error('The selected integration page is unavailable.');
+        if (action === 'add-page-command') handlers.addCommandForIntegrationPage(integration.id, page.id);
+        if (action === 'define-record-type') handlers.addActionForIntegrationPage(integration.id, page.id);
+        return;
+      }
+    });
+    await onIntegrationInspectionResult(async (result) => {
       if (handleIntegrationWebMcpResult(result)) return;
       if (handleWebCapabilityIntegrationResult(result)) return;
       // An answer to a request that already ended (timed out, stopped, or its window closed) has no one left to go to.
@@ -116,15 +128,6 @@ export async function boot(): Promise<void> {
         && (result as { context?: { mode?: unknown } }).context?.mode === 'ready-check') {
         handlers.completeIntegrationReadyCheck(result);
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
-        const action = (result as { action?: unknown }).action;
-        const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
-        const page = integration?.pages[0];
-        if (!integration || !page) throw new Error('The selected integration page is unavailable.');
-        if (action === 'add-page-command') handlers.addCommandForIntegrationPage(integration.id, page.id);
-        if (action === 'define-record-type') handlers.addActionForIntegrationPage(integration.id, page.id);
         return;
       }
       // The scan on each page load: one asked for is answered as its request, above.

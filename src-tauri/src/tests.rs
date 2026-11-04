@@ -4,6 +4,18 @@
     use zip::write::FileOptions;
 
     #[test]
+    fn integration_messages_count_only_with_the_profiles_token() {
+        // A frame the page embeds sends what the inspector would, without the token it cannot read: it is not read.
+        let token = integration_message_token("test-messages-a");
+        let message = |query: &str| format!("hvy-integration://inspection/eyJraW5kIjoieCJ9{query}").parse::<tauri::Url>().unwrap();
+        assert_eq!(integration_message(&message(&format!("?t={token}")), "test-messages-a").map(|url| url.to_string()), Some("hvy-integration://inspection/eyJraW5kIjoieCJ9".into()));
+        assert_eq!(integration_message(&message(""), "test-messages-a"), None);
+        assert_eq!(integration_message(&message("?t=guess"), "test-messages-a"), None);
+        // Each profile's browser has its own.
+        assert_eq!(integration_message(&message(&format!("?t={token}")), "test-messages-b"), None);
+    }
+
+    #[test]
     fn integration_navigation_allows_only_real_loopback_http_origins() {
         let local = "http://localhost:5173/".parse::<tauri::Url>().unwrap();
         let loopback = "http://127.0.0.1:5173/".parse::<tauri::Url>().unwrap();

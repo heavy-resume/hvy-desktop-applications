@@ -7,6 +7,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { pathToFileURL } = require('node:url');
 const { createWebAutomationHost } = require('./web-automation-host.cjs');
+const { runWebMcp } = require('./integration-webmcp.cjs');
 const { promisify } = require('node:util');
 const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
 
@@ -765,7 +766,8 @@ const INTEGRATION_URLS = {
 };
 
 const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
-const INTEGRATION_TOOLBAR = fs.readFileSync(path.join(__dirname, '..', 'public', 'integration-browser-toolbar.html'), 'utf8');
+// The isolated world Galaxy's scripts run in, in every page it reads (runInIntegrationWorld).
+const INTEGRATION_WORLD_ID = 1001;
 const INTEGRATION_TOOLBAR_HEIGHT = 52;
 // Web automation's browser host: workers, the sign-in window, and inspection (web-automation-host.cjs).
 const webAutomationHost = createWebAutomationHost({
@@ -779,9 +781,86 @@ const webAutomationHost = createWebAutomationHost({
     save: (browserSession, profileId, domains) => mergeElectronProfileCookies(browserSession, profileId, (domain) => domains.has(domain)),
   },
   inspectorSource: INTEGRATION_INSPECTOR,
+  worldId: INTEGRATION_WORLD_ID,
   pageSource: fs.readFileSync(path.join(__dirname, '..', 'src', 'web-automation-page.js'), 'utf8'),
   sendEvent: (event) => mainWindow?.webContents.send('hvy:web-automation-navigation', event),
 });
+
+// The integration browser's toolbar: the app's built page (integration-toolbar.html), from the dev server or dist.
+async function loadIntegrationToolbar(contents) {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    await contents.loadURL(new URL('/integration-toolbar.html', process.env.ELECTRON_RENDERER_URL).toString());
+    return;
+  }
+  await contents.loadFile(path.join(__dirname, '..', 'dist', 'integration-toolbar.html'));
+}
+
+// What the toolbar asks (src/integrationToolbar/toolbar.ts): the browser's buttons and address, its page menu, and
+// picking's buttons. It comes from its preload; the toolbar is known by its web contents.
+ipcMain.on('hvy:integration-toolbar', (event, message) => {
+  const browser = [...integrationBrowsers.values()].find((candidate) => candidate.toolbarContents === event.sender);
+  if (!browser || !message || typeof message !== 'object') return;
+  if (message.kind === 'toolbar-action' && typeof message.action === 'string') {
+    mainWindow?.webContents.send('hvy:integration-browser-event', { kind: 'integration-toolbar-action', action: message.action, profileId: browser.profileId });
+    raiseWindow(mainWindow);
+  } else if (message.kind === 'browser') {
+    if (message.command === 'back' && browser.contents.canGoBack()) browser.contents.goBack();
+    if (message.command === 'forward' && browser.contents.canGoForward()) browser.contents.goForward();
+    if (message.command === 'reload') browser.contents.reload();
+    if (message.command === 'close') browser.window.close();
+  } else if (message.kind === 'inspector-control' && typeof message.id === 'string' && /^[a-z0-9-]+$/.test(message.id)) {
+    // A button the page's picker put on the toolbar, by its id.
+    void runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.control(${JSON.stringify(message.id)})`);
+  } else if (message.kind === 'navigate' && typeof message.url === 'string') {
+    if (isAllowedIntegrationUrl(message.url, browser.allowedOrigins)) void browser.contents.loadURL(message.url);
+    else requestIntegrationNavigationApproval(browser, message.url, 'address');
+  }
+});
+
+// What an integration browser's preload asks (integration-preload.cjs): the isolated world Galaxy's scripts run in, which
+// it gives Galaxy's channel. Only an integration browser's page is told.
+ipcMain.on('hvy:integration-page-setup', (event) => {
+  const known = [...integrationBrowsers.values()].some((candidate) => candidate.contents === event.sender);
+  event.returnValue = known ? { worldId: INTEGRATION_WORLD_ID } : null;
+});
+
+// What Galaxy's scripts in an integration browser's page send, from their isolated world (integration-inspector.js).
+ipcMain.on('hvy:integration-page-message', (event, message) => {
+  const browser = [...integrationBrowsers.values()].find((candidate) => candidate.contents === event.sender);
+  if (!browser || !message || typeof message !== 'object') return;
+  if (message.kind === 'publish') receiveIntegrationResult(browser, message.value);
+  if (message.kind === 'toolbar-state') setIntegrationToolbarInspectionState(browser, message.value);
+  if (message.kind === 'cancel') {
+    browser.actionModePending = false;
+    setIntegrationToolbarInspectionState(browser);
+    raiseWindow(mainWindow);
+  }
+});
+
+// A result from the page: the inspector's, or the WebMCP bridge's. A background one (such as the scan on each page load)
+// doesn't end a selection the person is making, or bring Galaxy forward.
+function receiveIntegrationResult(browser, result) {
+  result.profileId = browser.profileId;
+  const isBackgroundResult = result?.kind === 'integration-page-readiness'
+    || result?.kind === 'integration-ready-check-validation'
+    || result?.kind === 'integration-record-watch-result'
+    || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
+    || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
+    || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
+  if (!isBackgroundResult) {
+    browser.actionModePending = false;
+    setIntegrationToolbarInspectionState(browser);
+  }
+  mainWindow?.webContents.send('hvy:integration-inspection-result', result);
+  if (!isBackgroundResult) raiseWindow(mainWindow);
+}
+
+// Galaxy's scripts in an integration browser's page run in their own isolated world, out of the page's reach: the page
+// cannot see them, change what they call, or watch what they send. The WebMCP bridge is the exception: it works with
+// the page's own tools, in the page's world (integration-preload.cjs).
+function runInIntegrationWorld(contents, code) {
+  return contents.executeJavaScriptInIsolatedWorld(INTEGRATION_WORLD_ID, [{ code }]);
+}
 
 function setIntegrationToolbarInspectionState(browser, state = {}) {
   if (!browser?.toolbarContents || browser.toolbarContents.isDestroyed()) return;
@@ -794,7 +873,7 @@ function requestIntegrationNavigationApproval(browser, requestedUrl, navigationK
     void shell.openExternal(requestedUrl);
     return;
   }
-  mainWindow?.webContents.send('hvy:integration-inspection-result', {
+  mainWindow?.webContents.send('hvy:integration-browser-event', {
     kind: 'integration-navigation-request',
     profileId: browser.profileId,
     integrationId: browser.integrationId,
@@ -847,20 +926,19 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target') {
     // Kept, so a page that loads while picking (a check that you're human passed) starts the same step again.
     browser.inspectionStart = `window.__hvyGalaxyInspector.start(${JSON.stringify(command === 'inspect-parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(payload))})`;
-    return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\n${browser.inspectionStart}`);
+    return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\n${browser.inspectionStart}`);
   }
-  if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
-  if (command === 'check-page-ready') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(${JSON.stringify(payload?.readyChecks || {})}, ${JSON.stringify(payload?.context || {})})`);
-  if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
-  if (command === 'cancel-extraction') return browserContents.executeJavaScript('window.__hvyGalaxyInspector?.cancelExtraction()');
-  if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
-  if (command === 'discover-sources') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
-  if (command === 'fetch-source') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
-  if (command === 'discover-webmcp-tools') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
-  if (command === 'invoke-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
-  if (command === 'cancel-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.cancel(${JSON.stringify(payload?.requestId)}) : undefined`);
+  if (command === 'test-pattern') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
+  if (command === 'check-page-ready') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(${JSON.stringify(payload?.readyChecks || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'extract-pattern') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'cancel-extraction') return runInIntegrationWorld(browserContents, 'window.__hvyGalaxyInspector?.cancelExtraction()');
+  if (command === 'execute-command') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
+  if (command === 'discover-sources') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
+  if (command === 'fetch-source') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'discover-webmcp-tools') return runWebMcp(browser.contents, 'discover', payload).then((result) => receiveIntegrationResult(browser, result));
+  if (command === 'invoke-webmcp-tool') return runWebMcp(browser.contents, 'invoke', payload).then((result) => receiveIntegrationResult(browser, result));
   if (command === 'cancel-inspect') {
-    browserContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
+    runInIntegrationWorld(browserContents, 'window.__hvyGalaxyInspector?.stop()');
     setIntegrationToolbarInspectionState(browser);
     raiseWindow(mainWindow);
   }
@@ -1392,30 +1470,30 @@ function executePendingIntegrationExtraction(browser) {
     : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return Promise.resolve(null);
   browser.pendingExtraction = null;
   if (extraction.kind === 'command-target') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
   }
   if (extraction.kind === 'command-execution') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
   }
   if (extraction.kind === 'ready-check-validation') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
   }
   if (extraction.kind === 'pattern-highlight') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
   }
   if (extraction.kind === 'source-discovery') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
   }
   if (extraction.kind === 'source-fetch') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
   }
   if (extraction.kind === 'webmcp-discovery') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+    return runWebMcp(browser.contents, 'discover', extraction.payload).then((result) => receiveIntegrationResult(browser, result));
   }
   if (extraction.kind === 'webmcp-invocation') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+    return runWebMcp(browser.contents, 'invoke', extraction.payload).then((result) => receiveIntegrationResult(browser, result));
   }
-  return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
+  return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
 }
 
 async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId) {
@@ -1440,6 +1518,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     });
     const toolbarView = new WebContentsView({
       webPreferences: {
+        preload: path.join(__dirname, 'integration-toolbar-preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -1488,95 +1567,11 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       }
       return { action: 'deny' };
     });
-    browser.toolbarContents.on('will-navigate', (event, requestedUrl) => {
-      const toolbarPrefix = 'hvy-integration://toolbar/';
-      if (requestedUrl.startsWith(toolbarPrefix)) {
-        event.preventDefault();
-        mainWindow?.webContents.send('hvy:integration-inspection-result', {
-          kind: 'integration-toolbar-action',
-          action: requestedUrl.slice(toolbarPrefix.length),
-          profileId,
-        });
-        raiseWindow(mainWindow);
-        return;
-      }
-      const browserCommandPrefix = 'hvy-integration://browser/';
-      if (requestedUrl.startsWith(browserCommandPrefix)) {
-        event.preventDefault();
-        const browserCommand = requestedUrl.slice(browserCommandPrefix.length);
-        if (browserCommand === 'back' && browser.contents.canGoBack()) browser.contents.goBack();
-        if (browserCommand === 'forward' && browser.contents.canGoForward()) browser.contents.goForward();
-        if (browserCommand === 'reload') browser.contents.reload();
-        if (browserCommand === 'inspect') {
-          browser.actionModePending = true;
-          browser.contents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", { externalToolbar: true })`);
-        }
-        if (browserCommand === 'close') integrationWindow.close();
-        return;
-      }
-      const inspectorControlPrefix = 'hvy-integration://inspector-control/';
-      if (requestedUrl.startsWith(inspectorControlPrefix)) {
-        event.preventDefault();
-        const control = requestedUrl.slice(inspectorControlPrefix.length);
-        // A button the page's picker put on the toolbar, by its id.
-        if (/^[a-z0-9-]+$/.test(control)) {
-          void browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.control(${JSON.stringify(control)})`);
-        }
-        return;
-      }
-      const navigatePrefix = 'hvy-integration://navigate/';
-      if (requestedUrl.startsWith(navigatePrefix)) {
-        event.preventDefault();
-        const targetUrl = Buffer.from(requestedUrl.slice(navigatePrefix.length), 'base64url').toString('utf8');
-        if (isAllowedIntegrationUrl(targetUrl, browser.allowedOrigins)) void browser.contents.loadURL(targetUrl);
-        else requestIntegrationNavigationApproval(browser, targetUrl, 'address');
-        return;
-      }
-    });
     browser.contents.on('will-navigate', (event, requestedUrl) => {
-      // A message from the inspector carries the browser's token (integration-inspector.js), for Tauri's host, which
-      // hears every frame's navigations. Only the top page's reach this handler, so frames cannot send one here; the
-      // token is dropped, not checked.
-      if (requestedUrl.startsWith('hvy-integration://')) requestedUrl = requestedUrl.replace(/\?t=[^#]*$/, '');
-      if (requestedUrl === 'hvy-integration://close') {
+      // Galaxy's scripts send what they find out of the page's sight (hvy:integration-page-message), and what the host
+      // reports goes on its own channel (hvy:integration-browser-event): a Galaxy address is nothing the page can send.
+      if (requestedUrl.startsWith('hvy-integration://')) {
         event.preventDefault();
-        integrationWindow.close();
-        return;
-      }
-      const inspectionPrefix = 'hvy-integration://inspection/';
-      if (requestedUrl.startsWith(inspectionPrefix)) {
-        event.preventDefault();
-        const encoded = requestedUrl.slice(inspectionPrefix.length);
-        const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-        result.profileId = profileId;
-        const isBackgroundResult = result?.kind === 'integration-page-readiness'
-          || result?.kind === 'integration-ready-check-validation'
-          || result?.kind === 'integration-record-watch-result'
-          || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
-          || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
-          || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
-        // A background result (such as the scan on each page load) doesn't end a selection the person is making.
-        if (!isBackgroundResult) {
-          browser.actionModePending = false;
-          setIntegrationToolbarInspectionState(browser);
-        }
-        mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        if (!isBackgroundResult) raiseWindow(mainWindow);
-        return;
-      }
-      const toolbarStatePrefix = 'hvy-integration://toolbar-state/';
-      if (requestedUrl.startsWith(toolbarStatePrefix)) {
-        event.preventDefault();
-        const encoded = requestedUrl.slice(toolbarStatePrefix.length);
-        const state = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-        setIntegrationToolbarInspectionState(browser, state);
-        return;
-      }
-      if (requestedUrl === 'hvy-integration://inspection-cancel') {
-        event.preventDefault();
-        browser.actionModePending = false;
-        setIntegrationToolbarInspectionState(browser);
-        raiseWindow(mainWindow);
         return;
       }
       if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
@@ -1586,9 +1581,9 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     browser.contents.on('did-finish-load', () => {
       const currentUrl = browser.contents.getURL();
       void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
-      void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
-        void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
-        if (browser.actionModePending) return browser.contents.executeJavaScript(browser.inspectionStart || DEFAULT_INSPECTION_START);
+      void runInIntegrationWorld(browser.contents, INTEGRATION_INSPECTOR).then(() => {
+        void runInIntegrationWorld(browser.contents, 'window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
+        if (browser.actionModePending) return runInIntegrationWorld(browser.contents, browser.inspectionStart || DEFAULT_INSPECTION_START);
         return executePendingIntegrationExtraction(browser);
       });
     });
@@ -1598,7 +1593,7 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     });
     integrationWindow.on('closed', () => {
       // Every close is reported: whatever was waiting on this window ends, not only a selection.
-      mainWindow?.webContents.send('hvy:integration-inspection-result', { kind: 'integration-browser-closed', profileId });
+      mainWindow?.webContents.send('hvy:integration-browser-event', { kind: 'integration-browser-closed', profileId });
       if (browser.actionModePending) {
         browser.actionModePending = false;
         raiseWindow(mainWindow);
@@ -1640,12 +1635,12 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.actionModePending = actionMode;
   if (actionMode) browser.inspectionStart = DEFAULT_INSPECTION_START;
   browser.pendingExtraction = pendingExtraction || null;
-  await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
+  await loadIntegrationToolbar(browser.toolbarContents);
   browser.window.removeMenu();
   if (browser.contents.getURL() === url && !browser.contents.isLoadingMainFrame()) {
-    await browser.contents.executeJavaScript(INTEGRATION_INSPECTOR);
+    await runInIntegrationWorld(browser.contents, INTEGRATION_INSPECTOR);
     if (browser.actionModePending) {
-      await browser.contents.executeJavaScript(browser.inspectionStart || DEFAULT_INSPECTION_START);
+      await runInIntegrationWorld(browser.contents, browser.inspectionStart || DEFAULT_INSPECTION_START);
     } else {
       await executePendingIntegrationExtraction(browser);
     }

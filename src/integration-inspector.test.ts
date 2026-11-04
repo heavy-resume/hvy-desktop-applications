@@ -7,7 +7,6 @@ import { createServer, normalizePath, type ViteDevServer } from 'vite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const inspectorSource = fs.readFileSync(new URL('./integration-inspector.js', import.meta.url), 'utf8');
-const integrationToolbarSource = fs.readFileSync(new URL('../public/integration-browser-toolbar.html', import.meta.url), 'utf8');
 const guideSource = fs.readFileSync(new URL('../src-tauri/resources/hvy-guide.hvy', import.meta.url), 'utf8');
 const require = createRequire(import.meta.url);
 const hvyReferenceRoot = dirname(require.resolve('heavy-file-format-ref-impl/package.json'));
@@ -110,13 +109,10 @@ interface InspectorApi {
 declare global {
   interface Window {
     __hvyGalaxyInspector: InspectorApi;
-    __hvyGalaxyPublish?: (value: unknown) => void;
-    __hvyGalaxyToolbarPublish?: (value: unknown) => void;
+    __hvyGalaxyHost?: { publish?: (value: unknown) => void; toolbarState?: (value: unknown) => void; cancel?: () => void };
     __toolbarState?: unknown;
     __commandRecordingResult?: unknown;
     __readyCheckResult?: unknown;
-    hvySetBrowserState(value: { url: string; allowed: string[] }): void;
-    hvySetInspectionState(value?: { active?: boolean; status?: string; buttons?: Array<{ id: string; label: string; primary?: boolean; disabled?: boolean }> }): void;
     __guideTitlePattern?: Parameters<InspectorApi['extractPattern']>[0];
   }
 }
@@ -306,7 +302,7 @@ describe('integration structural inspector', () => {
     page = await browser.newPage();
     await page.setContent(mockInbox);
     await page.evaluate(() => {
-      window.__hvyGalaxyPublish = (value) => { window.__readyCheckResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__readyCheckResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const result = await page.evaluate(() => {
@@ -336,7 +332,7 @@ describe('integration structural inspector', () => {
     page = await browser.newPage();
     await page.setContent(mockInbox);
     await page.evaluate(() => {
-      window.__hvyGalaxyPublish = (value) => { window.__readyCheckResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__readyCheckResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const states = await page.evaluate(() => {
@@ -366,38 +362,6 @@ describe('integration structural inspector', () => {
     ]);
   });
 
-  it('renders browser security state in the local toolbar document', async () => {
-    await page.setContent(integrationToolbarSource);
-    await page.evaluate(() => window.hvySetBrowserState({
-      url: 'https://mail.google.com/mail/u/0/',
-      allowed: ['https://mail.google.com'],
-    }));
-
-    expect(await page.locator('.host').textContent()).toBe('mail.google.com');
-    expect(await page.locator('.url').inputValue()).toBe('https://mail.google.com/mail/u/0/');
-    expect(await page.locator('.security').getAttribute('data-secure')).toBe('true');
-    expect(await page.locator('.security').getAttribute('data-allowed')).toBe('true');
-  });
-
-  it('renders field-picking controls in the local toolbar document', async () => {
-    await page.setContent(integrationToolbarSource);
-    await page.evaluate(() => window.hvySetInspectionState({
-      active: true,
-      status: 'Select fields, or choose Done to cancel',
-      buttons: [
-        { id: 'navigate', label: 'Navigate page' },
-        { id: 'undo', label: 'Undo last', disabled: true },
-        { id: 'done', label: 'Done', primary: true },
-      ],
-    }));
-
-    expect(await page.locator('[data-inspection-controls]').isVisible()).toBe(true);
-    expect(await page.locator('[data-inspection-status]').textContent()).toContain('choose Done to cancel');
-    expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
-    expect(await page.getByRole('button', { name: 'Undo last' }).isDisabled()).toBe(true);
-    expect(await page.locator('.address').isHidden()).toBe(true);
-  });
-
   it('discovers and retrieves a same-origin JSON endpoint with the page session boundary', async () => {
     await page.route('**/integration-items.json', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [{ id: 1, title: 'Planning session' }] }) }));
     await page.goto(viteUrl);
@@ -409,6 +373,18 @@ describe('integration structural inspector', () => {
     expect(source.kind).toBe('json-api');
     expect(source.authenticated).toBe(true);
     expect(result.value).toEqual({ items: [{ id: 1, title: 'Planning session' }] });
+  });
+
+  it("finds a JSON API by the type the browser reports, whatever its address, and leaves the page's fetch as it was", async () => {
+    await page.route('**/api/items', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) }));
+    await page.goto(viteUrl);
+    const pageFetch = await page.evaluate(() => String(window.fetch));
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => fetch('/api/items').then((response) => response.json()));
+
+    const found = await page.evaluate(() => window.__hvyGalaxyInspector.discoverStructuredSources().filter((source) => source.discoveredBy === 'network').map((source) => [source.kind, new URL(source.url).pathname]));
+    expect(found).toContainEqual(['json-api', '/api/items']);
+    expect(await page.evaluate(() => String(window.fetch))).toBe(pageFetch);
   });
 
   it('restarts parent highlighting when another record example is requested', async () => {
@@ -582,7 +558,7 @@ describe('integration structural inspector', () => {
     await page.setContent(mockInbox);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
@@ -614,7 +590,7 @@ describe('integration structural inspector', () => {
     </main>`);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true, deriveParent: true, prompt: 'Pick what to read from the job.' }));
@@ -650,8 +626,8 @@ describe('integration structural inspector', () => {
     </main>`);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
-      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, toolbarState: (value) => { window.__toolbarState = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('target', {
@@ -696,7 +672,7 @@ describe('integration structural inspector', () => {
     await page.setContent(sectionedPostings);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true, deriveParent: true }));
@@ -730,8 +706,8 @@ describe('integration structural inspector', () => {
     await page.setContent(mockInbox);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
-      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, toolbarState: (value) => { window.__toolbarState = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const parentSnapshot = await page.evaluate(() => {
@@ -863,7 +839,7 @@ describe('integration structural inspector', () => {
     await page.setContent(sectionedPostings);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
@@ -937,7 +913,7 @@ describe('integration structural inspector', () => {
     await page.setContent(sectionedPostings);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const { parentSnapshot, rangeSnapshot } = await page.evaluate(() => {
@@ -1715,7 +1691,7 @@ describe('integration structural inspector', () => {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.setContent('<main><article class="message"><span class="status">Unread</span><button>Mark read</button></article></main>');
     await page.evaluate(() => {
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const result = await page.evaluate(async () => {
@@ -1762,7 +1738,7 @@ describe('integration structural inspector', () => {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.setContent('<main><article class="message"><span class="status">Active</span><button>Delete</button></article></main>');
     await page.evaluate(() => {
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const result = await page.evaluate(async () => {
@@ -1850,7 +1826,7 @@ describe('integration structural inspector', () => {
     await page.setContent('<main><article class="job"><h1>Engineer</h1><p>Build things.</p></article></main>');
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, toolbarState: (value) => { window.__toolbarState = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true, externalToolbar: true, prompt: 'Pick the box around the whole job posting.' }));
@@ -1871,8 +1847,8 @@ describe('integration structural inspector', () => {
     await page.setContent('<main><nav class="pager"><a href="#" class="next">Next</a></nav></main>');
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
-      window.__hvyGalaxyToolbarPublish = (value) => { window.__toolbarState = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, toolbarState: (value) => { window.__toolbarState = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('target', {
@@ -1915,7 +1891,7 @@ describe('integration structural inspector', () => {
     await page.setContent(`<main style="margin-top:140px"><ul class="rows">${['Data Analyst', 'Product Manager', 'Designer'].map((title, index) => `<li class="row" data-row="${index}"><a href="https://jobs.test/jobs/${index}" class="open">${title}</a><p>Acme</p></li>`).join('')}</ul><p class="outside">Not a job</p></main>`);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
     const rowsPattern = await page.evaluate(() => {
@@ -1953,7 +1929,7 @@ describe('integration structural inspector', () => {
       <li><a href="#" class="group-next" aria-label="Next">›</a></li></ul></nav></main>`);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
       (window as { __pagerClicks?: number }).__pagerClicks = 0;
       document.querySelectorAll('.pager a').forEach((link) => link.addEventListener('click', (event) => {
         event.preventDefault();
@@ -2324,7 +2300,7 @@ describe('integration structural inspector', () => {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.setContent('<main><button class="reveal-control">Reveal field</button><section class="editor" hidden><input class="entry-control"></section></main>');
     await page.evaluate(() => {
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
       document.querySelector('.reveal-control')!.addEventListener('click', () => {
         document.querySelector<HTMLElement>('.editor')!.hidden = false;
       });
@@ -2366,7 +2342,7 @@ describe('integration structural inspector', () => {
     pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.setContent('<main><div role="dialog"><label>Project <select class="list-control"><option>Wrong project</option></select></label><label>List <select class="list-control target"><option value="wrong">Wrong list</option><option value="correct">Correct list</option></select></label><label>Owner <select class="list-control"><option>Wrong owner</option></select></label></div></main>');
-    await page.evaluate(() => { window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; }; });
+    await page.evaluate(() => { window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } }; });
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { commandRecorder: { scope: 'page' } }));
 
@@ -2397,7 +2373,7 @@ describe('integration structural inspector', () => {
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.setContent('<main><button class="destructive-control">Clear task</button></main>');
     await page.evaluate(() => {
-      window.__hvyGalaxyPublish = (value) => { window.__commandRecordingResult = value; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
       document.body.dataset.clickCount = '0';
       document.querySelector('.destructive-control')!.addEventListener('click', () => {
         document.body.dataset.clickCount = String(Number(document.body.dataset.clickCount) + 1);
@@ -2548,7 +2524,7 @@ describe('integration structural inspector', () => {
       const snapshot = inspector.snapshotElement(heading, null, 'target');
       const pattern = { scrollPage: false, parents: [inspector.snapshotElement(parent, null, 'parent')], targets: [{ label: 'Subject', snapshot: inspector.snapshotElement(parent.querySelector('span')!, parent, 'target') }] };
       heading.textContent = 'Loading';
-      window.__hvyGalaxyPublish = () => undefined;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: () => undefined };
       setTimeout(() => { heading.textContent = 'Inbox'; }, 150);
       return inspector.extractAndPublish(pattern, { readyChecks: { urlMode: 'strict-url', urlValue: location.href, elements: [{ id: 'inbox', name: 'Inbox', snapshot, expectedValue: 'Inbox' }] } });
     });
@@ -2561,7 +2537,7 @@ describe('integration structural inspector', () => {
     await page.goto(`${viteUrl}/__record-navigation-test.html`);
     await page.evaluate(() => {
       window.__readyCheckResult = [];
-      window.__hvyGalaxyPublish = (value) => { (window.__readyCheckResult as unknown[]).push(value); };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { (window.__readyCheckResult as unknown[]).push(value); } };
     });
     await page.setContent(`<main style="height:160px;overflow:auto">${Array.from({ length: 60 }, (_, index) => `<article style="height:42px"><span>Message ${index}</span></article>`).join('')}</main>`);
     await page.addScriptTag({ content: inspectorSource });
@@ -2586,7 +2562,7 @@ describe('integration structural inspector', () => {
       const scroller = document.querySelector<HTMLElement>('.events')!;
       const parent = scroller.querySelector('.event')!;
       let published = false;
-      window.__hvyGalaxyPublish = () => { published = true; };
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: () => { published = true; } };
       const operation = window.__hvyGalaxyInspector.extractAndPublish({
         minimumConfidence: 0.8,
         parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],

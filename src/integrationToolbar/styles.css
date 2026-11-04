@@ -1,0 +1,99 @@
+/* The integration browser's toolbar: a page of its own, in a strip above the site. */
+:root { color-scheme: dark; }
+
+.integration-toolbar-body {
+  width: 100%;
+  height: 100vh;
+  margin: 0;
+  overflow: hidden;
+  background: #17191e;
+  color: #f4f4f5;
+  font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#integration-toolbar { height: 100%; }
+
+.integration-toolbar {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid #555b64;
+  box-shadow: 0 2px 8px #0008;
+}
+
+.integration-toolbar-button {
+  box-sizing: border-box;
+  height: min(36px, calc(100% - 2px));
+  min-width: 36px;
+  padding: 0 10px;
+  border: 1px solid #5b6069;
+  border-radius: 7px;
+  background: #23262d;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.integration-toolbar-button:hover { background: #30343d; }
+.integration-toolbar-button:focus-visible,
+.integration-toolbar-url:focus-visible { outline: 2px solid #ff5d47; outline-offset: 1px; }
+.integration-toolbar-button:disabled { opacity: 0.5; cursor: default; }
+
+.integration-toolbar-address {
+  box-sizing: border-box;
+  height: min(36px, calc(100% - 2px));
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border: 1px solid #5b6069;
+  border-radius: 8px;
+  background: #0f1115;
+}
+.integration-toolbar-address[hidden] { display: none; }
+.integration-toolbar-security { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.integration-toolbar-security[data-secure="true"] { color: #9fd7b2; }
+.integration-toolbar-security[data-allowed="false"] { color: #ffb19f; }
+.integration-toolbar-host { font-weight: 700; white-space: nowrap; }
+.integration-toolbar-url { min-width: 0; flex: 1; border: 0; background: transparent; color: #dadce1; font: inherit; outline: 0; }
+
+.integration-toolbar-close { font-size: 20px; line-height: 1; }
+
+.integration-toolbar-menu-wrap { position: relative; height: min(36px, calc(100% - 2px)); }
+.integration-toolbar-menu-wrap[hidden] { display: none; }
+.integration-toolbar-menu-toggle { height: 100%; font-size: 20px; line-height: 1; }
+.integration-toolbar-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  background: #17191e;
+}
+.integration-toolbar-menu[hidden] { display: none; }
+
+.integration-toolbar-inspection { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; }
+.integration-toolbar-inspection[hidden] { display: none; }
+.integration-toolbar-status {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #ffb19f;
+  font-weight: 650;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.integration-toolbar-inspection-buttons { display: flex; align-items: center; gap: 7px; height: 100%; }
+.integration-toolbar-primary { border-color: #e0563f; background: #e0563f; font-weight: 700; }
+.integration-toolbar-primary:hover { background: #ed6650; }
