@@ -45,6 +45,7 @@ export type RecordSinkOutcome = 'appended' | 'refreshed' | 'kept';
 export interface RecordSink extends RecordConsumer {
   /** Lets a collection run skip pages whose records would be ignored anyway. */
   isKnown(key: string): boolean;
+  fieldsOf(key: string): Record<string, unknown> | null;
   onRecord(record: CollectedRecord): RecordSinkOutcome;
 }
 
@@ -55,8 +56,11 @@ function owned(values: Record<string, unknown>, ownedFields: string[] | undefine
 export function createRecordSink(store: DocumentItemStore, config: RecordSinkConfig = DEFAULT_RECORD_SINK_CONFIG): RecordSink {
   return {
     isKnown: (key) => config.onExisting === 'keep' && store.get(key)?.state === 'ok',
+    fieldsOf: (key) => store.get(key)?.fields ?? null,
     onRecord: (record) => {
       const existing = store.get(record.key);
+      // What a list shows of an item already in the document changes nothing: its own page, read or tried, says more.
+      if (existing && record.state === 'listed') return 'kept';
       if (existing && existing.state === 'ok' && (config.onExisting === 'keep' || (record.state !== 'ok' && config.keepGoodOnFailure))) {
         return 'kept';
       }

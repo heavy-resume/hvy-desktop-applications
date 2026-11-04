@@ -35,6 +35,8 @@ registerHvyCliPluginCommands({
     'This plugin collects records from web pages: start pages, site patterns, limits, and an optional output (into a component-list, or with "kind": "sql" into a table of the document database), as indented JSON in plugin.txt (its pluginConfig in plugin.json stays empty).',
     'Scripts start a run with doc.plugins.call("galaxy.web-collection", "collect", {"capabilityId": ..., "on_complete": handler}).',
     'A script that shows the output registers "on_records" ({"capabilityId": ..., "key": ..., "handler": ...}): the handler gets {"keys": [...]} as each record is written, and reads what changed.',
+    'Each record has a "state": "ok" (read from its own page), "listed" (read from its list, its page not read yet), "no_pattern" (its page could not be read), or "invalid". A run writes each new item listed as soon as its list shows it, then reads its page; with "readItemPages": false, it only lists them.',
+    'Scripts read items on their own pages with "extract": {"capabilityId": ..., "url": ...} for one, or {"capabilityId": ..., "items": [{"url": ..., "values": {...}}]}, where "values" is what its list showed, kept; without it, what the output holds of it already.',
   ],
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.web-collection', description: 'Create a web collection block. Edit plugin.txt (indented JSON) for start pages, patterns, and output.' }],
   operationCommands: [],

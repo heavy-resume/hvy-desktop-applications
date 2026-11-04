@@ -354,7 +354,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
 
     // UI: galaxy.web-collection reader, single item URL.
     async extract(collection: CollectionDefinition, url: string): Promise<CollectionRunState> {
-      const run = automation.extractItem(collection, url, sink);
+      const run = automation.extractItems(collection, [{ url }], sink);
       await settle();
       return automation.getState().runs.find((candidate) => candidate.runId === run.runId)!;
     },

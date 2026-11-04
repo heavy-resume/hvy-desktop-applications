@@ -21,6 +21,8 @@ import { patternFingerprints, resolveSitePattern, urlMatchesRule, type SitePatte
 export interface RecordConsumer {
   onRecord(record: CollectedRecord): void;
   isKnown?(key: string): boolean;
+  /** What it holds of an item already (its fields), for an item read again without them (`extract`): kept, as its list's are. */
+  fieldsOf?(key: string): Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
   /** Gets ready before the run reads anything (a database to open and check); failing fails the run with its reason. */
   open?(): Promise<void>;
   /** After the run: the records it was given are written, or the run fails with why one wasn't. */
@@ -93,6 +95,11 @@ export interface CollectionDefinition {
    * the rest are older. Off unless set.
    */
   stopAtKnownPage?: boolean;
+  /**
+   * False when a run reads only the lists: each new item is written as listed (what its list shows), and its own page is
+   * read later, when asked for (`extract`). Read in the same run unless set.
+   */
+  readItemPages?: false;
   followLinksToOtherSites: boolean;
   /** Record identity. Defaults to the canonical URL of the record's page. */
   key?: RecordKeyStrategy;
@@ -116,6 +123,8 @@ export interface StartPageProgress {
   known: number;
   /** Of those, to be read. */
   toCollect: number;
+  /** Of those, written as listed only, for their pages to be read later (a run that reads only lists). */
+  listed: number;
   /** Read so far: collected or with a problem. */
   read: number;
   collected: number;
@@ -134,6 +143,20 @@ export interface CollectionProblem {
   problem: string;
   /** An item's: the site setup whose list it was found on, so it can be added to that setup as another example. */
   siteId?: string;
+  /** An item's: what its list showed of it, kept when it is read again (`extract`). */
+  values?: Record<string, unknown>;
+}
+
+/** An item to read on its own page, as a run reads one its list showed: its address, and what the list showed of it. */
+export interface ExtractItem {
+  url: string;
+  /**
+   * What its list showed (its title, its company): kept, and what its page shows is added to it. Without it, what the
+   * consumer holds of the item already (`fieldsOf`).
+   */
+  values?: Record<string, unknown>;
+  /** The site setup whose list showed it, for its problem. */
+  siteId?: string;
 }
 
 export interface CollectionRunState {
@@ -144,11 +167,15 @@ export interface CollectionRunState {
   page: number;
   collected: number;
   skipped: number;
+  /** Items written as listed only: their pages not read in this run. */
+  listed: number;
   problems: number;
   /** Start pages this run could not read at all, by start page id: a site to set up, not an item. */
   startPageProblems: Record<string, string>;
   /** Every page this run opened and could not read, and why, in the order it found them: what "with problems" counts. */
   problemPages: CollectionProblem[];
+  /** The items it wrote as listed only, in the order it found them, for their pages to be read (`extract`): what "listed" counts. */
+  listedItems: ExtractItem[];
   /** Each start page's progress, by start page id. */
   startPages: Record<string, StartPageProgress>;
   attention: { workerId: string; url: string; reason: string } | null;
@@ -264,7 +291,7 @@ export class CollectionService {
   start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
     for (const startPage of startPages) {
-      run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, read: 0, collected: 0, problems: 0, current: null };
+      run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, listed: 0, read: 0, collected: 0, problems: 0, current: null };
     }
     const done = this.withConsumer(run, () => Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
       { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
@@ -273,16 +300,32 @@ export class CollectionService {
     return { runId: run.state.runId, done };
   }
 
-  extract(definition: CollectionDefinition, profileId: string, url: string, consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
+  /**
+   * Reads items on their own pages, as a run reads those its lists showed: one typed in, or ones listed earlier whose
+   * pages were not read, or could not be (Retry). Items on one site are read in turn, as a run reads them; one item
+   * alone goes first, as asked for.
+   */
+  extract(definition: CollectionDefinition, profileId: string, items: ExtractItem[], consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
-    const done = this.withConsumer(run, () => Promise.allSettled([this.deps.scheduler.run(
-      { profileId, kind: 'collection', origin: new URL(url).origin, label: `${definition.name}: ${url}`, interactive: true, signal: run.controller.signal },
+    const sites = new Map<string, ExtractItem[]>();
+    for (const item of items) {
+      const origin = new URL(item.url).origin;
+      sites.set(origin, [...(sites.get(origin) ?? []), item]);
+      if (item.siteId) run.itemSites.set(item.url, item.siteId);
+    }
+    const done = this.withConsumer(run, () => Promise.allSettled([...sites].map(([origin, siteItems]) => this.deps.scheduler.run(
+      { profileId, kind: 'collection', origin, label: `${definition.name}: ${siteItems.length === 1 ? siteItems[0].url : `${siteItems.length} pages on ${new URL(origin).host}`}`, interactive: items.length === 1, signal: run.controller.signal },
       async (lease) => {
-        this.assertAllowed(run, url, false);
-        await lease.paced(url, () => this.deps.host.navigate(lease.workerId, url));
-        await this.writeDetail(run, lease, url, await this.inspectAt(run, lease), {});
+        for (const item of siteItems) {
+          const key = this.keyFor(run, item.url, item.values ?? {});
+          const listed = item.values ?? (key ? await run.consumer.fieldsOf?.(key) : null) ?? null;
+          // An item its list showed came from a list, where a run may follow links to other sites.
+          this.assertAllowed(run, item.url, listed !== null);
+          await this.paced(run, lease, item.url, () => this.deps.host.navigate(lease.workerId, item.url));
+          await this.writeDetail(run, lease, item.url, await this.inspectAt(run, lease), listed ?? {});
+        }
       },
-    )])).then((results) => this.finish(run, results));
+    )))).then((results) => this.finish(run, results));
     return { runId: run.state.runId, done };
   }
 
@@ -341,7 +384,7 @@ export class CollectionService {
       attentionTurn: Promise.resolve(),
       consumer,
       itemSites: new Map(),
-      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, problems: 0, startPageProblems: {}, problemPages: [], startPages: {}, attention: null, error: null },
+      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, listed: 0, problems: 0, startPageProblems: {}, problemPages: [], listedItems: [], startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
     this.deps.emit('collection', `${runId} started: ${definition.name}`, { profileId });
@@ -357,7 +400,7 @@ export class CollectionService {
       run.state.status = 'failed';
       run.state.error = errorMessage(failure.reason);
     } else run.state.status = 'done';
-    this.deps.emit('collection', `${run.state.runId} ${run.state.status}: ${run.state.collected} collected, ${run.state.skipped} skipped, ${run.state.problems} problems`);
+    this.deps.emit('collection', `${run.state.runId} ${run.state.status}: ${run.state.collected} collected, ${run.state.listed} listed, ${run.state.skipped} skipped, ${run.state.problems} problems`);
     return structuredClone(run.state);
   }
 
@@ -489,7 +532,7 @@ export class CollectionService {
           emit('collection', `skip known ${knownKey}`);
           continue;
         }
-        if (progress.toCollect >= maxItems) {
+        if (progress.toCollect + progress.listed >= maxItems) {
           emit('collection', `${startPage.id}: reached its limit of ${maxItems} new items`);
           return queue;
         }
@@ -497,7 +540,8 @@ export class CollectionService {
         if (pattern.siteId) run.itemSites.set(link, pattern.siteId);
         const itemCommandId = pattern.itemCommandId;
         if (itemCommandId) {
-          // Side-pane board: the item opens beside the listing; there is no navigation to undo.
+          // Side-pane board: the item opens beside the listing; there is no navigation to undo. It is read as the list
+          // is, even in a run that reads only lists: only the list opens it.
           progress.toCollect += 1;
           progress.current = title;
           const opened = await this.paced(run, lease, listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: itemCommandId, recordRef: record.ref }));
@@ -509,6 +553,16 @@ export class CollectionService {
         }
         if (!isNavigationAllowed(run.definition, link, true)) {
           emit('collection', `skip out of scope ${link}`);
+          continue;
+        }
+        // In the document as soon as its list shows it, before its page is read: later in this run, or, in a run that reads
+        // only lists, when asked for. One keyed by what only its page shows is read in this run either way: written now,
+        // it would be another item than its page's.
+        if (knownKey) this.emitRecord(run, link, listingValues, 'listed', pattern.id, undefined);
+        if (knownKey && run.definition.readItemPages === false) {
+          progress.listed += 1;
+          run.state.listed += 1;
+          run.state.listedItems.push({ url: link, values: listingValues, ...(pattern.siteId ? { siteId: pattern.siteId } : {}) });
           continue;
         }
         queue.push({ link, title, values: listingValues });
@@ -705,10 +759,10 @@ export class CollectionService {
       ...(problem ? { problem } : key || state !== 'ok' ? {} : { problem: 'The record has no value for its key.' }),
     };
     if (record.state === 'ok') run.state.collected += 1;
-    else {
+    else if (record.state !== 'listed') {
       run.state.problems += 1;
       const siteId = run.itemSites.get(url);
-      run.state.problemPages.push({ kind: 'item', url, title: typeof values.title === 'string' && values.title ? values.title : null, problem: record.problem ?? '', ...(siteId ? { siteId } : {}) });
+      run.state.problemPages.push({ kind: 'item', url, title: typeof values.title === 'string' && values.title ? values.title : null, problem: record.problem ?? '', ...(siteId ? { siteId } : {}), values });
     }
     this.deps.emit('collection', `record ${record.state}${patternId ? ` (${patternId})` : ''} ${record.key}`);
     run.consumer.onRecord(record);

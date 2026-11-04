@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createCliItemStore } from './cliItemStore';
+import { createRecordSink, DEFAULT_RECORD_SINK_CONFIG } from './recordSink';
+import type { CollectedRecord } from './records';
 import { LISTING_STORE_CONFIG } from '../test/webAutomation/listingDocument';
 import { ANALYSIS_ORIGIN, analysisServiceCapability, analysisServiceManifest, mockAnalysisService, SECOND_ACCOUNT_SESSION, SOURCE_DOCUMENT_PHRASE } from '../test/webAutomation/analysisService';
 import { buildSearchDocument } from '../test/webAutomation/listingDocument';
@@ -160,7 +162,9 @@ describe('mock integration: job search flow', () => {
       close: async () => { throw new Error('The database is locked.'); },
     });
     expect(failedWrite).toMatchObject({ status: 'failed', error: 'The database is locked.', collected: 5 });
-    expect(written).toHaveLength(5);
+    // Each of the five, listed and then read.
+    expect(written).toHaveLength(10);
+    expect(new Set(written).size).toBe(5);
   });
 
   it('5. challenge: the run pauses for attention, the user solves it, and the run resumes', async () => {
@@ -1052,6 +1056,62 @@ describe('mock integration: job search flow', () => {
     await flow.collect(boards, undefined, flow.output(boards.capabilityId));
     expect(replaced).toEqual([]);
     expect(heard.length).toBeGreaterThan(0);
-    expect([...heard].sort()).toEqual(flow.items.list().map((item) => item.key).sort());
+    // Each record written is heard: a job listed, then read, twice.
+    expect([...new Set(heard)].sort()).toEqual(flow.items.list().map((item) => item.key).sort());
+  });
+  it('46. each new item is in the document as soon as its list shows it, listed, and then its page is read', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const written: CollectedRecord[] = [];
+    const sink = createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG);
+    const run = await flow!.collect(boards, undefined, { onRecord: (record) => { written.push(record); sink.onRecord(record); }, isKnown: sink.isKnown });
+    expect(run).toMatchObject({ status: 'done', listed: 0 });
+    // Every item listed before any page was read: the list is read first, and each item written as it is found.
+    const firstRead = written.findIndex((record) => record.state === 'ok');
+    expect(written.slice(0, firstRead).every((record) => record.state === 'listed')).toBe(true);
+    expect(written.filter((record) => record.state === 'listed').map((record) => record.key).sort()).toEqual(written.filter((record) => record.state === 'ok').map((record) => record.key).sort());
+    expect(flow!.items.list().every((item) => item.state === 'ok')).toBe(true);
+  });
+
+  it('47. a collection that reads only lists: its items are listed, and reading them later keeps what their lists showed', async () => {
+    const boards = listingCollection([ACME], { readItemPages: false, startPages: [{ id: 'acme', url: ACME, values: { company: 'Acme' } }] });
+    await signedInFlow(boards);
+    const run = await flow!.collect(boards);
+    expect(run).toMatchObject({ status: 'done', collected: 0, problems: 0 });
+    expect(run.listed).toBeGreaterThan(0);
+    expect(run.startPages.acme).toMatchObject({ listed: run.listed, toCollect: 0 });
+    const listed = flow!.items.list();
+    expect(listed.map((item) => item.state)).toEqual(listed.map(() => 'listed'));
+    expect(listed[0].fields).toMatchObject({ company: 'Acme', title: expect.any(String) });
+    expect(listed[0].fields.description).toBeUndefined();
+
+    // Read when asked for, with what each list showed: the page adds to it.
+    const read = flow!.automation.extractItems(boards, listed.map((item) => ({ url: item.url, values: item.fields })), flow!.output(boards.capabilityId) ?? createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG));
+    await flow!.settle();
+    expect(await read.done).toMatchObject({ status: 'done', collected: listed.length, problems: 0 });
+    for (const item of flow!.items.list()) {
+      expect(item.state).toBe('ok');
+      expect(item.fields).toMatchObject({ company: 'Acme', title: listed.find((before) => before.key === item.key)!.fields.title, description: expect.any(String) });
+    }
+
+    // Listed again by the next run, they stay as their pages were read.
+    await flow!.collect(boards);
+    expect(flow!.items.list().every((item) => item.state === 'ok')).toBe(true);
+  });
+
+  it('48. Retry: an item that couldn\'t be read keeps what its list showed, and is read again once its setup reads it', async () => {
+    const boards = listingCollection([ACME], { patterns: [], startPages: [{ id: 'acme', url: ACME, values: { company: 'Acme' } }] });
+    await signedInFlow(boards);
+    const listOnly = flow!.addSiteSetups(boards, { id: 'acme-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'acme-ats' }] });
+    const failed = await flow!.collect(listOnly);
+    expect(failed.problemPages.length).toBeGreaterThan(0);
+    expect(failed.problemPages[0]).toMatchObject({ kind: 'item', siteId: 'acme-ats', values: { company: 'Acme', title: expect.any(String) } });
+
+    // Its setup now reads item pages (an example added), and the problems are read again.
+    const fixed = flow!.addSiteSetups(listOnly, { id: 'acme-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'acme-ats' }, { ...atsDetailPattern, siteId: 'acme-ats' }] });
+    const retried = flow!.automation.extractItems(fixed, failed.problemPages.map(({ url, values, siteId }) => ({ url, values, siteId })), createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG));
+    await flow!.settle();
+    expect(await retried.done).toMatchObject({ status: 'done', collected: failed.problemPages.length, problems: 0 });
+    expect(flow!.items.list().every((item) => item.state === 'ok' && item.fields.company === 'Acme')).toBe(true);
   });
 });

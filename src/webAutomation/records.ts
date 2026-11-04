@@ -3,12 +3,18 @@
  * consumer (a record sink in the document, a script, or MCP) decides what a
  * record means and where it goes.
  */
-export type CollectedRecordState = 'ok' | 'no_pattern' | 'invalid';
+/**
+ * - `ok`: read from its own page;
+ * - `listed`: read from its list, its own page not read yet (a run that reads only lists, or one that has yet to reach it);
+ * - `no_pattern`: its page was opened, and nothing read it;
+ * - `invalid`: read, but missing what its collection requires.
+ */
+export type CollectedRecordState = 'ok' | 'listed' | 'no_pattern' | 'invalid';
 
 export interface CollectedRecordProvenance {
   sourceUrl: string;
   collectedAt: number;
-  /** The detail pattern used. Absent when nothing matched. */
+  /** The pattern that read it: its page's, or, listed, its list's. Absent when nothing matched. */
   patternId?: string;
 }
 

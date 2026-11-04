@@ -582,6 +582,7 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
         maxPages: number(value.maxPages, 5, 1, LIMIT_BOUNDS.maxPages),
         maxItems: number(value.maxItems, 50, 1, LIMIT_BOUNDS.maxItems),
         ...(value.stopAtKnownPage === true ? { stopAtKnownPage: true } : {}),
+        ...(value.readItemPages === false ? { readItemPages: false as const } : {}),
         followLinksToOtherSites: value.followLinksToOtherSites === true,
         ...(key ? { key } : {}),
         ...(ignoredQueryParameters ? { ignoredQueryParameters } : {}),

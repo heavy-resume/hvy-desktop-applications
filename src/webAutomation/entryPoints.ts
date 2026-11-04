@@ -7,6 +7,7 @@ import {
   testSitePattern,
   type CollectionDefinition,
   type CollectionRunState,
+  type ExtractItem,
   type RecordConsumer,
   type SitePatternTestResult,
 } from './collection';
@@ -342,11 +343,12 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return collections.start(definition, profileId, consumer, startPages);
     },
 
-    // UI: galaxy.web-collection reader, single item URL entry; scripting extract({ url }).
-    extractItem(definition: CollectionDefinition, url: string, consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
+    // UI: galaxy.web-collection reader, a run's pages with problems, Retry; scripting extract({ url }) or extract({ items }):
+    // items read on their own pages, keeping what their lists showed.
+    extractItems(definition: CollectionDefinition, items: ExtractItem[], consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
-      return collections.extract(definition, profileId, url, consumer);
+      return collections.extract(definition, profileId, items, consumer);
     },
 
     // UI: a link clicked in the document. One to a site a web plugin instance here uses (a report, a job posting) opens in

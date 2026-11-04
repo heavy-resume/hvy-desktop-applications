@@ -55,6 +55,7 @@ export function createSqlRecordConsumer(
       for (const item of createSqlItemStore(db, config).list()) states.set(item.key, item.state);
     }),
     isKnown: (key) => policy.onExisting === 'keep' && states.get(key) === 'ok',
+    fieldsOf: (key) => use((db) => createSqlItemStore(db, config).get(key)?.fields ?? null),
     onRecord: (record) => {
       writes.push(use((db) => {
         const store = createSqlItemStore(db, config);

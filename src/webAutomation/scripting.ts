@@ -1,6 +1,6 @@
 import { queueWebCapabilityScriptOperation, type WebCapabilityScriptCallback } from '../plugins/webCapabilityScripting';
 import type { CollectedRecord } from './records';
-import type { CollectionDefinition, RecordConsumer } from './collection';
+import type { CollectionDefinition, ExtractItem, RecordConsumer } from './collection';
 import type { WebAutomation } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { WebApiCapability } from './webApi';
@@ -136,9 +136,16 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       };
       return operation(args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls).done);
     },
+    // One item (`url`), or several (`items`, each { url, values }: what its list showed, as its record has it, kept).
     extract: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(args, () => lookup.automation.extractItem(collection(lookup, args), String(args.url ?? ''), consumer(lookup, args)).done);
+      const items: ExtractItem[] = Array.isArray(args.items)
+        ? args.items.map((item: { url?: unknown; values?: unknown }) => ({
+          url: String(item?.url ?? ''),
+          ...(item?.values && typeof item.values === 'object' ? { values: item.values as Record<string, unknown> } : {}),
+        }))
+        : [{ url: String(args.url ?? '') }];
+      return operation(args, () => lookup.automation.extractItems(collection(lookup, args), items, consumer(lookup, args)).done);
     },
     stop: (args, ctx) => {
       resolve(ctx).automation.stopCollection(String(args.runId ?? ''));

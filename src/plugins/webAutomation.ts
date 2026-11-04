@@ -3,7 +3,7 @@ import type { HvyPlugin, HvyPluginContext, HvyPluginFactory, HvyPluginInstance }
 import { openExternalUrl, readSystemClipboardText } from '../backend';
 import { state } from '../state';
 import { subscribeWebAutomation } from '../webAutomation/app';
-import type { CollectionDefinition, CollectionField, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
+import type { CollectionDefinition, CollectionField, CollectionProblem, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
 import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
 import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
@@ -873,6 +873,11 @@ function collectionSettingsEditor(ctx: HvyPluginContext): HvyPluginInstance {
         labelled('Fields (JSON)', fieldsJson, 'What each record holds: [{ "id": "title", "label": "Title" }, …]. Long text: "kind": "long-text".'),
         labelled('A record is the same as another by', identity),
         labelled('Address parameters to ignore', ignored, 'One per line: two addresses that differ only in these are one page.'),
+        // Off, a run lists each new item (in the output as soon as its list shows it), and its page is read when asked for.
+        checkboxRow(`Read each ${String(config.itemName ?? '').trim() || 'item'}'s own page as its list is read`, config.readItemPages !== false, (on) => commit((draft) => {
+          if (on) delete draft.readItemPages;
+          else draft.readItemPages = false;
+        })),
         checkboxRow('Follow links to other sites', config.followLinksToOtherSites === true, (on) => commit((draft) => {
           draft.followLinksToOtherSites = on;
         })),
@@ -1521,7 +1526,7 @@ function pageProgressText(progress: StartPageProgress, items: string, needsYou: 
     case 'waiting': return 'Waiting for its turn…';
     case 'reading': return progress.pages ? `Reading the list: page ${progress.pages}, ${listed}${progress.current ? ` · ${progress.current}` : ''}` : 'Opening the list…';
     case 'collecting': return `Collecting ${progress.read + 1} of ${progress.toCollect}${progress.current ? `: ${progress.current}` : ''} (${listed})`;
-    case 'done': return `Last run: ${progress.collected} new, ${progress.known} already listed, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
+    case 'done': return `Last run: ${progress.collected} new, ${progress.listed ? `${progress.listed} not read yet, ` : ''}${progress.known} already listed, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
     case 'stopped': return `Last run stopped after ${progress.read} of ${progress.toCollect}.`;
     case 'failed': return `Last run failed after ${progress.read} of ${progress.toCollect}.`;
   }
@@ -1533,8 +1538,24 @@ function pageProgressText(progress: StartPageProgress, items: string, needsYou: 
  */
 function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, collection: CollectionDefinition, run: CollectionRunState): void {
   const count = run.problemPages.length;
-  const { body, row, close } = openModal(`${count} ${count === 1 ? 'page' : 'pages'} with problems`, 'hvy-web-page-dialog wide-dialog');
-  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it, or add it to its site setup as another example, so the next run reads pages like it.', 'hvy-web-page-hint'));
+  const { body, errors, row, close } = openModal(`${count} ${count === 1 ? 'page' : 'pages'} with problems`, 'hvy-web-page-dialog wide-dialog');
+  // Read again, into the block's output: an item on its own page, keeping what its list showed; a start page, collected
+  // again. Why it couldn't start is said here, and the dialog stays open.
+  const sink = lookup.sink(collection.capabilityId);
+  const retry = (problems: CollectionProblem[]) => {
+    if (!sink) return;
+    const latest = currentCollection(ctx, collection);
+    const items = problems.filter((problem) => problem.kind === 'item').map(({ url, values, siteId }) => ({ url, ...(values ? { values } : {}), ...(siteId ? { siteId } : {}) }));
+    const pages = problems.filter((problem) => problem.kind === 'start-page').map((problem) => problem.url);
+    try {
+      if (items.length) lookup.automation.extractItems(latest, items, sink);
+      if (pages.length) lookup.automation.startCollection(latest, sink, pages);
+      close();
+    } catch (error) {
+      errors.textContent = errorMessage(error);
+    }
+  };
+  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it, or add it to its site setup as another example, so the next run reads pages like it. Retry reads it again.', 'hvy-web-page-hint'));
   const list = document.createElement('div');
   list.className = 'hvy-web-problems';
   for (const problem of run.problemPages) {
@@ -1566,12 +1587,23 @@ function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
       });
       entry.append(addExample);
     }
+    if (sink) {
+      const again = button('Retry');
+      again.classList.add('hvy-web-problem-action');
+      again.addEventListener('click', () => retry([problem]));
+      entry.append(again);
+    }
     list.append(entry);
   }
+  const retryAll = () => {
+    const all = button('Retry all');
+    all.addEventListener('click', () => retry(run.problemPages));
+    return all;
+  };
   body.append(list);
   const done = button('Close', true);
   done.addEventListener('click', close);
-  row.append(done);
+  row.append(...(sink && count > 1 ? [retryAll()] : []), done);
   done.focus();
 }
 
@@ -1810,7 +1842,7 @@ const collectionView: HvyPluginFactory = (ctx) => {
     root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPage, openPage));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
-    const summary = status(`${RUN_STATUS[run.status]}: ${run.collected} new, ${run.skipped} already listed, `);
+    const summary = status(`${RUN_STATUS[run.status]}: ${run.collected} new, ${run.listed ? `${run.listed} not read yet, ` : ''}${run.skipped} already listed, `);
     if (run.problemPages.length) {
       // The pages it couldn't read, and why, in a dialog.
       const problems = document.createElement('button');
@@ -1823,6 +1855,20 @@ const collectionView: HvyPluginFactory = (ctx) => {
       summary.append(`${run.problems} with problems.`);
     }
     root.append(summary);
+    // A run that read only lists: the pages of the items it listed, read now, keeping what their lists showed.
+    if (run.listedItems.length && sink && run.status !== 'running' && run.status !== 'needs-attention') {
+      const read = button(`Read ${run.listedItems.length === 1 ? 'its page' : 'their pages'}`);
+      read.addEventListener('click', () => {
+        problem = '';
+        try {
+          lookup.automation.extractItems(collection, run.listedItems, sink);
+        } catch (error) {
+          problem = errorMessage(error);
+        }
+        sync();
+      });
+      root.append(actions(read));
+    }
     if (run.status === 'running') {
       const stop = button('Stop');
       stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));

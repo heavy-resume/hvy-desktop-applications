@@ -63,11 +63,12 @@ describe('scripting methods', () => {
     collection.collect({
       capabilityId: 'listings',
       startUrls: [`${ATS_ORIGIN}/globex/jobs`],
-      on_record: (record: Record<string, unknown>) => items.push(String(record.key)),
+      on_record: (record: Record<string, unknown>) => items.push(`${String(record.state)} ${String(record.key)}`),
       on_complete: (result: Record<string, unknown>) => done.push(result),
     }, ctx);
     await flow.clock.runUntil(() => done.length === 1);
-    expect(items).toEqual([`${ATS_ORIGIN}/globex/jobs/eng-1`, `${ATS_ORIGIN}/globex/jobs/ops-1`]);
+    // Each job as its list shows it, then as its page is read.
+    expect(items).toEqual([`listed ${ATS_ORIGIN}/globex/jobs/eng-1`, `listed ${ATS_ORIGIN}/globex/jobs/ops-1`, `ok ${ATS_ORIGIN}/globex/jobs/eng-1`, `ok ${ATS_ORIGIN}/globex/jobs/ops-1`]);
     expect(done[0]).toMatchObject({ status: 'completed', result: { status: 'done', collected: 2 } });
   });
 

@@ -76,7 +76,7 @@ export function listMcpWebCapabilities(documents: McpDocument[], access: McpInte
 
 export class McpWebHandler {
   /** runId → records MCP has seen from that run. */
-  private readonly runRecords = new Map<string, CollectedRecord[]>();
+  private readonly runRecords = new Map<string, Map<string, CollectedRecord>>();
 
   constructor(private readonly documents: () => McpDocument[]) {}
 
@@ -104,14 +104,16 @@ export class McpWebHandler {
   private collect(document: McpDocument, request: Extract<McpWebRequest, { operation: 'collect' }>): { runId: string } {
     const block = document.collections.find(({ collection }) => collection.capabilityId === request.capabilityId);
     if (!block?.mcp.collect) throw new WebAutomationError('not_authorized', 'This collection is not exposed through MCP.');
-    const records: CollectedRecord[] = [];
+    // Each item as the run last wrote it: listed as its list showed it, then as its page was read.
+    const records = new Map<string, CollectedRecord>();
     const run = document.automation.startCollection(block.collection, {
       // Records still go to the document's own sink, so MCP-started runs land where UI-started ones do.
       onRecord: (record) => {
-        records.push(record);
+        records.set(record.key, record);
         block.sink?.onRecord(record);
       },
       isKnown: (key) => block.sink?.isKnown?.(key) ?? false,
+      fieldsOf: (key) => block.sink?.fieldsOf?.(key) ?? null,
     }, request.startUrls);
     this.runRecords.set(run.runId, records);
     run.done.catch(() => undefined);
@@ -123,7 +125,7 @@ export class McpWebHandler {
     const run = state.runs.find((candidate) => candidate.runId === runId);
     const records = this.runRecords.get(runId);
     if (!run || !records) throw new WebAutomationError('invalid_request', `Unknown collection run ${runId}.`);
-    const items = records.map((record) => ({
+    const items = [...records.values()].map((record) => ({
       key: record.key,
       state: record.state,
       problem: record.problem ?? null,
@@ -135,7 +137,7 @@ export class McpWebHandler {
     return {
       untrustedContent: true,
       origin: 'collected web pages',
-      value: { status: run.status, attention: run.attention ? { reason: run.attention.reason, url: run.attention.url } : null, collected: run.collected, problems: run.problems, records: items },
+      value: { status: run.status, attention: run.attention ? { reason: run.attention.reason, url: run.attention.url } : null, collected: run.collected, listed: run.listed, problems: run.problems, records: items },
     };
   }
 }

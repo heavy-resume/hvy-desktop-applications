@@ -219,7 +219,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
         let written: string[] = [];
         let batching = false;
         const tell = () => {
-          const keys = written;
+          // A batch names each record once: listed, then read, it was written twice.
+          const keys = [...new Set(written)];
           written = [];
           if (!keys.length) return;
           options.onDatabaseChange?.(stateRuntime);
@@ -253,6 +254,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
           automation.recordsWritten(capabilityId, [record.key]);
         },
         isKnown: sink.isKnown,
+        fieldsOf: sink.fieldsOf,
       };
     },
   };
