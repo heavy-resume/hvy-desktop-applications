@@ -114,6 +114,7 @@ export class McpWebHandler {
       },
       isKnown: (key) => block.sink?.isKnown?.(key) ?? false,
       fieldsOf: (key) => block.sink?.fieldsOf?.(key) ?? null,
+      readsPage: (key) => block.sink?.readsPage?.(key) ?? true,
     }, request.startUrls);
     this.runRecords.set(run.runId, records);
     run.done.catch(() => undefined);

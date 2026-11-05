@@ -1114,4 +1114,25 @@ describe('mock integration: job search flow', () => {
     expect(await retried.done).toMatchObject({ status: 'done', collected: failed.problemPages.length, problems: 0 });
     expect(flow!.items.list().every((item) => item.state === 'ok' && item.fields.company === 'Acme')).toBe(true);
   });
+  it('49. pages the output says to leave unread: those items stay listed, counted apart, and are read when asked for', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const sink = createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG);
+    // The output leaves unread the page of each item whose list title it was told to skip.
+    const skipped = (key: string) => /Product Manager/i.test(String(flow!.items.get(key)?.fields.title ?? ''));
+    const run = await flow!.collect(boards, undefined, { ...sink, onRecord: (record) => { sink.onRecord(record); }, readsPage: (key) => !skipped(key) });
+    const items = flow!.items.list();
+    const unread = items.filter((item) => skipped(item.key));
+    expect(unread.length).toBeGreaterThan(0);
+    expect(run).toMatchObject({ status: 'done', leftUnread: unread.length, listed: 0, collected: items.length - unread.length, problems: 0 });
+    expect(run.listedItems).toEqual([]);
+    expect(unread.every((item) => item.state === 'listed')).toBe(true);
+    expect(items.filter((item) => !skipped(item.key)).every((item) => item.state === 'ok')).toBe(true);
+
+    // Asked for, its page is read.
+    const read = flow!.automation.extractItems(boards, [{ url: unread[0].url }], sink);
+    await flow!.settle();
+    expect(await read.done).toMatchObject({ collected: 1 });
+    expect(flow!.items.get(unread[0].key)?.state).toBe('ok');
+  });
 });

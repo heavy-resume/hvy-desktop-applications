@@ -17,6 +17,16 @@ export interface SqlItemStoreConfig {
   columns: Record<string, string>;
   /** When the item was first found, as an ISO time: written once, not moved by a later run. */
   collectedAtColumn?: string;
+  /**
+   * A condition on an item's row (an SQL expression, which may look in other tables): a run leaves the page of a listed
+   * item it holds for unread, as the document asks (a job whose title it skips). Its page is read when asked for.
+   */
+  skipPagesWhere?: string;
+}
+
+/** Whether the output's condition holds for an item's row: its page is left unread. */
+export function skipsPage(db: SqlItemDatabase, config: SqlItemStoreConfig, key: string): boolean {
+  return Boolean(config.skipPagesWhere) && db.query(`SELECT 1 FROM ${quoted(config.table)} WHERE ${quoted(config.keyColumn)} = ? AND (${config.skipPagesWhere})`, [key]).length > 0;
 }
 
 /** The database a store writes through: the document's, as scripts' `doc.db` reaches it. */
@@ -121,5 +131,12 @@ export function validateSqlItemStore(db: SqlItemDatabase, config: SqlItemStoreCo
       return indexed.length === 1 && indexed[0] === config.keyColumn;
     });
   if (columns.has(config.keyColumn) && !unique) errors.push(`Table "${config.table}" must make "${config.keyColumn}" unique (a primary key or a unique column), so each item is one row.`);
+  if (config.skipPagesWhere) {
+    try {
+      db.query(`SELECT 1 FROM ${quoted(config.table)} WHERE (${config.skipPagesWhere}) LIMIT 0`);
+    } catch (error) {
+      errors.push(`The output's condition for pages to leave unread doesn't work on table "${config.table}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return errors;
 }

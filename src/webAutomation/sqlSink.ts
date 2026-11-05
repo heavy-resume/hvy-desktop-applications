@@ -1,7 +1,7 @@
 import type { RecordConsumer } from './collection';
 import { WebAutomationError } from './errors';
 import { createRecordSink, type RecordSinkConfig } from './recordSink';
-import { createSqlItemStore, validateSqlItemStore, type SqlItemDatabase, type SqlItemStoreConfig } from './sqlItemStore';
+import { createSqlItemStore, skipsPage, validateSqlItemStore, type SqlItemDatabase, type SqlItemStoreConfig } from './sqlItemStore';
 
 /**
  * A copy of a document's database, opened for one use: the reference implementation's scripting database
@@ -56,6 +56,8 @@ export function createSqlRecordConsumer(
     }),
     isKnown: (key) => policy.onExisting === 'keep' && states.get(key) === 'ok',
     fieldsOf: (key) => use((db) => createSqlItemStore(db, config).get(key)?.fields ?? null),
+    // Asked after the item's listed record is written, and in turn behind it.
+    readsPage: (key) => use((db) => !skipsPage(db, config, key)),
     onRecord: (record) => {
       writes.push(use((db) => {
         const store = createSqlItemStore(db, config);

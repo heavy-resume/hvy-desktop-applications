@@ -1,7 +1,7 @@
 import { getActiveStateRuntime, getRefreshReaderBlock, getRenderApp, runWithStateRuntime } from '../../../heavy-file-format/src/state';
 import { runPluginDocumentHooks } from '../../../heavy-file-format/src/plugins/hooks';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
-import { saveAppSettings } from '../backend';
+import { openExternalUrl, saveAppSettings } from '../backend';
 import { state } from '../state';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
@@ -142,6 +142,7 @@ setDocumentAutomationOpener((rawDocument) => {
     // A plugin wrote rows into the document's database (a record sink, a ranking): its table views read it again on a
     // redraw, which ends with the document hooks, so its scripts see the new rows.
     onDatabaseChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
+    openInBrowser: openExternalUrl,
   });
   openedByDocument.set(document, opened);
   return opened.lookup;

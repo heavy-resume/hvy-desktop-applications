@@ -874,7 +874,7 @@ function collectionSettingsEditor(ctx: HvyPluginContext): HvyPluginInstance {
         labelled('A record is the same as another by', identity),
         labelled('Address parameters to ignore', ignored, 'One per line: two addresses that differ only in these are one page.'),
         // Off, a run lists each new item (in the output as soon as its list shows it), and its page is read when asked for.
-        checkboxRow(`Read each ${String(config.itemName ?? '').trim() || 'item'}'s own page as its list is read`, config.readItemPages !== false, (on) => commit((draft) => {
+        checkboxRow(`Visit and read each ${String(config.itemName ?? '').trim() || 'item'}'s page`, config.readItemPages !== false, (on) => commit((draft) => {
           if (on) delete draft.readItemPages;
           else draft.readItemPages = false;
         })),
@@ -1078,7 +1078,7 @@ function readsWith(collection: CollectionDefinition, url: string): string | null
   return recognized ? (recognized.site ? setupName(recognized.site) : recognized.pattern.name) : null;
 }
 
-type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage'>>;
+type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage' | 'readItemPages'>>;
 
 /** Why the block would refuse a change, checked over the whole configuration as the loader and lint do. */
 function checkCollection(ctx: HvyPluginContext, patch: CollectionPatch): string[] {
@@ -1519,14 +1519,14 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
 
 /** A start page's part of a run, in a line: what it is doing while the run goes, and how it went afterwards. */
 function pageProgressText(progress: StartPageProgress, items: string, needsYou: boolean): string {
-  const listed = `${progress.found} found, ${progress.known} already listed`;
+  const listed = `${progress.found} found, ${progress.known} already in the list`;
   // The start page the run is on when it waits for the user: the card below, and the toolbar, say why.
   if (needsYou && (progress.status === 'reading' || progress.status === 'collecting')) return 'Needs you: a page here doesn’t look as expected. Show it from below.';
   switch (progress.status) {
     case 'waiting': return 'Waiting for its turn…';
     case 'reading': return progress.pages ? `Reading the list: page ${progress.pages}, ${listed}${progress.current ? ` · ${progress.current}` : ''}` : 'Opening the list…';
     case 'collecting': return `Collecting ${progress.read + 1} of ${progress.toCollect}${progress.current ? `: ${progress.current}` : ''} (${listed})`;
-    case 'done': return `Last run: ${progress.collected} new, ${progress.listed ? `${progress.listed} not read yet, ` : ''}${progress.known} already listed, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
+    case 'done': return `Last run: ${progress.collected} new, ${progress.listed ? `${progress.listed} not read yet, ` : ''}${progress.leftUnread ? `${progress.leftUnread} left unread, ` : ''}${progress.known} already in the list, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
     case 'stopped': return `Last run stopped after ${progress.read} of ${progress.toCollect}.`;
     case 'failed': return `Last run failed after ${progress.read} of ${progress.toCollect}.`;
   }
@@ -1622,7 +1622,7 @@ type Limit = 'maxPages' | 'maxItems';
 type Limits = Partial<Record<Limit, number>> & { stopAtKnownPage?: boolean };
 
 /**
- * How far a run goes at a page: list pages read, new items, and whether a list page of items already listed ends it.
+ * How far a run goes at a page: list pages read, new items, and whether a list page of items already in the list ends it.
  * For the default limits the numbers are required; for a page, a blank field (or "Default") uses the default, which
  * it shows.
  */
@@ -1640,7 +1640,7 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
   const pages = input('maxPages');
   const newItems = input('maxItems');
   const capitalized = `${items(collection).charAt(0).toUpperCase()}${items(collection).slice(1)}`;
-  const stopText = `Stop at a list page of ${items(collection)} already listed`;
+  const stopText = `Stop at a list page of ${items(collection)} already in the list`;
   const stopHint = 'For lists with the newest first: the pages after it are older.';
   const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', newItems]] as const)
     .flatMap(([limit, field]) => (field.value.trim() ? [[limit, Number(field.value)]] : [])));
@@ -1674,7 +1674,7 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
   }
   const choiceLabel = document.createElement('label');
   const choiceName = document.createElement('span');
-  choiceName.textContent = `At a list page of ${items(collection)} already listed`;
+  choiceName.textContent = `At a list page of ${items(collection)} already in the list`;
   choiceLabel.append(choiceName, choice, paragraph(stopHint, 'hvy-web-page-hint'));
   return {
     elements: [...elements, choiceLabel],
@@ -1687,7 +1687,7 @@ function ownLimitsText(collection: CollectionDefinition, page: StartPage): strin
   const parts = [
     ...(page.maxPages !== undefined ? [`${page.maxPages} ${page.maxPages === 1 ? 'page' : 'pages'}`] : []),
     ...(page.maxItems !== undefined ? [`${page.maxItems} new ${items(collection)}`] : []),
-    ...(page.stopAtKnownPage !== undefined ? [page.stopAtKnownPage ? 'stops at a page already listed' : 'keeps going past pages already listed'] : []),
+    ...(page.stopAtKnownPage !== undefined ? [page.stopAtKnownPage ? 'stops at a page already in the list' : 'keeps going past pages already in the list'] : []),
   ];
   return parts.length ? `Limits: ${parts.join(', ')}` : null;
 }
@@ -1711,63 +1711,119 @@ function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDe
   limits.elements[0].querySelector('input')?.focus();
 }
 
+/** A page's included flag, as collecting everything reads it: false is saved, true is the default (left out). */
+function withIncluded(page: StartPage, included: boolean): StartPage {
+  const { included: _included, ...rest } = page;
+  return included ? rest : { ...rest, included: false as const };
+}
+
 /**
- * Where a run looks: the block's start pages, each with what reads it, whether collecting everything includes it, its
- * progress (or how its last run went), collecting it alone, and opening it; and adding another. `openPage` is null
- * until the block has a browser profile.
+ * Where a run looks: the block's start pages, as a table. Each row is ticked while collecting everything includes it,
+ * with what reads it, how its last run went (or that it has none), opening it, and editing it. Above it: collecting the
+ * pages ticked, adding a page or a pasted site setup, the default limits (on the right), and whether a run reads each
+ * item's own page. `collectPages` is null without an output to collect into, and `openPage` until the block has a
+ * browser profile.
  */
-function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPage: ((page: StartPage) => void) | null, openPage: ((page: StartPage) => void) | null): HTMLElement {
+function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPages: ((pages: StartPage[]) => void) | null, openPage: ((page: StartPage) => void) | null): HTMLElement {
   const progressByPage = latestPageProgress(runs);
   const busy = runs.some((run) => run.status === 'running' || run.status === 'needs-attention');
+  const included = collection.startPages.filter((page) => page.included !== false);
   const section = document.createElement('section');
   section.className = 'hvy-web-pages';
   section.setAttribute('aria-label', 'Pages to look at');
   const title = document.createElement('h3');
   title.className = 'hvy-web-pages-title';
   title.textContent = 'Pages to look at';
-  section.append(title);
-  if (!collection.startPages.length) section.append(paragraph('No pages yet.'));
-  // Not ul/li: the reader styles those inside a document block as prose lists.
-  const list = document.createElement('div');
-  list.setAttribute('role', 'list');
-  list.className = 'hvy-web-page-list';
+
+  // The bar: what acts on the pages ticked, and on the block, then the default limits on the right.
+  const collect = button(`Fetch ${items(collection)}${included.length ? ` (${included.length})` : ''}`, true);
+  collect.title = 'Fetches from the pages ticked: what collecting everything (a script, AI tools) fetches from.';
+  collect.disabled = !collectPages || busy || !included.some((page) => readsWith(collection, page.url));
+  collect.addEventListener('click', () => collectPages?.(included.filter((page) => readsWith(collection, page.url))));
+  const add = button('+ Add a page');
+  add.addEventListener('click', () => openAddPageDialog(ctx, collection));
+  // A site setup copied from a site or another document: read from the clipboard and reviewed before it is added.
+  const paste = button('Paste site setup');
+  paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
+  // How far a run goes at each page that doesn't set its own limits.
+  const limits = button('Default limits…');
+  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} new ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}.`;
+  limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
+  const bar = document.createElement('div');
+  bar.className = 'hvy-web-pages-bar';
+  bar.append(actions(collect, add, paste), actions(limits));
+
+  // Whether a run reads each item's page as its list is read, or lists them for their pages to be read when chosen.
+  const itemPages = checkboxRow(`Visit and read each ${collection.itemName?.trim() || 'item'}'s page`, collection.readItemPages !== false, (on) => {
+    saveCollection(ctx, { readItemPages: on ? undefined : false });
+  });
+  itemPages.classList.add('hvy-web-page-include');
+  section.append(
+    title,
+    bar,
+    itemPages,
+    paragraph(`Follows the link to each ${collection.itemName?.trim() || 'item'}'s page and extracts additional info.`, 'hvy-web-page-hint'),
+  );
+  if (!collection.startPages.length) {
+    section.append(paragraph('No pages yet.'));
+    return section;
+  }
+
+  // The table: not table/tr/td, which the reader styles inside a document block as prose.
+  const table = document.createElement('div');
+  table.className = 'hvy-web-pages-table';
+  table.setAttribute('role', 'table');
+  table.setAttribute('aria-label', 'Pages to look at');
+  const cell = (className: string, ...children: Array<HTMLElement | string>) => {
+    const created = document.createElement('div');
+    created.className = `hvy-web-pages-cell ${className}`;
+    created.setAttribute('role', 'cell');
+    created.append(...children);
+    return created;
+  };
+  const row = (...cells: HTMLElement[]) => {
+    const created = document.createElement('div');
+    created.className = 'hvy-web-pages-row';
+    created.setAttribute('role', 'row');
+    created.append(...cells);
+    return created;
+  };
+  const tick = (checked: boolean, label: string, onChange: (checked: boolean) => void) => {
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'hvy-galaxy-input';
+    box.checked = checked;
+    box.setAttribute('aria-label', label);
+    box.addEventListener('change', () => onChange(box.checked));
+    return box;
+  };
+  // Every page ticked, or none; part ticked shows as such.
+  const all = tick(included.length === collection.startPages.length, 'Include every page when collecting', (on) => {
+    saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => withIncluded(page, on)) });
+  });
+  all.indeterminate = included.length > 0 && included.length < collection.startPages.length;
+  const heading = row(cell('hvy-web-pages-tick', all), cell('hvy-web-pages-head', 'Page'), cell('hvy-web-pages-head', 'Last run'), cell('hvy-web-pages-head', ''));
+  heading.classList.add('hvy-web-pages-heading');
+  table.append(heading);
   for (const page of collection.startPages) {
-    const item = document.createElement('div');
-    item.setAttribute('role', 'listitem');
-    item.className = 'hvy-web-page';
     const recognized = recognizeAddress(collection, page.url);
     const reads = readsWith(collection, page.url);
-    const summary = document.createElement('div');
-    summary.className = 'hvy-web-page-summary';
     const name = pageName(collection, page);
     const latest = progressByPage[page.id];
-    const include = document.createElement('input');
-    include.type = 'checkbox';
-    include.className = 'hvy-galaxy-input';
-    include.checked = page.included !== false;
-    include.addEventListener('change', () => {
-      const latest = currentCollection(ctx, collection);
-      saveCollection(ctx, { startPages: latest.startPages.map((candidate) => {
-        if (candidate.id !== page.id) return candidate;
-        const { included: _included, ...rest } = candidate;
-        return include.checked ? rest : { ...rest, included: false as const };
-      }) });
+    const include = tick(page.included !== false, `Include ${name} when collecting`, (on) => {
+      saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((candidate) => (candidate.id === page.id ? withIncluded(candidate, on) : candidate)) });
     });
-    const includeLabel = document.createElement('label');
-    includeLabel.className = 'checkbox-row hvy-web-page-include';
-    const includeText = document.createElement('span');
-    includeText.textContent = 'Include when collecting all';
-    includeLabel.append(include, includeText);
-    summary.append(
+    const about = [
       paragraph(name, 'hvy-web-automation-entry hvy-web-page-name'),
       ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-page-hint')] : []),
       paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-page-hint'),
       ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-page-hint')] : []),
-      ...(latest?.problem
-        ? [paragraph(`Last run: couldn’t read this page. ${latest.problem}`, 'hvy-web-error')]
-        : latest ? [paragraph(pageProgressText(latest.progress, items(collection), latest.needsYou), latest.needsYou ? 'hvy-web-page-progress hvy-web-page-needs-you' : latest.running ? 'hvy-web-page-progress' : 'hvy-web-page-hint')] : []),
-      includeLabel,
-    );
+    ];
+    const lastRun = latest?.problem
+      ? paragraph(`Couldn’t read this page. ${latest.problem}`, 'hvy-web-error')
+      : latest
+        ? paragraph(pageProgressText(latest.progress, items(collection), latest.needsYou), latest.needsYou ? 'hvy-web-page-progress hvy-web-page-needs-you' : latest.running ? 'hvy-web-page-progress' : 'hvy-web-page-hint')
+        : paragraph('Not collected yet.', 'hvy-web-page-hint');
     const edit = button('Edit');
     edit.setAttribute('aria-label', `Edit ${name}`);
     edit.addEventListener('click', () => openPageDialog(ctx, collection, page));
@@ -1780,13 +1836,6 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
     open.disabled = !openPage;
     open.addEventListener('click', () => openPage?.(page));
     const controls = actions(open, edit);
-    if (collectPage && reads) {
-      const collect = button('Collect');
-      collect.setAttribute('aria-label', `Collect ${name}`);
-      collect.disabled = busy;
-      collect.addEventListener('click', () => collectPage(page));
-      controls.prepend(collect);
-    }
     if (canSetUpSites() && (!reads || (latest?.problem && recognized?.site))) {
       const site = recognized?.site ?? null;
       const fix = button(site ? 'Fix' : 'Set up this site', true);
@@ -1794,22 +1843,9 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
       fix.addEventListener('click', () => setUpSiteFor(ctx, collection, page.url, site, (setup) => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [setup]))));
       controls.prepend(fix);
     }
-    item.append(summary, controls);
-    list.append(item);
+    table.append(row(cell('hvy-web-pages-tick', include), cell('hvy-web-pages-page', ...about), cell('hvy-web-pages-run', lastRun), cell('hvy-web-pages-actions', controls)));
   }
-  if (collection.startPages.length) section.append(list);
-  const add = button('+ Add a page');
-  add.addEventListener('click', () => openAddPageDialog(ctx, collection));
-  // A site setup copied from a site or another document: read from the clipboard and reviewed before it is added.
-  const paste = button('Paste site setup');
-  paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
-  // How far a run goes at each page that doesn't set its own limits.
-  const limits = button('Default limits…');
-  limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
-  section.append(
-    paragraph(`Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} new ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already listed' : ''}.`, 'hvy-web-page-hint'),
-    actions(add, paste, limits),
-  );
+  section.append(table);
   return section;
 }
 
@@ -1825,12 +1861,12 @@ const collectionView: HvyPluginFactory = (ctx) => {
     const collection = result.value.collection;
     const runs = lookup.automation.getState().runs.filter((candidate) => candidate.capabilityId === collection.capabilityId);
     const run = runs.at(-1);
-    // One start page on its own, into the block's output, as collecting everything does.
+    // The pages ticked, into the block's output, as collecting everything does.
     const sink = lookup.sink(collection.capabilityId);
-    const collectPage = sink ? (page: StartPage) => {
+    const collectPages = sink ? (pages: StartPage[]) => {
       problem = '';
       try {
-        lookup.automation.startCollection(collection, sink, [page.url]);
+        lookup.automation.startCollection(collection, sink, pages.map((page) => page.url));
       } catch (error) {
         problem = errorMessage(error);
       }
@@ -1839,10 +1875,13 @@ const collectionView: HvyPluginFactory = (ctx) => {
     const openPage = lookup.automation.profileOf(collection.capabilityId) ? (page: StartPage) => {
       lookup.automation.openLink(page.url);
     } : null;
-    root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPage, openPage));
+    root.append(heading(collection.name), ...profileLine(ctx, lookup, collection.capabilityId), pagesSection(ctx, collection, runs, collectPages, openPage));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
-    const summary = status(`${RUN_STATUS[run.status]}: ${run.collected} new, ${run.listed ? `${run.listed} not read yet, ` : ''}${run.skipped} already listed, `);
+    // Which run this is: of one page, by its name; of several, how many; or items read on their own pages.
+    const runPages = Object.keys(run.startPages).flatMap((id) => collection.startPages.filter((page) => page.id === id));
+    const which = runPages.length === 1 ? pageName(collection, runPages[0]) : runPages.length ? `${runPages.length} pages` : `${items(collection)} read on their own pages`;
+    const summary = status(`Last run (${which}): ${RUN_STATUS[run.status].toLowerCase()}, ${run.collected} new, ${run.listed ? `${run.listed} not read yet, ` : ''}${run.leftUnread ? `${run.leftUnread} left unread as this document asks, ` : ''}${run.skipped} already in the list, `);
     if (run.problemPages.length) {
       // The pages it couldn't read, and why, in a dialog.
       const problems = document.createElement('button');

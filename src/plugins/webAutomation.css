@@ -42,19 +42,48 @@
   font-size: 1rem;
 }
 
-.hvy-web-page-list {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.hvy-web-page {
+/* Above the start pages: what acts on the pages ticked, and the default limits on the right. */
+.hvy-web-pages-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.5rem 0.6rem;
+  gap: 0.5rem;
+}
+
+/* The start pages as a table: a column for each part, lined up across rows (each row's cells are the grid's). */
+.hvy-web-pages-table {
+  display: grid;
+  grid-template-columns: auto minmax(0, 2fr) minmax(0, 1.5fr) auto;
   border: 1px solid var(--hvy-border, #c9c3b8);
   border-radius: 0.45rem;
+}
+
+.hvy-web-pages-row {
+  display: contents;
+}
+
+.hvy-web-pages-cell {
+  display: grid;
+  align-content: center;
+  gap: 0.15rem;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid var(--hvy-border, #c9c3b8);
+}
+
+.hvy-web-pages-heading .hvy-web-pages-cell {
+  border-top: 0;
+}
+
+.hvy-web-pages-head {
+  font-size: 0.8rem;
+  font-weight: 650;
+  opacity: 0.75;
+}
+
+.hvy-web-pages-actions {
+  justify-content: end;
 }
 
 .hvy-web-page-values {
@@ -69,12 +98,6 @@
 .hvy-web-page-hint {
   font-size: 0.85rem;
   opacity: 0.8;
-}
-
-.hvy-web-page-summary {
-  display: grid;
-  gap: 0.15rem;
-  min-width: 0;
 }
 
 .hvy-web-page-name {

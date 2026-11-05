@@ -23,6 +23,11 @@ export interface RecordConsumer {
   isKnown?(key: string): boolean;
   /** What it holds of an item already (its fields), for an item read again without them (`extract`): kept, as its list's are. */
   fieldsOf?(key: string): Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
+  /**
+   * Whether a run reads the page of an item it has just written as listed: false leaves it listed, its page read only
+   * when asked for (`extract`). Read unless it says.
+   */
+  readsPage?(key: string): boolean | Promise<boolean>;
   /** Gets ready before the run reads anything (a database to open and check); failing fails the run with its reason. */
   open?(): Promise<void>;
   /** After the run: the records it was given are written, or the run fails with why one wasn't. */
@@ -125,6 +130,8 @@ export interface StartPageProgress {
   toCollect: number;
   /** Of those, written as listed only, for their pages to be read later (a run that reads only lists). */
   listed: number;
+  /** Of those, written as listed, their pages left unread as the consumer asked (`readsPage`). */
+  leftUnread: number;
   /** Read so far: collected or with a problem. */
   read: number;
   collected: number;
@@ -169,6 +176,8 @@ export interface CollectionRunState {
   skipped: number;
   /** Items written as listed only: their pages not read in this run. */
   listed: number;
+  /** Items written as listed, their pages left unread as the consumer asked (`readsPage`). */
+  leftUnread: number;
   problems: number;
   /** Start pages this run could not read at all, by start page id: a site to set up, not an item. */
   startPageProblems: Record<string, string>;
@@ -291,7 +300,7 @@ export class CollectionService {
   start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages): { runId: string; done: Promise<CollectionRunState> } {
     const run = this.createRun(definition, profileId, consumer);
     for (const startPage of startPages) {
-      run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, listed: 0, read: 0, collected: 0, problems: 0, current: null };
+      run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, listed: 0, leftUnread: 0, read: 0, collected: 0, problems: 0, current: null };
     }
     const done = this.withConsumer(run, () => Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
       { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
@@ -384,7 +393,7 @@ export class CollectionService {
       attentionTurn: Promise.resolve(),
       consumer,
       itemSites: new Map(),
-      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, listed: 0, problems: 0, startPageProblems: {}, problemPages: [], listedItems: [], startPages: {}, attention: null, error: null },
+      state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, listed: 0, leftUnread: 0, problems: 0, startPageProblems: {}, problemPages: [], listedItems: [], startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
     this.deps.emit('collection', `${runId} started: ${definition.name}`, { profileId });
@@ -400,7 +409,7 @@ export class CollectionService {
       run.state.status = 'failed';
       run.state.error = errorMessage(failure.reason);
     } else run.state.status = 'done';
-    this.deps.emit('collection', `${run.state.runId} ${run.state.status}: ${run.state.collected} collected, ${run.state.listed} listed, ${run.state.skipped} skipped, ${run.state.problems} problems`);
+    this.deps.emit('collection', `${run.state.runId} ${run.state.status}: ${run.state.collected} collected, ${run.state.listed} listed, ${run.state.leftUnread} left unread, ${run.state.skipped} skipped, ${run.state.problems} problems`);
     return structuredClone(run.state);
   }
 
@@ -563,6 +572,12 @@ export class CollectionService {
           progress.listed += 1;
           run.state.listed += 1;
           run.state.listedItems.push({ url: link, values: listingValues, ...(pattern.siteId ? { siteId: pattern.siteId } : {}) });
+          continue;
+        }
+        if (knownKey && run.consumer.readsPage && !(await run.consumer.readsPage(knownKey))) {
+          progress.leftUnread += 1;
+          run.state.leftUnread += 1;
+          emit('collection', `leave unread ${knownKey}`);
           continue;
         }
         queue.push({ link, title, values: listingValues });

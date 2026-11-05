@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createScriptingDbRuntime } from '../../../heavy-file-format/src/plugins/db-table';
 import { deserializeDocument } from '../../../heavy-file-format/src/serialization';
-import { rankRows, SIMILARITY_VECTORS_TABLE, type EmbeddingSource, type RankRequest, type UseDatabase } from './similarity';
+import { matchRows, rankRows, SIMILARITY_VECTORS_TABLE, type EmbeddingSource, type RankRequest, type UseDatabase } from './similarity';
 import type { SqlItemDatabase } from './sqlItemStore';
 
 // Each text is a point on a plane: its vector is fixed by the words it has, so the ranking is known.
@@ -84,5 +84,28 @@ describe('ranking by similarity', () => {
     const short: EmbeddingSource = { id: 'short', embed: async (texts) => texts.slice(1).map(() => [1, 0]) };
     await expect(rankRows(use, short, request())).rejects.toThrow('one vector per text');
     expect(Object.values(matches(db)).every((match) => match === null)).toBe(true);
+  });
+  it('matches short texts by their words and pieces to the closest example, with nothing sent anywhere', async () => {
+    const document = deserializeDocument('---\nhvy_version: 0.1\n---\n', '.hvy');
+    const { api } = await createScriptingDbRuntime(document);
+    api.execute('CREATE TABLE jobs (job_key TEXT PRIMARY KEY, title TEXT, title_match REAL)');
+    api.execute('CREATE TABLE flagged (title TEXT PRIMARY KEY)');
+    const titles = ['senior frontend engineer', 'frontend engineer design systems', 'front end developer', 'staff software engineer', 'backend engineer', 'account executive', 'sales development representative', 'customer success manager', 'data engineer'];
+    titles.forEach((title) => api.execute('INSERT INTO jobs (job_key, title) VALUES (?, ?)', [title, title]));
+    const useDatabase: UseDatabase = async (use) => use(api);
+    const request = { rows: 'SELECT job_key, title FROM jobs', key: 'job_key', text: 'title', examples: 'SELECT title FROM flagged', write: { table: 'jobs', key: 'job_key', column: 'title_match' } };
+    // Nothing flagged: no title has a score.
+    expect(await matchRows(useDatabase, request)).toEqual({ scored: titles.length, examples: 0 });
+    expect(api.query('SELECT COUNT(*) AS scored FROM jobs WHERE title_match IS NOT NULL')[0].scored).toBe(0);
+
+    api.execute("INSERT INTO flagged (title) VALUES ('senior frontend engineer')");
+    expect(await matchRows(useDatabase, request)).toEqual({ scored: titles.length, examples: 1 });
+    const scores = Object.fromEntries(api.query('SELECT job_key, title_match FROM jobs').map((row) => [String(row.job_key), Number(row.title_match)]));
+    console.log('title scores', JSON.stringify(Object.entries(scores).sort(([, a], [, b]) => b - a).map(([title, score]) => `${Math.round(score * 100)} ${title}`)));
+    expect(scores['senior frontend engineer']).toBeCloseTo(1);
+    // Frontend work, by its name or its pieces, above engineering of other kinds, above sales.
+    expect(scores['frontend engineer design systems']).toBeGreaterThan(scores['staff software engineer']);
+    expect(scores['front end developer']).toBeGreaterThan(scores['account executive']);
+    expect(Math.min(scores['staff software engineer'], scores['backend engineer'])).toBeGreaterThan(Math.max(scores['account executive'], scores['sales development representative'], scores['customer success manager']));
   });
 });

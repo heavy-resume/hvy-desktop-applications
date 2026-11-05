@@ -12,3 +12,9 @@ When you make a checkbox always start with check to the left of the label, not t
 
 If you want to make README changes, update README.foragents.md instead of
 README.md, unless explicitly requested.
+
+When evaluating decisions, consider the forward looking risks of each decision and weigh them as a probability (not a number but a vague high risk, moderate, low). When asking for decisions from the user, present these probabilities and no more than a couple sentences explaining why.
+
+When suggesting UI labels consider whether they are unnecessary or redundant and choose labels with minimal text, often one or two words
+
+When evaluating new libraries always consider: size, maintenance frequency, security, etc.

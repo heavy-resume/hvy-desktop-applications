@@ -4,7 +4,7 @@ import type { CollectionDefinition, ExtractItem, RecordConsumer } from './collec
 import type { WebAutomation } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { WebApiCapability } from './webApi';
-import { rankRows, type EmbeddingSource, type UseDatabase } from './similarity';
+import { matchRows, rankRows, type EmbeddingSource, type UseDatabase } from './similarity';
 import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
 
 /** The subset of HvyPluginScriptingContext these methods use. */
@@ -25,6 +25,11 @@ export interface DocumentAutomationLookup {
   database: UseDatabase;
   /** The document's database changed outside a script: its views redraw, and its document hooks run. */
   databaseChanged(): void;
+  /**
+   * Opens an item of a collection in the default browser, outside Galaxy (as you see it there, signed in or not as you
+   * are): only an item the collection's output holds, so a script opens no other address.
+   */
+  openInBrowser(capabilityId: string, url: string): Promise<void>;
 }
 
 export type DocumentAutomationResolver = (ctx: ScriptingContext) => DocumentAutomationLookup;
@@ -151,6 +156,8 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       resolve(ctx).automation.stopCollection(String(args.runId ?? ''));
       return null;
     },
+    // An item of the collection, in the default browser.
+    open_in_browser: (args, ctx) => operation(args, () => resolve(ctx).openInBrowser(String(args.capabilityId ?? ''), String(args.url ?? ''))),
     /**
      * Calls `handler` with `{ keys }` each time the collection block's output writes records, however the run was
      * started. Registered by the document's load script; the same `key` replaces an earlier handler.
@@ -264,6 +271,23 @@ export function similarityScriptingMethods(resolve: DocumentAutomationResolver):
           key: String(args.key ?? ''),
           text: String(args.text ?? ''),
           query: await queryText(lookup, args.query),
+          write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
+        });
+        lookup.databaseChanged();
+        return result;
+      });
+    },
+    // Rows scored by how alike their text is to the closest example (job titles to the flagged ones), locally, with no
+    // service: words and their pieces, weighted by rarity.
+    match: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(args, async () => {
+        const write = input(args.write);
+        const result = await matchRows(lookup.database, {
+          rows: String(args.rows ?? ''),
+          key: String(args.key ?? ''),
+          text: String(args.text ?? ''),
+          examples: String(args.examples ?? ''),
           write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
         });
         lookup.databaseChanged();

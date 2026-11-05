@@ -78,15 +78,25 @@ function cosine(left: Float32Array, right: Float32Array): number {
   return leftNorm && rightNorm ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
 }
 
+/** Writes each row's score (by key) into a column of a table, in one statement; a row in `keys` with no score gets null. */
+function writeScores(db: SqlItemDatabase, write: { table: string; key: string; column: string }, scores: Record<string, number | null>): void {
+  const table = identifier(write.table, 'table');
+  const keyColumn = identifier(write.key, 'key column');
+  const scoreColumn = identifier(write.column, 'score column');
+  db.execute(
+    `UPDATE ${table} SET ${scoreColumn} = (SELECT value FROM json_each(?) WHERE json_each.key = ${table}.${keyColumn}) WHERE ${keyColumn} IN (SELECT key FROM json_each(?))`,
+    [JSON.stringify(scores), JSON.stringify(scores)],
+  );
+}
+
 /**
  * Scores the rows `request.rows` returns: each row's text against the query, by cosine similarity of their vectors.
  * Texts already embedded by this source are not embedded again (the query's too: a resume's sections are the same from
  * one ranking to the next). Every score is written in one statement.
  */
 export async function rankRows(useDatabase: UseDatabase, source: EmbeddingSource, request: RankRequest): Promise<RankResult> {
-  const table = identifier(request.write.table, 'table');
-  const keyColumn = identifier(request.write.key, 'key column');
-  const scoreColumn = identifier(request.write.column, 'score column');
+  // Checked before anything is embedded.
+  for (const [value, role] of [[request.write.table, 'table'], [request.write.key, 'key column'], [request.write.column, 'score column']]) identifier(value, role);
   if (!request.query.trim()) throw new WebAutomationError('invalid_request', 'There is no query text to rank by.');
 
   const rows = await useDatabase((db) => {
@@ -125,10 +135,79 @@ export async function rankRows(useDatabase: UseDatabase, source: EmbeddingSource
     ).map((row) => [String(row.text_hash), decodeVector(row.vector)]));
     const query = vectors.get(hashes.get(request.query)!)!;
     const scores = Object.fromEntries(scoredRows.map((row) => [row.key, cosine(query, vectors.get(hashes.get(row.text)!)!)]));
-    db.execute(
-      `UPDATE ${table} SET ${scoreColumn} = (SELECT value FROM json_each(?) WHERE json_each.key = ${table}.${keyColumn}) WHERE ${keyColumn} IN (SELECT key FROM json_each(?))`,
-      [JSON.stringify(scores), JSON.stringify(scores)],
-    );
+    writeScores(db, request.write, scores);
     return { scored: scoredRows.length, embedded: embedded.length };
+  });
+}
+
+/**
+ * Matching by the words in short texts, with nothing sent anywhere: scores the rows a query returns
+ * by how alike one of their text columns is to the closest of some examples (job titles to the ones flagged). Texts
+ * are compared by their words and the three-letter pieces of them, weighted by how rare each is among the texts here,
+ * so "frontend engineer" is close to "front end engineer" and "senior frontend developer", and a word every text has
+ * counts for little. A score is 0 to 1, 1 for a text the same as an example. Without examples, no row has a score.
+ */
+export interface MatchRequest {
+  /** A query returning the rows to score: their key and their text. */
+  rows: string;
+  key: string;
+  text: string;
+  /** A query returning the examples: their text, in its first column. */
+  examples: string;
+  write: { table: string; key: string; column: string };
+}
+
+/**
+ * A text's parts, each with its weight: its words, and each word's three-letter pieces (with its edges, so a short word
+ * has some). A word's pieces together weigh as much as the word, so a long word counts for no more than a short one.
+ * Each two words together are a word too, as sites write them either way ("front end", "frontend").
+ */
+export function textFeatures(text: string): Array<[feature: string, weight: number]> {
+  const words = text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const joined = words.slice(1).map((word, index) => `${words[index]}${word}`);
+  return [...words.flatMap((word): Array<[string, number]> => {
+    const padded = ` ${word} `;
+    const pieces = Array.from({ length: Math.max(padded.length - 2, 0) }, (_, index) => `#${padded.slice(index, index + 3)}`);
+    return [[word, 1], ...pieces.map((piece): [string, number] => [piece, 1 / pieces.length])];
+  }), ...joined.map((word): [string, number] => [word, 1])];
+}
+
+function weighted(features: Array<[string, number]>, rarity: Map<string, number>): Map<string, number> {
+  const vector = new Map<string, number>();
+  for (const [feature, weight] of features) vector.set(feature, (vector.get(feature) ?? 0) + weight * (rarity.get(feature) ?? 0));
+  return vector;
+}
+
+function sparseCosine(left: Map<string, number>, right: Map<string, number>): number {
+  let dot = 0;
+  for (const [feature, weight] of left) dot += weight * (right.get(feature) ?? 0);
+  const norm = (vector: Map<string, number>) => Math.sqrt([...vector.values()].reduce((sum, weight) => sum + weight * weight, 0));
+  const lengths = norm(left) * norm(right);
+  return lengths ? dot / lengths : 0;
+}
+
+/** Scores the rows `request.rows` returns against the closest example, and writes every score in one statement. */
+export function matchRows(useDatabase: UseDatabase, request: MatchRequest): Promise<{ scored: number; examples: number }> {
+  for (const [value, role] of [[request.write.table, 'table'], [request.write.key, 'key column'], [request.write.column, 'score column']]) identifier(value, role);
+  return useDatabase((db) => {
+    const rows = db.query(request.rows).map((row) => {
+      if (!(request.key in row) || !(request.text in row)) {
+        throw new WebAutomationError('invalid_request', `The rows query must return the columns "${request.key}" and "${request.text}".`);
+      }
+      return { key: String(row[request.key]), features: textFeatures(String(row[request.text] ?? '')) };
+    });
+    const examples = db.query(request.examples).map((row) => textFeatures(String(Object.values(row)[0] ?? ''))).filter((features) => features.length);
+    // How rare each part is among the texts here: a part in every text weighs least.
+    const texts = [...rows.map((row) => row.features), ...examples];
+    const counts = new Map<string, number>();
+    for (const features of texts) for (const feature of new Set(features.map(([feature]) => feature))) counts.set(feature, (counts.get(feature) ?? 0) + 1);
+    const rarity = new Map([...counts].map(([feature, count]) => [feature, Math.log((texts.length + 1) / (count + 1)) + 1]));
+    const exampleVectors = examples.map((features) => weighted(features, rarity));
+    const scores = Object.fromEntries(rows.map((row) => {
+      const vector = weighted(row.features, rarity);
+      return [row.key, exampleVectors.length && row.features.length ? Math.max(...exampleVectors.map((example) => sparseCosine(vector, example))) : null];
+    }));
+    writeScores(db, request.write, scores);
+    return { scored: rows.length, examples: examples.length };
   });
 }

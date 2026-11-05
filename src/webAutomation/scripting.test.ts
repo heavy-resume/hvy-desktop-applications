@@ -22,6 +22,7 @@ async function setup() {
     sink: (id) => (id === boards.capabilityId ? flow.sink : null),
     database: async (use) => use(db),
     databaseChanged: () => undefined,
+    openInBrowser: async () => undefined,
   });
   return { flow, boards, resolve, ctx: { rawDocument: {} } };
 }

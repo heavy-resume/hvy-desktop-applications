@@ -15,6 +15,7 @@ import { WebAutomationError } from './errors';
 import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
+import { recordKey } from './records';
 import { publishedServices } from './serviceManifests';
 import { createSqlRecordConsumer, useDocumentDatabase, type OpenedDatabase } from './sqlSink';
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
@@ -146,6 +147,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   onDocumentChange?(stateRuntime: StateRuntime, listPath: string): void;
   /** The document's database changed outside a script: a record sink wrote rows into one of its tables. */
   onDatabaseChange?(stateRuntime: StateRuntime): void;
+  /** The default browser, outside Galaxy (the app's): where an item a script asks to open there is opened. */
+  openInBrowser?(url: string): Promise<void>;
 }) {
   const { document } = options;
   let stateRuntime = options.stateRuntime;
@@ -206,6 +209,14 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
     database: (use) => useDocumentDatabase(document, openDatabase, use),
     databaseChanged: () => options.onDatabaseChange?.(stateRuntime),
+    openInBrowser: async (capabilityId, url) => {
+      const definition = collectionBlock(capabilityId)?.collection;
+      const key = definition ? recordKey(definition.key ?? { kind: 'url' }, url, {}, definition.ignoredQueryParameters) : null;
+      const held = key ? await lookup.sink(capabilityId)?.fieldsOf?.(key) : null;
+      if (!held) throw new WebAutomationError('not_authorized', 'Only an item this collection collected opens in the default browser.');
+      if (!options.openInBrowser) throw new WebAutomationError('invalid_request', 'This app has no default browser to open it in.');
+      await options.openInBrowser(url);
+    },
     sink: (capabilityId) => {
       const output = collectionBlock(capabilityId)?.output;
       if (!output) return null;

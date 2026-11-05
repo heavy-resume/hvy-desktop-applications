@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createScriptingDbRuntime } from '../../../heavy-file-format/src/plugins/db-table';
 import { deserializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createRecordSink } from './recordSink';
-import { createSqlItemStore, validateSqlItemStore, type SqlItemStoreConfig } from './sqlItemStore';
+import { createSqlItemStore, skipsPage, validateSqlItemStore, type SqlItemStoreConfig } from './sqlItemStore';
 import { createSqlRecordConsumer } from './sqlSink';
 
 const JOBS_TABLE = `CREATE TABLE jobs (
@@ -144,5 +144,34 @@ describe('collecting into a table of the document\'s database', () => {
       expect.objectContaining({ job_key: 'https://jobs.test/1', evaluation: 'Evaluated' }),
       expect.objectContaining({ job_key: 'https://jobs.test/2', evaluation: 'Not evaluated' }),
     ]);
+  });
+  it('leaves the pages of items the output\'s condition holds for unread, looking in another table, and refuses one that doesn\'t work', async () => {
+    const { db } = await jobsDatabase();
+    db.execute('CREATE TABLE skipped_titles (title TEXT PRIMARY KEY)');
+    db.execute("INSERT INTO skipped_titles (title) VALUES ('Designer')");
+    const config = { ...CONFIG, skipPagesWhere: 'title IN (SELECT title FROM skipped_titles)' };
+    expect(validateSqlItemStore(db, config)).toEqual([]);
+    const sink = createRecordSink(createSqlItemStore(db, config), { onExisting: 'keep', keepGoodOnFailure: true });
+    sink.onRecord({ ...record('https://jobs.test/1', { title: 'Engineer' }), state: 'listed' });
+    sink.onRecord({ ...record('https://jobs.test/2', { title: 'Designer' }), state: 'listed' });
+    expect(skipsPage(db, config, 'https://jobs.test/1')).toBe(false);
+    expect(skipsPage(db, config, 'https://jobs.test/2')).toBe(true);
+    // Without a condition, every page is read.
+    expect(skipsPage(db, CONFIG, 'https://jobs.test/2')).toBe(false);
+    expect(validateSqlItemStore(db, { ...CONFIG, skipPagesWhere: 'no_such_column = 1' })).toEqual([expect.stringContaining('The output\'s condition for pages to leave unread doesn\'t work on table "jobs"')]);
+  });
+
+  it('a run asks after writing each listed item, in turn behind its write', async () => {
+    const { document, db } = await jobsDatabase();
+    db.execute('CREATE TABLE skipped_titles (title TEXT PRIMARY KEY)');
+    db.execute("INSERT INTO skipped_titles (title) VALUES ('Designer')");
+    const config = { ...CONFIG, skipPagesWhere: 'title IN (SELECT title FROM skipped_titles)' };
+    const consumer = createSqlRecordConsumer(document, async () => ({ api: db, dispose: () => {} }), config, { onExisting: 'keep', keepGoodOnFailure: true }, () => {});
+    await consumer.open?.();
+    consumer.onRecord({ ...record('https://jobs.test/2', { title: 'Designer' }), state: 'listed' });
+    expect(await consumer.readsPage?.('https://jobs.test/2')).toBe(false);
+    consumer.onRecord({ ...record('https://jobs.test/1', { title: 'Engineer' }), state: 'listed' });
+    expect(await consumer.readsPage?.('https://jobs.test/1')).toBe(true);
+    await consumer.close?.();
   });
 });

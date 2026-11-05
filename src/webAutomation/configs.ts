@@ -117,6 +117,7 @@ function readOutput(value: unknown, errors: string[]): CollectionBlockConfig['ou
         recordColumn: identifier(store.recordColumn, 'record column'),
         columns,
         ...(store.collectedAtColumn !== undefined ? { collectedAtColumn: identifier(store.collectedAtColumn, 'column for when an item was found') } : {}),
+        ...(text(store.skipPagesWhere) ? { skipPagesWhere: text(store.skipPagesWhere) } : {}),
       },
       policy: readPolicy(),
     };
