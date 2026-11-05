@@ -28,6 +28,12 @@ import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { ApiTransport, capabilityOrigin, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
 
 /** A plugin method the queue can target, resolved through the plugin-to-plugin call interface. */
+/** What an on_records handler is told: the records written, or the item whose page a run starts reading. */
+export interface RecordsChange {
+  keys: string[];
+  reading: string | null;
+}
+
 export interface PluginCallTarget {
   pluginId: string;
   method: string;
@@ -158,7 +164,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   // may use the account (its service approved), since what the handler did before that was refused.
   const sessionHandovers = new Map<string, () => void>();
   // Script handlers told when a collection's output writes records, by capability and key.
-  const recordWatchers = new Map<string, (keys: string[]) => void>();
+  const recordWatchers = new Map<string, (change: RecordsChange) => void>();
 
   // The plugin must be allowed in this file (the reference implementation's per-file plugin authorization).
   function requirePlugin(pluginId: string, displayName: string): void {
@@ -303,14 +309,20 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
 
     // UI: scripting doc.plugins.call("galaxy.web-collection", "on_records", { capabilityId, key, handler }), registered by
     // the document's load script: told the keys of the records a collection's output wrote, as it writes them, so the
-    // script reads what changed when it changed. The same key replaces an earlier handler.
-    onRecordsWritten(capabilityId: string, key: string, handler: (keys: string[]) => void): void {
+    // script reads what changed when it changed; and the key of each item whose page a run starts reading. The same key
+    // replaces an earlier handler.
+    onRecordsWritten(capabilityId: string, key: string, handler: (change: RecordsChange) => void): void {
       recordWatchers.set(`${capabilityId}\0${key}`, handler);
     },
 
     // A collection block's output wrote records (documentAutomation's sink).
     recordsWritten(capabilityId: string, keys: string[]): void {
-      for (const [watcherKey, handler] of recordWatchers) if (watcherKey.startsWith(`${capabilityId}\0`)) handler(keys);
+      for (const [watcherKey, handler] of recordWatchers) if (watcherKey.startsWith(`${capabilityId}\0`)) handler({ keys, reading: null });
+    },
+
+    // A collection block's run starts reading an item's page (`extract`), its record written after.
+    itemReading(capabilityId: string, key: string): void {
+      for (const [watcherKey, handler] of recordWatchers) if (watcherKey.startsWith(`${capabilityId}\0`)) handler({ keys: [], reading: key });
     },
 
     // UI: galaxy.web-api reader, "Sign out" button.

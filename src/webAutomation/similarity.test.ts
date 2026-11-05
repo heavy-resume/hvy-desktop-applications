@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createScriptingDbRuntime } from '../../../heavy-file-format/src/plugins/db-table';
 import { deserializeDocument } from '../../../heavy-file-format/src/serialization';
-import { matchRows, rankRows, SIMILARITY_VECTORS_TABLE, type EmbeddingSource, type RankRequest, type UseDatabase } from './similarity';
+import { matchRows, rankRows, SIMILARITY_QUERIES_TABLE, SIMILARITY_VECTORS_TABLE, type EmbeddingSource, type FetchedQuery, type RankRequest, type UseDatabase } from './similarity';
 import type { SqlItemDatabase } from './sqlItemStore';
 
 // Each text is a point on a plane: its vector is fixed by the words it has, so the ranking is known.
@@ -48,7 +48,7 @@ describe('ranking by similarity', () => {
   it('scores only the rows its query returns, by cosine similarity to the query, and writes every score', async () => {
     const { db, use } = await jobsDatabase();
     const source = fakeSource();
-    expect(await rankRows(use, source, request())).toEqual({ scored: 3, embedded: 3 });
+    expect(await rankRows(use, source, request())).toEqual({ scored: 3, embedded: 3, queryFetchedAt: null });
     // Go is filtered out by the rows query, and a row with no text gets no score.
     expect(matches(db)).toEqual({ go: null, none: null, py: 0, ts: 1, web: 0.994 });
     // The query and each row's text, in one batch; a text the same as the query is embedded once.
@@ -60,16 +60,49 @@ describe('ranking by similarity', () => {
     const source = fakeSource();
     await rankRows(use, source, request());
     db.execute("UPDATE jobs SET evaluation = 'Not evaluated' WHERE job_key = 'go'");
-    expect(await rankRows(use, source, request())).toEqual({ scored: 4, embedded: 1 });
+    expect(await rankRows(use, source, request())).toEqual({ scored: 4, embedded: 1, queryFetchedAt: null });
     expect(source.calls.at(-1)).toEqual(['Go']);
     expect(matches(db).go).toBeCloseTo(0.11, 2);
     // Another model's vectors are not comparable: it embeds everything again, and keeps its own.
     const other = fakeSource('fake/model-2');
-    expect(await rankRows(use, other, request())).toEqual({ scored: 4, embedded: 4 });
+    expect(await rankRows(use, other, request())).toEqual({ scored: 4, embedded: 4, queryFetchedAt: null });
     expect(db.query(`SELECT model, COUNT(*) AS kept FROM ${SIMILARITY_VECTORS_TABLE} GROUP BY model ORDER BY model`)).toEqual([
       expect.objectContaining({ model: 'fake/model-1', kept: 4 }),
       expect.objectContaining({ model: 'fake/model-2', kept: 4 }),
     ]);
+  });
+
+  it('fetches a query from elsewhere once, ranks by it as kept until asked to fetch it again, and for another source', async () => {
+    const { db, use } = await jobsDatabase();
+    const source = fakeSource();
+    let resume = 'TypeScript';
+    let fetches = 0;
+    let clock = 0;
+    const fetched = (refresh = false): FetchedQuery => ({
+      id: 'resume-1',
+      refresh,
+      now: () => `t${(clock += 1)}`,
+      fetch: async () => {
+        fetches += 1;
+        return resume;
+      },
+    });
+    expect(await rankRows(use, source, request({ query: fetched() }))).toEqual({ scored: 3, embedded: 3, queryFetchedAt: 't1' });
+    expect(matches(db).ts).toBe(1);
+    // Kept: not fetched again, even though it changed where it came from; when it was fetched is still the first time.
+    resume = 'Python';
+    expect(await rankRows(use, source, request({ query: fetched() }))).toEqual({ scored: 3, embedded: 0, queryFetchedAt: 't1' });
+    expect(fetches).toBe(1);
+    expect(matches(db).ts).toBe(1);
+    // Asked to fetch it again: ranked by what it is now.
+    expect(await rankRows(use, source, request({ query: fetched(true) }))).toEqual({ scored: 3, embedded: 0, queryFetchedAt: 't2' });
+    expect(fetches).toBe(2);
+    expect(matches(db)).toMatchObject({ py: 1, ts: 0 });
+    // Only which text it was is kept, not the text.
+    expect(db.query(`SELECT * FROM ${SIMILARITY_QUERIES_TABLE}`)).toEqual([expect.objectContaining({ query: 'resume-1', text_hash: expect.stringMatching(/^[0-9a-f]{64}$/), fetched_at: 't2' })]);
+    // Another source has no vector of it: fetched again.
+    await rankRows(use, fakeSource('fake/model-2'), request({ query: fetched() }));
+    expect(fetches).toBe(3);
   });
 
   it('refuses a write target that is not an identifier, rows without the named columns, and an empty query', async () => {
@@ -85,15 +118,15 @@ describe('ranking by similarity', () => {
     await expect(rankRows(use, short, request())).rejects.toThrow('one vector per text');
     expect(Object.values(matches(db)).every((match) => match === null)).toBe(true);
   });
-  it('matches short texts by their words and pieces to the closest example, with nothing sent anywhere', async () => {
+  it('matches short texts by how much of the closest example they have, its ending word most and minor words least, with nothing sent anywhere', async () => {
     const document = deserializeDocument('---\nhvy_version: 0.1\n---\n', '.hvy');
     const { api } = await createScriptingDbRuntime(document);
     api.execute('CREATE TABLE jobs (job_key TEXT PRIMARY KEY, title TEXT, title_match REAL)');
     api.execute('CREATE TABLE flagged (title TEXT PRIMARY KEY)');
-    const titles = ['senior frontend engineer', 'frontend engineer design systems', 'front end developer', 'staff software engineer', 'backend engineer', 'account executive', 'sales development representative', 'customer success manager', 'data engineer'];
+    const titles = ['senior frontend engineer', 'frontend engineer design systems', 'front end developer', 'staff software engineer', 'backend engineer', 'account executive', 'sales development representative', 'customer success manager', 'data engineer', 'qa automation engineer', 'senior accountant'];
     titles.forEach((title) => api.execute('INSERT INTO jobs (job_key, title) VALUES (?, ?)', [title, title]));
     const useDatabase: UseDatabase = async (use) => use(api);
-    const request = { rows: 'SELECT job_key, title FROM jobs', key: 'job_key', text: 'title', examples: 'SELECT title FROM flagged', write: { table: 'jobs', key: 'job_key', column: 'title_match' } };
+    const request = { rows: 'SELECT job_key, title FROM jobs', key: 'job_key', text: 'title', examples: 'SELECT title FROM flagged', endingWordWeight: 2, minorWords: ['senior', 'staff', 'iv'], write: { table: 'jobs', key: 'job_key', column: 'title_match' } };
     // Nothing flagged: no title has a score.
     expect(await matchRows(useDatabase, request)).toEqual({ scored: titles.length, examples: 0 });
     expect(api.query('SELECT COUNT(*) AS scored FROM jobs WHERE title_match IS NOT NULL')[0].scored).toBe(0);
@@ -107,5 +140,13 @@ describe('ranking by similarity', () => {
     expect(scores['frontend engineer design systems']).toBeGreaterThan(scores['staff software engineer']);
     expect(scores['front end developer']).toBeGreaterThan(scores['account executive']);
     expect(Math.min(scores['staff software engineer'], scores['backend engineer'])).toBeGreaterThan(Math.max(scores['account executive'], scores['sales development representative'], scores['customer success manager']));
+
+    // The ending word ("engineer") counts most and "senior" little: with engineering roles chosen, any engineer is well above a senior
+    // accountant, though "engineer" is in most titles.
+    for (const title of ['senior software engineer iv', 'backend engineer', 'full stack engineer']) api.execute('INSERT INTO flagged (title) VALUES (?)', [title]);
+    await matchRows(useDatabase, request);
+    const engineering = Object.fromEntries(api.query('SELECT job_key, title_match FROM jobs').map((row) => [String(row.job_key), Number(row.title_match)]));
+    expect(engineering['qa automation engineer']).toBeGreaterThan(engineering['senior accountant'] * 3);
+    expect(engineering['qa automation engineer']).toBeGreaterThan(Math.max(engineering['account executive'], engineering['customer success manager']));
   });
 });

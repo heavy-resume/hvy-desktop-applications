@@ -28,6 +28,8 @@ export interface RecordConsumer {
    * when asked for (`extract`). Read unless it says.
    */
   readsPage?(key: string): boolean | Promise<boolean>;
+  /** A run (`extract`) is about to read this item's page; its record is written once it has. */
+  reading?(key: string): void;
   /** Gets ready before the run reads anything (a database to open and check); failing fails the run with its reason. */
   open?(): Promise<void>;
   /** After the run: the records it was given are written, or the run fails with why one wasn't. */
@@ -330,7 +332,11 @@ export class CollectionService {
           const listed = item.values ?? (key ? await run.consumer.fieldsOf?.(key) : null) ?? null;
           // An item its list showed came from a list, where a run may follow links to other sites.
           this.assertAllowed(run, item.url, listed !== null);
-          await this.paced(run, lease, item.url, () => this.deps.host.navigate(lease.workerId, item.url));
+          // Its turn come (after the pause between pages), the consumer is told as its page opens.
+          await this.paced(run, lease, item.url, () => {
+            if (key) run.consumer.reading?.(key);
+            return this.deps.host.navigate(lease.workerId, item.url);
+          });
           await this.writeDetail(run, lease, item.url, await this.inspectAt(run, lease), listed ?? {});
         }
       },

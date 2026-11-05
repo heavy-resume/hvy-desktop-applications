@@ -1051,8 +1051,8 @@ describe('mock integration: job search flow', () => {
     flow.approve();
     const replaced: string[] = [];
     const heard: string[] = [];
-    flow.automation.onRecordsWritten(boards.capabilityId, 'job-list', (keys) => replaced.push(...keys));
-    flow.automation.onRecordsWritten(boards.capabilityId, 'job-list', (keys) => heard.push(...keys));
+    flow.automation.onRecordsWritten(boards.capabilityId, 'job-list', ({ keys }) => replaced.push(...keys));
+    flow.automation.onRecordsWritten(boards.capabilityId, 'job-list', ({ keys }) => heard.push(...keys));
     await flow.collect(boards, undefined, flow.output(boards.capabilityId));
     expect(replaced).toEqual([]);
     expect(heard.length).toBeGreaterThan(0);
@@ -1073,7 +1073,7 @@ describe('mock integration: job search flow', () => {
     expect(flow!.items.list().every((item) => item.state === 'ok')).toBe(true);
   });
 
-  it('47. a collection that reads only lists: its items are listed, and reading them later keeps what their lists showed', async () => {
+  it('47. a collection that reads only lists: its items are listed, and reading them later keeps what their lists showed, each said as it starts', async () => {
     const boards = listingCollection([ACME], { readItemPages: false, startPages: [{ id: 'acme', url: ACME, values: { company: 'Acme' } }] });
     await signedInFlow(boards);
     const run = await flow!.collect(boards);
@@ -1085,9 +1085,21 @@ describe('mock integration: job search flow', () => {
     expect(listed[0].fields).toMatchObject({ company: 'Acme', title: expect.any(String) });
     expect(listed[0].fields.description).toBeUndefined();
 
-    // Read when asked for, with what each list showed: the page adds to it.
-    const read = flow!.automation.extractItems(boards, listed.map((item) => ({ url: item.url, values: item.fields })), flow!.output(boards.capabilityId) ?? createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG));
+    // Read when asked for, in the order asked, with what each list showed: the page adds to it. The consumer is told as
+    // each page starts being read, before its record is written.
+    const sink = createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG);
+    const told: string[] = [];
+    const asked = [...listed].reverse();
+    const read = flow!.automation.extractItems(boards, asked.map((item) => ({ url: item.url, values: item.fields })), {
+      ...sink,
+      reading: (key) => told.push(`reading ${key}`),
+      onRecord: (record) => {
+        told.push(`written ${record.key}`);
+        sink.onRecord(record);
+      },
+    });
     await flow!.settle();
+    expect(told).toEqual(asked.flatMap((item) => [`reading ${item.key}`, `written ${item.key}`]));
     expect(await read.done).toMatchObject({ status: 'done', collected: listed.length, problems: 0 });
     for (const item of flow!.items.list()) {
       expect(item.state).toBe('ok');

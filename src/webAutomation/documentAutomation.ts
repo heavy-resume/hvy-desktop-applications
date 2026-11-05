@@ -248,6 +248,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
         });
         return {
           ...consumer,
+          reading: (key) => automation.itemReading(capabilityId, key),
           close: async () => {
             try {
               await consumer.close?.();
@@ -266,6 +267,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
         },
         isKnown: sink.isKnown,
         fieldsOf: sink.fieldsOf,
+        reading: (key) => automation.itemReading(capabilityId, key),
       };
     },
   };

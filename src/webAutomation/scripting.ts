@@ -4,7 +4,7 @@ import type { CollectionDefinition, ExtractItem, RecordConsumer } from './collec
 import type { WebAutomation } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { WebApiCapability } from './webApi';
-import { matchRows, rankRows, type EmbeddingSource, type UseDatabase } from './similarity';
+import { matchRows, rankRows, type EmbeddingSource, type FetchedQuery, type UseDatabase } from './similarity';
 import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
 
 /** The subset of HvyPluginScriptingContext these methods use. */
@@ -166,7 +166,7 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       const lookup = resolve(ctx);
       const capabilityId = collection(lookup, args).capabilityId;
       const handler = required(callback(args.handler), 'on_records needs a handler function.');
-      lookup.automation.onRecordsWritten(capabilityId, String(args.key ?? 'default'), (keys) => handler({ keys }));
+      lookup.automation.onRecordsWritten(capabilityId, String(args.key ?? 'default'), (change) => handler({ keys: change.keys, reading: change.reading }));
       return null;
     },
   };
@@ -244,16 +244,29 @@ function endpointEmbeddingSource(lookup: DocumentAutomationLookup, value: unknow
  * The text to rank by: given as a string, or sections of a document a web API block serves (a resume's summary and
  * skills), which Galaxy opens and reads itself. The script never sees that text; it goes only to the embedding source.
  */
-async function queryText(lookup: DocumentAutomationLookup, value: unknown): Promise<string> {
+/**
+ * The query: a string, or sections of a document a web API block serves, fetched only when the ranking needs them (not
+ * kept from an earlier one, or `refresh`).
+ */
+function rankQuery(lookup: DocumentAutomationLookup, value: unknown): string | FetchedQuery {
   if (typeof value === 'string') return value;
   const source = input(value);
   const capabilityId = String(source.capabilityId ?? '');
   const capability = required(lookup.webApi(capabilityId), `This document has no web API block "${capabilityId}".`);
   const sectionIds = Array.isArray(source.sections) ? source.sections.map(String) : [];
   if (!sectionIds.length) throw new WebAutomationError('invalid_request', 'Name the sections of the document to rank by.');
-  const document = await lookup.automation.openServedDocument(capability, String(source.endpointId ?? ''), String(source.documentId ?? ''));
-  // The named sections, in the document's own order.
-  return exportDocumentSourceMarkdown({ ...document, sections: document.sections.filter((section) => sectionIds.includes(section.customId)) });
+  const endpointId = String(source.endpointId ?? '');
+  const documentId = String(source.documentId ?? '');
+  return {
+    id: JSON.stringify([capabilityId, endpointId, documentId, sectionIds]),
+    refresh: source.refresh === true,
+    now: () => new Date().toISOString(),
+    fetch: async () => {
+      const document = await lookup.automation.openServedDocument(capability, endpointId, documentId);
+      // The named sections, in the document's own order.
+      return exportDocumentSourceMarkdown({ ...document, sections: document.sections.filter((section) => sectionIds.includes(section.customId)) });
+    },
+  };
 }
 
 /**
@@ -270,15 +283,15 @@ export function similarityScriptingMethods(resolve: DocumentAutomationResolver):
           rows: String(args.rows ?? ''),
           key: String(args.key ?? ''),
           text: String(args.text ?? ''),
-          query: await queryText(lookup, args.query),
+          query: rankQuery(lookup, args.query),
           write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
         });
         lookup.databaseChanged();
         return result;
       });
     },
-    // Rows scored by how alike their text is to the closest example (job titles to the flagged ones), locally, with no
-    // service: words and their pieces, weighted by rarity.
+    // Rows scored by how much of the closest example their text has (job titles to the ones chosen), locally, with no
+    // service: its words and groups of words, weighted by rarity (similarity.ts).
     match: (args, ctx) => {
       const lookup = resolve(ctx);
       return operation(args, async () => {
@@ -288,6 +301,10 @@ export function similarityScriptingMethods(resolve: DocumentAutomationResolver):
           key: String(args.key ?? ''),
           text: String(args.text ?? ''),
           examples: String(args.examples ?? ''),
+          ...(typeof args.phrase_share === 'number' ? { phraseShare: args.phrase_share } : {}),
+          ...(typeof args.ending_word_weight === 'number' ? { endingWordWeight: args.ending_word_weight } : {}),
+          ...(Array.isArray(args.minor_words) ? { minorWords: args.minor_words.map(String) } : {}),
+          ...(typeof args.minor_weight === 'number' ? { minorWeight: args.minor_weight } : {}),
           write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
         });
         lookup.databaseChanged();
