@@ -251,6 +251,8 @@ export interface AppState {
     fields: Array<{ id: string; label: string }>;
     /** What the browser says to pick for the record type being built: the box around one item, then its fields. */
     prompts: { box: string | null; fields: string } | null;
+    /** The next field picking is on an item just opened from the list: its toolbar offers Wrong page, once. */
+    offerWrongPage: boolean;
     /** Work in progress, such as finding an item on the list. */
     pending: string | null;
     error: string | null;
@@ -729,3 +731,13 @@ export const state: AppState = {
   appZoom: 1,
   documentZoom: 1,
 };
+
+/**
+ * The fields of the collection a site setup is for, while the record type being built is one of its pages: each
+ * column is assigned one of them. Null for any other record type.
+ */
+export function siteSetupFields(app: AppState = state): NonNullable<AppState['siteSetup']>['fields'] | null {
+  return app.siteSetup && app.integrationRegistry.integrations.some((integration) => integration.id === app.integrationActionDraftIntegrationId && integration.siteSetup)
+    ? app.siteSetup.fields
+    : null;
+}

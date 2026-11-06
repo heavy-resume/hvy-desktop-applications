@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createCustomPageIntegration, type IntegrationActionDefinition, type IntegrationDefinition } from './integrationRegistry';
 import { patternsFromSetup, setupIntegrations, type SetupSource } from './siteSetupPatterns';
+import { recordValues } from './webAutomation/nativeHost';
 
 function field(label: string) {
   return { id: `field-${label}`, label, cardinality: 'single' as const, optional: false, snapshot: { selected: { shape: label } } };
@@ -41,6 +42,28 @@ describe('setting up a site into a collection', () => {
     expect(source.integration).toMatchObject({ id: list.id });
     // The source is saved into the document, so it is not marked as in a session.
     expect(source.integration).not.toHaveProperty('siteSetup');
+  });
+
+  it('passes what opens a row\'s item (its opener) to the list\'s matcher', () => {
+    const list = setupPage('https://boards.test/acme/jobs', 1, ['company', 'title']);
+    list.actions[0].pattern!.opener = { selected: { shape: 'title-link' } };
+    const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title']);
+    const [listing] = patternsFromSetup('acme', [list, job], list.id);
+    expect((listing.matcher as { pattern: { opener?: unknown } }).pattern.opener).toEqual({ selected: { shape: 'title-link' } });
+  });
+
+  it('opens a row by where its opener goes, and by its first link for a list with no opener', () => {
+    const targets = [
+      { label: 'company', value: 'Acme', href: 'https://boards.test/company/acme' },
+      { label: 'title', value: 'Engineer', href: 'https://boards.test/acme/jobs/1' },
+    ];
+    // A row with the company's link before the job's: the opener is the job's.
+    expect(recordValues({ parent: 'row', score: 1, targets, opener: { element: 'a.title', href: 'https://boards.test/acme/jobs/1' } }))
+      .toEqual({ company: 'Acme', title: 'Engineer', link: 'https://boards.test/acme/jobs/1' });
+    expect(recordValues({ parent: 'row', score: 1, targets })).toMatchObject({ link: 'https://boards.test/company/acme' });
+    // An opener with no link (its page's script opens the item), or none found in the row: no link is guessed.
+    expect(recordValues({ parent: 'row', score: 1, targets, opener: { element: 'div.card', href: null } })).toEqual({ company: 'Acme', title: 'Engineer' });
+    expect(recordValues({ parent: 'row', score: 1, targets, opener: null })).toEqual({ company: 'Acme', title: 'Engineer' });
   });
 
   it('uses the page command recorded as the list\'s next page, whatever it is named', () => {

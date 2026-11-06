@@ -1110,6 +1110,7 @@ function openModal(title: string, className: string): { form: HTMLFormElement; b
   form.setAttribute('aria-modal', 'true');
   form.setAttribute('aria-label', title);
   const heading = document.createElement('h2');
+  heading.className = 'hvy-web-dialog-title';
   heading.textContent = title;
   const body = document.createElement('div');
   body.className = 'hvy-web-dialog-body';
@@ -1262,13 +1263,13 @@ function setupPlanText(collection: CollectionDefinition, plan: SiteSetupPaste): 
 }
 
 /**
- * "Paste site setup": a site setup copied from a site (its Copy button) or another document, read from the clipboard
+ * "Add from clipboard": a site setup copied from a site (its Copy button) or another document, read from the clipboard
  * and reviewed before anything changes: what each setup reads, on which sites, whether it is new or replaces one here,
  * and whether this collection takes it (the check saving runs). Where the clipboard cannot be read directly, a paste
  * area takes ⌘V instead of a text box. Wrong or broken text adds nothing, and says why.
  */
 function openPasteSetupDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
-  const { body, errors, row, close } = openModal('Paste a site setup', 'hvy-web-page-dialog wide-dialog');
+  const { body, errors, row, close } = openModal('Add from clipboard', 'hvy-web-page-dialog wide-dialog');
   const review = document.createElement('div');
   review.className = 'hvy-web-page-result';
   review.setAttribute('role', 'status');
@@ -1358,8 +1359,8 @@ function openPasteSetupDialog(ctx: HvyPluginContext, collection: CollectionDefin
 
 /**
  * Add a page: its address. An address a setup reads asks only for the fields that setup doesn't read; one nothing
- * reads goes on to setting its site up. Cancelling at any point adds nothing. Site setups come in through Paste site
- * setup.
+ * reads goes on to setting its site up. Cancelling at any point adds nothing. Site setups come in through Add from
+ * clipboard.
  */
 function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
   const { form, body, errors, row, close } = openModal('Add a page', 'hvy-web-page-dialog wide-dialog');
@@ -1384,7 +1385,7 @@ function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefiniti
     action = null;
     submit.textContent = 'Add';
     const entered = input.value.trim();
-    // A site setup pasted here belongs to Paste site setup, which reviews it.
+    // A site setup pasted here belongs to Add from clipboard, which reviews it.
     const isSetup = (() => {
       try {
         return readSiteSetupText(entered) !== null;
@@ -1401,7 +1402,7 @@ function openAddPageDialog(ctx: HvyPluginContext, collection: CollectionDefiniti
     values.element.replaceWith(next.element);
     values = next;
     if (isSetup) {
-      result.append(paragraph('That’s a site setup. Use Paste site setup for it.', 'hvy-web-page-hint'));
+      result.append(paragraph('That’s a site setup. Use Add from clipboard for it.', 'hvy-web-page-hint'));
     } else if (entered && !url) {
       result.append(paragraph('That isn’t an address.', 'hvy-web-page-hint'));
     } else if (duplicate) {
@@ -1540,9 +1541,11 @@ function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
   const count = run.problemPages.length;
   const { body, errors, row, close } = openModal(`${count} ${count === 1 ? 'page' : 'pages'} with problems`, 'hvy-web-page-dialog wide-dialog');
   // Read again, into the block's output: an item on its own page, keeping what its list showed; a start page, collected
-  // again. Why it couldn't start is said here, and the dialog stays open.
+  // again. One page retried keeps the dialog open, so the others can be too (each retry is a run of its own, and becomes
+  // the block's last); Retry all retries those not retried yet, and closes it. Why one couldn't start is said here.
   const sink = lookup.sink(collection.capabilityId);
-  const retry = (problems: CollectionProblem[]) => {
+  const retried = new Set<CollectionProblem>();
+  const retry = (problems: CollectionProblem[], then: () => void) => {
     if (!sink) return;
     const latest = currentCollection(ctx, collection);
     const items = problems.filter((problem) => problem.kind === 'item').map(({ url, values, siteId }) => ({ url, ...(values ? { values } : {}), ...(siteId ? { siteId } : {}) }));
@@ -1550,12 +1553,13 @@ function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
     try {
       if (items.length) lookup.automation.extractItems(latest, items, sink);
       if (pages.length) lookup.automation.startCollection(latest, sink, pages);
-      close();
+      for (const problem of problems) retried.add(problem);
+      then();
     } catch (error) {
       errors.textContent = errorMessage(error);
     }
   };
-  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it, or add it to its site setup as another example, so the next run reads pages like it. Retry reads it again.', 'hvy-web-page-hint'));
+  body.append(paragraph('Pages the last run opened and couldn’t read. Open one to look at it, or add it to its site setup as another example, so the next run reads pages like it. Retry reads it again; Retry all, every one not retried yet.', 'hvy-web-page-hint'));
   const list = document.createElement('div');
   list.className = 'hvy-web-problems';
   for (const problem of run.problemPages) {
@@ -1590,14 +1594,18 @@ function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
     if (sink) {
       const again = button('Retry');
       again.classList.add('hvy-web-problem-action');
-      again.addEventListener('click', () => retry([problem]));
+      // Retried, it says so, and can't be retried again from here.
+      again.addEventListener('click', () => retry([problem], () => {
+        again.textContent = 'Retrying…';
+        entry.querySelectorAll('button').forEach((control) => { control.disabled = true; });
+      }));
       entry.append(again);
     }
     list.append(entry);
   }
   const retryAll = () => {
     const all = button('Retry all');
-    all.addEventListener('click', () => retry(run.problemPages));
+    all.addEventListener('click', () => retry(run.problemPages.filter((problem) => !retried.has(problem)), close));
     return all;
   };
   body.append(list);
@@ -1743,7 +1751,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   const add = button('+ Add a page');
   add.addEventListener('click', () => openAddPageDialog(ctx, collection));
   // A site setup copied from a site or another document: read from the clipboard and reviewed before it is added.
-  const paste = button('Paste site setup');
+  const paste = button('Add from clipboard');
   paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
   // How far a run goes at each page that doesn't set its own limits.
   const limits = button('Default limits…');

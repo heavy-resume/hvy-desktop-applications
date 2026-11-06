@@ -335,6 +335,16 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       return result!;
     },
 
+    // UI: Set up this site, picking an example item whose opener has no link: the row's opener clicked in a worker.
+    async openListedItemByClick(listUrl: string, pattern: SitePatternDefinition, values: Record<string, unknown>) {
+      let result: Awaited<ReturnType<typeof runtime.openListedItemByClick>> | undefined;
+      void runtime.openListedItemByClick(BOARDS_PROFILE, listUrl, pattern, values).then((value) => {
+        result = value;
+      });
+      await clock.runUntil(() => result !== undefined);
+      return result!;
+    },
+
     async testPattern(pattern: SitePatternDefinition, url: string) {
       let result: Awaited<ReturnType<typeof runtime.testSitePattern>> | null = null;
       void runtime.testSitePattern(BOARDS_PROFILE, pattern, url).then((value) => {

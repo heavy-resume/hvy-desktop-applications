@@ -1,5 +1,5 @@
 import { selectedInspectionContent } from '../integrationRegistry';
-import { type AppState } from '../state';
+import { siteSetupFields, type AppState } from '../state';
 import { isRecord } from './render-ai-mcp';
 import { escapeAttr, escapeHtml } from './shared';
 import { approvalMatchesDescriptor, webMcpCapabilityId, webMcpToolsForContext } from '../integrationWebMcp';
@@ -313,9 +313,7 @@ export function renderIntegrationActionBuilderDialog(state: AppState): string {
   const targets = state.integrationActionExamples;
   const labelsComplete = targets.length > 0 && targets.every((_, index) => state.integrationActionTargetLabels[index]?.trim());
   // Setting up a site for a document's collection: each column is assigned one of its fields rather than named.
-  const setupFields = state.siteSetup && state.integrationRegistry.integrations.some((integration) => integration.id === state.integrationActionDraftIntegrationId && integration.siteSetup)
-    ? state.siteSetup.fields
-    : null;
+  const setupFields = siteSetupFields(state);
   const fieldLabel = (label: string) => setupFields?.find((field) => field.id === label)?.label ?? label;
   const fieldNameControl = (fieldIndex: number) => {
     const current = state.integrationActionTargetLabels[fieldIndex] ?? '';
@@ -324,7 +322,9 @@ export function renderIntegrationActionBuilderDialog(state: AppState): string {
     const options = setupFields.map((field) => `<option value="${escapeAttr(field.id)}" ${field.id === current ? 'selected' : ''} ${taken.has(field.id) ? 'disabled' : ''}>${escapeHtml(field.label)}</option>`).join('');
     return `<select class="hvy-galaxy-select" aria-label="Field ${fieldIndex + 1}" data-field="integration-target-label" data-index="${fieldIndex}"><option value="" ${current ? '' : 'selected'}>Assign to…</option>${options}</select>`;
   };
-  const fieldHeaders = targets.map((_, fieldIndex) => `<th><div class="integration-field-column-header">${fieldNameControl(fieldIndex)}<button type="button" tabindex="-1" class="integration-field-remove integration-field-column-remove" data-action="remove-integration-action-selection" data-kind="target" data-index="${fieldIndex}" aria-label="Remove ${escapeAttr(state.integrationActionTargetLabels[fieldIndex] || `field ${fieldIndex + 1}`)}">×</button><div><button type="button" tabindex="-1" class="hvy-galaxy-button integration-field-setting ${state.integrationActionTargetCardinalities[fieldIndex] === 'list' ? 'is-active' : ''}" data-action="toggle-integration-target-many" data-index="${fieldIndex}" aria-pressed="${state.integrationActionTargetCardinalities[fieldIndex] === 'list'}">Many</button></div></div></th>`).join('');
+  // Many (a field read as a list): a collection's fields each hold one value, so a site setup has none.
+  const manyControl = (fieldIndex: number) => (setupFields ? '' : `<div><button type="button" tabindex="-1" class="hvy-galaxy-button integration-field-setting ${state.integrationActionTargetCardinalities[fieldIndex] === 'list' ? 'is-active' : ''}" data-action="toggle-integration-target-many" data-index="${fieldIndex}" aria-pressed="${state.integrationActionTargetCardinalities[fieldIndex] === 'list'}">Many</button></div>`);
+  const fieldHeaders = targets.map((_, fieldIndex) => `<th><div class="integration-field-column-header">${fieldNameControl(fieldIndex)}<button type="button" tabindex="-1" class="integration-field-remove integration-field-column-remove" data-action="remove-integration-action-selection" data-kind="target" data-index="${fieldIndex}" aria-label="Remove ${escapeAttr(state.integrationActionTargetLabels[fieldIndex] || `field ${fieldIndex + 1}`)}">×</button>${manyControl(fieldIndex)}</div></th>`).join('');
   const exampleRows = parents.map((_parent, parentIndex) => {
     const liveRecord = state.integrationActionLiveExampleRecords[parentIndex];
     const liveTargets = liveRecord && typeof liveRecord === 'object' && Array.isArray((liveRecord as { targets?: unknown }).targets)

@@ -32,6 +32,8 @@ export interface MockPage {
   frames?: Array<{ src: string }>;
   /** Side-pane boards: record ref → what the pane shows after the item command. */
   panes?: Record<string, Pick<MockPage, 'matches'>>;
+  /** Lists whose items a click opens (what opens them has no link): record ref → where clicking in it goes. */
+  opens?: Record<string, string>;
 }
 
 export interface MockRouteRequest {
@@ -171,6 +173,12 @@ export class MockHost implements BrowserHost {
     const worker = this.worker(workerId);
     const url = worker.history[worker.index];
     if (request.recordRef) {
+      const opens = this.page(url)?.opens?.[request.recordRef];
+      if (opens) {
+        this.log(`${workerId} click ${request.commandId} on ${request.recordRef}`);
+        await this.navigate(workerId, new URL(opens, url).href);
+        return { status: 'executed' };
+      }
       if (!this.page(url)?.panes?.[request.recordRef]) return { status: 'no_match' };
       worker.pane = request.recordRef;
       this.log(`${workerId} click ${request.commandId} on ${request.recordRef}`);

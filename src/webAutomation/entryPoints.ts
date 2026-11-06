@@ -4,6 +4,7 @@ import {
 
   CollectionService,
   openListedItem,
+  openListedItemByClick,
   testSitePattern,
   type CollectionDefinition,
   type CollectionRunState,
@@ -130,6 +131,11 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     // UI: Set up this site, picking an example item: the row's item, opened as a run opens it.
     openListedItem(profileId: string, listUrl: string, link: string): Promise<{ url: string }> {
       return openListedItem({ scheduler, host: deps.host }, profileId, listUrl, link);
+    },
+
+    // UI: Set up this site, picking an example item whose opener has no link: the row's opener clicked, as a run would.
+    openListedItemByClick(profileId: string, listUrl: string, pattern: SitePatternDefinition, values: Record<string, unknown>): Promise<{ url: string } | null> {
+      return openListedItemByClick({ scheduler, host: deps.host, clock: deps.clock }, profileId, listUrl, pattern, values);
     },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".

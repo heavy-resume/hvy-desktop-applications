@@ -30,6 +30,8 @@ export interface InspectorRecord {
   parent: string;
   score: number;
   targets: Array<{ label: string; value: unknown; href?: string | null }>;
+  /** What opens the row's item, for a list whose pattern has one (null when not found in this row), and its link. */
+  opener?: { element: string; href: string | null } | null;
 }
 
 interface RawInspection {
@@ -46,14 +48,18 @@ function matcherOf(pattern: SitePatternDefinition): IntegrationPatternMatcher | 
   return matcher ? { ...matcher, pattern: expandedPattern(matcher.pattern) } : null;
 }
 
-/** Field values by field ID, and the record's link: the first link among its fields. As a run reads a row, so site setup too. */
+/**
+ * Field values by field ID, and the record's link: where what opens the row goes, for a list that was shown what
+ * (`opener`), or else the first link among its fields. As a run reads a row, so site setup too.
+ */
 export function recordValues(record: InspectorRecord): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const target of record.targets) {
     // A picked field's label is the collection field it was assigned to.
     values[target.label] = target.value;
-    if (target.href && values[LINK_FIELD_ID] === undefined) values[LINK_FIELD_ID] = target.href;
   }
+  const link = record.opener !== undefined ? record.opener?.href : record.targets.find((target) => target.href)?.href;
+  if (link) values[LINK_FIELD_ID] = link;
   return values;
 }
 

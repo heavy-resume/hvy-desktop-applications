@@ -6,6 +6,7 @@ import { state } from '../state';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
 import type { CollectionRunState } from './collection';
+import type { SitePatternDefinition } from './sitePatterns';
 import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
 import type { BrowserHost } from './host';
@@ -107,6 +108,11 @@ export function openProfilePage(profileId: string, url: string): Promise<void> {
 /** UI: Set up this site, picking an example item: the row's item, opened as a run opens it. */
 export function openListedItem(profileId: string, listUrl: string, link: string): Promise<{ url: string }> {
   return appRuntime().openListedItem(profileId, listUrl, link);
+}
+
+/** UI: Set up this site, picking an example item whose opener has no link: clicked in a worker; null when it opened nothing. */
+export function openListedItemByClick(profileId: string, listUrl: string, pattern: SitePatternDefinition, values: Record<string, unknown>): Promise<{ url: string } | null> {
+  return appRuntime().openListedItemByClick(profileId, listUrl, pattern, values);
 }
 
 export function subscribeWebAutomation(listener: (event: AutomationEvent) => void): () => void {

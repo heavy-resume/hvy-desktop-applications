@@ -12,6 +12,14 @@ export class IntegrationBrowserClosedError extends Error {
   }
 }
 
+/** A request no one waits for any more (what asked for it was closed): ending it is not a failure to report. */
+export class BrowserRequestCancelledError extends Error {
+  constructor(message = 'The request was cancelled.') {
+    super(message);
+    this.name = 'BrowserRequestCancelledError';
+  }
+}
+
 type BrowserResult = Record<string, unknown>;
 
 export interface BrowserRequestOptions<T> {

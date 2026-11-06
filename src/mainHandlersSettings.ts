@@ -3,13 +3,13 @@ import { installAiChatClient } from './aiClient';
 import { beginDocumentKeyMigration, commitDocumentKeyMigration, finalizeDocumentKeyMigration, installMcpClient, installPluginPackage, loadWorkspace as loadWorkspaceBackend, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, rollbackDocumentKeyMigration, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget, type Workspace } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
-import { findFileInWorkspaces, state } from './state';
+import { findFileInWorkspaces, siteSetupFields, state } from './state';
 import { applyAppColorTheme, handlers, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { adoptIntoSiteSetup, endSiteSetup, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
-import { IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
+import { BrowserRequestCancelledError, IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 import { openDocumentKeyFileDialog } from './backend';
 import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, preserveStoredDocumentKey, reloadDocumentKeys, renameStoredDocumentKey, reviewDocumentKeyImports, serializeDocumentKeyFile } from './documentKeys';
@@ -39,6 +39,11 @@ async function openDocumentNamesUsingKey(keyId: string): Promise<string[]> {
 
 /** How long the Integrations manager waits for the page to answer a background request, as the web capability runtime does. */
 const INTEGRATION_PAGE_REQUEST_TIMEOUT_MS = 60_000;
+/**
+ * The Integrations manager's requests of its page (a preview, a check of the saved examples, a ready check test): closing
+ * the manager cancels the ones still waiting, as no one is left to see their answer. Collection runs are not among them.
+ */
+let integrationPageRequests = new AbortController();
 
 function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'): string {
   if (destination === 'msn') return 'MSN image test';
@@ -224,15 +229,26 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       answer: (result) => result,
       timeoutMs: INTEGRATION_PAGE_REQUEST_TIMEOUT_MS,
       timeoutMessage: 'The page didn’t answer in time.',
+      signal: integrationPageRequests.signal,
     }, send);
-  /** Why a request of the page failed: closing the browser isn't an error, only the end of what was waiting on it. */
+  /**
+   * Why a request of the page failed: closing the browser or the manager isn't an error, only the end of what was waiting
+   * on it. During a site setup, it is said in the setup, where it happened, not under the manager (where it would only be
+   * seen once the setup is done).
+   */
   const integrationPageRequestFailed = (error: unknown, status: string): string | null => {
     if (error instanceof IntegrationBrowserClosedError) {
       state.status = 'Integration browser closed';
       return null;
     }
+    if (error instanceof BrowserRequestCancelledError) return null;
     state.status = status;
-    return error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    if (state.siteSetup) {
+      state.siteSetup.error = message;
+      return null;
+    }
+    return message;
   };
   /** Runs a record type's extraction on its page (opening it if the browser is closed) and waits for the records. */
   const extractOnIntegrationActionPage = (extraction: { context: Record<string, unknown> } & Record<string, unknown>) =>
@@ -500,6 +516,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         ...(state.integrationActionScope ? { scope: matcherSnapshot(state.integrationActionScope) } : {}),
         parents: state.integrationActionAnchors.map(matcherSnapshot),
         fields,
+        // What opens a row's item is picked in its own step, not here: kept as it was.
+        ...(existing?.pattern?.opener ? { opener: existing.pattern.opener } : {}),
       },
     };
     if (existingIndex >= 0) integration.actions[existingIndex] = recordType;
@@ -1086,6 +1104,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   siteSetupStep: (step) => runSiteSetupStep(step as SiteSetupStep),
   closeIntegrations: () => {
+    integrationPageRequests.abort(new BrowserRequestCancelledError());
+    integrationPageRequests = new AbortController();
     endSiteSetup();
     state.integrationsDialogOpen = false;
     state.status = 'Ready';
@@ -1581,11 +1601,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.inspectionPrivacyRules = [];
     state.status = `Editing ${action.name}`;
     rerender({ preserveMountedDocument: true });
-    // The page opens behind the builder, and checks the saved examples against it once loaded.
+    // The page opens behind the builder, and checks the saved examples against it once loaded: as the page shows them,
+    // without scrolling through it as a run does (an example off screen has no live fit), so adding an example starts
+    // where the page is.
     void requestFromIntegrationPage(profile.id, ['integration-extraction'], async (requestId) => {
       const liveExampleExtraction = {
-        pattern: { ...actionPatternPayload(action), scrollPage: action.scrollPage !== false },
-        context: { mode: 'examples', browserRequestId: requestId, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
+        pattern: { ...actionPatternPayload(action), scrollPage: false },
+        context: { mode: 'examples', actionId: action.id, browserRequestId: requestId, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
         foreground: false,
       };
       try {
@@ -1605,10 +1627,12 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = `Validated ${state.integrationActionLiveExampleRecords.filter(Boolean).length} live examples`;
     }, (error: unknown) => {
       state.error = integrationPageRequestFailed(error, `Couldn’t check ${action.name}’s examples`);
-    }).finally(() => {
+      return error;
+    }).then((error) => {
       rerender({ preserveMountedDocument: true });
-      // Once the saved examples were checked against it (in the page, as it loads): picking the new one starts there.
-      if (example) handlers.pickIntegrationRecordFields();
+      // Once the saved examples were checked against it (in the page, as it loads): picking the new one starts there,
+      // unless the manager was closed meanwhile.
+      if (example && !(error instanceof BrowserRequestCancelledError)) handlers.pickIntegrationRecordFields();
     });
   },
   closeIntegrationActionBuilder: () => {
@@ -1707,9 +1731,12 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationActionTargetSelectionParentIndex = state.integrationActionAnchors.length;
     state.integrationActionTargetSelectionFieldIndex = null;
     const prompt = state.siteSetup?.prompts?.fields;
-    const fieldChoices = state.siteSetup?.fields;
+    const fieldChoices = siteSetupFields();
+    // A site setup's item just opened from the list: Wrong page takes it back.
+    const wrongPage = state.siteSetup?.offerWrongPage === true;
+    if (state.siteSetup) state.siteSetup.offerWrongPage = false;
     void runBusy('Starting field selection...', async () => {
-      await startIntegrationActionInspection('target', { multiSelect: true, deriveParent: true, ...(prompt ? { prompt } : {}), ...(fieldChoices ? { fieldChoices } : {}) }, open?.openPage);
+      await startIntegrationActionInspection('target', { multiSelect: true, deriveParent: true, ...(prompt ? { prompt } : {}), ...(fieldChoices ? { fieldChoices } : {}), ...(wrongPage ? { wrongPage: true } : {}) }, open?.openPage);
       state.status = 'Select the fields to read';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },

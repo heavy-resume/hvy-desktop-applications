@@ -830,11 +830,8 @@ ipcMain.on('hvy:integration-page-message', (event, message) => {
   if (!browser || !message || typeof message !== 'object') return;
   if (message.kind === 'publish') receiveIntegrationResult(browser, message.value);
   if (message.kind === 'toolbar-state') setIntegrationToolbarInspectionState(browser, message.value);
-  if (message.kind === 'cancel') {
-    browser.actionModePending = false;
-    setIntegrationToolbarInspectionState(browser);
-    raiseWindow(mainWindow);
-  }
+  // Picking cancelled in the page (Escape): told to Galaxy as a result, which ends the selection it waits for.
+  if (message.kind === 'cancel') receiveIntegrationResult(browser, { kind: 'integration-inspection-cancelled' });
 });
 
 // A result from the page: the inspector's, or the WebMCP bridge's. A background one (such as the scan on each page load)

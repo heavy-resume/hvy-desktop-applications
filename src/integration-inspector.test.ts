@@ -19,6 +19,8 @@ async function movePointerTo(page: Page, selector: string): Promise<void> {
   const box = await page.locator(selector).boundingBox();
   if (!box) throw new Error(`Element is not visible: ${selector}`);
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // The inspector handles a move on the next frame.
+  await page.evaluate(() => new Promise((resolve) => { requestAnimationFrame(() => resolve(null)); }));
 }
 
 async function clickPointerAt(page: Page, selector: string): Promise<void> {
@@ -60,6 +62,7 @@ interface PickOptions { gesture: 'click'; pageNumber?: boolean; prompt: string; 
 interface InspectorApi {
   discoverStructuredSources(): Array<{ kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string; title: string; authenticated: boolean; discoveredBy: 'link' | 'network' }>;
   fetchStructuredSource(source: { kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string }): Promise<{ value: unknown }>;
+  stop(): void;
   start(kind: 'parent' | 'target', options?: {
     primary?: boolean;
     parentCssPath?: string;
@@ -73,6 +76,7 @@ interface InspectorApi {
     deriveParent?: boolean;
     recordChoice?: { refuse?: string };
     fieldChoices?: Array<{ id: string; label: string }>;
+    wrongPage?: boolean;
     externalToolbar?: boolean;
     context?: Record<string, unknown>;
     rangeEdit?: { boundary: 'start' | 'end'; snapshot: InspectorSnapshot };
@@ -88,12 +92,13 @@ interface InspectorApi {
     details: Array<{ parent: string; score: number; parentScore: number; relationshipScore: number; targets: Array<{ label: string; score: number }> }>;
     diagnostics?: unknown;
   };
-  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number; recordLimit?: number; scrollPage?: boolean }): {
+  extractPattern(pattern: { scope?: InspectorSnapshot; parents: InspectorSnapshot[]; targets: Array<{ label: string; cardinality?: 'single' | 'list'; optional?: boolean; snapshot: InspectorSnapshot; snapshots?: InspectorSnapshot[]; negativeSnapshots?: InspectorSnapshot[] }>; minimumConfidence?: number; recordLimit?: number; scrollPage?: boolean; opener?: InspectorSnapshot }): {
     matches: number;
     records: Array<{
       parent: string;
       score: number;
       targets: Array<{ label: string; element: string; score: number; value: unknown }>;
+      opener?: { element: string; href: string | null } | null;
     }>;
   };
   extractAcrossPage(pattern: Parameters<InspectorApi['extractPattern']>[0]): Promise<ReturnType<InspectorApi['extractPattern']> & { minimumConfidence: number }>;
@@ -521,6 +526,36 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('offers text a card makes click-through, where its title link covers the card', async () => {
+    // As a job board's card: the title link's ::after covers the whole card, so a click anywhere opens the job, and the
+    // card's other text lets clicks through to it (pointer-events: none), so the page's hit test never finds that text.
+    await page.setContent(`
+      <style>
+        .job { position: relative; display: flex; gap: 2rem; width: 900px; padding: 16px; }
+        .title::after { content: ""; position: absolute; inset: 0; z-index: 1; }
+        .attributes * { pointer-events: none; }
+        .attributes, .attributes div { display: flex; flex-direction: column; }
+      </style>
+      <div class="job" id="job">
+        <h2><a class="title" href="/job/1">Global Tech - Software Developer with AI, Manager</a></h2>
+        <div class="attributes"><div><span>19 Hours Ago</span><span>Hybrid</span><div><span class="location">Seattle, WA, USA</span></div></div></div>
+      </div>
+    `);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '#job',
+      parentSnapshot: window.__hvyGalaxyInspector.snapshotElement(document.querySelector('#job')!, null, 'parent'),
+      multiSelect: true,
+    }));
+    await clickPointerAt(page, '.location');
+    // The location itself is offered, not only what holds it with the time and Hybrid.
+    expect(await page.locator('#hvy-galaxy-inspector-picker button').allTextContents()).toContain('span — Seattle, WA, USA');
+    expect(pageErrors).toEqual([]);
+  });
+
   it('collects several target fields before returning to Galaxy', async () => {
     const parentSnapshot = await page.evaluate(() => {
       const parent = document.querySelector('[data-record="first"]')!;
@@ -551,6 +586,13 @@ describe('integration structural inspector', () => {
     expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('1 field selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
     expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
+
+    // Escape takes back the last field, as Undo last does; with none left it does nothing, and picking goes on.
+    await page.keyboard.press('Escape');
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(0);
+    await page.keyboard.press('Escape');
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Select fields, or choose Done to cancel');
+    expect(await page.getByRole('button', { name: 'Done' }).isVisible()).toBe(true);
     expect(pageErrors).toEqual([]);
   });
 
@@ -731,7 +773,7 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('relays wheel scrolling to the page beneath the inspection shield', async () => {
+  it('relays wheel scrolling to the box beneath the inspection shield', async () => {
     await page.setContent('<main class="scroll-box" style="height:100px;overflow:auto"><div style="height:800px"><span>Top</span></div></main>');
     await page.addScriptTag({ content: inspectorSource });
     await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
@@ -739,6 +781,65 @@ describe('integration structural inspector', () => {
     await page.mouse.move(box!.x + 30, box!.y + 30);
     await page.mouse.wheel(0, 180);
     expect(await page.locator('.scroll-box').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('scrolls a box beneath the shield by a touchpad’s slow wheel, each event less than a pixel', async () => {
+    await page.setContent('<main class="scroll-box" style="height:100px;overflow:auto"><div style="height:800px"><span>Top</span></div></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
+    const scrollTop = await page.evaluate(() => {
+      const scroller = document.querySelector('.scroll-box')!;
+      scroller.scrollTop = 300;
+      const shield = document.getElementById('hvy-galaxy-inspector-shield')!;
+      const rect = scroller.getBoundingClientRect();
+      for (let index = 0; index < 20; index += 1) {
+        shield.dispatchEvent(new WheelEvent('wheel', { deltaY: -0.4, clientX: rect.left + 30, clientY: rect.top + 30, bubbles: true, cancelable: true }));
+      }
+      return scroller.scrollTop;
+    });
+    expect(scrollTop).toBe(292);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('leaves a page that scrolls as a whole to the browser to scroll, beneath the shield', async () => {
+    await page.setContent('<main style="height:3000px"><span>Top</span></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('parent', { primary: true }));
+    const cancelled = await page.evaluate(() => {
+      const shield = document.getElementById('hvy-galaxy-inspector-shield')!;
+      const wheel = new WheelEvent('wheel', { deltaY: 120, clientX: 30, clientY: 30, bubbles: true, cancelable: true });
+      shield.dispatchEvent(wheel);
+      return wheel.defaultPrevented;
+    });
+    expect(cancelled).toBe(false);
+    await page.mouse.move(30, 30);
+    await page.mouse.wheel(0, 300);
+    await expect.poll(() => page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(300);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('keeps the page from hearing presses, hovers, and clicks while picking, and lets it hear them once stopped', async () => {
+    await page.setContent('<main><button class="page-button" style="width:200px;height:60px">Open</button></main>');
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => {
+      const button = document.querySelector('.page-button')!;
+      (window as unknown as { __heard: string[] }).__heard = [];
+      for (const type of ['pointerdown', 'mousedown', 'mouseup', 'mouseover', 'pointerenter', 'click']) {
+        button.addEventListener(type, () => (window as unknown as { __heard: string[] }).__heard.push(type));
+      }
+      window.__hvyGalaxyInspector.start('parent', { primary: true });
+    });
+    await movePointerTo(page, '.page-button');
+    await page.mouse.down();
+    await page.mouse.up();
+    expect(await page.evaluate(() => (window as unknown as { __heard: string[] }).__heard)).toEqual([]);
+    // The click opened the picker's choices, not the page's button.
+    expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(1);
+
+    await page.evaluate(() => window.__hvyGalaxyInspector.stop());
+    await page.locator('.page-button').click();
+    expect(await page.evaluate(() => (window as unknown as { __heard: string[] }).__heard)).toContain('click');
     expect(pageErrors).toEqual([]);
   });
 
@@ -1028,6 +1129,57 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('looks for saved examples the live check missed in what the page adds afterwards, as a list loads more', async () => {
+    // A page of its own: the inspector keeps the channel it found as it loaded.
+    await page.close();
+    page = await browser.newPage();
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setContent(`
+      <main>
+        <article class="message-card"><span class="value">Alpha</span></article>
+        <ul id="later"><li class="compact-row" role="listitem"><button class="value">Beta</button></li></ul>
+      </main>
+    `);
+    // Galaxy's channel, there before the inspector is.
+    await page.evaluate(() => {
+      const sent: unknown[] = [];
+      (window as unknown as { __sent: unknown[] }).__sent = sent;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { sent.push(value); } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    // The second example was saved from a row the page has not loaded yet.
+    const published = await page.evaluate(async () => {
+      const sent = (window as unknown as { __sent: unknown[] }).__sent;
+      const firstParent = document.querySelector('.message-card')!;
+      const secondParent = document.querySelector('.compact-row')!;
+      const firstSnapshot = window.__hvyGalaxyInspector.snapshotElement(firstParent.querySelector('.value')!, firstParent, 'target');
+      const secondSnapshot = window.__hvyGalaxyInspector.snapshotElement(secondParent.querySelector('.value')!, secondParent, 'target');
+      const pattern = {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(firstParent, null, 'parent'), window.__hvyGalaxyInspector.snapshotElement(secondParent, null, 'parent')],
+        targets: [{ label: 'VALUE', snapshot: firstSnapshot, exampleSnapshots: [firstSnapshot, secondSnapshot] }],
+        scrollPage: false,
+      };
+      document.querySelector('#later')!.remove();
+      await window.__hvyGalaxyInspector.extractAndPublish(pattern, { mode: 'examples', actionId: 'jobs-list' });
+      return sent;
+    }) as Array<{ kind: string; records: Array<{ targets: Array<{ value: unknown }> } | null> }>;
+    expect(published.map((value) => [value.kind, value.records.map((record) => record?.targets[0].value ?? null)])).toEqual([['integration-extraction', ['Alpha', null]]]);
+
+    // Something else added: nothing to tell.
+    await page.evaluate(() => document.querySelector('main')!.insertAdjacentHTML('beforeend', '<p>Loading…</p>'));
+    await page.waitForTimeout(700);
+    expect(await page.evaluate(() => (window as unknown as { __sent: unknown[] }).__sent.length)).toBe(1);
+
+    // The row loads: found in what was added, and told with the record type it is for.
+    await page.evaluate(() => document.querySelector('main')!.insertAdjacentHTML('beforeend', '<ul><li class="compact-row" role="listitem"><button class="value">Beta</button></li></ul>'));
+    await page.waitForTimeout(700);
+    const update = await page.evaluate(() => (window as unknown as { __sent: unknown[] }).__sent[1]) as { kind: string; context: unknown; records: Array<{ targets: Array<{ value: unknown }> } | null> };
+    expect(update.kind).toBe('integration-live-examples');
+    expect(update.context).toEqual({ mode: 'live-examples', actionId: 'jobs-list' });
+    expect(update.records.map((record) => record?.targets[0].value ?? null)).toEqual(['Alpha', 'Beta']);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('shows already-matched records while another parent example is selected', async () => {
     const pattern = await page.evaluate(() => {
       const parent = document.querySelector('[data-record="first"]')!;
@@ -1048,6 +1200,39 @@ describe('integration structural inspector', () => {
     expect(await page.locator('#hvy-galaxy-existing-matches').textContent()).toContain('Needs example');
     await movePointerTo(page, '[data-record="missing-preview"] .subject');
     expect(await page.locator('#hvy-galaxy-inspector-highlight').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('hides the matched records while the page scrolls, and draws them where they are once it pauses', async () => {
+    await page.setContent(`
+      <main class="scroller" style="height:160px;overflow:auto">
+        <article class="row" style="height:90px"><b class="name">Alpha</b></article>
+        <article class="row" style="height:90px"><b class="name">Beta</b></article>
+        <article class="row" style="height:90px"><b class="name">Gamma</b></article>
+      </main>
+    `);
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => {
+      const parent = document.querySelector('.row')!;
+      const existingPattern = {
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'NAME', snapshot: window.__hvyGalaxyInspector.snapshotElement(parent.querySelector('.name')!, parent, 'target') }],
+      };
+      window.__hvyGalaxyInspector.start('parent', { existingPattern });
+    });
+    const firstBox = page.locator('[data-existing-match-kind="parent"]').first();
+    await expect.poll(() => firstBox.isVisible()).toBe(true);
+
+    // The page tells of a scroll on its next frame.
+    await page.locator('.scroller').evaluate(async (element) => {
+      element.scrollTop = 60;
+      await new Promise(requestAnimationFrame);
+    });
+    expect(await firstBox.isVisible()).toBe(false);
+
+    await page.waitForTimeout(300);
+    expect(await firstBox.isVisible()).toBe(true);
+    expect((await firstBox.boundingBox())?.y).toBeCloseTo((await page.locator('.row').first().boundingBox())!.y, 0);
     expect(pageErrors).toEqual([]);
   });
 
@@ -1887,8 +2072,9 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('picks one of a pattern\'s records, boxed, and gives it back as a run reads it, refusing a pick outside them', async () => {
-    await page.setContent(`<main style="margin-top:140px"><ul class="rows">${['Data Analyst', 'Product Manager', 'Designer'].map((title, index) => `<li class="row" data-row="${index}"><a href="https://jobs.test/jobs/${index}" class="open">${title}</a><p>Acme</p></li>`).join('')}</ul><p class="outside">Not a job</p></main>`);
+  it('picks one of a pattern\'s records by what opens it, gives back both, and refuses a click outside them', async () => {
+    // As a job board's row: the company's link first, then the job's.
+    await page.setContent(`<main style="margin-top:140px"><ul class="rows">${['Data Analyst', 'Product Manager', 'Designer'].map((title, index) => `<li class="row" data-row="${index}"><a href="https://jobs.test/company/acme" class="company">Acme</a> <a href="https://jobs.test/jobs/${index}" class="open">${title}</a><p>Remote</p></li>`).join('')}</ul><p class="outside">Not a job</p></main>`);
     await page.evaluate(() => {
       delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
       window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
@@ -1899,26 +2085,74 @@ describe('integration structural inspector', () => {
       return {
         minimumConfidence: 0.8,
         parents: [window.__hvyGalaxyInspector.snapshotElement(row, null, 'parent')],
-        targets: [{ label: 'title', snapshot: window.__hvyGalaxyInspector.snapshotElement(row.querySelector('.open')!, row, 'target') }],
+        targets: [
+          { label: 'company', snapshot: window.__hvyGalaxyInspector.snapshotElement(row.querySelector('.company')!, row, 'target') },
+          { label: 'title', snapshot: window.__hvyGalaxyInspector.snapshotElement(row.querySelector('.open')!, row, 'target') },
+        ],
       };
     });
-    await page.evaluate((pattern) => window.__hvyGalaxyInspector.start('parent', {
+    const choose = () => page.evaluate((pattern) => window.__hvyGalaxyInspector.start('parent', {
       existingPattern: pattern,
-      prompt: 'Pick a job from the list',
-      recordChoice: { refuse: 'Pick one of the jobs boxed in green.' },
+      prompt: 'Click what opens a job',
+      recordChoice: { refuse: 'Click what opens one of the jobs boxed in green.' },
     }), rowsPattern);
+    type Choice = { kind: string; record: { targets: Array<{ label: string; value: unknown }> }; opener: { snapshot: InspectorSnapshot; href: string | null } };
+    await choose();
     const status = page.locator('[data-inspector-status-text]');
-    expect(await status.textContent()).toBe('Pick a job from the list');
+    expect(await status.textContent()).toBe('Click what opens a job');
 
     await clickPointerAt(page, '.outside');
-    expect(await status.textContent()).toBe('Pick one of the jobs boxed in green.');
+    expect(await status.textContent()).toBe('Click what opens one of the jobs boxed in green.');
     expect(await page.evaluate(() => window.__commandRecordingResult)).toBeUndefined();
 
-    // Anywhere in a row picks it: its paragraph too.
-    await clickPointerAt(page, '[data-row="1"] p');
-    const chosen = await page.evaluate(() => window.__commandRecordingResult as { kind: string; record: { targets: Array<{ label: string; value: unknown; href?: string | null }> } });
+    // Pointing at the job's link boxes it, and clicking it gives the row and the link it follows: the job's, not the company's.
+    await movePointerTo(page, '[data-row="1"] .open');
+    expect((await page.locator('#hvy-galaxy-inspector-highlight').boundingBox())?.width).toBeCloseTo((await page.locator('[data-row="1"] .open').boundingBox())!.width, 0);
+    await clickPointerAt(page, '[data-row="1"] .open');
+    const chosen = await page.evaluate(() => window.__commandRecordingResult as Choice);
     expect(chosen.kind).toBe('integration-record-choice');
-    expect(chosen.record.targets).toEqual([expect.objectContaining({ label: 'title', value: 'Product Manager', href: expect.stringMatching(/\/jobs\/1$/) })]);
+    expect(chosen.record.targets.map((target) => target.value)).toEqual(['Acme', 'Product Manager']);
+    expect(chosen.opener.href).toBe('https://jobs.test/jobs/1');
+    expect(chosen.opener.snapshot.selected.shape.tag).toBe('a');
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+
+    // What has no link opens its item by its script: it is given back with none.
+    await choose();
+    await clickPointerAt(page, '[data-row="2"] p');
+    expect((await page.evaluate(() => window.__commandRecordingResult as Choice)).opener).toMatchObject({ href: null, snapshot: { selected: { shape: { tag: 'p' } } } });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('finds a list\'s opener in every row, and the link it follows, where a field\'s element is the same', async () => {
+    await page.setContent(`<main><ul class="rows">${['Data Analyst', 'Product Manager'].map((title, index) => `<li class="row"><a href="https://jobs.test/company/acme" class="company">Acme</a> <a href="https://jobs.test/jobs/${index}" class="open">${title}</a></li>`).join('')}</ul></main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const records = await page.evaluate(() => {
+      const row = document.querySelector('.row')!;
+      const snapshot = (element: Element) => window.__hvyGalaxyInspector.snapshotElement(element, row, 'target');
+      return window.__hvyGalaxyInspector.extractPattern({
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(row, null, 'parent')],
+        targets: [{ label: 'company', snapshot: snapshot(row.querySelector('.company')!) }, { label: 'title', snapshot: snapshot(row.querySelector('.open')!) }],
+        // The title is a field, and what opens the job too.
+        opener: snapshot(row.querySelector('.open')!),
+      }).records;
+    });
+    expect(records.map((record) => [record.targets.map((target) => target.value), record.opener?.href])).toEqual([
+      [['Acme', 'Data Analyst'], 'https://jobs.test/jobs/0'],
+      [['Acme', 'Product Manager'], 'https://jobs.test/jobs/1'],
+    ]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('offers Wrong page while picking an item\'s fields, when asked, which gives the page back unread', async () => {
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true, deriveParent: true, wrongPage: true, fieldChoices: [{ id: 'title', label: 'Title' }] }));
+    await page.locator('#hvy-galaxy-inspector-status button').filter({ hasText: 'Wrong page' }).click();
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toEqual({ kind: 'integration-wrong-page' });
     expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
     expect(pageErrors).toEqual([]);
   });

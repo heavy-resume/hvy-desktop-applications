@@ -24,6 +24,8 @@
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
   let targetCollection = null;
+  // While picking fields: takes back the last one picked (Escape).
+  let undoLastPick = null;
   let commandRecorder = null;
   let commandRecordElements = null;
   // Picking one of a pattern's records (a site setup's example item: a row of the list): its matches, boxed, and what
@@ -935,8 +937,26 @@
     box.style.padding = '3px 5px';
   };
 
+  // The elements under a point that hit testing skips (`pointer-events: none`, as a card its title link covers sets on its
+  // text, so a click anywhere opens the link): from an element it found, down through the child whose box holds the
+  // point (the last such, painted on top), innermost first. Hit testing gives the innermost first, so a walk stops at an
+  // element one before it reached (`seen`): an outer element's walk ends at once, rather than measuring the same path again.
+  const elementsWithinAt = (element, x, y, seen) => {
+    const found = [];
+    for (let node = element; node;) {
+      node = [...node.children].reverse().find((child) => {
+        const rect = child.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      }) ?? null;
+      if (!node || seen.has(node)) break;
+      found.unshift(node);
+    }
+    return found;
+  };
+
   const elementsBehindInspector = (x, y) => {
     const visitedRoots = new Set();
+    const seen = new Set();
     const collect = (root) => {
       if (visitedRoots.has(root)) return [];
       visitedRoots.add(root);
@@ -944,7 +964,9 @@
       const result = [];
       hits.forEach((element) => {
         if (element.shadowRoot) result.push(...collect(element.shadowRoot));
-        result.push(element);
+        const within = elementsWithinAt(element, x, y, seen);
+        for (const found of [...within, element]) seen.add(found);
+        result.push(...within, element);
       });
       return result;
     };
@@ -1247,19 +1269,49 @@
     window.__hvyGalaxyInspector.stop();
   };
 
-  // The record the pointer is in, when picking a record: one of the matches (found again if the page replaced them).
-  const recordChoiceAt = (event) => {
-    if (recordChoice.matches.some((match) => !match.element.isConnected)) recordChoice.matches = findPatternMatches(inspectionPattern);
-    const under = elementsBehindInspector(event.clientX, event.clientY)[0] || event.target;
-    return recordChoice.matches.find((match) => composedContains(match.element, under)) || null;
+  // What the page gets a click on at a point, beneath the inspector: the topmost element there as hit testing finds it
+  // (not what it lets clicks through), into shadow roots.
+  const pageElementAt = (x, y) => {
+    let found = null;
+    for (let root = document; root;) {
+      const element = root.elementsFromPoint(x, y).find((candidate) => !isInspectorElement(candidate));
+      if (!element || element === found) break;
+      found = element;
+      root = element.shadowRoot;
+    }
+    return found;
   };
 
+  // Picking a record by what opens it: what a click at the pointer lands on (`opener`), and the record it is in, one of
+  // the matches (found again if the page replaced them).
+  const recordChoiceAt = (event) => {
+    if (recordChoice.matches.some((match) => !match.element.isConnected)) recordChoice.matches = findPatternMatches(inspectionPattern);
+    const opener = pageElementAt(event.clientX, event.clientY);
+    const match = opener ? recordChoice.matches.find((candidate) => composedContains(candidate.element, opener)) : null;
+    return match ? { match, opener } : null;
+  };
+
+  // The pointer's moves (pointermove and mousemove, and those a scroll makes under it), handled once a frame: the latest.
+  // Where it is, what it is over, and its path are kept as it moves, as the path is gone once the event is over.
+  let pendingMove = null;
+  let moveFrame = 0;
   const pointerMove = (event) => {
+    const path = event.composedPath();
+    pendingMove = { clientX: event.clientX, clientY: event.clientY, target: event.target, composedPath: () => path };
+    if (moveFrame) return;
+    moveFrame = requestAnimationFrame(() => {
+      moveFrame = 0;
+      const move = pendingMove;
+      pendingMove = null;
+      if (move) pointerMoveNow(move);
+    });
+  };
+  const pointerMoveNow = (event) => {
     if (!active || pickingPaused || !(event.target instanceof Element)) return;
     if (event.target.closest('#hvy-galaxy-inspector-picker')) return;
     if (recordChoice) {
-      const match = recordChoiceAt(event);
-      if (match) highlight(match.element);
+      const choice = recordChoiceAt(event);
+      if (choice) highlight(choice.opener);
       else {
         document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
         highlighted = null;
@@ -1288,12 +1340,18 @@
     event.preventDefault();
     event.stopImmediatePropagation();
     if (recordChoice) {
-      const match = recordChoiceAt(event);
-      if (!match) {
+      const choice = recordChoiceAt(event);
+      if (!choice) {
         recordChoice.refuse();
         return;
       }
-      publish({ kind: 'integration-record-choice', ...(inspectionContext ? { context: inspectionContext } : {}), record: serializeMatches([match], true).records[0] });
+      publish({
+        kind: 'integration-record-choice',
+        ...(inspectionContext ? { context: inspectionContext } : {}),
+        record: serializeMatches([choice.match], true).records[0],
+        // Where it is in the record, so it is found in every row, and the link clicking it follows, if any.
+        opener: { snapshot: window.__hvyGalaxyInspector.snapshotElement(choice.opener, choice.match.element, 'target'), href: openedHref(choice.opener) },
+      });
       window.__hvyGalaxyInspector.stop();
       return;
     }
@@ -1309,6 +1367,14 @@
       document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
       highlighted = null;
       rangeStatus?.();
+      return;
+    }
+    // Escape while picking fields takes back the last one picked, as Undo last does; with none picked, it does nothing.
+    // It never leaves picking (Done and the toolbar do).
+    if (active && undoLastPick && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      undoLastPick();
       return;
     }
     if (active && event.key === 'Escape') {
@@ -1366,6 +1432,21 @@
     if (!ends.length) return null;
     const best = Math.max(...ends.map((candidate) => candidate.score));
     return ends.find((candidate) => best - candidate.score < 0.035);
+  };
+
+  /**
+   * What opens a row's item (a list's `opener`): the element in the row that best fits the one picked. Not a field, so
+   * it may be one's element too (the title link). When it fits more than once, the first of the closest fits is taken.
+   */
+  const openerWithin = (row, opener, minimumTargetConfidence) => {
+    const expected = opener?.selected;
+    if (!expected?.shape) return null;
+    const fits = structuralTargetsWithin(row, !expected.relativePath?.length)
+      .map((candidate) => ({ element: candidate, score: targetCandidateSimilarity(expected, candidate, row).score }))
+      .filter((candidate) => candidate.score >= minimumTargetConfidence);
+    if (!fits.length) return null;
+    const best = Math.max(...fits.map((candidate) => candidate.score));
+    return fits.find((candidate) => best - candidate.score < 0.035).element;
   };
 
   // Whether a matched field is the only one on its element. A range field reads between its boundaries, so it may start
@@ -1511,20 +1592,24 @@
     });
   };
 
-  const evaluatePatternCandidates = (pattern = {}) => {
+  // `within`: only elements inside these (elements the page added), not the whole page.
+  const evaluatePatternCandidates = (pattern = {}, within = null) => {
     const outermost = matchingShapes === null;
     if (outermost) matchingShapes = new WeakMap();
     try {
-      return evaluatePatternCandidatesNow(pattern);
+      return evaluatePatternCandidatesNow(pattern, within);
     } finally {
       if (outermost) matchingShapes = null;
     }
   };
-  const evaluatePatternCandidatesNow = (pattern = {}) => {
+  const evaluatePatternCandidatesNow = (pattern = {}, within = null) => {
     const { minimumConfidence, minimumTargetConfidence } = patternThresholds(pattern);
     const parentShapes = (pattern.parents || []).map((sample) => sample?.selected?.shape).filter(Boolean);
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
-    const candidates = patternScopes(pattern).flatMap((scope) => deepElements(scope.element).filter((element) => element !== scope.element));
+    const scopes = patternScopes(pattern);
+    const candidates = within
+      ? within.flatMap((root) => [root, ...deepElements(root)]).filter((element) => scopes.some((scope) => element !== scope.element && (scope.element === document ? element.isConnected : composedContains(scope.element, element))))
+      : scopes.flatMap((scope) => deepElements(scope.element).filter((element) => element !== scope.element));
     return [...new Set(candidates)]
       .filter(isParentCandidate)
       .map((element) => ({ element, parentScore: Math.max(0, ...parentShapes.map((shape) => shapeSimilarity(shape, shapeSignature(element)))) }))
@@ -1537,19 +1622,21 @@
         const targetsPass = evaluated.matchedTargets.every((target) => target.optional || target.element && target.score >= minimumTargetConfidence);
         const hasMatchedTarget = !targets.length || evaluated.matchedTargets.some((target) => target.element && target.score >= minimumTargetConfidence);
         const hasLearnedAbsence = evaluated.matchedTargets.some((target) => target.optional && target.rejectedByNegative);
+        const accepted = (hasMatchedTarget || hasLearnedAbsence) && targetsPass && distinctTargets && evaluated.score >= minimumConfidence;
         return {
           ...evaluated,
           distinctTargets,
           targetsPass,
-          accepted: (hasMatchedTarget || hasLearnedAbsence) && targetsPass && distinctTargets && evaluated.score >= minimumConfidence,
+          accepted,
           minimumConfidence,
           minimumTargetConfidence,
+          ...(accepted && pattern.opener ? { opener: openerWithin(candidate.element, pattern.opener, minimumTargetConfidence) } : {}),
         };
       });
   };
 
-  const findPatternMatches = (pattern = {}) => {
-    const parentCandidates = evaluatePatternCandidates(pattern)
+  const findPatternMatches = (pattern = {}, within = null) => {
+    const parentCandidates = evaluatePatternCandidates(pattern, within)
       .filter((candidate) => candidate.accepted)
       .sort((left, right) => right.parentScore - left.parentScore || right.score - left.score);
     const accepted = [];
@@ -1735,6 +1822,13 @@
 
   const linkHref = (element) => {
     const anchor = element.closest?.('a[href]') || element.querySelector?.('a[href]');
+    return anchor ? new URL(anchor.getAttribute('href'), location.href).href : null;
+  };
+
+  // The link clicking an element follows: its own, or the link it is in. A box with a link somewhere inside it does not
+  // follow it when clicked, so it has none (what it opens, it opens by its script).
+  const openedHref = (element) => {
+    const anchor = element.closest?.('a[href]');
     return anchor ? new URL(anchor.getAttribute('href'), location.href).href : null;
   };
 
@@ -2179,6 +2273,8 @@
           } : {}),
         };
       }),
+      // What opens the row's item, for a list whose pattern has one: where it is, and the link clicking it follows.
+      ...(includeValues && match.opener !== undefined ? { opener: match.opener ? { element: cssPath(match.opener), href: openedHref(match.opener) } : null } : {}),
     })),
   });
 
@@ -2315,22 +2411,27 @@
     };
   };
 
+  // The pattern as one saved example alone: its parent, and each field as that example had it.
+  const examplePattern = (pattern, exampleIndex) => {
+    const targets = (pattern.targets || []).map((target) => {
+      const hasPositionalSnapshot = Array.isArray(target.exampleSnapshots) && exampleIndex < target.exampleSnapshots.length;
+      const exampleSnapshot = hasPositionalSnapshot
+        ? target.exampleSnapshots[exampleIndex]
+        : target.snapshots?.[exampleIndex] ?? target.snapshot ?? null;
+      return {
+        ...target,
+        snapshot: exampleSnapshot,
+        snapshots: exampleSnapshot ? [exampleSnapshot] : [],
+      };
+    });
+    return { ...pattern, parents: [pattern.parents[exampleIndex]], targets };
+  };
+
   const extractLiveExamples = async (pattern = {}, runId = extractionRun) => {
     const usedRecords = new Set();
     const records = [];
     for (let exampleIndex = 0; exampleIndex < (pattern.parents || []).length; exampleIndex += 1) {
-      const targets = (pattern.targets || []).map((target) => {
-        const hasPositionalSnapshot = Array.isArray(target.exampleSnapshots) && exampleIndex < target.exampleSnapshots.length;
-        const exampleSnapshot = hasPositionalSnapshot
-          ? target.exampleSnapshots[exampleIndex]
-          : target.snapshots?.[exampleIndex] ?? target.snapshot ?? null;
-        return {
-          ...target,
-          snapshot: exampleSnapshot,
-          snapshots: exampleSnapshot ? [exampleSnapshot] : [],
-        };
-      });
-      const extraction = await extractAcrossPage({ ...pattern, parents: [pattern.parents[exampleIndex]], targets }, runId);
+      const extraction = await extractAcrossPage(examplePattern(pattern, exampleIndex), runId);
       if (runId !== extractionRun) break;
       const available = extraction.records.find((record) => {
         const identity = recordContentIdentity(record);
@@ -2344,6 +2445,73 @@
       records.push(available);
     }
     return { matches: records.filter(Boolean).length, records, diagnostics: null, minimumConfidence: patternThresholds(pattern).minimumConfidence };
+  };
+
+  // After the live examples check, each saved example it did not find is looked for again in what the page adds (a list
+  // loading more as it is scrolled), not the whole page again: an element the page has, anywhere in it, was already
+  // looked at. It stops once all are found, the page navigates, or another extraction starts. Each find is published
+  // with the example records as they now are; Galaxy keeps the best fit for each.
+  let liveExampleWatch = null;
+  const stopLiveExampleWatch = () => {
+    if (!liveExampleWatch) return;
+    liveExampleWatch.observer.disconnect();
+    document.removeEventListener('scroll', liveExampleWatch.scrolled, true);
+    clearTimeout(liveExampleWatch.timer);
+    liveExampleWatch = null;
+  };
+  // What the inspector draws in the page is not the page.
+  const isInspectorElement = (element) => Boolean(element.closest('[id^="hvy-galaxy-"], [data-collection-selection]'));
+  const watchLiveExamples = (pattern, records, context) => {
+    stopLiveExampleWatch();
+    if (!records.some((record) => record === null)) return;
+    const pageUrl = location.href;
+    const runId = extractionRun;
+    let added = [];
+    const evaluate = () => {
+      if (!liveExampleWatch) return;
+      liveExampleWatch.timer = null;
+      if (location.href !== pageUrl || runId !== extractionRun) {
+        stopLiveExampleWatch();
+        return;
+      }
+      // The outermost of what was added, still in the page: those with nothing else added above them.
+      const addedSet = new Set(added);
+      const roots = [...addedSet].filter((element) => {
+        if (!element.isConnected) return false;
+        for (let node = composedParent(element); node; node = composedParent(node)) if (addedSet.has(node)) return false;
+        return true;
+      });
+      added = [];
+      if (!roots.length) return;
+      const used = new Set(records.filter(Boolean).map(recordContentIdentity));
+      let found = false;
+      records.forEach((record, exampleIndex) => {
+        if (record) return;
+        const available = serializeMatches(findPatternMatches(examplePattern(pattern, exampleIndex), roots), true).records
+          .find((candidate) => !used.has(recordContentIdentity(candidate)));
+        if (!available) return;
+        used.add(recordContentIdentity(available));
+        records[exampleIndex] = available;
+        found = true;
+      });
+      if (found) publish({ kind: 'integration-live-examples', context, page: { origin: location.origin, pathname: location.pathname }, records: [...records] });
+      if (!records.some((record) => record === null)) stopLiveExampleWatch();
+    };
+    // Additions come in bursts as a list loads, and as it scrolls: evaluated once both pause, so not while scrolling.
+    const wait = () => {
+      if (!added.length || !liveExampleWatch) return;
+      clearTimeout(liveExampleWatch.timer);
+      liveExampleWatch.timer = setTimeout(evaluate, 400);
+    };
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) if (node instanceof Element && !isInspectorElement(node)) added.push(node);
+      }
+      wait();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener('scroll', wait, true);
+    liveExampleWatch = { observer, scrolled: wait, timer: null };
   };
 
   window.__hvyGalaxyInspector = {
@@ -2442,23 +2610,42 @@
       shield.id = 'hvy-galaxy-inspector-shield';
       shield.style.cssText = 'position:fixed;inset:0;z-index:2147483644;background:transparent;cursor:crosshair;pointer-events:auto';
       document.documentElement.append(shield);
+      // The shield takes the wheel. Over a page that scrolls as a whole, the browser scrolls it (the shield is fixed over
+      // it), as smoothly as ever. Only a box that scrolls within the page is scrolled here, as the browser does not reach
+      // it through the shield: found once a gesture (the wheel's events until they pause), and by whole pixels, as the
+      // page keeps (scrollTop drops a fraction), with what is left over kept for the next, as a touchpad scrolled slowly
+      // moves less than a pixel an event.
+      let wheelScroller = null;
+      let wheelPause = 0;
+      let wheelRest = { x: 0, y: 0 };
       shield.addEventListener('wheel', (event) => {
-        const chains = elementsBehindInspector(event.clientX, event.clientY).flatMap((element) => {
-          const ancestors = [];
-          for (let node = element; node instanceof Element; node = node.parentElement) ancestors.push(node);
-          return ancestors;
-        });
-        const scroller = [...new Set(chains)].find((element) => {
-          const style = getComputedStyle(element);
-          return element.scrollHeight > element.clientHeight + 2 && /(auto|scroll)/.test(style.overflowY);
-        }) || document.scrollingElement;
-        if (!scroller) return;
+        if (!wheelScroller) {
+          const chains = elementsBehindInspector(event.clientX, event.clientY).flatMap((element) => {
+            const ancestors = [];
+            for (let node = element; node instanceof Element; node = node.parentElement) ancestors.push(node);
+            return ancestors;
+          });
+          wheelScroller = [...new Set(chains)].find((element) => {
+            const style = getComputedStyle(element);
+            return element.scrollHeight > element.clientHeight + 2 && /(auto|scroll)/.test(style.overflowY);
+          }) || document.scrollingElement;
+        }
+        clearTimeout(wheelPause);
+        wheelPause = setTimeout(() => {
+          wheelScroller = null;
+          wheelRest = { x: 0, y: 0 };
+        }, 150);
+        if (!wheelScroller || wheelScroller === document.scrollingElement) return;
         event.preventDefault();
-        scroller.scrollTop += event.deltaY;
-        scroller.scrollLeft += event.deltaX;
+        wheelRest = { x: wheelRest.x + event.deltaX, y: wheelRest.y + event.deltaY };
+        const step = { x: Math.trunc(wheelRest.x), y: Math.trunc(wheelRest.y) };
+        wheelRest = { x: wheelRest.x - step.x, y: wheelRest.y - step.y };
+        if (step.y) wheelScroller.scrollTop += step.y;
+        if (step.x) wheelScroller.scrollLeft += step.x;
       }, { passive: false });
       const trackedBoxes = [];
       targetCollection = null;
+      undoLastPick = null;
       toolbarControl = null;
       commandRecordElements = options.commandRecorder?.scope === 'record'
         ? new Set(inspectionPattern ? findPatternMatches(inspectionPattern).map((match) => match.element) : [])
@@ -2547,12 +2734,29 @@
       const scheduleSelectionUpdate = () => {
         if (!selectionFrame) selectionFrame = requestAnimationFrame(updateSelectionBoxes);
       };
+      // While the page scrolls, the boxes are hidden rather than moved each frame (each move measures the page again), and
+      // drawn where they are once it pauses.
+      let scrollPause = 0;
+      const hideSelectionWhileScrolling = (event) => {
+        if (event.target instanceof Element && isInspectorElement(event.target)) return;
+        if (!scrollPause) {
+          trackedBoxes.forEach(({ box }) => { box.style.display = 'none'; });
+          if (scopeBox) scopeBox.style.display = 'none';
+          document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+        }
+        clearTimeout(scrollPause);
+        scrollPause = setTimeout(() => {
+          scrollPause = 0;
+          scheduleSelectionUpdate();
+        }, 150);
+      };
       updateSelectionBoxes();
-      document.addEventListener('scroll', scheduleSelectionUpdate, true);
+      document.addEventListener('scroll', hideSelectionWhileScrolling, true);
       window.addEventListener('resize', scheduleSelectionUpdate);
       selectionOverlayCleanup = () => {
-        document.removeEventListener('scroll', scheduleSelectionUpdate, true);
+        document.removeEventListener('scroll', hideSelectionWhileScrolling, true);
         window.removeEventListener('resize', scheduleSelectionUpdate);
+        clearTimeout(scrollPause);
         if (selectionFrame) cancelAnimationFrame(selectionFrame);
         document.querySelectorAll('[data-collection-selection="true"]').forEach((element) => element.remove());
       };
@@ -3016,6 +3220,7 @@
           fieldButtons.replaceChildren();
           navigationButton.hidden = false;
           doneButton.hidden = false;
+          if (wrongPageButton) wrongPageButton.hidden = false;
           pickingPaused = false;
           updateCollectionStatus();
         };
@@ -3026,6 +3231,7 @@
           document.getElementById('hvy-galaxy-inspector-picker')?.remove();
           navigationButton.hidden = true;
           doneButton.hidden = true;
+          if (wrongPageButton) wrongPageButton.hidden = true;
           const taken = new Set(selectedItems.map((selected) => selected.result.fieldId).filter(Boolean));
           const fieldButton = (label, id, fieldId) => {
             const button = document.createElement('button');
@@ -3069,6 +3275,9 @@
             else updateCollectionStatus();
           },
         };
+        undoLastPick = () => {
+          if (selectedItems.length) undoButton.click();
+        };
         undoButton.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -3099,7 +3308,22 @@
         undoButton.dataset.toolbarId = 'undo';
         doneButton.dataset.toolbarId = 'done';
         doneButton.dataset.toolbarPrimary = 'true';
-        status.append(fieldButtons, undoButton, doneButton);
+        // An item a site setup just opened from its list may not be the item (a company's page): Wrong page goes back
+        // to the list, to click what opens one again.
+        const wrongPageButton = options.wrongPage ? document.createElement('button') : null;
+        if (wrongPageButton) {
+          wrongPageButton.type = 'button';
+          wrongPageButton.textContent = 'Wrong page';
+          wrongPageButton.dataset.toolbarId = 'wrong-page';
+          wrongPageButton.style.cssText = doneButton.style.cssText;
+          wrongPageButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            publish({ kind: 'integration-wrong-page' });
+            window.__hvyGalaxyInspector.stop();
+          });
+        }
+        status.append(fieldButtons, ...(wrongPageButton ? [wrongPageButton] : []), undoButton, doneButton);
         updateCollectionStatus();
       }
       if (externalToolbar) mirrorStatusToToolbar(status, statusText);
@@ -3137,6 +3361,7 @@
       rangeEditing = false;
       inspectionPattern = null;
       targetCollection = null;
+      undoLastPick = null;
       commandRecorder = null;
       commandRecordElements = null;
       recordChoice = null;
@@ -3144,6 +3369,9 @@
       inspectionContext = null;
       document.removeEventListener('pointermove', pointerMove, true);
       document.removeEventListener('mousemove', pointerMove, true);
+      cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+      pendingMove = null;
       document.removeEventListener('click', click, true);
       document.removeEventListener('keydown', keydown, true);
       removeUi();
@@ -3241,6 +3469,7 @@
     },
     async extractAndPublish(pattern = {}, context = {}) {
       const runId = ++extractionRun;
+      stopLiveExampleWatch();
       const checks = context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] };
       const readiness = await waitForPageReadiness(checks);
       if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
@@ -3274,10 +3503,13 @@
         page: { origin: location.origin, pathname: location.pathname },
         ...extraction,
       });
+      // Saved examples not found yet are looked for in what the page adds, told by the record type, not this request.
+      if (context.mode === 'examples' && extraction.status !== 'not-ready') watchLiveExamples(pattern, [...extraction.records], { mode: 'live-examples', actionId: context.actionId ?? null });
       return extraction;
     },
     cancelExtraction() {
       extractionRun += 1;
+      stopLiveExampleWatch();
     },
     extractAcrossPage(pattern = {}) {
       return extractAcrossPage(pattern);

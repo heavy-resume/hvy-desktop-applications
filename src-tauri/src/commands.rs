@@ -473,13 +473,10 @@ fn show_integration_toolbar_state(app: &AppHandle, profile_id: &str, state: &ser
     }
 }
 
-/// Picking cancelled in the page (Escape): the toolbar is the browser's again, and Galaxy comes forward.
+/// Picking cancelled in the page (Escape): told to Galaxy as a result, which ends the selection it waits for (the toolbar
+/// is the browser's again, and Galaxy comes forward).
 fn cancel_integration_inspection(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str) {
-    action_mode.store(false, Ordering::SeqCst);
-    show_integration_toolbar_state(app, profile_id, &serde_json::json!({}));
-    if let Some(main_window) = app.get_webview_window("main") {
-        let _ = raise_integration_window(&main_window.as_ref().window());
-    }
+    emit_integration_result(app, action_mode, profile_id, serde_json::json!({ "kind": "integration-inspection-cancelled" }));
 }
 
 /// A message Galaxy's scripts send from their own world (integration_world.rs): what the inspector's navigations say.

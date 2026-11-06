@@ -237,6 +237,42 @@ export async function openListedItem(
   });
 }
 
+/** How long a click on what opens an item has to go somewhere before it is taken to have opened nothing. */
+export const OPENED_BY_CLICK_MS = 3_000;
+const OPEN_BY_CLICK_COMMAND_ID = 'open-item-by-click';
+
+/**
+ * Site setup, picking an example item whose opener has no link (the page's script opens it): in a worker of the
+ * profile, the list page loaded, the row found again by its values, and its opener clicked, as a one-step command in
+ * the row. The item is where the page went within `OPENED_BY_CLICK_MS`; null when it went nowhere.
+ */
+export async function openListedItemByClick(
+  deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock },
+  profileId: string,
+  listUrl: string,
+  pattern: SitePatternDefinition,
+  values: Record<string, unknown>,
+): Promise<{ url: string } | null> {
+  const matcher = pattern.matcher as { pattern: { opener?: unknown }; commands: Record<string, unknown> };
+  const command = { id: OPEN_BY_CLICK_COMMAND_ID, name: 'Open item', scope: 'record', steps: [{ gesture: 'click', target: matcher.pattern.opener }] };
+  const clicking = { ...pattern, matcher: { ...matcher, commands: { ...matcher.commands, [OPEN_BY_CLICK_COMMAND_ID]: command } } };
+  return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(listUrl).origin, label: `Open an item on ${listUrl}`, interactive: true }, async (lease) => {
+    const listed = await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl));
+    const inspection = await deps.host.inspect(lease.workerId, { patterns: [pattern], fingerprints: patternFingerprints([pattern]) });
+    const row = inspection.matches[pattern.id]?.records.find((record) => JSON.stringify(record.values) === JSON.stringify(values));
+    if (!row) throw new Error('That item wasn’t in the list when it was loaded again. Pick it again.');
+    const clicked = await deps.host.runCommand(lease.workerId, { pattern: clicking, commandId: OPEN_BY_CLICK_COMMAND_ID, recordRef: row.ref });
+    if (clicked.status !== 'executed') return null;
+    const deadline = deps.clock.now() + OPENED_BY_CLICK_MS;
+    for (;;) {
+      const at = await deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} });
+      if (at.url !== listed.url) return { url: at.url };
+      if (deps.clock.now() >= deadline) return null;
+      await deps.clock.sleep(250);
+    }
+  });
+}
+
 /**
  * Pattern builder "Test on another site": loads a URL in a worker of the
  * chosen profile and checks both scope and structural confidence there.

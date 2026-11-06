@@ -2,8 +2,10 @@
   margin: 0;
 }
 
+/* A run's line names its page, whose address may be long and unbroken. */
 .hvy-web-automation-status {
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
 .hvy-web-automation-actions {
@@ -63,11 +65,13 @@
   display: contents;
 }
 
+/* A page's cell breaks a long address anywhere, so its column, not the table, gives way. */
 .hvy-web-pages-cell {
   display: grid;
   align-content: center;
   gap: 0.15rem;
   min-width: 0;
+  overflow-wrap: anywhere;
   padding: 0.5rem 0.6rem;
   border-top: 1px solid var(--hvy-border, #c9c3b8);
 }
@@ -102,6 +106,11 @@
 
 .hvy-web-page-name {
   font-weight: 650;
+}
+
+/* A dialog's title may be a page's address, long and unbroken: it wraps, so the dialog keeps its width. */
+.hvy-web-dialog-title {
+  overflow-wrap: anywhere;
 }
 
 .hvy-web-dialog-body {

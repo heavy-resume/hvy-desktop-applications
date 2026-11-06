@@ -4,7 +4,7 @@ import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nativeWindowTheme } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
-import { state, workspaceRelativeFilePath } from './state';
+import { siteSetupFields, state, workspaceRelativeFilePath } from './state';
 import { handlers, clearArchivedHomepageDocument, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
@@ -21,7 +21,7 @@ import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
 import { installDevWebAutomationHost } from './webAutomation/devHost';
-import { installSiteSetup, itemPicked } from './siteSetupSession';
+import { installSiteSetup, itemPicked, wrongItemPage } from './siteSetupSession';
 import type { InspectorRecord } from './webAutomation/nativeHost';
 import { PAGINATION_COMMAND_NAMES } from './mainHandlersSettings';
 import { installBackgroundActivity } from './backgroundActivity';
@@ -120,6 +120,27 @@ export async function boot(): Promise<void> {
       if (handleWebCapabilityIntegrationResult(result)) return;
       // An answer to a request that already ended (timed out, stopped, or its window closed) has no one left to go to.
       if (browserResultRequestId(result)) return;
+      // Saved examples the page found as it added content, after its live examples check: each found replaces "No live fit",
+      // or a weaker fit, while the record type they belong to is still being edited.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-live-examples') {
+        const update = result as { context?: { actionId?: unknown }; records?: unknown[] };
+        if (!state.integrationActionBuilderOpen || !update.context?.actionId || update.context.actionId !== state.integrationActionDraftActionId) return;
+        const score = (record: unknown) => (record && typeof record === 'object' && typeof (record as { score?: unknown }).score === 'number' ? (record as { score: number }).score : -1);
+        const found = update.records ?? [];
+        const known = state.integrationActionLiveExampleRecords;
+        state.integrationActionLiveExampleRecords = Array.from({ length: Math.max(found.length, known.length) }, (_, index) => (score(found[index]) > score(known[index]) ? found[index] : known[index] ?? null));
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      // Picking cancelled in the page (Escape while picking a box, or the toolbar's cancel): nothing was picked, and Galaxy
+      // stops waiting for it.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-inspection-cancelled') {
+        state.integrationActionSelectionPending = false;
+        state.integrationCommandSelectionPending = false;
+        state.status = 'Selection cancelled';
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-scope-selection-request') {
         handlers.limitIntegrationActionToSection();
         return;
@@ -179,10 +200,15 @@ export async function boot(): Promise<void> {
         rerender({ preserveMountedDocument: true });
         return;
       }
-      // A site setup's example item: the row picked on the list, to open as a run does.
+      // A site setup's example item: what opens it, clicked in a row of the list, to open as a run does.
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-record-choice') {
-        const { record } = result as { record?: InspectorRecord };
-        if (record) itemPicked(record);
+        const { record, opener } = result as { record?: InspectorRecord; opener?: { snapshot: unknown; href: string | null } };
+        if (record && opener) itemPicked(record, opener);
+        return;
+      }
+      // Wrong page, picking the fields of a site setup's item just opened from the list: back to the list.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-wrong-page') {
+        wrongItemPage();
         return;
       }
       // Undo last with no fields picked: the box just picked is taken back, and the page picks a box again.
@@ -212,11 +238,14 @@ export async function boot(): Promise<void> {
         }
         const parentIndex = state.integrationActionTargetSelectionParentIndex;
         items.forEach((item) => {
-          // A field the record type already has, picked in another example: this example's of it, not a new field.
+          // A field the record type already has, picked in another example: this example's of it, not a new field (a site
+          // setup's example added with the fields read wrongly picked again; the rest keep what it suggested).
           const named = (item as { fieldId?: unknown }).fieldId;
-          const existingField = derivedParent && typeof named === 'string' ? state.integrationActionTargetLabels.indexOf(named) : -1;
+          const existingField = typeof named === 'string' && named ? state.integrationActionTargetLabels.indexOf(named) : -1;
           if (existingField >= 0) {
             state.integrationActionTargetVariants[existingField][parentIndex] = item;
+            state.integrationActionTargetNegativeVariants[existingField][parentIndex] = null;
+            state.integrationActionTargetAbsentExamples[existingField][parentIndex] = false;
             return;
           }
           state.integrationActionExamples.push(item);
@@ -317,7 +346,7 @@ export async function boot(): Promise<void> {
             rerender({ preserveMountedDocument: true });
             const parentSnapshot = state.integrationActionAnchors[parentIndex];
             const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
-            await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot });
+            await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot, prompt: state.status });
             return;
           }
         }
@@ -332,14 +361,24 @@ export async function boot(): Promise<void> {
       rerender({ preserveMountedDocument: true });
       if (collectInitialFields) {
         const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
-        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true, undoParent: true, ...(state.siteSetup ? { prompt: state.siteSetup.prompts?.fields, fieldChoices: state.siteSetup.fields } : {}) });
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true, undoParent: true, ...(state.siteSetup ? { prompt: state.siteSetup.prompts?.fields, fieldChoices: siteSetupFields() } : {}) });
         return;
       }
       if (collectExistingFields) {
         const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
+        // A site setup's example: what it suggested for each field stays, and only the fields read wrongly or missed are
+        // picked again, each assigned its field, then Done.
+        if (siteSetupFields()) {
+          state.integrationActionTargetSelectionFieldIndex = null;
+          state.status = 'Pick the fields read wrongly in this example, then Done';
+          rerender({ preserveMountedDocument: true });
+          await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true, prompt: 'Pick any field read wrongly or missed here, then Done', fieldChoices: siteSetupFields() });
+          return;
+        }
+        // Elsewhere each field is picked in turn, named on the page as here.
         state.status = `Select ${state.integrationActionTargetLabels[0] || 'field 1'} in this example`;
         rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result });
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, prompt: state.status });
         return;
       }
       await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);

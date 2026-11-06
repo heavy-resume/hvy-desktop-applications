@@ -39,6 +39,7 @@ export function atsCompany(company: string, displayName: string, pages: MockJob[
       challenge: index === 0 ? options.challenge : undefined,
       restoresOnBack: options.restoresOnBack,
       ...(index < pages.length - 1 ? { nextPage: `/${company}/jobs?page=${index + 2}` } : {}),
+      opens: Object.fromEntries(jobs.map((item) => [`${company}-${item.slug}`, `/${company}/jobs/${item.slug}`])),
       matches: {
         'ats-listing': {
           confidence: 0.93,

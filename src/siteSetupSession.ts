@@ -1,12 +1,11 @@
 import { controlIntegrationBrowser } from './integrationBrowser';
-import { actionPatternPayload, createCustomPageIntegration, onIntegrationRegistrySaved, saveIntegrationRegistry, type IntegrationDefinition } from './integrationRegistry';
+import { actionPatternPayload, createCustomPageIntegration, matcherSnapshot, onIntegrationRegistrySaved, saveIntegrationRegistry, type IntegrationDefinition } from './integrationRegistry';
 import { handlers, rerender } from './main';
 import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
 import { setSiteSetupOpener, type SiteSetupRequest } from './webAutomation/siteSetupOpener';
-import { openListedItem, openProfilePage } from './webAutomation/app';
-import { itemLink } from './webAutomation/collection';
+import { openListedItem, openListedItemByClick, openProfilePage } from './webAutomation/app';
 import { recordValues, type InspectorRecord } from './webAutomation/nativeHost';
 
 /**
@@ -22,7 +21,22 @@ import { recordValues, type InspectorRecord } from './webAutomation/nativeHost';
  * A session sets up one site: its list page (the address it is set up on) and, once the list's rows are picked, one
  * item's own page. `integrationIds` keeps every page the session has had, so one it drops takes its patterns along.
  */
-let active: { request: SiteSetupRequest; integrationIds: Set<string>; listId: string; itemId: string | null } | null = null;
+let active: {
+  request: SiteSetupRequest;
+  integrationIds: Set<string>;
+  listId: string;
+  itemId: string | null;
+  /** The item page opened from the list just now, while its fields are picked: what Wrong page takes back. */
+  openedItem: OpenedItem | null;
+  /** The list's items open without a link (their page's script opens them), which runs can't follow yet. */
+  openerWithoutLink: boolean;
+} | null = null;
+
+/** What opening an item from the list added: its page to the item page's record type, or (`pageId` null) the item page itself. */
+interface OpenedItem {
+  integrationId: string;
+  pageId: string | null;
+}
 
 const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
@@ -49,7 +63,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
     : { ...createCustomPageIntegration(`${item} list`, request.url), siteSetup: true as const };
   const itemPage = existing.find((integration) => integration.id !== list.id) ?? null;
   for (const integration of [list, ...(itemPage ? [itemPage] : [])]) addToRegistry(integration);
-  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null };
+  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, openerWithoutLink: false };
   state.siteSetup = {
     collectionName: request.collection.name,
     documentName: state.document?.source.name ?? '',
@@ -60,6 +74,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
     itemIntegrationId: itemPage?.id ?? null,
     fields: request.collection.fields.map((field) => ({ id: field.id, label: field.label })),
     prompts: null,
+    offerWrongPage: false,
     pending: null,
     error: null,
   };
@@ -73,9 +88,9 @@ function startSiteSetup(request: SiteSetupRequest): void {
  * item's record type (so its setup reads that address too), and its fields are picked, as the first example's were.
  * The examples picked before are kept. A setup with no item page yet starts it here.
  */
-function addItemExample(url: string): void {
+function addItemExample(url: string): OpenedItem | null {
   const session = active;
-  if (!session || !state.siteSetup) return;
+  if (!session || !state.siteSetup) return null;
   const name = itemName(session.request);
   const itemPage = sessionIntegration(session.itemId);
   const posting = itemPage?.actions[0];
@@ -83,17 +98,19 @@ function addItemExample(url: string): void {
     setItemPage(createCustomPageIntegration(`${capitalized(name)} page`, url));
     const started = sessionIntegration(session.itemId);
     if (started) buildRecordType(started, `${capitalized(name)} page`, pagePrompts(name));
-    return;
+    return started ? { integrationId: started.id, pageId: null } : null;
   }
   const page = itemPage.pages.find((candidate) => candidate.url === url)
     ?? { ...createCustomPageIntegration(`${capitalized(name)} page`, url).pages[0], id: `${itemPage.id}-page-${crypto.randomUUID()}` };
-  if (!itemPage.pages.includes(page)) {
+  const added = !itemPage.pages.includes(page);
+  if (added) {
     itemPage.pages = [...itemPage.pages, page];
     saveIntegrationRegistry(state.integrationRegistry);
   }
   state.selectedIntegrationId = itemPage.id;
   state.siteSetup.prompts = pagePrompts(name);
   handlers.editIntegrationAction(itemPage.id, posting.id, { pageId: page.id });
+  return added ? { integrationId: itemPage.id, pageId: page.id } : null;
 }
 
 /**
@@ -104,7 +121,7 @@ function addItemExample(url: string): void {
 function rowPrompts(item: string): { box: string | null; fields: string } {
   return {
     box: `Pick the box around one ${item} in the list, with everything you want from it inside.`,
-    fields: `Pick what to read from this ${item} (its title gives the link to it)`,
+    fields: `Pick what to read from this ${item}`,
   };
 }
 
@@ -147,33 +164,55 @@ function pickExampleItem(session: NonNullable<typeof active>): void {
   state.siteSetup.error = null;
   void handlers.inspectIntegrationPage(list.id, list.pages[0].id, 'parent', {
     existingPattern: pattern,
-    prompt: `Pick a ${name} from the list`,
-    recordChoice: { refuse: `Pick one of the ${name}s boxed in green.` },
+    prompt: `Click what opens a ${name}`,
+    recordChoice: { refuse: `Click what opens one of the ${name}s boxed in green.` },
   });
 }
 
+/** Runs read a list's items by following each row's link, so a list whose items open without one gives them nothing. */
+function openerWithoutLinkNote(name: string): string {
+  return `Runs can't open ${name}s on this site yet: its ${name}s open without a link.`;
+}
+
 /**
- * The row picked: its item opened as a run opens it, in a worker (the list page, then the row's link, read as a run
- * reads a row), and its fields picked where that ended up: the page runs will read. The first one is the setup's
- * item page; each after it is one more example of it.
+ * What opens an item, clicked in one of the list's rows: kept as the list's `opener` (found in every row, its link is
+ * the row's), and the item opened as a run opens it, in a worker: the list page, then the opener's link followed from
+ * it, or, with no link (its page's script opens it), the opener clicked. Its fields are picked where that ended up,
+ * the page runs will read, with Wrong page to take it back. Opening nothing is a pick to make again. The first item is
+ * the setup's item page; each after it is one more example of it.
  */
-export function itemPicked(record: InspectorRecord): void {
+export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown; href: string | null }): void {
   const session = active;
   const list = session ? sessionIntegration(session.listId) : null;
-  const listing = session ? sessionPatterns(session).find((pattern) => pattern.role === 'listing') : null;
-  if (!session || !list || !listing || !state.siteSetup) return;
+  const rows = list?.actions[0];
+  if (!session || !list || !rows?.pattern || !state.siteSetup) return;
   const name = itemName(session.request);
-  const link = itemLink(listing, recordValues(record), list.pages[0].url);
-  if (!link) {
-    state.siteSetup.error = `That ${name}'s row has no link to open it by. Pick its title (the link to it) as one of the rows' fields.`;
-    rerender({ preserveMountedDocument: true });
-    return;
-  }
+  const listUrl = list.pages[0].url;
+  rows.pattern = { ...rows.pattern, opener: matcherSnapshot(opener.snapshot) };
+  saveIntegrationRegistry(state.integrationRegistry);
+  const listing = sessionPatterns(session).find((pattern) => pattern.role === 'listing');
+  if (!listing) return;
+  session.openerWithoutLink = !opener.href;
+  state.siteSetup.error = null;
   state.siteSetup.pending = `Opening the ${name} as a run does…`;
   rerender({ preserveMountedDocument: true });
-  void openListedItem(state.selectedIntegrationProfileId, list.pages[0].url, link).then(({ url }) => {
-    if (state.siteSetup) state.siteSetup.pending = null;
-    addItemExample(url);
+  const opening = opener.href
+    ? openListedItem(state.selectedIntegrationProfileId, listUrl, new URL(opener.href, listUrl).href)
+    : openListedItemByClick(state.selectedIntegrationProfileId, listUrl, listing, recordValues(record));
+  void opening.then((opened) => {
+    if (!state.siteSetup) return;
+    state.siteSetup.pending = null;
+    if (!opened) {
+      session.openerWithoutLink = false;
+      pickExampleItem(session);
+      state.siteSetup.error = `That didn't open a ${name}. Click what opens one.`;
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
+    state.siteSetup.offerWrongPage = true;
+    session.openedItem = addItemExample(opened.url);
+    if (session.openerWithoutLink) state.siteSetup.error = openerWithoutLinkNote(name);
+    rerender({ preserveMountedDocument: true });
   }, (error: unknown) => {
     if (state.siteSetup) {
       state.siteSetup.pending = null;
@@ -181,6 +220,31 @@ export function itemPicked(record: InspectorRecord): void {
     }
     rerender({ preserveMountedDocument: true });
   });
+}
+
+/**
+ * Wrong page, picking the fields of an item just opened from the list: what opening it added is taken back (its page,
+ * or the item page it started), and the list is back to click what opens an item again.
+ */
+export function wrongItemPage(): void {
+  const session = active;
+  const opened = session?.openedItem;
+  if (!session || !state.siteSetup) return;
+  session.openedItem = null;
+  state.integrationActionSelectionPending = false;
+  state.integrationActionBuilderOpen = false;
+  if (opened?.pageId) {
+    const itemPage = sessionIntegration(opened.integrationId);
+    if (itemPage) itemPage.pages = itemPage.pages.filter((page) => page.id !== opened.pageId);
+  } else if (opened) {
+    session.integrationIds.delete(opened.integrationId);
+    session.itemId = null;
+    state.siteSetup.itemIntegrationId = null;
+    state.integrationRegistry = { ...state.integrationRegistry, integrations: state.integrationRegistry.integrations.filter((integration) => integration.id !== opened.integrationId) };
+  }
+  saveIntegrationRegistry(state.integrationRegistry);
+  pickExampleItem(session);
+  rerender({ preserveMountedDocument: true });
 }
 
 /** The session's item page, replacing any earlier one (its patterns go with it). */
@@ -222,7 +286,10 @@ export function runSiteSetupStep(step: SiteSetupStep): void {
 /** After each save in the session, what the block would refuse, shown before Done. */
 function checkSiteSetup(): void {
   if (!active || !state.siteSetup) return;
-  const errors = active.request.check(sessionPatterns(active));
+  const errors = [
+    ...active.request.check(sessionPatterns(active)),
+    ...(active.openerWithoutLink ? [openerWithoutLinkNote(itemName(active.request))] : []),
+  ];
   state.siteSetup.error = errors.length ? errors.join(' ') : null;
 }
 

@@ -167,6 +167,11 @@ export interface IntegrationActionPatternDefinition {
   scope?: unknown;
   parents: unknown[];
   fields: IntegrationActionFieldDefinition[];
+  /**
+   * A list's rows: what opens a row's item, where it is in the row (an inspector snapshot), picked by clicking it. Its
+   * link is the item's; not a field, so it may be one too (the title).
+   */
+  opener?: unknown;
 }
 
 export interface IntegrationDefinition {
@@ -276,11 +281,12 @@ export function matcherSnapshot(value: unknown): unknown {
   };
 }
 
-export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; scope?: unknown; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[]; exampleSnapshots: Array<unknown | null> }> } | null {
+export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; scope?: unknown; opener?: unknown; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[]; exampleSnapshots: Array<unknown | null> }> } | null {
   if (!action.pattern) return null;
   return {
     minimumConfidence: action.pattern.minimumConfidence ?? 0.85,
     ...(action.pattern.scope ? { scope: action.pattern.scope } : {}),
+    ...(action.pattern.opener ? { opener: action.pattern.opener } : {}),
     parents: action.pattern.parents,
     targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [], exampleSnapshots: field.exampleSnapshots ?? [] })),
   };

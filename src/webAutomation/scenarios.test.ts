@@ -15,6 +15,7 @@ import { createMockFlow, DOCUMENT_PATH, EVALUATE_QUEUE, mockQueueBlocks, type Mo
 import { ignoredProfileContexts } from './profileContexts';
 import { SESSION_CHECK_TIMEOUT_MS } from './session';
 import { readSiteSetupText, siteSetupText } from './siteSetups';
+import type { SitePatternDefinition } from './sitePatterns';
 import {
   ATS_ORIGIN,
   atsDetailPattern,
@@ -438,6 +439,21 @@ describe('mock integration: job search flow', () => {
     expect(opened.url).toBe(link);
     const loads = flow!.print().split('\n').filter((line) => line.includes(' → '));
     expect(loads.slice(-2).map((line) => line.split(' → ')[1])).toEqual([expect.stringContaining('/acme/jobs'), expect.stringContaining('/acme/jobs/eng-2')]);
+  });
+
+  it('19d. setup opens a row whose opener has no link by clicking it in the row; a click that goes nowhere in 3 seconds opened nothing', async () => {
+    const opener = { selected: { shape: 'card' } };
+    const withOpener = (pattern: SitePatternDefinition) => ({ ...pattern, matcher: { pattern: { opener }, commands: {} } });
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    const opened = await flow!.openListedItemByClick(ACME, withOpener(atsListingPattern), { title: 'Platform Engineer', link: '/acme/jobs/eng-2?utm_source=board' });
+    expect(opened).toEqual({ url: `${ATS_ORIGIN}/acme/jobs/eng-2` });
+    expect(flow!.print()).toContain('click open-item-by-click on acme-eng-2');
+
+    // A side-pane board's click shows the item beside the list: the address stays, so it opened nothing.
+    const startedAt = flow!.clock.now();
+    expect(await flow!.openListedItemByClick(`${SIDE_PANE_ORIGIN}/search`, withOpener(sidePaneListingPattern), { title: 'ML Engineer', link: '/view/2' })).toBeNull();
+    expect(flow!.clock.now() - startedAt).toBeGreaterThanOrEqual(3_000);
   });
 
   it('19b. an item its site setup didn\'t read is listed with that setup, to add it there as another example', async () => {
