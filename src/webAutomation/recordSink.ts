@@ -46,6 +46,7 @@ export interface RecordSink extends RecordConsumer {
   /** Lets a collection run skip pages whose records would be ignored anyway. */
   isKnown(key: string): boolean;
   fieldsOf(key: string): Record<string, unknown> | null;
+  provenanceOf(key: string): CollectedRecordProvenance | null;
   onRecord(record: CollectedRecord): RecordSinkOutcome;
 }
 
@@ -57,10 +58,16 @@ export function createRecordSink(store: DocumentItemStore, config: RecordSinkCon
   return {
     isKnown: (key) => config.onExisting === 'keep' && store.get(key)?.state === 'ok',
     fieldsOf: (key) => store.get(key)?.fields ?? null,
+    provenanceOf: (key) => store.get(key)?.provenance ?? null,
     onRecord: (record) => {
       const existing = store.get(record.key);
       // What a list shows of an item already in the document changes nothing: its own page, read or tried, says more.
-      if (existing && record.state === 'listed') return 'kept';
+      // Except where it came from, when its record doesn't say (its page tried before records kept it): the setup whose
+      // list shows it, so reading it again reads it with that setup.
+      if (existing && record.state === 'listed') {
+        if (!existing.provenance.siteId && record.provenance.siteId) store.put({ ...existing, provenance: { ...existing.provenance, siteId: record.provenance.siteId } });
+        return 'kept';
+      }
       if (existing && existing.state === 'ok' && (config.onExisting === 'keep' || (record.state !== 'ok' && config.keepGoodOnFailure))) {
         return 'kept';
       }

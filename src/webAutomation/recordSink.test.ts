@@ -20,6 +20,19 @@ describe('record sink', () => {
     expect(store.get('b')).toMatchObject({ state: 'ok', fields: { title: 'B' } });
   });
 
+  it('keeps an item a list shows again as it is, but for the site setup it came from, when its record doesn\'t say', () => {
+    const store = createMemoryItemStore();
+    const sink = createRecordSink(store);
+    sink.onRecord(record('a', { title: 'A' }, 'no_pattern'));
+    const listed = { ...record('a', { title: 'Listed' }, 'listed'), provenance: { sourceUrl: 'a', collectedAt: 2, patternId: 'list', siteId: 'board' } };
+    expect(sink.onRecord(listed)).toBe('kept');
+    expect(store.get('a')).toMatchObject({ state: 'no_pattern', fields: { title: 'A' }, provenance: { collectedAt: 1, siteId: 'board' } });
+    expect(sink.provenanceOf('a')).toMatchObject({ siteId: 'board' });
+    // One that says already keeps it.
+    sink.onRecord({ ...listed, provenance: { ...listed.provenance, siteId: 'other' } });
+    expect(store.get('a')?.provenance.siteId).toBe('board');
+  });
+
   it('refresh: rewrites only owned fields, so other glue keeps its fields', () => {
     const store = createMemoryItemStore();
     const sink = createRecordSink(store, { onExisting: 'refresh', keepGoodOnFailure: true, ownedFields: ['title', 'body'] });

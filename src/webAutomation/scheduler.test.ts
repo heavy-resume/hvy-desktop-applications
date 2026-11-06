@@ -87,6 +87,27 @@ describe('worker scheduler', () => {
     expect(new Set(gaps).size).toBeGreaterThan(1);
   });
 
+  it('loads at once what the user just asked for, still counted as the site\'s last load', async () => {
+    const { clock, scheduler, log } = setup();
+    const times: number[] = [];
+    const done = scheduler.run({ profileId: 'p1', kind: 'collection', label: 'setup', interactive: true }, async (lease) => {
+      for (let index = 0; index < 2; index += 1) {
+        await lease.paced('https://same.test/page', async () => {
+          times.push(clock.now());
+        }, { delay: false });
+      }
+      // A load after them waits the delay since the last of them.
+      await lease.paced('https://same.test/page', async () => {
+        times.push(clock.now());
+      });
+    });
+    await clock.runUntil(() => times.length === 3);
+    await done;
+    expect(times[1] - times[0]).toBe(0);
+    expect(times[2] - times[1]).toBeGreaterThanOrEqual(1_500);
+    expect(log.filter((line) => line.startsWith('delay '))).toHaveLength(1);
+  });
+
   it('scales the delays for development, and says how long each would be at full pacing', async () => {
     const { clock, scheduler, log } = setup({ delayScale: 0.25 });
     const times: number[] = [];

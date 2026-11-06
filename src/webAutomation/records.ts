@@ -16,6 +16,11 @@ export interface CollectedRecordProvenance {
   collectedAt: number;
   /** The pattern that read it: its page's, or, listed, its list's. Absent when nothing matched. */
   patternId?: string;
+  /**
+   * The site setup it came from: the one whose list showed it, or whose pattern read it. Kept when its page can't be
+   * read, so reading it again (`extract`) reads it with that setup.
+   */
+  siteId?: string;
 }
 
 export interface CollectedRecord {

@@ -122,9 +122,10 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
     back: (workerId) => call('back', { workerId }),
 
     async inspect(workerId, request): Promise<PageInspection> {
+      // An item's own page has one record: found, reading stops, rather than scrolling the rest of the page for more.
       const patterns = request.patterns.flatMap((pattern) => {
         const matcher = matcherOf(pattern);
-        return matcher ? [{ id: pattern.id, matcher: matcher.pattern }] : [];
+        return matcher ? [{ id: pattern.id, matcher: { ...matcher.pattern, ...(pattern.role === 'detail' ? { recordLimit: 1 } : {}) } }] : [];
       });
       const raw = await call<RawInspection>('inspect', { workerId, request: { patterns } });
       return {

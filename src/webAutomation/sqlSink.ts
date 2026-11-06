@@ -56,6 +56,7 @@ export function createSqlRecordConsumer(
     }),
     isKnown: (key) => policy.onExisting === 'keep' && states.get(key) === 'ok',
     fieldsOf: (key) => use((db) => createSqlItemStore(db, config).get(key)?.fields ?? null),
+    provenanceOf: (key) => use((db) => createSqlItemStore(db, config).get(key)?.provenance ?? null),
     // Asked after the item's listed record is written, and in turn behind it.
     readsPage: (key) => use((db) => !skipsPage(db, config, key)),
     onRecord: (record) => {

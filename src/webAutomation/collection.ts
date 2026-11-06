@@ -8,10 +8,11 @@ import {
   recordKey,
   validateRecord,
   type CollectedRecord,
+  type CollectedRecordProvenance,
   type CollectedRecordState,
   type RecordKeyStrategy,
 } from './records';
-import { patternFingerprints, resolveSitePattern, urlMatchesRule, type SitePatternDefinition } from './sitePatterns';
+import { hostMatches, patternFingerprints, resolveSitePattern, urlMatchesRule, type SitePatternDefinition } from './sitePatterns';
 
 /**
  * Receives a run's records. Runs never store anything; a record sink, a
@@ -23,6 +24,8 @@ export interface RecordConsumer {
   isKnown?(key: string): boolean;
   /** What it holds of an item already (its fields), for an item read again without them (`extract`): kept, as its list's are. */
   fieldsOf?(key: string): Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
+  /** Where an item it holds came from (its record's provenance), for an item read again (`extract`). */
+  provenanceOf?(key: string): CollectedRecordProvenance | null | Promise<CollectedRecordProvenance | null>;
   /**
    * Whether a run reads the page of an item it has just written as listed: false leaves it listed, its page read only
    * when asked for (`extract`). Read unless it says.
@@ -230,8 +233,9 @@ export async function openListedItem(
   link: string,
 ): Promise<{ url: string }> {
   return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(listUrl).origin, label: `Open ${link}`, interactive: true }, async (lease) => {
-    await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl));
-    await lease.paced(link, () => deps.host.navigate(lease.workerId, link));
+    // Opened because the user just picked it, as their own click would: without the delay between a run's loads.
+    await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl), { delay: false });
+    await lease.paced(link, () => deps.host.navigate(lease.workerId, link), { delay: false });
     const opened = await deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} });
     return { url: opened.url };
   });
@@ -257,7 +261,7 @@ export async function openListedItemByClick(
   const command = { id: OPEN_BY_CLICK_COMMAND_ID, name: 'Open item', scope: 'record', steps: [{ gesture: 'click', target: matcher.pattern.opener }] };
   const clicking = { ...pattern, matcher: { ...matcher, commands: { ...matcher.commands, [OPEN_BY_CLICK_COMMAND_ID]: command } } };
   return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(listUrl).origin, label: `Open an item on ${listUrl}`, interactive: true }, async (lease) => {
-    const listed = await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl));
+    const listed = await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl), { delay: false });
     const inspection = await deps.host.inspect(lease.workerId, { patterns: [pattern], fingerprints: patternFingerprints([pattern]) });
     const row = inspection.matches[pattern.id]?.records.find((record) => JSON.stringify(record.values) === JSON.stringify(values));
     if (!row) throw new Error('That item wasn’t in the list when it was loaded again. Pick it again.');
@@ -366,6 +370,11 @@ export class CollectionService {
         for (const item of siteItems) {
           const key = this.keyFor(run, item.url, item.values ?? {});
           const listed = item.values ?? (key ? await run.consumer.fieldsOf?.(key) : null) ?? null;
+          // Read with the site setup it came from, as its record says (or the pattern that listed or read it, in a record
+          // written before records kept the setup), when not given one.
+          const provenance = !run.itemSites.has(item.url) && key ? await run.consumer.provenanceOf?.(key) : null;
+          const siteId = provenance?.siteId ?? run.definition.patterns.find((pattern) => pattern.id === provenance?.patternId)?.siteId;
+          if (siteId) run.itemSites.set(item.url, siteId);
           // An item its list showed came from a list, where a run may follow links to other sites.
           this.assertAllowed(run, item.url, listed !== null);
           // Its turn come (after the pause between pages), the consumer is told as its page opens.
@@ -721,11 +730,23 @@ export class CollectionService {
    * Resolves the pattern for a role. A frame rule match opens the iframe's
    * src on its own (first version; in-frame extraction comes later).
    */
-  private async resolveRole(run: ActiveRun, lease: WorkerLease, inspection: PageInspection, role: SitePatternDefinition['role']): Promise<
+  private async resolveRole(run: ActiveRun, lease: WorkerLease, inspection: PageInspection, role: SitePatternDefinition['role'], siteId?: string): Promise<
     | { kind: 'match'; pattern: SitePatternDefinition; match: PatternMatch; inspection: PageInspection }
     | { kind: 'ambiguous'; names: string[]; inspection: PageInspection }
     | { kind: 'none'; inspection: PageInspection }
   > {
+    // A page reached from a site setup's list (or read again, its record saying which setup) is read with that setup's
+    // pattern, whatever its address: address rules are for pages no setup is known for. One it doesn't fit is resolved
+    // by its address, as those are.
+    const own = siteId ? run.definition.patterns.filter((pattern) => pattern.role === role && pattern.siteId === siteId) : [];
+    if (own.length) {
+      const uninspected = own.filter((pattern) => !(pattern.id in inspection.matches));
+      const page = uninspected.length
+        ? { ...inspection, matches: { ...inspection.matches, ...(await this.stoppable(run, this.deps.host.inspect(lease.workerId, { patterns: uninspected, fingerprints: {} }))).matches } }
+        : inspection;
+      const matched = own.map((pattern) => this.matchPattern(page, pattern)).find(Boolean);
+      if (matched) return { kind: 'match', pattern: matched.pattern, match: matched.match, inspection: page };
+    }
     const resolution = resolveSitePattern(run.definition.patterns, role, inspection);
     if (resolution.kind === 'ambiguous') return { kind: 'ambiguous', names: resolution.candidates.map((pattern) => pattern.name), inspection };
     if (resolution.kind === 'none') return { kind: 'none', inspection };
@@ -751,9 +772,14 @@ export class CollectionService {
       .map((field) => [field.id, values[field.id]]));
   }
 
-  /** Whether a site setup reads this address for a role: one of its patterns' page rules covers it. */
-  private covers(run: ActiveRun, url: string, role: SitePatternDefinition['role']): boolean {
-    return run.definition.patterns.some((pattern) => pattern.role === role && pattern.appliesTo.some((rule) => rule.target === 'page' && urlMatchesRule(rule, url)));
+  /**
+   * Whether a site setup reads this address for a role: one of its patterns' page rules covers it, or, for a page of a
+   * known setup, that setup has a pattern for the role on the page's site (its host).
+   */
+  private covers(run: ActiveRun, url: string, role: SitePatternDefinition['role'], siteId?: string): boolean {
+    const host = new URL(url).hostname;
+    return run.definition.patterns.some((pattern) => pattern.role === role && pattern.appliesTo.some((rule) => rule.target === 'page'
+      && (urlMatchesRule(rule, url) || (siteId !== undefined && pattern.siteId === siteId && hostMatches(rule.host, host)))));
   }
 
   /**
@@ -762,11 +788,11 @@ export class CollectionService {
    * deal with. The run waits with Needs attention (Show, Resume), then looks again once; a page that still does not
    * match (the site changed) is reported as before.
    */
-  private async resolveExpected(run: ActiveRun, lease: WorkerLease, inspection: PageInspection, role: SitePatternDefinition['role']): ReturnType<CollectionService['resolveRole']> {
-    const resolved = await this.resolveRole(run, lease, inspection, role);
-    if (resolved.kind !== 'none' || !this.covers(run, resolved.inspection.url, role)) return resolved;
+  private async resolveExpected(run: ActiveRun, lease: WorkerLease, inspection: PageInspection, role: SitePatternDefinition['role'], siteId?: string): ReturnType<CollectionService['resolveRole']> {
+    const resolved = await this.resolveRole(run, lease, inspection, role, siteId);
+    if (resolved.kind !== 'none' || !this.covers(run, resolved.inspection.url, role, siteId)) return resolved;
     await this.waitForAttention(run, lease.workerId, resolved.inspection.url, 'unexpected-page');
-    return this.resolveRole(run, lease, await this.inspectAt(run, lease), role);
+    return this.resolveRole(run, lease, await this.inspectAt(run, lease), role, siteId);
   }
 
   /**
@@ -776,7 +802,7 @@ export class CollectionService {
    */
   private async writeDetail(run: ActiveRun, lease: WorkerLease, url: string, inspection: PageInspection, listingValues: Record<string, unknown>, startPageProblem?: (problem: string) => void): Promise<void> {
     const report = (problem: string) => (startPageProblem ? startPageProblem(problem) : this.writeProblem(run, url, listingValues, problem));
-    const resolved = await this.resolveExpected(run, lease, inspection, 'detail');
+    const resolved = await this.resolveExpected(run, lease, inspection, 'detail', run.itemSites.get(url));
     if (resolved.kind === 'ambiguous') {
       report(`Several patterns could apply: ${resolved.names.join(', ')}.`);
       return;
@@ -806,19 +832,19 @@ export class CollectionService {
 
   private emitRecord(run: ActiveRun, url: string, values: Record<string, unknown>, state: CollectedRecordState, patternId: string | undefined, problem: string | undefined): void {
     const key = this.keyFor(run, url, values);
+    const siteId = run.itemSites.get(url) ?? run.definition.patterns.find((pattern) => pattern.id === patternId)?.siteId;
     const record: CollectedRecord = {
       // A record whose key fields are missing is still reported, keyed by its URL and marked invalid.
       key: key ?? canonicalUrl(url, run.definition.ignoredQueryParameters),
       url,
       values: { ...values, url },
-      provenance: { sourceUrl: url, collectedAt: this.deps.clock.now(), ...(patternId ? { patternId } : {}) },
+      provenance: { sourceUrl: url, collectedAt: this.deps.clock.now(), ...(patternId ? { patternId } : {}), ...(siteId ? { siteId } : {}) },
       state: key || state !== 'ok' ? state : 'invalid',
       ...(problem ? { problem } : key || state !== 'ok' ? {} : { problem: 'The record has no value for its key.' }),
     };
     if (record.state === 'ok') run.state.collected += 1;
     else if (record.state !== 'listed') {
       run.state.problems += 1;
-      const siteId = run.itemSites.get(url);
       run.state.problemPages.push({ kind: 'item', url, title: typeof values.title === 'string' && values.title ? values.title : null, problem: record.problem ?? '', ...(siteId ? { siteId } : {}), values });
     }
     this.deps.emit('collection', `record ${record.state}${patternId ? ` (${patternId})` : ''} ${record.key}`);

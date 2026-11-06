@@ -267,6 +267,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
         },
         isKnown: sink.isKnown,
         fieldsOf: sink.fieldsOf,
+        provenanceOf: sink.provenanceOf,
         reading: (key) => automation.itemReading(capabilityId, key),
       };
     },

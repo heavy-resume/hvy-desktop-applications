@@ -39,9 +39,11 @@ export interface WorkerLease {
   /**
    * Loads something from the URL's site (a navigation, or a command that loads the next page): waits for the site's
    * turn, so loads there never overlap however many workers are on it, then a random delay since the last load there
-   * finished, then runs `load`.
+   * finished, then runs `load`. `delay: false` skips the random delay (not the turn): a load the user asked for just
+   * now, as a person's click would be, such as site setup opening the item picked. It still counts as the site's last
+   * load, so the next load there waits after it.
    */
-  paced<T>(url: string, load: () => Promise<T>): Promise<T>;
+  paced<T>(url: string, load: () => Promise<T>, options?: { delay?: false }): Promise<T>;
 }
 
 export interface SchedulerState {
@@ -137,7 +139,7 @@ export class WorkerScheduler {
     return {
       workerId: record.id,
       profileId: record.profileId,
-      paced: async (url, load) => {
+      paced: async (url, load, options) => {
         const key = `${record.profileId}\0${new URL(url).origin}`;
         // The site's turn comes after whatever load is there now.
         const previous = this.siteTurns.get(key) ?? Promise.resolve();
@@ -148,7 +150,7 @@ export class WorkerScheduler {
         this.siteTurns.set(key, turn);
         await previous;
         const last = this.lastLoad.get(key);
-        if (last !== undefined) {
+        if (last !== undefined && options?.delay !== false) {
           const { min, max } = this.options.navigationDelayMs;
           const scale = this.options.navigationDelayScale;
           const full = randomBetween(this.options.random, min, max);

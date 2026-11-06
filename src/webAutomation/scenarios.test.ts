@@ -456,6 +456,29 @@ describe('mock integration: job search flow', () => {
     expect(flow!.clock.now() - startedAt).toBeGreaterThanOrEqual(3_000);
   });
 
+  it('19e. an item a site setup\'s list shows is read with that setup\'s item page, whatever its address, and so is one read again by itself', async () => {
+    // The item page's address rules cover only the one item it was set up on: as a board whose job addresses each have
+    // their own folder (/job/<title>/<id>), where an item page's folder is one job's.
+    const narrow: SitePatternDefinition = { ...atsDetailPattern, siteId: 'acme-ats', appliesTo: [{ target: 'page', host: 'boards.mock-ats.test', path: '/acme/jobs/eng-1' }] };
+    const listing: SitePatternDefinition = { ...atsListingPattern, siteId: 'acme-ats' };
+    const boards = listingCollection([ACME], { patterns: [] });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, { id: 'acme-ats', name: 'Mock ATS', patterns: [listing, narrow] });
+    const run = await flow!.collect(setup);
+    expect(run).toMatchObject({ status: 'done', problems: 0 });
+    expect(flow!.item(`${ATS_ORIGIN}/acme/jobs/eng-2?utm_source=board`)).toMatchObject({ state: 'ok', provenance: { patternId: 'ats-detail', siteId: 'acme-ats' }, fields: { title: 'Platform Engineer', company: 'Acme' } });
+
+    // Listed only, then read by itself (as a document's "Visit and read job"), given no setup: its record says which.
+    const listedOnly = { ...setup, readItemPages: false as const };
+    await signedInFlow(listedOnly);
+    flow!.addSiteSetups(listedOnly, { id: 'acme-ats', name: 'Mock ATS', patterns: [listing, narrow] });
+    await flow!.collect(listedOnly);
+    const listed = `${ATS_ORIGIN}/acme/jobs/eng-3?utm_source=board`;
+    expect(flow!.item(listed)).toMatchObject({ state: 'listed', provenance: { patternId: 'ats-listing', siteId: 'acme-ats' } });
+    expect(await flow!.extract(listedOnly, listed)).toMatchObject({ status: 'done', problems: 0 });
+    expect(flow!.item(listed)).toMatchObject({ state: 'ok', provenance: { siteId: 'acme-ats' }, fields: { title: 'Frontend Engineer' } });
+  });
+
   it('19b. an item its site setup didn\'t read is listed with that setup, to add it there as another example', async () => {
     const boards = listingCollection([ACME], { patterns: [] });
     await signedInFlow(boards);
