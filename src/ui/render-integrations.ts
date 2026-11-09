@@ -96,7 +96,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
       <div class="site-setup-step-body">
         <h3 class="site-setup-step-title">${escapeHtml(title)}${optional ? ' <small class="site-setup-step-optional">Optional</small>' : ''}</h3>
         <p class="site-setup-step-text">${body}</p>
-        ${status ? `<p class="site-setup-step-status">${status}</p>` : ''}
+        ${status ? `<div class="site-setup-step-status">${status}</div>` : ''}
         <div class="site-setup-step-actions">${actions}</div>
       </div>
     </li>`;
@@ -124,7 +124,25 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
   const itemStep = step(4, `Pick an example ${item}`, Boolean(posting), false,
     `Pick one of the ${escapeHtml(item)}s in the list. Galaxy opens it as a run does, then you pick what to read from it, such as its description and title. Pick another to add an example of a ${escapeHtml(item)} page laid out differently.`,
     posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : '',
-    button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows));
+    `${posting ? button('Edit examples', 'item-examples') : ''}${button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows)}`);
+  // Two of the list's items found, then read, as a run would with this setup: what each would hold, field by field.
+  const test = setup.test;
+  const preview = (value: string) => (value.length > 160 ? `${escapeHtml(value.slice(0, 160))}… <small>(${value.length.toLocaleString()} characters)</small>` : escapeHtml(value));
+  const testResults = test?.results
+    ? `<ul class="site-setup-test-results">${test.results.map((result) => `
+        <li class="site-setup-test-result">
+          <strong class="site-setup-test-title">${escapeHtml(result.title)}</strong>
+          ${result.problem ? `<span class="site-setup-test-problem">${escapeHtml(result.problem)}</span>` : ''}
+          <dl class="site-setup-test-fields">${result.fields.map((field) => `<dt class="site-setup-test-label">${escapeHtml(field.label)}</dt><dd class="site-setup-test-value${field.value ? '' : ' site-setup-test-empty'}">${field.value ? preview(field.value) : 'Empty'}</dd>`).join('')}</dl>
+        </li>`).join('')}</ul>`
+    : test?.items.length
+      ? `<ul class="site-setup-test-results">${test.items.map((found) => `<li class="site-setup-test-result"><strong class="site-setup-test-title">${escapeHtml(found.title)}</strong></li>`).join('')}</ul>`
+      : '';
+  const tested = Boolean(test?.results?.length && test.results.every((result) => !result.problem));
+  const testStep = step(5, 'Test', tested, false,
+    `Find 2 ${escapeHtml(item)}s on the list, then read their pages as a run does, to check each field gets what you expect.`,
+    `${test?.pending ? `<span class="site-setup-test-pending" role="status">${escapeHtml(test.pending)}</span>` : ''}${test?.problem ? `<span class="site-setup-test-problem">${escapeHtml(test.problem)}</span>` : ''}${testResults}`,
+    `${button(`Find ${item}s`, 'test-find', false, !rows || !posting || Boolean(test?.pending))}${button('Read them', 'test-read', Boolean(test?.items.length && !test.results), !test?.items.length || Boolean(test?.pending))}`);
   const profiles = state.integrationRegistry.profiles;
   return `
     <div class="modal-backdrop" role="presentation">
@@ -135,7 +153,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         </div>
         ${setup.pending ? `<p class="site-setup-pending" role="status">${escapeHtml(setup.pending)}</p>` : ''}
         ${setup.error ? `<p class="integration-fetch-error" role="alert">${escapeHtml(setup.error)}</p>` : ''}
-        <ol class="site-setup-steps">${openStep}${rowsStep}${nextStep}${itemStep}</ol>
+        <ol class="site-setup-steps">${openStep}${rowsStep}${nextStep}${itemStep}${testStep}</ol>
         <div class="dialog-actions site-setup-footer"><label class="integration-profile-select site-setup-profile"><span>Browser profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Browser profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button" data-action="close-integrations">Cancel</button>${button('Done', 'done', Boolean(rows && posting), !rows)}</div>
       </section>
     </div>`;

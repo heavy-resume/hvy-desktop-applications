@@ -880,6 +880,53 @@
   font-weight: 600;
 }
 
+.site-setup-test-results {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-weight: 400;
+}
+
+.site-setup-test-result {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--hvy-border, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+}
+
+.site-setup-test-title {
+  overflow-wrap: anywhere;
+}
+
+.site-setup-test-problem {
+  color: var(--hvy-danger, #c0392b);
+  font-weight: 600;
+}
+
+.site-setup-test-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.site-setup-test-label {
+  font-weight: 600;
+}
+
+.site-setup-test-value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-setup-test-value.site-setup-test-empty {
+  color: var(--hvy-danger, #c0392b);
+  font-style: italic;
+}
+
 .site-setup-step-actions {
   display: flex;
   flex-wrap: wrap;

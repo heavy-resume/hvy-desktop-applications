@@ -321,7 +321,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       target.classList.toggle('is-active', required);
       target.setAttribute('aria-pressed', String(required));
     }
-    if (action === 'add-integration-action-anchor') handlers.addIntegrationActionAnchor();
+    if (action === 'add-integration-action-anchor') handlers.addIntegrationActionExample();
     if (action === 'limit-integration-action-to-section') handlers.limitIntegrationActionToSection();
     if (action === 'remove-integration-action-scope') handlers.removeIntegrationActionScope();
     if (action === 'test-integration-action-pattern') handlers.testIntegrationActionPattern();

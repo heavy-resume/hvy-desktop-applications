@@ -192,7 +192,11 @@ export interface CollectionRunState {
   listedItems: ExtractItem[];
   /** Each start page's progress, by start page id. */
   startPages: Record<string, StartPageProgress>;
-  attention: { workerId: string; url: string; reason: string } | null;
+  /**
+   * The page waiting for the user. An item's page that doesn't look as its site setup expects names that setup
+   * (`siteId`), so it can be added to it as another example.
+   */
+  attention: { workerId: string; url: string; reason: string; siteId?: string } | null;
   error: string | null;
 }
 
@@ -313,6 +317,8 @@ interface ActiveRun {
   definition: CollectionDefinition;
   controller: AbortController;
   resumeAttention: (() => void) | null;
+  /** The user let the page waiting for them go (`skip`): it is reported, not looked at again. */
+  skipAttention: boolean;
   /** The user opened the waiting page in its own window: the worker loads it again on Resume, to see what they did. */
   reloadAfterAttention: boolean;
   /** The page waiting for the user now, and those waiting behind it: a run asks about one page at a time. */
@@ -320,6 +326,15 @@ interface ActiveRun {
   consumer: RecordConsumer;
   /** Each item's site setup (its list's), for its problem. */
   itemSites: Map<string, string>;
+  /** An `extract` run's items not opened yet, and those whose page is open and being read: each item's key by its URL. */
+  waiting: Map<string, string>;
+  reading: Map<string, string>;
+}
+
+/** The items a collection's runs are reading on their own pages (`extract`), by key: still to open, and open now. */
+export interface ItemsInProgress {
+  waiting: string[];
+  reading: string[];
 }
 
 type ListingResolution = { pattern: SitePatternDefinition; match: PatternMatch } | null;
@@ -333,6 +348,8 @@ export class CollectionService {
     host: BrowserHost;
     clock: Clock;
     emit: AutomationEmit;
+    /** Runs no one is watching (a site setup's Test): a page that needs the user is reported, not waited on. */
+    unattended?: boolean;
   }) {}
 
   getState(): CollectionRunState[] {
@@ -363,6 +380,8 @@ export class CollectionService {
       const origin = new URL(item.url).origin;
       sites.set(origin, [...(sites.get(origin) ?? []), item]);
       if (item.siteId) run.itemSites.set(item.url, item.siteId);
+      const key = this.keyFor(run, item.url, item.values ?? {});
+      if (key) run.waiting.set(item.url, key);
     }
     const done = this.withConsumer(run, () => Promise.allSettled([...sites].map(([origin, siteItems]) => this.deps.scheduler.run(
       { profileId, kind: 'collection', origin, label: `${definition.name}: ${siteItems.length === 1 ? siteItems[0].url : `${siteItems.length} pages on ${new URL(origin).host}`}`, interactive: items.length === 1, signal: run.controller.signal },
@@ -379,10 +398,18 @@ export class CollectionService {
           this.assertAllowed(run, item.url, listed !== null);
           // Its turn come (after the pause between pages), the consumer is told as its page opens.
           await this.paced(run, lease, item.url, () => {
-            if (key) run.consumer.reading?.(key);
+            run.waiting.delete(item.url);
+            if (key) {
+              run.reading.set(item.url, key);
+              run.consumer.reading?.(key);
+            }
             return this.deps.host.navigate(lease.workerId, item.url);
           });
-          await this.writeDetail(run, lease, item.url, await this.inspectAt(run, lease), listed ?? {});
+          try {
+            await this.writeDetail(run, lease, item.url, await this.inspectAt(run, lease), listed ?? {});
+          } finally {
+            run.reading.delete(item.url);
+          }
         }
       },
     )))).then((results) => this.finish(run, results));
@@ -423,8 +450,28 @@ export class CollectionService {
     await this.deps.host.openUserWindow(run.state.profileId, attention.url);
   }
 
+  /** What the collection's runs are reading on items' own pages now (`extract`), by key. */
+  inProgress(capabilityId: string): ItemsInProgress {
+    const runs = [...this.runs.values()].filter((run) => run.definition.capabilityId === capabilityId);
+    return {
+      waiting: runs.flatMap((run) => [...run.waiting.values()]),
+      reading: runs.flatMap((run) => [...run.reading.values()]),
+    };
+  }
+
   resume(runId: string): void {
     this.runs.get(runId)?.resumeAttention?.();
+  }
+
+  /**
+   * Lets the page waiting for the user go without looking at it again: it is reported as the run's problem (an item's
+   * page with its site setup, to be added as an example and retried), and the run carries on.
+   */
+  skip(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run?.resumeAttention) return;
+    run.skipAttention = true;
+    run.resumeAttention();
   }
 
   stop(runId: string): void {
@@ -440,10 +487,13 @@ export class CollectionService {
       definition,
       controller: new AbortController(),
       resumeAttention: null,
+      skipAttention: false,
       reloadAfterAttention: false,
       attentionTurn: Promise.resolve(),
       consumer,
       itemSites: new Map(),
+      waiting: new Map(),
+      reading: new Map(),
       state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, listed: 0, leftUnread: 0, problems: 0, startPageProblems: {}, problemPages: [], listedItems: [], startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
@@ -452,6 +502,9 @@ export class CollectionService {
   }
 
   private finish(run: ActiveRun, results: PromiseSettledResult<unknown>[]): CollectionRunState {
+    // Items a stopped or failed run never reached are no longer coming.
+    run.waiting.clear();
+    run.reading.clear();
     const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     // A start page still waiting for a worker when the run ended never started.
     for (const progress of Object.values(run.state.startPages)) if (progress.status === 'waiting') progress.status = 'stopped';
@@ -685,11 +738,17 @@ export class CollectionService {
         fingerprints: patternFingerprints(patterns),
       }));
       if (inspection.ready) return inspection;
-      await this.waitForAttention(run, lease.workerId, inspection.url, inspection.attention ?? 'page-not-ready');
+      // Let go, the page is read as it is: what it doesn't show is its problem.
+      if (!await this.waitForAttention(run, lease.workerId, inspection.url, inspection.attention ?? 'page-not-ready')) return inspection;
     }
   }
 
-  private async waitForAttention(run: ActiveRun, workerId: string, url: string, reason: string): Promise<void> {
+  /** Waits for the user to deal with a page; false when they let it go (`skip`) rather than resumed. */
+  private async waitForAttention(run: ActiveRun, workerId: string, url: string, reason: string, siteId?: string): Promise<boolean> {
+    if (this.deps.unattended) {
+      this.deps.emit('collection', `${run.state.runId} let ${url} go: ${reason}, with no one to ask`);
+      return false;
+    }
     // Several pages of a run can need the user at once (two workers on a site that challenges both): the run asks
     // about one, and the next asks once the user dealt with it.
     const previous = run.attentionTurn;
@@ -701,7 +760,7 @@ export class CollectionService {
     try {
       this.checkStopped(run);
       run.state.status = 'needs-attention';
-      run.state.attention = { workerId, url, reason };
+      run.state.attention = { workerId, url, reason, ...(siteId ? { siteId } : {}) };
       this.deps.emit('collection', `${run.state.runId} needs attention: ${reason} at ${url}`);
       await new Promise<void>((resolve) => {
         run.resumeAttention = resolve;
@@ -711,11 +770,18 @@ export class CollectionService {
       run.state.status = 'running';
       await this.deps.host.hideWorker(workerId);
       this.checkStopped(run);
+      if (run.skipAttention) {
+        run.skipAttention = false;
+        run.reloadAfterAttention = false;
+        this.deps.emit('collection', `${run.state.runId} let ${url} go`);
+        return false;
+      }
       if (run.reloadAfterAttention) {
         run.reloadAfterAttention = false;
         await this.stoppable(run, this.deps.host.navigate(workerId, url));
       }
       this.deps.emit('collection', `${run.state.runId} resumed`);
+      return true;
     } finally {
       dealtWith();
     }
@@ -791,7 +857,8 @@ export class CollectionService {
   private async resolveExpected(run: ActiveRun, lease: WorkerLease, inspection: PageInspection, role: SitePatternDefinition['role'], siteId?: string): ReturnType<CollectionService['resolveRole']> {
     const resolved = await this.resolveRole(run, lease, inspection, role, siteId);
     if (resolved.kind !== 'none' || !this.covers(run, resolved.inspection.url, role, siteId)) return resolved;
-    await this.waitForAttention(run, lease.workerId, resolved.inspection.url, 'unexpected-page');
+    // An item's page names its site setup, to be added to it as another example.
+    if (!await this.waitForAttention(run, lease.workerId, resolved.inspection.url, 'unexpected-page', role === 'detail' ? siteId : undefined)) return resolved;
     return this.resolveRole(run, lease, await this.inspectAt(run, lease), role, siteId);
   }
 
@@ -814,7 +881,8 @@ export class CollectionService {
       else this.writeRecord(run, url, values, resolved.pattern.id);
       return;
     }
-    report(`No site setup reads this page (${new URL(url).host}).`);
+    const siteId = run.itemSites.get(url);
+    report(this.covers(run, url, 'detail', siteId) ? 'It didn’t look as its site setup expects.' : `No site setup reads this page (${new URL(url).host}).`);
   }
 
   private keyFor(run: ActiveRun, url: string, values: Record<string, unknown>): string | null {
@@ -831,6 +899,8 @@ export class CollectionService {
   }
 
   private emitRecord(run: ActiveRun, url: string, values: Record<string, unknown>, state: CollectedRecordState, patternId: string | undefined, problem: string | undefined): void {
+    // Its record written, the item's page is read: the consumer may already ask what is in progress.
+    run.reading.delete(url);
     const key = this.keyFor(run, url, values);
     const siteId = run.itemSites.get(url) ?? run.definition.patterns.find((pattern) => pattern.id === patternId)?.siteId;
     const record: CollectedRecord = {

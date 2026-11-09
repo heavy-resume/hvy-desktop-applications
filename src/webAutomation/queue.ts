@@ -292,7 +292,7 @@ export class DurableQueue {
   private deliver(entry: QueueEntry): void {
     if (!this.handler || !FINISHED.includes(entry.status)) return;
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
-    this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}`);
+    this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}${entry.status === 'failed' ? ` (${entry.lastError ?? 'Failed.'})` : ''}`);
     const base = { key: entry.key, context: entry.context ?? null };
     this.handler(entry.status === 'done'
       ? { ...base, status: 'done', result: entry.result }

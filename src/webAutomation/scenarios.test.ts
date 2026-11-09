@@ -218,6 +218,22 @@ describe('mock integration: job search flow', () => {
     expect(resumed).toMatchObject({ status: 'done', collected: 2, problems: 0, attention: null });
   });
 
+  it('5a. an item\'s page that only looks different, let go to add it as an example: reported with its site setup, and the run carries on', async () => {
+    const boards = listingCollection([`${ATS_ORIGIN}/wonka/jobs`], { patterns: [] });
+    await signedInFlow(boards);
+    const siteId = 'wonka-ats';
+    const setup = flow!.addSiteSetups(boards, { id: siteId, name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId }, { ...atsDetailPattern, siteId }] });
+    const paused = await flow!.collect(setup);
+    expect(paused).toMatchObject({ status: 'needs-attention', attention: { reason: 'unexpected-page', siteId } });
+    const url = paused.attention!.url;
+    // UI: "Add as example": the run reports the page without loading it again, and goes on to the next, which asks too.
+    const next = await flow!.skipAttention(paused.runId);
+    expect(next).toMatchObject({ status: 'needs-attention', problems: 1, attention: { reason: 'unexpected-page', siteId } });
+    expect(next.attention!.url).not.toBe(url);
+    expect(next.problemPages).toEqual([expect.objectContaining({ kind: 'item', url, siteId, problem: 'It didn’t look as its site setup expects.' })]);
+    expect(await flow!.skipAttention(paused.runId)).toMatchObject({ status: 'done', problems: 2, attention: null });
+  });
+
   it('5b. start pages: one left out of collecting all is skipped, and still collects on its own', async () => {
     const globex = `${ATS_ORIGIN}/globex/jobs`;
     const base = listingCollection([ACME, globex]);
@@ -439,6 +455,28 @@ describe('mock integration: job search flow', () => {
     expect(opened.url).toBe(link);
     const loads = flow!.print().split('\n').filter((line) => line.includes(' → '));
     expect(loads.slice(-2).map((line) => line.split(' → ')[1])).toEqual([expect.stringContaining('/acme/jobs'), expect.stringContaining('/acme/jobs/eng-2')]);
+  });
+
+  it('19f. setup Test: finds two of the list\'s items and reads their pages as a run would, keeping nothing; a page that needs a person is reported, not waited on', async () => {
+    const boards = listingCollection([ACME], { patterns: [] });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, { id: 'acme-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'acme-ats' }, { ...atsDetailPattern, siteId: 'acme-ats' }] });
+    const found = await flow!.listSetupExamples(setup, ACME, 2);
+    expect(found.items).toHaveLength(2);
+    expect(found.items.every((item) => item.url.startsWith(`${ATS_ORIGIN}/acme/jobs/`) && typeof item.values?.title === 'string')).toBe(true);
+    const read = await flow!.readSetupExamples(setup, found.items);
+    expect(read.records.map((record) => record.url)).toEqual(found.items.map((item) => item.url));
+    expect(read.records.every((record) => record.state === 'ok' && record.values.company === 'Acme' && record.values.title)).toBe(true);
+    // Nothing went into the collection's output.
+    expect(flow!.items.list()).toEqual([]);
+
+    // Wonka's job pages want a sign-in first: with no one to ask, each is reported as its setup didn't expect.
+    const wonka = `${ATS_ORIGIN}/wonka/jobs`;
+    const wonkaSetup = flow!.addSiteSetups(listingCollection([wonka], { patterns: [] }), { id: 'wonka-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'wonka-ats' }, { ...atsDetailPattern, siteId: 'wonka-ats' }] });
+    const wonkaItems = (await flow!.listSetupExamples(wonkaSetup, wonka, 2)).items;
+    const unread = await flow!.readSetupExamples(wonkaSetup, wonkaItems);
+    expect(unread.run).toMatchObject({ status: 'done', problems: 2 });
+    expect(unread.records.map((record) => record.problem)).toEqual(['It didn’t look as its site setup expects.', 'It didn’t look as its site setup expects.']);
   });
 
   it('19d. setup opens a row whose opener has no link by clicking it in the row; a click that goes nowhere in 3 seconds opened nothing', async () => {
@@ -1165,6 +1203,25 @@ describe('mock integration: job search flow', () => {
     expect(await retried.done).toMatchObject({ status: 'done', collected: failed.problemPages.length, problems: 0 });
     expect(flow!.items.list().every((item) => item.state === 'ok' && item.fields.company === 'Acme')).toBe(true);
   });
+  it('48b. what is being read on items\' own pages is Galaxy\'s: one open, the rest waiting; nothing once the run ends', async () => {
+    const boards = listingCollection([`${ATS_ORIGIN}/wonka/jobs`], { patterns: [], readItemPages: false });
+    await signedInFlow(boards);
+    const siteId = 'wonka-ats';
+    const setup = flow!.addSiteSetups(boards, { id: siteId, name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId }, { ...atsDetailPattern, siteId }] });
+    const listed = await flow!.collect(setup);
+    expect(listed.listedItems).toHaveLength(2);
+    expect(flow!.inProgress(setup.capabilityId)).toEqual({ waiting: [], reading: [] });
+    // Its pages read (Wonka's ask a person first): the first is open, waiting for them, and the second waits its turn.
+    const run = flow!.automation.extractItems(setup, listed.listedItems, createRecordSink(flow!.items, DEFAULT_RECORD_SINK_CONFIG));
+    await flow!.settle();
+    const keys = listed.listedItems.map((item) => flow!.items.list().find((record) => record.url === item.url)!.key);
+    expect(flow!.inProgress(setup.capabilityId)).toEqual({ waiting: [keys[1]], reading: [keys[0]] });
+    // Stopped, nothing is read any more.
+    flow!.automation.stopCollection(run.runId);
+    await run.done;
+    expect(flow!.inProgress(setup.capabilityId)).toEqual({ waiting: [], reading: [] });
+  });
+
   it('49. pages the output says to leave unread: those items stay listed, counted apart, and are read when asked for', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);

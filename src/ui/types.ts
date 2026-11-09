@@ -113,6 +113,7 @@ export interface UiHandlers {
   changeIntegrationActionRange(parentIndex: number, fieldIndex: number, boundary: 'start' | 'end'): void;
   /** With `openPage`, opening the record type's page first, and picking once it has loaded. */
   addIntegrationActionAnchor(open?: { openPage?: boolean }): void;
+  addIntegrationActionExample(): void;
   limitIntegrationActionToSection(): void;
   removeIntegrationActionScope(): void;
   testIntegrationActionPattern(): void;

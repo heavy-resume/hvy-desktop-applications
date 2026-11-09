@@ -1104,7 +1104,7 @@ export function readDocumentModePreference(path: string): HvyMode | null {
   }
 }
 export function writeDocumentModePreference(path: string, mode: HvyMode): void {
-  if (!path) return;
+  if (!path || state.recent.documentModes?.[path] === mode) return;
   state.recent = {
     ...state.recent,
     documentModes: { ...(state.recent.documentModes ?? {}), [path]: mode },

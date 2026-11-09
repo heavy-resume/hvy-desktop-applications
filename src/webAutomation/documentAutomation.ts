@@ -6,6 +6,7 @@ import { createScriptingPluginsApi } from '../../../heavy-file-format/src/plugin
 import type { HvyPlugin, HvyPluginFactory } from '../../../heavy-file-format/src/plugins/types';
 import { getActiveStateRuntime, runWithStateRuntime, type StateRuntime } from '../../../heavy-file-format/src/state';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
+import type { VisualBlock } from '../../../heavy-file-format/src/editor/types';
 import { createCliItemStore } from './cliItemStore';
 import { QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
 import { readWebAutomationBlocks } from './documentBlocks';
@@ -168,8 +169,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       const { webApis, collections } = readWebAutomationBlocks(document);
       const block = webApis.find(({ config }) => config.capabilityId === capabilityId)?.block
         ?? collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.block;
-      const context = block ? profileContextFor(document, block) : null;
-      return context ? contextProfileName(context) : documentProfileName(document.meta);
+      return profileNameIn(document, block ? profileContextFor(document, block) : null);
     },
     linkOwner: (url) => {
       const origin = new URL(url).origin;
@@ -329,3 +329,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
 }
 
 export type DocumentAutomation = ReturnType<typeof openDocumentAutomation>;
+
+/** The profile a block uses, by name: its web profile context's, or the file's outside one. */
+export function profileNameIn(document: VisualDocument, context: VisualBlock | null): string | null {
+  return context ? contextProfileName(context) : documentProfileName(document.meta);
+}

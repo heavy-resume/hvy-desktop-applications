@@ -200,13 +200,17 @@ export class WorkerScheduler {
     }
     const limits = this.options.collectionLimits();
     const site = request.origin ? `${request.profileId}\0${request.origin}` : null;
-    if (site && (this.siteWorkers.get(site) ?? 0) >= limits.perSite) return null;
+    // What the user just asked for doesn't wait behind runs for the site's or Settings' worker limits: a run holds its
+    // site's worker for every page it reads there. It still takes its turn among the site's loads, and stays within
+    // the profile's own cap.
+    const interactive = Boolean(request.interactive);
+    if (!interactive && site && (this.siteWorkers.get(site) ?? 0) >= limits.perSite) return null;
     const idle = this.workers.find((worker) => worker.profileId === request.profileId && worker.kind === 'collection' && !worker.busy);
     if (idle) return this.claim(idle, request, site);
     const collectionWorkers = this.workers.filter((worker) => worker.kind === 'collection');
     const profileWorkers = collectionWorkers.filter((worker) => worker.profileId === request.profileId);
     if (profileWorkers.length >= this.options.maxCollectionWorkersPerProfile) return null;
-    if (collectionWorkers.length >= limits.total) return null;
+    if (!interactive && collectionWorkers.length >= limits.total) return null;
     return this.claim(this.create(request.profileId, 'collection'), request, site);
   }
 

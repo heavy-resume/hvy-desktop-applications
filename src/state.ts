@@ -256,6 +256,17 @@ export interface AppState {
     /** Work in progress, such as finding an item on the list. */
     pending: string | null;
     error: string | null;
+    /**
+     * Test: the items found on the list (by title), then what reading their pages gave each, field by field; or why
+     * nothing was found or read. Cleared when the setup changes.
+     */
+    test: {
+      /** Finding or reading now, said in the step. */
+      pending: string | null;
+      items: Array<{ url: string; title: string }>;
+      results: Array<{ url: string; title: string; fields: Array<{ label: string; value: string }>; problem: string | null }> | null;
+      problem: string | null;
+    } | null;
   } | null;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;

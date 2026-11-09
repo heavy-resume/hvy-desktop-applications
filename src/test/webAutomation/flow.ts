@@ -5,7 +5,7 @@ import type { VisualBlock } from '../../../../heavy-file-format/src/editor/types
 import { createCliItemStore, type CliItemStoreConfig } from '../../webAutomation/cliItemStore';
 import { createMemoryItemStore, createRecordSink, DEFAULT_RECORD_SINK_CONFIG, updateItemFields, type DocumentItem, type RecordSinkConfig } from '../../webAutomation/recordSink';
 import { seededRandom } from '../../webAutomation/clock';
-import type { CollectionDefinition, CollectionRunState, RecordConsumer } from '../../webAutomation/collection';
+import type { CollectionDefinition, CollectionRunState, ExtractItem, RecordConsumer } from '../../webAutomation/collection';
 import { createWebAutomationRuntime, type WebAutomation, type WebAutomationRuntimeDeps } from '../../webAutomation/entryPoints';
 import { openDocumentAutomation, registerWebAutomationPlugins, type DocumentAutomation } from '../../webAutomation/documentAutomation';
 import { executeHvyCliCommandSync } from '../../../../heavy-file-format/src/cli-core';
@@ -345,6 +345,26 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       return result!;
     },
 
+    // UI: Set up this site, Test, "Find": the list's first items, as a run lists them with the setup.
+    async listSetupExamples(definition: CollectionDefinition, listUrl: string, count: number) {
+      let result: Awaited<ReturnType<typeof runtime.listSetupExamples>> | null = null;
+      void runtime.listSetupExamples(BOARDS_PROFILE, definition, listUrl, count).then((value) => {
+        result = value;
+      });
+      await clock.runUntil(() => result !== null);
+      return result!;
+    },
+
+    // UI: Set up this site, Test, "Read": those items' pages, read as a run reads them.
+    async readSetupExamples(definition: CollectionDefinition, items: ExtractItem[]) {
+      let result: Awaited<ReturnType<typeof runtime.readSetupExamples>> | null = null;
+      void runtime.readSetupExamples(BOARDS_PROFILE, definition, items).then((value) => {
+        result = value;
+      });
+      await clock.runUntil(() => result !== null);
+      return result!;
+    },
+
     async testPattern(pattern: SitePatternDefinition, url: string) {
       let result: Awaited<ReturnType<typeof runtime.testSitePattern>> | null = null;
       void runtime.testSitePattern(BOARDS_PROFILE, pattern, url).then((value) => {
@@ -393,6 +413,18 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     // UI: Needs attention window, "Resume".
     async resumeAttention(runId: string): Promise<CollectionRunState> {
       automation.resumeAttention(runId);
+      await settle();
+      return automation.getState().runs.find((candidate) => candidate.runId === runId)!;
+    },
+
+    // UI: scripting galaxy.web-collection "in_progress": the items a document shows as queued, or as being read.
+    inProgress(capabilityId: string) {
+      return automation.itemsInProgress(capabilityId);
+    },
+
+    // UI: Needs attention item, "Add as example": the page is let go before its site is set up.
+    async skipAttention(runId: string): Promise<CollectionRunState> {
+      automation.skipAttention(runId);
       await settle();
       return automation.getState().runs.find((candidate) => candidate.runId === runId)!;
     },

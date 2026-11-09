@@ -152,6 +152,11 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
         : [{ url: String(args.url ?? '') }];
       return operation(args, () => lookup.automation.extractItems(collection(lookup, args), items, consumer(lookup, args)).done);
     },
+    // The items the collection's runs are reading on their own pages now, by key: { waiting: [...], reading: [...] }.
+    in_progress: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return lookup.automation.itemsInProgress(collection(lookup, args).capabilityId);
+    },
     stop: (args, ctx) => {
       resolve(ctx).automation.stopCollection(String(args.runId ?? ''));
       return null;

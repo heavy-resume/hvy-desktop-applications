@@ -14,6 +14,9 @@ const DEFAULT_DEBUG_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
 let nextDebugLogId = 1;
 const debugLogEntries: DebugLogEntry[] = [];
+// Each entry's encoded size, alongside it, so the log's size is kept without stringifying all of it.
+const debugLogEntryBytes: number[] = [];
+let debugLogBytes = 0;
 let maxDebugLogBytes = DEFAULT_DEBUG_LOG_MAX_BYTES;
 
 export function configureDebugLog(options: { maxBytes?: number }): void {
@@ -80,26 +83,37 @@ export function getDebugLogEntries(): DebugLogEntry[] {
 
 export function clearDebugLogEntries(): void {
   debugLogEntries.length = 0;
+  debugLogEntryBytes.length = 0;
+  debugLogBytes = 0;
   emitDebugLogChanged();
 }
 
 function pushDebugLogEntry(entry: DebugLogEntry): void {
+  const bytes = new TextEncoder().encode(JSON.stringify(entry)).length;
   debugLogEntries.push(entry);
+  debugLogEntryBytes.push(bytes);
+  debugLogBytes += bytes;
   pruneDebugLogEntries();
   emitDebugLogChanged();
 }
 
 function pruneDebugLogEntries(): void {
   while (debugLogEntries.length > MAX_DEBUG_LOG_ENTRIES) {
-    debugLogEntries.shift();
+    dropOldestDebugLogEntry();
   }
   while (debugLogEntries.length > 1 && debugLogByteSize() > maxDebugLogBytes) {
-    debugLogEntries.shift();
+    dropOldestDebugLogEntry();
   }
 }
 
+function dropOldestDebugLogEntry(): void {
+  debugLogEntries.shift();
+  debugLogBytes -= debugLogEntryBytes.shift() ?? 0;
+}
+
+// The size of the log as JSON: its entries, a comma between each, and the brackets.
 function debugLogByteSize(): number {
-  return new TextEncoder().encode(JSON.stringify(debugLogEntries)).length;
+  return debugLogBytes + Math.max(debugLogEntries.length - 1, 0) + 2;
 }
 
 function emitDebugLogChanged(): void {

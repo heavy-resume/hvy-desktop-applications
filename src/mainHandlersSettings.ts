@@ -7,7 +7,7 @@ import { findFileInWorkspaces, siteSetupFields, state } from './state';
 import { applyAppColorTheme, handlers, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
-import { adoptIntoSiteSetup, endSiteSetup, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
+import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { BrowserRequestCancelledError, IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
@@ -1696,6 +1696,19 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       await startIntegrationActionInspection('target', { parentCssPath, parentSnapshot, multiSelect: false, rangeEdit: { boundary, snapshot } });
       state.status = `Select where the range ${boundary === 'end' ? 'ends' : 'starts'}`;
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  // The record type builder's Add example. A site setup's item page: another example is another item, picked from the
+  // list and opened as a run opens it, as Pick another does. What was changed here (an example removed) is saved first,
+  // so it isn't lost.
+  addIntegrationActionExample: () => {
+    if (!editingSetupItemPage()) {
+      handlers.addIntegrationActionAnchor();
+      return;
+    }
+    if (integrationActionDraftJson() !== state.integrationActionBuilderInitialJson) persistIntegrationAction();
+    else state.integrationActionBuilderOpen = false;
+    runSiteSetupStep('item-page');
+    rerender({ preserveMountedDocument: true });
   },
   addIntegrationActionAnchor: (open) => {
     const selectingFirstExample = state.integrationActionAnchors.length === 0;

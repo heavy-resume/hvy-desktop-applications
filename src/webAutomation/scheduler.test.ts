@@ -130,6 +130,18 @@ describe('worker scheduler', () => {
       expect(Number(full)).toBeCloseTo(Number(scaled) * 4, 0);
     }
   });
+  it('starts what the user just asked for at once, beyond the site\'s and Settings\' worker limits, within the profile\'s cap', async () => {
+    const clock = new VirtualClock();
+    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, maxCollectionWorkersPerProfile: 3, collectionLimits: () => ({ perSite: 1, total: 1 }) });
+    const job = (label: string, interactive = false) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label, interactive }, holdFor(clock, 10_000));
+    const jobs = [job('run'), job('next run'), job('retry', true), job('open', true), job('third', true)];
+    await clock.step(0);
+    expect(scheduler.getState().workers.filter((worker) => worker.busy).map((worker) => worker.label).sort()).toEqual(['open', 'retry', 'run']);
+    expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['next run', 'third']);
+    await clock.runUntil(() => scheduler.getState().waitingJobs.length === 0 && scheduler.getState().workers.every((worker) => !worker.busy));
+    await Promise.all(jobs);
+  });
+
   it('reads the collection limits as each job is placed, so a changed setting applies to the next job', async () => {
     const clock = new VirtualClock();
     let limits = { perSite: 1, total: 4 };

@@ -9,10 +9,12 @@ import {
   type CollectionDefinition,
   type CollectionRunState,
   type ExtractItem,
+  type ItemsInProgress,
   type RecordConsumer,
   type SitePatternTestResult,
 } from './collection';
 import type { SitePatternDefinition } from './sitePatterns';
+import type { CollectedRecord } from './records';
 import { WebAutomationError } from './errors';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { MAX_DOCUMENT_TEXT } from './servedDocuments';
@@ -92,6 +94,8 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
   });
   const documentQueues = new Map<string, DurableQueue>();
   const heardSessions = new Map<string, SessionStatus>();
+  // Site setup's Test: runs of a setup not saved yet, for no document, written nowhere.
+  const setupTests = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, unattended: true });
   return {
     deps,
     /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
@@ -138,6 +142,23 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
       return openListedItemByClick({ scheduler, host: deps.host, clock: deps.clock }, profileId, listUrl, pattern, values);
     },
 
+    // UI: Set up this site, Test, "Find": the first `count` items on the list page, as a run lists them with this setup.
+    // Only that page is read, and nothing is kept.
+    async listSetupExamples(profileId: string, definition: CollectionDefinition, listUrl: string, count: number): Promise<SetupTestRun & { items: ExtractItem[] }> {
+      const startPage = { id: 'setup-test', url: listUrl };
+      const trial: CollectionDefinition = { ...definition, startPages: [startPage], maxItems: count, maxPages: 1, readItemPages: false };
+      const run = await setupTests.start(trial, profileId, { onRecord: () => undefined }, [startPage]).done;
+      return { items: run.listedItems, run };
+    },
+
+    // UI: Set up this site, Test, "Read": those items' own pages, read as a run reads them with this setup: what each
+    // record would hold.
+    async readSetupExamples(profileId: string, definition: CollectionDefinition, items: ExtractItem[]): Promise<SetupTestRun & { records: CollectedRecord[] }> {
+      const records: CollectedRecord[] = [];
+      const run = await setupTests.extract(definition, profileId, items, { onRecord: (record) => records.push(record) }).done;
+      return { records, run };
+    },
+
     // UI: pattern builder and Site patterns manager, "Test on another site".
     testSitePattern(profileId: string, pattern: SitePatternDefinition, url: string): Promise<SitePatternTestResult> {
       return testSitePattern({ scheduler, host: deps.host }, profileId, pattern, url);
@@ -146,6 +167,11 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
 }
 
 export type WebAutomationRuntime = ReturnType<typeof createWebAutomationRuntime>;
+
+/** A site setup's Test run: how it ended (a page that needed the user, or couldn't be read, says why). */
+export interface SetupTestRun {
+  run: CollectionRunState;
+}
 
 /** Everything a UI renders. Plain JSON: no functions, no class instances. */
 export interface WebAutomationState {
@@ -189,7 +215,11 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
 
   /** The local profile the document's instance uses, as the document names it. Null until the user chooses one. */
   function profileOf(capabilityId: string): BrowserProfile | null {
-    return resolveProfile(deps.profileName(capabilityId), deps.profiles());
+    return profileNamed(deps.profileName(capabilityId));
+  }
+
+  function profileNamed(name: string | null): BrowserProfile | null {
+    return resolveProfile(name, deps.profiles());
   }
 
   function profileFor(capabilityId: string, name: string): string {
@@ -237,6 +267,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
 
     // UI: web plugin readers, the profile an instance uses ("Signed in · Personal"), or none yet.
     profileOf,
+    // UI: the profile a reader's block names, read from the block itself.
+    profileNamed,
 
     // UI: the browser profile dialog, once the choice is saved in the document: for the file ("this file") or for a web
     // profile context ("a web profile context"). Every web reader redraws in it (they redraw on events), and the log
@@ -246,8 +278,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: "Sign in" modal for a galaxy.web-api block: what the document does with your account, and what changed.
-    reviewWebApi(capability: WebApiCapability): AuthorizationReview {
-      return webApi.review(deps.documentPath(), capability, profileFor(capability.capabilityId, capability.name));
+    reviewWebApi(capability: WebApiCapability, profileId = profileFor(capability.capabilityId, capability.name)): AuthorizationReview {
+      return webApi.review(deps.documentPath(), capability, profileId);
     },
 
     // UI: "Web API - Allow [service]…" modal, "Allow", for a galaxy.web-api block; signing in follows if the profile is not signed in.
@@ -324,6 +356,12 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // A collection block's output wrote records (documentAutomation's sink).
     recordsWritten(capabilityId: string, keys: string[]): void {
       for (const [watcherKey, handler] of recordWatchers) if (watcherKey.startsWith(`${capabilityId}\0`)) handler({ keys, reading: null });
+    },
+
+    // UI: scripting doc.plugins.call("galaxy.web-collection", "in_progress", { capabilityId }): the items the collection's
+    // runs are reading on their own pages now, by key; what a document shows as queued or being read follows it.
+    itemsInProgress(capabilityId: string): ItemsInProgress {
+      return collections.inProgress(capabilityId);
     },
 
     // A collection block's run starts reading an item's page (`extract`), its record written after.
@@ -403,6 +441,11 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: Needs attention window, "Resume".
     resumeAttention(runId: string): void {
       collections.resume(runId);
+    },
+
+    // UI: Needs attention item, "Add as example": the page is let go, reported as a problem, while its site is set up.
+    skipAttention(runId: string): void {
+      collections.skip(runId);
     },
 
     // UI: galaxy.web-collection reader and Background activity, "Stop".

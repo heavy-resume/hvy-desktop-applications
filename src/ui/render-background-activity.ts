@@ -15,13 +15,18 @@ export interface BackgroundActivityLabel {
 
 export function backgroundActivityLabel(activity: BackgroundActivity | null): BackgroundActivityLabel | null {
   if (!activity) return null;
-  const busy = activity.workers.flatMap(({ label }) => (label ? [label] : []));
+  // A worker held on a page that needs the user waits for them; it is not working.
+  const busy = activity.workers.flatMap(({ label, needsYou }) => (label && !needsYou ? [label] : []));
   const queues = activity.documents.flatMap(({ queues: documentQueues }) => documentQueues);
-  const runs = activity.documents.flatMap(({ runs: documentRuns }) => documentRuns);
+  const allRuns = activity.documents.flatMap(({ runs: documentRuns }) => documentRuns);
+  const runs = allRuns.filter((run) => run.status === 'running');
+  const needingYou = allRuns.filter((run) => run.status === 'needs-attention');
   const queued = queues.reduce((total, queue) => total + queue.queued + queue.retrying, 0);
   const paused = queues.filter((queue) => queue.paused || queue.awaitingResume).length;
   const failed = queues.reduce((total, queue) => total + queue.failed, 0);
   const details = [
+    // Waiting on the user while other work goes on: said in full; the short label says Working.
+    needingYou.length && (busy.length || runs.length) ? `${plural(needingYou.length, 'run')} needing you` : '',
     activity.waitingJobs.length ? `${activity.waitingJobs.length} waiting` : '',
     queued ? `${queued} queued` : '',
     paused ? `${plural(paused, 'queue')} paused` : '',
@@ -30,9 +35,10 @@ export function backgroundActivityLabel(activity: BackgroundActivity | null): Ba
   const main = busy.length === 1 ? busy[0]
     : busy.length ? `${busy.length} running`
       : runs.length ? (runs.length === 1 ? `${runs[0].name}: collecting` : `${runs.length} collecting`)
-        : details.shift();
+        : needingYou.length ? (needingYou.length === 1 ? `${needingYou[0].name}: needs you` : `${needingYou.length} runs need you`)
+          : details.shift();
   if (!main) return null;
-  const short = busy.length || runs.length ? 'Working' : queued ? `${queued} queued` : paused ? 'Paused' : main;
+  const short = busy.length || runs.length ? 'Working' : needingYou.length ? 'Needs you' : queued ? `${queued} queued` : paused ? 'Paused' : main;
   return { short, full: `Background: ${main}${details.length ? ` (${details.join(', ')})` : ''}` };
 }
 
@@ -66,6 +72,9 @@ function runRow(path: string, run: BackgroundRunSummary): string {
     </li>`;
 }
 
+/** Whether a queue has work to pause: failed entries wait on nothing. */
+const hasWork = (queue: BackgroundQueueSummary) => queue.queued + queue.running + queue.retrying > 0;
+
 function queueRow(path: string, queue: BackgroundQueueSummary): string {
   const counts = [
     queue.running ? `${queue.running} running` : '',
@@ -74,12 +83,13 @@ function queueRow(path: string, queue: BackgroundQueueSummary): string {
     queue.failed ? `${queue.failed} failed` : '',
   ].filter(Boolean).join(', ');
   const paused = queue.awaitingResume ? 'waiting for Resume' : queue.paused ? `paused${queue.pauseReason ? ` (${queue.pauseReason.replaceAll('_', ' ')})` : ''}` : '';
-  const action = queue.paused || queue.awaitingResume ? 'resume' : 'pause';
+  const action = queue.paused || queue.awaitingResume ? 'resume' : hasWork(queue) ? 'pause' : null;
   return `
     <li class="background-activity-row">
       <span class="background-activity-row-text">${escapeHtml(queue.queueId)}: ${escapeHtml(counts)}${paused ? ` · ${escapeHtml(paused)}` : ''}</span>
-      <button class="hvy-galaxy-button" type="button" data-action="${action}-background-queue" data-path="${escapeAttr(path)}" data-queue-id="${escapeAttr(queue.queueId)}">${action === 'resume' ? 'Resume' : 'Pause'}</button>
-    </li>`;
+      ${action ? `<button class="hvy-galaxy-button" type="button" data-action="${action}-background-queue" data-path="${escapeAttr(path)}" data-queue-id="${escapeAttr(queue.queueId)}">${action === 'resume' ? 'Resume' : 'Pause'}</button>` : ''}
+    </li>${queue.failures.map(({ key, error }) => `
+    <li class="background-activity-failure"><span class="background-activity-failure-key">${escapeHtml(key)}</span> ${escapeHtml(error)}</li>`).join('')}`;
 }
 
 function time(at: number): string {
@@ -107,7 +117,7 @@ export function renderBackgroundActivityDialog(state: AppState): string {
     </li>`).join('');
   const withRuns = activity.documents.filter(({ runs }) => runs.length);
   const withQueues = activity.documents.filter(({ queues }) => queues.length);
-  const canPauseAll = withQueues.some(({ queues }) => queues.some((queue) => !queue.paused && !queue.awaitingResume));
+  const canPauseAll = withQueues.some(({ queues }) => queues.some((queue) => !queue.paused && !queue.awaitingResume && hasWork(queue)));
   const events = activity.events.map((event) => `
     <li class="background-activity-event">
       <time class="background-activity-event-time">${time(event.at)}</time>

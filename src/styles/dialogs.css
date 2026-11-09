@@ -1304,6 +1304,17 @@
   overflow-wrap: anywhere;
 }
 
+.background-activity-failure {
+  padding: 0 8px;
+  color: var(--hvy-danger, #b3261e);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.background-activity-failure-key {
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
 .background-activity-duplicate {
   margin-left: 6px;
   border-radius: 999px;

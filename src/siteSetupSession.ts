@@ -5,7 +5,9 @@ import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
 import { setSiteSetupOpener, type SiteSetupRequest } from './webAutomation/siteSetupOpener';
-import { openListedItem, openListedItemByClick, openProfilePage } from './webAutomation/app';
+import { listSetupExamples, openListedItem, openListedItemByClick, openProfilePage, readSetupExamples } from './webAutomation/app';
+import type { CollectionDefinition, CollectionRunState, ExtractItem } from './webAutomation/collection';
+import { withSiteSetups } from './webAutomation/siteSetups';
 import { recordValues, type InspectorRecord } from './webAutomation/nativeHost';
 
 /**
@@ -30,7 +32,12 @@ let active: {
   openedItem: OpenedItem | null;
   /** The list's items open without a link (their page's script opens them), which runs can't follow yet. */
   openerWithoutLink: boolean;
+  /** Test: the items found on the list, to read. */
+  testItems: ExtractItem[];
 } | null = null;
+
+/** How many of the list's items Test reads. */
+const TEST_ITEMS = 2;
 
 /** What opening an item from the list added: its page to the item page's record type, or (`pageId` null) the item page itself. */
 interface OpenedItem {
@@ -63,7 +70,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
     : { ...createCustomPageIntegration(`${item} list`, request.url), siteSetup: true as const };
   const itemPage = existing.find((integration) => integration.id !== list.id) ?? null;
   for (const integration of [list, ...(itemPage ? [itemPage] : [])]) addToRegistry(integration);
-  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, openerWithoutLink: false };
+  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, openerWithoutLink: false, testItems: [] };
   state.siteSetup = {
     collectionName: request.collection.name,
     documentName: state.document?.source.name ?? '',
@@ -77,6 +84,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
     offerWrongPage: false,
     pending: null,
     error: null,
+    test: null,
   };
   state.selectedIntegrationId = list.id;
   handlers.openIntegrations();
@@ -259,7 +267,76 @@ function sessionPatterns(session: NonNullable<typeof active>): SitePatternDefini
   return patternsFromSetup(session.request.site.id, integrations, session.listId);
 }
 
-export type SiteSetupStep = 'open-page' | 'rows' | 'pagination' | 'item-page' | 'done';
+/** The collection as it would be with this setup: what Test runs. */
+function sessionCollection(session: NonNullable<typeof active>): CollectionDefinition {
+  const { collection, site } = session.request;
+  return { ...collection, ...withSiteSetups(collection, [{ ...site, patterns: sessionPatterns(session) }]) };
+}
+
+/** Why a Test run found or read nothing: its own words, or what its page said. */
+function runProblem(run: CollectionRunState): string | null {
+  return run.error ?? Object.values(run.startPageProblems)[0] ?? run.problemPages[0]?.problem ?? null;
+}
+
+function shownValue(value: unknown): string {
+  return value === undefined || value === null ? '' : String(value).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Test, Find: the first items on the list page, as a run with this setup lists them. Test, Read: their own pages, read
+ * as a run reads them, each shown field by field, so an empty or wrong field shows before Done. Nothing is kept.
+ */
+function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'test-read'): void {
+  const setup = state.siteSetup;
+  if (!setup) return;
+  const name = itemName(session.request);
+  const definition = sessionCollection(session);
+  const title = (item: ExtractItem) => shownValue(item.values?.title) || item.url;
+  // What happened is said in the step, by its buttons.
+  const failed = (error: unknown) => {
+    if (!state.siteSetup?.test || active !== session) return;
+    state.siteSetup.test.pending = null;
+    state.siteSetup.test.problem = error instanceof Error ? error.message : String(error);
+    rerender({ preserveMountedDocument: true });
+  };
+  if (step === 'test-find') {
+    session.testItems = [];
+    setup.test = { pending: `Finding ${TEST_ITEMS} ${name}s on the list…`, items: [], results: null, problem: null };
+    rerender({ preserveMountedDocument: true });
+    void listSetupExamples(state.selectedIntegrationProfileId, definition, setup.url, TEST_ITEMS).then(({ items, run }) => {
+      if (!state.siteSetup || active !== session) return;
+      session.testItems = items.slice(0, TEST_ITEMS);
+      state.siteSetup.test = {
+        pending: null,
+        items: session.testItems.map((item) => ({ url: item.url, title: title(item) })),
+        results: null,
+        problem: session.testItems.length ? null : runProblem(run) ?? `The list showed no ${name}s.`,
+      };
+      rerender({ preserveMountedDocument: true });
+    }, failed);
+    return;
+  }
+  const items = session.testItems;
+  if (!items.length || !setup.test) return;
+  setup.test = { ...setup.test, pending: `Reading ${items.length === 1 ? `the ${name}’s page` : `the ${items.length} ${name}s’ pages`}…`, results: null, problem: null };
+  rerender({ preserveMountedDocument: true });
+  void readSetupExamples(state.selectedIntegrationProfileId, definition, items).then(({ records, run }) => {
+    if (!state.siteSetup?.test || active !== session) return;
+    state.siteSetup.test.pending = null;
+    state.siteSetup.test.results = items.map((item) => {
+      const record = records.find((candidate) => candidate.url === item.url);
+      return {
+        url: item.url,
+        title: shownValue(record?.values.title) || title(item),
+        fields: session.request.collection.fields.map((field) => ({ label: field.label, value: shownValue(record?.values[field.id]) })),
+        problem: record ? record.problem ?? null : runProblem(run) ?? 'Its page wasn’t read.',
+      };
+    });
+    rerender({ preserveMountedDocument: true });
+  }, failed);
+}
+
+export type SiteSetupStep = 'open-page' | 'rows' | 'pagination' | 'item-page' | 'item-examples' | 'test-find' | 'test-read' | 'done';
 
 // UI: the site setup's steps in the Integrations manager, and Done.
 export function runSiteSetupStep(step: SiteSetupStep): void {
@@ -281,6 +358,15 @@ export function runSiteSetupStep(step: SiteSetupStep): void {
   if (step === 'rows') buildRecordType(list, `${item} rows`, rowPrompts(itemName(session.request)));
   if (step === 'pagination') handlers.addCommandForIntegrationPage(list.id, list.pages[0].id, true);
   if (step === 'item-page') pickExampleItem(session);
+  // The item page's examples, in the record type builder: one picked wrong is removed, or its fields picked again.
+  const itemPage = sessionIntegration(session.itemId);
+  if (step === 'item-examples' && itemPage) buildRecordType(itemPage, `${item} page`, pagePrompts(itemName(session.request)));
+  if (step === 'test-find' || step === 'test-read') testSetup(session, step);
+}
+
+/** The record type builder is editing the setup's item page: its examples are other items from the list. */
+export function editingSetupItemPage(): boolean {
+  return Boolean(active?.itemId && state.siteSetup && state.integrationActionDraftIntegrationId === active.itemId && state.integrationActionDraftActionId);
 }
 
 /** After each save in the session, what the block would refuse, shown before Done. */
@@ -291,6 +377,9 @@ function checkSiteSetup(): void {
     ...(active.openerWithoutLink ? [openerWithoutLinkNote(itemName(active.request))] : []),
   ];
   state.siteSetup.error = errors.length ? errors.join(' ') : null;
+  // What was tested is not the setup any more.
+  state.siteSetup.test = null;
+  active.testItems = [];
 }
 
 /** A page added during a setup is its item page ("Use a different item"), replacing the one it had. */

@@ -248,6 +248,8 @@ export function renderModals(state: AppState): void {
   }
   const integrationDetailScrollTop = root.querySelector<HTMLElement>('.integration-detail')?.scrollTop ?? 0;
   const integrationListScrollTop = root.querySelector<HTMLElement>('.integration-list')?.scrollTop ?? 0;
+  // Set up this site keeps its place as its steps report back (Test's results arrive at the bottom).
+  const siteSetupScrollTop = root.querySelector<HTMLElement>('.site-setup-dialog')?.scrollTop ?? 0;
   const currentIntegrationActionBuilderContent = root.querySelector<HTMLElement>('.integration-action-builder-content');
   const currentIntegrationActionBuilderDialog = root.querySelector<HTMLElement>('.integration-action-builder-dialog');
   if (currentIntegrationActionBuilderContent && state.integrationActionBuilderStep === 'define') {
@@ -335,6 +337,8 @@ export function renderModals(state: AppState): void {
   if (documentKeyList) documentKeyList.scrollTop = documentKeyListScrollTop;
   if (integrationDetail) integrationDetail.scrollTop = integrationDetailScrollTop;
   if (integrationList) integrationList.scrollTop = integrationListScrollTop;
+  const siteSetupDialog = root.querySelector<HTMLElement>('.site-setup-dialog');
+  if (siteSetupDialog) siteSetupDialog.scrollTop = siteSetupScrollTop;
   if (integrationActionBuilderContent) integrationActionBuilderContent.scrollTop = state.integrationActionBuilderStep === 'define' ? integrationActionBuilderScrollTop : 0;
   if (integrationActionBuilderDialog) integrationActionBuilderDialog.scrollTop = state.integrationActionBuilderStep === 'define' ? integrationActionBuilderDialogScrollTop : 0;
   if (state.aiSettingsDialogOpen) {

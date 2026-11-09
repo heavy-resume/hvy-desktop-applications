@@ -5,7 +5,7 @@ import { openExternalUrl, saveAppSettings } from '../backend';
 import { state } from '../state';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
-import type { CollectionRunState } from './collection';
+import type { CollectionDefinition, CollectionRunState, ExtractItem } from './collection';
 import type { SitePatternDefinition } from './sitePatterns';
 import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
@@ -108,6 +108,16 @@ export function openProfilePage(profileId: string, url: string): Promise<void> {
 /** UI: Set up this site, picking an example item: the row's item, opened as a run opens it. */
 export function openListedItem(profileId: string, listUrl: string, link: string): Promise<{ url: string }> {
   return appRuntime().openListedItem(profileId, listUrl, link);
+}
+
+/** UI: Set up this site, Test, "Find": the list's first items, as a run lists them with the setup being made. */
+export function listSetupExamples(profileId: string, definition: CollectionDefinition, listUrl: string, count: number) {
+  return appRuntime().listSetupExamples(profileId, definition, listUrl, count);
+}
+
+/** UI: Set up this site, Test, "Read": those items' pages, read as a run reads them with the setup being made. */
+export function readSetupExamples(profileId: string, definition: CollectionDefinition, items: ExtractItem[]) {
+  return appRuntime().readSetupExamples(profileId, definition, items);
 }
 
 /** UI: Set up this site, picking an example item whose opener has no link: clicked in a worker; null when it opened nothing. */
@@ -228,6 +238,8 @@ export interface BackgroundQueueSummary {
   running: number;
   retrying: number;
   failed: number;
+  /** Each failed entry and why it failed, newest last. */
+  failures: Array<{ key: string; error: string }>;
   paused: boolean;
   pauseReason: string | null;
   awaitingResume: boolean;
@@ -244,8 +256,11 @@ export interface BackgroundRunSummary {
 
 /** What Background activity shows. Plain data, so the app can keep it in its state and render it. */
 export interface BackgroundActivity {
-  /** Each browser worker: its profile, kind, and the job it is running (null when idle). */
-  workers: Array<{ workerId: string; profile: string; kind: 'collection' | 'api'; label: string | null }>;
+  /**
+   * Each browser worker: its profile, kind, and the job it is running (null when idle); and whether that job is held on
+   * a page that needs the user (a collection run's attention), so it waits rather than works.
+   */
+  workers: Array<{ workerId: string; profile: string; kind: 'collection' | 'api'; label: string | null; needsYou: boolean }>;
   /** Jobs waiting for a worker, in the order they will get one. */
   waitingJobs: Array<{ profile: string; kind: 'collection' | 'api'; label: string }>;
   /** Labels running or waiting more than once at the same time: the same call made twice. */
@@ -264,10 +279,12 @@ export function backgroundActivity(): BackgroundActivity {
   const profileName = (profileId: string) => state.integrationRegistry.profiles.find(({ id }) => id === profileId)?.name ?? profileId;
   const labels = [...scheduler.workers.flatMap(({ label }) => (label ? [label] : [])), ...scheduler.waitingJobs.map(({ label }) => label)];
   const documents: BackgroundActivity['documents'] = [];
+  const attentionWorkers = new Set<string>();
   for (const [document, path] of documentPaths) {
     const lookup = openedByDocument.get(document)?.lookup;
     if (!lookup) continue;
     const automationState = lookup.automation.getState();
+    for (const run of automationState.runs) if (run.attention) attentionWorkers.add(run.attention.workerId);
     const runs = automationState.runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).map((run): BackgroundRunSummary => ({
       runId: run.runId,
       name: lookup.collection(run.capabilityId)?.name ?? run.capabilityId,
@@ -284,6 +301,7 @@ export function backgroundActivity(): BackgroundActivity {
         running: count('running'),
         retrying: count('waiting-retry'),
         failed: count('failed'),
+        failures: queue.entries.filter((entry) => entry.status === 'failed').map((entry) => ({ key: entry.key, error: entry.lastError ?? 'Failed.' })),
         paused: queue.paused,
         pauseReason: queue.pauseReason,
         awaitingResume: queue.awaitingResume,
@@ -292,7 +310,7 @@ export function backgroundActivity(): BackgroundActivity {
     if (runs.length || queues.length) documents.push({ path, runs, queues });
   }
   return {
-    workers: scheduler.workers.map(({ workerId, profileId, kind, busy, label }) => ({ workerId, profile: profileName(profileId), kind, label: busy ? label : null })),
+    workers: scheduler.workers.map(({ workerId, profileId, kind, busy, label }) => ({ workerId, profile: profileName(profileId), kind, label: busy ? label : null, needsYou: busy && attentionWorkers.has(workerId) })),
     waitingJobs: scheduler.waitingJobs.map(({ profileId, kind, label }) => ({ profile: profileName(profileId), kind, label })),
     duplicates: [...new Set(labels.filter((label, index) => labels.indexOf(label) !== index))],
     documents,
