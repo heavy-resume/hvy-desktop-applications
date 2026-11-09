@@ -14,7 +14,7 @@ function setup(options: { perProfile?: number; global?: number; delayScale?: num
     random: seededRandom(1),
     emit: (_source, message) => log.push(message),
     maxCollectionWorkersPerProfile: options.perProfile ?? 2,
-    collectionLimits: () => ({ perSite: 2, total: options.global ?? 4 }),
+    collectionLimits: () => ({ perSite: 2, total: options.global ?? 4, apiCalls: 4 }),
     idleTimeoutMs: 60_000,
     ...(options.delayScale !== undefined ? { navigationDelayScale: options.delayScale } : {}),
   });
@@ -132,30 +132,49 @@ describe('worker scheduler', () => {
   });
   it('starts what the user just asked for at once, beyond the site\'s and Settings\' worker limits, within the profile\'s cap', async () => {
     const clock = new VirtualClock();
-    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, maxCollectionWorkersPerProfile: 3, collectionLimits: () => ({ perSite: 1, total: 1 }) });
+    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, maxCollectionWorkersPerProfile: 3, collectionLimits: () => ({ perSite: 1, total: 1, apiCalls: 4 }) });
     const job = (label: string, interactive = false) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label, interactive }, holdFor(clock, 10_000));
     const jobs = [job('run'), job('next run'), job('retry', true), job('open', true), job('third', true)];
     await clock.step(0);
-    expect(scheduler.getState().workers.filter((worker) => worker.busy).map((worker) => worker.label).sort()).toEqual(['open', 'retry', 'run']);
+    expect(scheduler.getState().workers.filter((worker) => worker.busy).map((worker) => worker.jobs[0].label).sort()).toEqual(['open', 'retry', 'run']);
     expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['next run', 'third']);
     await clock.runUntil(() => scheduler.getState().waitingJobs.length === 0 && scheduler.getState().workers.every((worker) => !worker.busy));
     await Promise.all(jobs);
   });
 
+  it('runs a profile\'s API calls side by side in its one API worker while they go to one site, up to its limit; a call to another site waits for them', async () => {
+    const clock = new VirtualClock();
+    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, collectionLimits: () => ({ perSite: 2, total: 4, apiCalls: 2 }) });
+    const call = (label: string, origin = 'https://api.test') => scheduler.run({ profileId: 'p1', kind: 'api', origin, label }, holdFor(clock, 1_000));
+    const calls = [call('report 1'), call('report 2'), call('report 3'), call('elsewhere', 'https://other.test')];
+    await clock.step(0);
+    const apiWorkers = () => scheduler.getState().workers.filter((worker) => worker.kind === 'api');
+    expect(apiWorkers()).toHaveLength(1);
+    expect(apiWorkers()[0].jobs.map((job) => job.label)).toEqual(['report 1', 'report 2']);
+    expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['report 3', 'elsewhere']);
+    // As one finishes, the next call to the site takes its place; the other site's call waits until the worker is free.
+    await clock.runUntil(() => apiWorkers()[0].jobs.some((job) => job.label === 'report 3'));
+    expect(apiWorkers()[0].jobs.map((job) => job.label)).not.toContain('elsewhere');
+    await clock.runUntil(() => apiWorkers()[0].jobs.some((job) => job.label === 'elsewhere'));
+    expect(apiWorkers()[0].jobs.map((job) => job.label)).toEqual(['elsewhere']);
+    await clock.runUntil(() => apiWorkers().every((worker) => !worker.busy));
+    await Promise.all(calls);
+  });
+
   it('reads the collection limits as each job is placed, so a changed setting applies to the next job', async () => {
     const clock = new VirtualClock();
-    let limits = { perSite: 1, total: 4 };
+    let limits = { perSite: 1, total: 4, apiCalls: 4 };
     const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, collectionLimits: () => limits });
     const job = (label: string) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label }, holdFor(clock, 10_000));
     const first = [job('a'), job('b')];
     await clock.step(0);
     expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['b']);
     // App Settings: two pages on one site. The next placement lets the waiting job in, in order.
-    limits = { perSite: 2, total: 4 };
+    limits = { perSite: 2, total: 4, apiCalls: 4 };
     const third = job('c');
     await clock.step(0);
     expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['c']);
-    expect(scheduler.getState().workers.filter((worker) => worker.busy).map((worker) => worker.label).sort()).toEqual(['a', 'b']);
+    expect(scheduler.getState().workers.filter((worker) => worker.busy).map((worker) => worker.jobs[0].label).sort()).toEqual(['a', 'b']);
     await clock.runUntil(() => scheduler.getState().waitingJobs.length === 0 && scheduler.getState().workers.every((worker) => !worker.busy));
     await Promise.all([...first, third]);
   });

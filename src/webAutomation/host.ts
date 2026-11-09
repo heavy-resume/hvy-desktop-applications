@@ -43,6 +43,11 @@ export interface InspectionRequest {
   patterns: SitePatternDefinition[];
   /** Fingerprints to evaluate, keyed by pattern ID. */
   fingerprints: Record<string, PlatformSignal[]>;
+  /**
+   * A list needs no more than this many rows read: reading stops there, rather than scrolling the rest of the page for
+   * more. Unset, every row on the page is read.
+   */
+  listingLimit?: number;
 }
 
 export interface ExtractedRecord {

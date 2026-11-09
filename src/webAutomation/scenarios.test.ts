@@ -461,11 +461,17 @@ describe('mock integration: job search flow', () => {
     const boards = listingCollection([ACME], { patterns: [] });
     await signedInFlow(boards);
     const setup = flow!.addSiteSetups(boards, { id: 'acme-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'acme-ats' }, { ...atsDetailPattern, siteId: 'acme-ats' }] });
+    const startedAt = flow!.clock.now();
     const found = await flow!.listSetupExamples(setup, ACME, 2);
     expect(found.items).toHaveLength(2);
+    // Every row is new to a Test, so the list is read only as far as the two it takes.
+    expect(flow!.print()).toMatch(/read the first 2 rows of /);
     expect(found.items.every((item) => item.url.startsWith(`${ATS_ORIGIN}/acme/jobs/`) && typeof item.values?.title === 'string')).toBe(true);
     const read = await flow!.readSetupExamples(setup, found.items);
     expect(read.records.map((record) => record.url)).toEqual(found.items.map((item) => item.url));
+    // The user waits on them: no pause between their loads, as a run's.
+    expect(flow!.print()).not.toMatch(/delay [\d.]+s before/);
+    expect(flow!.clock.now() - startedAt).toBeLessThan(1_000);
     expect(read.records.every((record) => record.state === 'ok' && record.values.company === 'Acme' && record.values.title)).toBe(true);
     // Nothing went into the collection's output.
     expect(flow!.items.list()).toEqual([]);

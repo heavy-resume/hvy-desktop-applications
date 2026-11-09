@@ -71,6 +71,7 @@ interface InspectorApi {
     selectionScope?: InspectorSnapshot;
     minimumConfidence?: number;
     existingPattern?: Parameters<InspectorApi['extractPattern']>[0];
+    matchingView?: boolean;
     multiSelect?: boolean;
     undoParent?: boolean;
     deriveParent?: boolean;
@@ -694,7 +695,7 @@ describe('integration structural inspector', () => {
     expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Title', 'Pay', 'Description', 'Skip', 'Undo last']);
     await press('Title');
     await settled('Picked: Title · Still to pick: Pay, Description · then Done');
-    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Navigate page', 'Undo last', 'Done']);
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Navigate page', 'Use range', 'Undo last', 'Done']);
 
     await clickPointerAt(page, '.pane .pay');
     await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'p — \$140,000 a year' }).click();
@@ -721,12 +722,13 @@ describe('integration structural inspector', () => {
     const picker = page.locator('#hvy-galaxy-inspector-picker');
     await clickPointerAt(page, '[data-record="first"] .posting-title');
     await picker.locator('button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    await page.getByRole('button', { name: 'Use range' }).click();
     await clickPointerAt(page, '[data-record="first"] .posting-meta');
-    await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).hover();
-    await picker.getByRole('button', { name: 'Start after this' }).click();
+    await picker.getByLabel('Start after it').check();
+    await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).click();
     await clickPointerAt(page, '[data-record="first"] .apply-button');
-    await picker.locator('button', { hasText: 'a — Apply now' }).hover();
-    await picker.getByRole('button', { name: 'End before this' }).click();
+    await picker.getByLabel('End before it').check();
+    await picker.locator('button', { hasText: 'a — Apply now' }).click();
     await page.getByRole('button', { name: 'Done' }).click();
 
     const result = await page.evaluate(() => {
@@ -766,7 +768,7 @@ describe('integration structural inspector', () => {
     expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
     expect(await page.evaluate(() => window.__toolbarState)).toMatchObject({
       active: true,
-      buttons: [{ id: 'navigate', label: 'Navigate page' }, { id: 'undo', label: 'Undo last', disabled: true }, { id: 'done', label: 'Done', primary: true }],
+      buttons: [{ id: 'navigate', label: 'Navigate page' }, { id: 'range', label: 'Use range' }, { id: 'undo', label: 'Undo last', disabled: true }, { id: 'done', label: 'Done', primary: true }],
     });
     await page.evaluate(() => window.__hvyGalaxyInspector.control('done'));
     expect(await page.evaluate(() => window.__commandRecordingResult)).toEqual({ kind: 'integration-target-collection', items: [] });
@@ -955,10 +957,16 @@ describe('integration structural inspector', () => {
     // The title is a field of its own; the description starts after the details line.
     await clickPointerAt(page, '[data-record="first"] .posting-title');
     await picker.locator('button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    // Use range: a click picks where a range starts, not a field.
+    await page.getByRole('button', { name: 'Use range' }).click();
+    expect(await status.textContent()).toBe('Pick where the range starts · Esc leaves range mode');
+    expect(await page.getByRole('button', { name: 'Pick element' }).count()).toBe(1);
     await clickPointerAt(page, '[data-record="first"] .posting-meta');
-    await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).hover();
-    await picker.getByRole('button', { name: 'Start after this' }).click();
-    expect(await status.textContent()).toBe('Pick where the range ends · Esc cancels the range');
+    // The row clicked is where it starts; ticked, it starts after the row.
+    await picker.getByLabel('Start after it').check();
+    await picker.locator('button', { hasText: 'p — Remote (US) · Full-time' }).click();
+    expect(await picker.count()).toBe(0);
+    expect(await status.textContent()).toBe('Pick where the range ends · Esc leaves range mode');
 
     // Hovering previews the range up to the element under the pointer.
     await movePointerTo(page, '[data-record="first"] .apply-button');
@@ -970,9 +978,11 @@ describe('integration structural inspector', () => {
 
     await clickPointerAt(page, '[data-record="first"] .apply-button');
     expect(await picker.locator('div').first().textContent()).toBe('Choose where the range ends');
-    await picker.locator('button', { hasText: 'a — Apply now' }).hover();
-    await picker.getByRole('button', { name: 'End before this' }).click();
+    await picker.getByLabel('End before it').check();
+    await picker.locator('button', { hasText: 'a — Apply now' }).click();
+    // The range made, picking is back to elements.
     expect(await status.textContent()).toBe('2 fields selected');
+    expect(await page.getByRole('button', { name: 'Use range' }).count()).toBe(1);
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(2);
 
     await page.getByRole('button', { name: 'Done' }).click();
@@ -1000,13 +1010,139 @@ describe('integration structural inspector', () => {
     }), parentSnapshot);
     await clickPointerAt(page, '[data-record="first"] .posting-title');
     await page.locator('#hvy-galaxy-inspector-picker button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    await page.getByRole('button', { name: 'Use range' }).click();
     await clickPointerAt(page, '[data-record="first"] .posting-meta');
-    await page.getByRole('button', { name: 'Start a range here' }).click();
+    await page.locator('#hvy-galaxy-inspector-picker button', { hasText: 'p — Remote (US) · Full-time' }).click();
     await page.keyboard.press('Escape');
 
+    // Escape leaves range mode, taking the range's start back.
     expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('1 field selected');
+    expect(await page.getByRole('button', { name: 'Use range' }).count()).toBe(1);
     expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(1);
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('shows how an item page pattern matches a page it failed on, to look at only: how close, which field failed, and Add as example', async () => {
+    const posting = (description: string) => `
+      <main>
+        <article class="posting">
+          <h1 class="title">Senior Engineer</h1>
+          <p class="company">Acme</p>
+          ${description}
+        </article>
+      </main>`;
+    await page.setContent(posting('<div class="description"><p>Build secure services.</p><p>Run them well.</p></div>'));
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const pattern = await page.evaluate(() => {
+      const parent = document.querySelector('.posting')!;
+      const target = (selector: string) => window.__hvyGalaxyInspector.snapshotElement(parent.querySelector(selector)!, parent, 'target');
+      return {
+        minimumConfidence: 0.85,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(parent, null, 'parent')],
+        targets: [{ label: 'title', snapshot: target('.title') }, { label: 'company', snapshot: target('.company') }, { label: 'description', snapshot: target('.description') }],
+      };
+    });
+
+    // A page laid out differently: no description where the examples had it.
+    await page.setContent(posting('<aside class="apply"><a href="#apply">Apply</a></aside>'));
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate((existingPattern) => window.__hvyGalaxyInspector.start('parent', { existingPattern, matchingView: true, prompt: 'Job page' }), pattern);
+    const status = page.locator('[data-inspector-status-text]');
+    expect(await status.textContent()).toMatch(/^Job page · Closest \d+% \(needs 85%\)( · .*)? · description (not found|\d+% \(needs \d+%\))/);
+    // The candidate is boxed as failing, and so is each of its fields, pass or fail.
+    expect(await page.locator('[data-existing-match-kind="parent"][data-existing-match-status="fail"]').count()).toBeGreaterThan(0);
+    expect(await page.locator('[data-existing-match-kind="target"][data-existing-match-label="title"][data-existing-match-status="pass"]').count()).toBe(1);
+
+    // Clicking the page picks nothing.
+    await clickPointerAt(page, '.posting .title');
+    expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(0);
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toBeUndefined();
+
+    await page.getByRole('button', { name: 'Add as example' }).click();
+    expect(await page.evaluate(() => window.__commandRecordingResult)).toEqual({ kind: 'integration-matching-add-example' });
+    expect(await page.locator('#hvy-galaxy-inspector-status').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('offers an image, or what holds only an image, as an image; a section holding a logo among its text is offered as that text', async () => {
+    await page.setContent(`
+      <main>
+        <article data-record="first">
+          <a class="logo" href="#company"><img alt="Acme logo" width="40" height="40" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'/%3E"></a>
+          <div class="body"><h2>Overview</h2><p>Acme builds secure services for regulated customers.</p><p>You will design and run them.</p></div>
+        </article>
+      </main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '[data-record="first"]', parentSnapshot: snapshot, multiSelect: true }), parentSnapshot);
+    const picker = page.locator('#hvy-galaxy-inspector-picker');
+
+    // The section's text is offered with its length, not as an image for the logo beside it.
+    await clickPointerAt(page, '[data-record="first"] .body p:first-of-type');
+    const choices = await picker.locator('[data-picker-choice]').allTextContents();
+    expect(choices.some((choice) => choice.includes('🖼️'))).toBe(false);
+    expect(choices.some((choice) => /^div\.body · \d+ characters/.test(choice))).toBe(true);
+
+    // The logo is an image, and so is the link holding only it.
+    await page.keyboard.press('Escape');
+    await clickPointerAt(page, '[data-record="first"] .logo img');
+    const logo = await picker.locator('[data-picker-choice]').allTextContents();
+    expect(logo.some((choice) => choice.startsWith('🖼️ img'))).toBe(true);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('takes a range\'s start back with Undo last, or Cancel range where nothing after it can end it, keeping the fields already picked', async () => {
+    await page.setContent(sectionedPostings);
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('[data-record="first"]')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', {
+      parentCssPath: '[data-record="first"]',
+      parentSnapshot: snapshot,
+      multiSelect: true,
+    }), parentSnapshot);
+    const status = page.locator('[data-inspector-status-text]');
+    await clickPointerAt(page, '[data-record="first"] .posting-title');
+    await page.locator('#hvy-galaxy-inspector-picker button', { hasText: 'h1 — Senior TypeScript Engineer' }).click();
+    await page.getByRole('button', { name: 'Use range' }).click();
+    await clickPointerAt(page, '[data-record="first"] .posting-meta');
+    await page.locator('#hvy-galaxy-inspector-picker button', { hasText: 'p — Remote (US) · Full-time' }).click();
+    expect(await status.textContent()).toBe('Pick where the range ends · Esc leaves range mode');
+
+    // Undo last takes back the range's start, not the field before it, and stays in range mode.
+    await page.getByRole('button', { name: 'Undo last' }).click();
+    expect(await status.textContent()).toBe('Pick where the range starts · Esc leaves range mode');
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
+
+    // Clicked where nothing comes after the start: the picker offers to take the start back.
+    await clickPointerAt(page, '[data-record="first"] .posting-meta');
+    await page.locator('#hvy-galaxy-inspector-picker button', { hasText: 'p — Remote (US) · Full-time' }).click();
+    await clickPointerAt(page, '[data-record="first"] .posting-title');
+    expect(await page.locator('#hvy-galaxy-inspector-picker div').first().textContent()).toBe('Pick something after the start');
+    await page.getByRole('button', { name: 'Cancel range' }).click();
+    expect(await status.textContent()).toBe('Pick where the range starts · Esc leaves range mode');
+    expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(0);
+
+    // Pick element leaves range mode.
+    await page.getByRole('button', { name: 'Pick element' }).click();
+    expect(await status.textContent()).toBe('1 field selected');
+
+    // Navigating the page, Use range goes back to picking, in range mode.
+    await page.getByRole('button', { name: 'Navigate page' }).click();
+    expect(await page.getByRole('button', { name: 'Resume picking' }).count()).toBe(1);
+    await page.getByRole('button', { name: 'Use range' }).click();
+    expect(await page.getByRole('button', { name: 'Navigate page' }).count()).toBe(1);
+    expect(await status.textContent()).toBe('Pick where the range starts · Esc leaves range mode');
+    await clickPointerAt(page, '[data-record="first"] .posting-meta');
+    expect(await page.locator('#hvy-galaxy-inspector-picker div').first().textContent()).toBe('Choose where the range starts');
     expect(pageErrors).toEqual([]);
   });
 
@@ -1051,8 +1187,7 @@ describe('integration structural inspector', () => {
     await page.locator('#hvy-galaxy-inspector-picker').evaluate((element) => element.remove());
     await clickPointerAt(page, '[data-record="first"] h2:first-of-type');
     expect(await picker.locator('div').first().textContent()).toBe('Choose where the range starts');
-    await picker.locator('button', { hasText: 'h2 — About the role' }).hover();
-    await picker.getByRole('button', { name: 'Start a range here' }).click();
+    await picker.locator('button', { hasText: 'h2 — About the role' }).click();
     expect((await published()).selected.directText).toBe('About the role');
     expect((await published()).range).toMatchObject({
       includeStart: true,
@@ -2100,6 +2235,9 @@ describe('integration structural inspector', () => {
     await choose();
     const status = page.locator('[data-inspector-status-text]');
     expect(await status.textContent()).toBe('Click what opens a job');
+    // Only the jobs are boxed, not their fields.
+    expect(await page.locator('[data-existing-match-kind="parent"]').count()).toBeGreaterThan(0);
+    expect(await page.locator('[data-existing-match-kind="target"]').count()).toBe(0);
 
     await clickPointerAt(page, '.outside');
     expect(await status.textContent()).toBe('Click what opens one of the jobs boxed in green.');

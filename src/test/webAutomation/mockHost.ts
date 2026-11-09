@@ -157,6 +157,16 @@ export class MockHost implements BrowserHost {
     const matches = worker.restored
       ? Object.fromEntries(Object.entries(visible).filter(([patternId]) => request.patterns.some((pattern) => pattern.id === patternId)))
       : {};
+    // A list read only as far as its limit, as the inspector stops scrolling there.
+    if (request.listingLimit) {
+      for (const pattern of request.patterns) {
+        const match = matches[pattern.id];
+        if (pattern.role === 'listing' && match && match.records.length > request.listingLimit) {
+          matches[pattern.id] = { ...match, records: match.records.slice(0, request.listingLimit) };
+          this.log(`${workerId} read the first ${request.listingLimit} rows of ${this.short(url)}`);
+        }
+      }
+    }
     const fingerprintMatches = Object.fromEntries(Object.entries(request.fingerprints).flatMap(([patternId, signals]) => (
       signals.length && signals.every((signal) => this.signalPresent(url, page, signal)) ? [[patternId, signals.length]] : []
     )));

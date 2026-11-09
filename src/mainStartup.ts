@@ -21,7 +21,7 @@ import { loadWorkspaceExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
 import { installDevWebAutomationHost } from './webAutomation/devHost';
-import { installSiteSetup, itemPicked, wrongItemPage } from './siteSetupSession';
+import { addMatchingExample, installSiteSetup, itemPicked, wrongItemPage } from './siteSetupSession';
 import type { InspectorRecord } from './webAutomation/nativeHost';
 import { PAGINATION_COMMAND_NAMES } from './mainHandlersSettings';
 import { installBackgroundActivity } from './backgroundActivity';
@@ -204,6 +204,11 @@ export async function boot(): Promise<void> {
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-record-choice') {
         const { record, opener } = result as { record?: InspectorRecord; opener?: { snapshot: unknown; href: string | null } };
         if (record && opener) itemPicked(record, opener);
+        return;
+      }
+      // Show matching's Add as example: the page goes on to its site setup as another example.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-matching-add-example') {
+        addMatchingExample();
         return;
       }
       // Wrong page, picking the fields of a site setup's item just opened from the list: back to the list.

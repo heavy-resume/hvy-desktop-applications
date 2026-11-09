@@ -264,8 +264,11 @@ export interface AppState {
       /** Finding or reading now, said in the step. */
       pending: string | null;
       items: Array<{ url: string; title: string }>;
-      results: Array<{ url: string; title: string; fields: Array<{ label: string; value: string }>; problem: string | null }> | null;
+      /** Each field's value on one line (`value`), and in full as it was read (`full`), for a long one opened whole. */
+      results: Array<{ url: string; title: string; fields: Array<{ label: string; value: string; full: string }>; problem: string | null }> | null;
       problem: string | null;
+      /** The long value opened in full: its result and field. */
+      opened: { result: number; field: number } | null;
     } | null;
   } | null;
   integrationCommandBuilderOpen: boolean;

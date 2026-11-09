@@ -9,8 +9,9 @@ export interface SchedulerOptions {
   random: Random;
   emit: AutomationEmit;
   /**
-   * Collection workers at once: on one site (origin) per profile, whose loads there still take turns, and in all.
-   * Read when a job is placed, so a change in App Settings applies to the next one.
+   * Collection workers at once: on one site (origin) per profile, whose loads there still take turns, and in all; and
+   * calls a profile's API worker makes at once, all to one site (its page sends them side by side). Read when a job is
+   * placed, so a change in App Settings applies to the next one.
    */
   collectionLimits?: () => CollectionWorkerLimits;
   maxCollectionWorkersPerProfile?: number;
@@ -26,9 +27,14 @@ export interface SchedulerOptions {
 export interface JobRequest {
   profileId: string;
   kind: 'collection' | 'api';
-  /** The site a collection job works on: it counts toward that site's worker limit for its profile while it runs. */
+  /**
+   * The site a job works on. A collection job counts toward that site's worker limit for its profile while it runs; API
+   * jobs share their worker only with others on the same site (its page is there).
+   */
   origin?: string;
   label: string;
+  /** What makes two jobs the same call, told apart from two calls of one kind (the label): the label by default. */
+  identity?: string;
   interactive?: boolean;
   signal?: AbortSignal;
 }
@@ -47,16 +53,20 @@ export interface WorkerLease {
 }
 
 export interface SchedulerState {
-  workers: Array<{ workerId: string; profileId: string; kind: 'collection' | 'api'; busy: boolean; label: string | null }>;
-  waitingJobs: Array<{ profileId: string; kind: 'collection' | 'api'; label: string }>;
+  /** Each worker and the jobs it runs now: one at a time for a collection worker, several for an API worker. */
+  workers: Array<{ workerId: string; profileId: string; kind: 'collection' | 'api'; busy: boolean; jobs: Array<{ label: string; identity: string }> }>;
+  waitingJobs: Array<{ profileId: string; kind: 'collection' | 'api'; label: string; identity: string }>;
 }
 
 interface WorkerRecord {
   id: string;
   profileId: string;
   kind: 'collection' | 'api';
+  /** Running a job now (an API worker, one or more). */
   busy: boolean;
-  label: string | null;
+  jobs: JobRequest[];
+  /** An API worker's site while it runs jobs. */
+  origin: string | null;
   site: string | null;
   creating: Promise<string> | null;
   idle: AbortController | null;
@@ -129,9 +139,9 @@ export class WorkerScheduler {
         profileId: worker.profileId,
         kind: worker.kind,
         busy: worker.busy,
-        label: worker.label,
+        jobs: worker.jobs.map((request) => ({ label: request.label, identity: identityOf(request) })),
       })),
-      waitingJobs: this.pending.map((job) => ({ profileId: job.request.profileId, kind: job.request.kind, label: job.request.label })),
+      waitingJobs: this.pending.map((job) => ({ profileId: job.request.profileId, kind: job.request.kind, label: job.request.label, identity: identityOf(job.request) })),
     };
   }
 
@@ -194,9 +204,11 @@ export class WorkerScheduler {
 
   private acquire(request: JobRequest): WorkerRecord | null {
     if (request.kind === 'api') {
+      // One page per profile for its API calls: they share it while they go to one site, up to the limit.
       const existing = this.workers.find((worker) => worker.profileId === request.profileId && worker.kind === 'api');
-      if (existing) return existing.busy ? null : this.claim(existing, request);
-      return this.claim(this.create(request.profileId, 'api'), request);
+      if (!existing) return this.claim(this.create(request.profileId, 'api'), request);
+      if (!existing.busy) return this.claim(existing, request);
+      return existing.origin === (request.origin ?? null) && existing.jobs.length < this.options.collectionLimits().apiCalls ? this.claim(existing, request) : null;
     }
     const limits = this.options.collectionLimits();
     const site = request.origin ? `${request.profileId}\0${request.origin}` : null;
@@ -220,7 +232,8 @@ export class WorkerScheduler {
       profileId,
       kind,
       busy: false,
-      label: null,
+      jobs: [],
+      origin: null,
       site: null,
       creating: this.options.host.createWorker(profileId),
       idle: null,
@@ -231,7 +244,8 @@ export class WorkerScheduler {
 
   private claim(record: WorkerRecord, request: JobRequest, site: string | null = null): WorkerRecord {
     record.busy = true;
-    record.label = request.label;
+    record.jobs.push(request);
+    record.origin = request.origin ?? null;
     record.idle?.abort();
     record.idle = null;
     if (site) {
@@ -244,29 +258,38 @@ export class WorkerScheduler {
   private async start(job: PendingJob, record: WorkerRecord): Promise<void> {
     try {
       if (record.creating) {
-        record.id = await record.creating;
-        record.creating = null;
-        this.options.emit('scheduler', `worker created (${record.kind})`, { workerId: record.id, profileId: record.profileId });
+        // API jobs sharing a worker still being made wait for it together; the first to have it says so.
+        const creating = record.creating;
+        record.id = await creating;
+        if (record.creating === creating) {
+          record.creating = null;
+          this.options.emit('scheduler', `worker created (${record.kind})`, { workerId: record.id, profileId: record.profileId });
+        }
       } else if (record.kind === 'collection') {
         // Only collections go back through a page's history. An API job stays on the page it needs, and resetting would
         // reload that page (Tauri rebuilds the webview) before every request.
         await this.options.host.resetWorker(record.id);
       }
     } catch (error) {
-      this.workers.splice(this.workers.indexOf(record), 1);
-      this.release(record);
+      if (this.workers.includes(record)) this.workers.splice(this.workers.indexOf(record), 1);
+      this.release(record, job.request);
       job.reject(error);
       return;
     }
     this.options.emit('scheduler', `start: ${job.request.label}`, { workerId: record.id });
     await job.run(record);
     this.options.emit('scheduler', `finish: ${job.request.label}`, { workerId: record.id });
-    this.release(record);
+    this.release(record, job.request);
   }
 
-  private release(record: WorkerRecord): void {
+  private release(record: WorkerRecord, request: JobRequest): void {
+    record.jobs.splice(record.jobs.indexOf(request), 1);
+    if (record.jobs.length) {
+      this.dispatch();
+      return;
+    }
     record.busy = false;
-    record.label = null;
+    record.origin = null;
     if (record.site) {
       const workers = (this.siteWorkers.get(record.site) ?? 1) - 1;
       if (workers) this.siteWorkers.set(record.site, workers);
@@ -288,4 +311,8 @@ export class WorkerScheduler {
       this.dispatch();
     }).catch(() => undefined);
   }
+}
+
+function identityOf(request: JobRequest): string {
+  return request.identity ?? request.label;
 }

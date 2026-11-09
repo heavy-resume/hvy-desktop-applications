@@ -27,7 +27,7 @@ describe('automation settings', () => {
   });
   it('keeps the collection limits whole and within their bounds, defaulting what is missing', () => {
     expect(normalizeCollectionWorkerLimits(undefined)).toEqual(DEFAULT_COLLECTION_WORKER_LIMITS);
-    expect(normalizeCollectionWorkerLimits({ perSite: 9, total: 0 })).toEqual({ perSite: COLLECTION_WORKER_LIMIT_BOUNDS.perSite, total: 1 });
-    expect(normalizeCollectionWorkerLimits({ perSite: 1.5, total: 6 })).toEqual({ perSite: DEFAULT_COLLECTION_WORKER_LIMITS.perSite, total: 6 });
+    expect(normalizeCollectionWorkerLimits({ perSite: 9, total: 0, apiCalls: 20 })).toEqual({ perSite: COLLECTION_WORKER_LIMIT_BOUNDS.perSite, total: 1, apiCalls: COLLECTION_WORKER_LIMIT_BOUNDS.apiCalls });
+    expect(normalizeCollectionWorkerLimits({ perSite: 1.5, total: 6 })).toEqual({ perSite: DEFAULT_COLLECTION_WORKER_LIMITS.perSite, total: 6, apiCalls: DEFAULT_COLLECTION_WORKER_LIMITS.apiCalls });
   });
 });

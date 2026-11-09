@@ -540,7 +540,7 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
     pluginAcceptances,
     webServiceApprovals,
     webCollectionLimits: data.has('webCollectionPerSite')
-      ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')) })
+      ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')), apiCalls: Number(data.get('webApiCalls')) })
       : parsedSettings.webCollectionLimits,
   };
 }

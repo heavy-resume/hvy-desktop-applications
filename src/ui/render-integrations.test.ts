@@ -16,6 +16,7 @@ describe('Set up this site', () => {
     state.integrationRegistry = { ...state.integrationRegistry, integrations: [list, item] as never };
     state.integrationsDialogOpen = true;
     const description = 'You will design, build, and operate services. '.repeat(10).trim();
+    const fullDescription = `${description}\n\nWhat you bring: <care> & craft.`;
     state.siteSetup = {
       collectionName: 'Careers pages', documentName: 'Search.hvy', itemName: 'job', siteName: 'boards.example.test', url: 'https://boards.example.test/jobs',
       listIntegrationId: list.id, itemIntegrationId: item.id,
@@ -30,17 +31,25 @@ describe('Set up this site', () => {
     // The item page's examples can be corrected, as the list's can.
     expect(before).toMatch(/data-step="item-examples" >Edit examples<\/button><button [^>]*data-step="item-page" >Pick another job</);
 
-    state.siteSetup.test = { items: [{ url: 'https://boards.example.test/jobs/1', title: 'Engineer' }, { url: 'https://boards.example.test/jobs/2', title: 'Designer' }], results: null, problem: null, pending: null };
+    state.siteSetup.test = { items: [{ url: 'https://boards.example.test/jobs/1', title: 'Engineer' }, { url: 'https://boards.example.test/jobs/2', title: 'Designer' }], results: null, problem: null, pending: null, opened: null };
     const found = renderIntegrationsDialog(state);
     expect(found).toContain('<strong class="site-setup-test-title">Engineer</strong>');
     expect(found).toMatch(/data-step="test-read" >Read them</);
 
     state.siteSetup.test.results = [
-      { url: 'https://boards.example.test/jobs/1', title: 'Engineer', fields: [{ label: 'Title', value: 'Engineer' }, { label: 'Description', value: description }], problem: null },
-      { url: 'https://boards.example.test/jobs/2', title: 'Designer', fields: [{ label: 'Title', value: 'Designer' }, { label: 'Description', value: '' }], problem: 'Description is required.' },
+      { url: 'https://boards.example.test/jobs/1', title: 'Engineer', fields: [{ label: 'Title', value: 'Engineer', full: 'Engineer' }, { label: 'Description', value: description, full: fullDescription }], problem: null },
+      { url: 'https://boards.example.test/jobs/2', title: 'Designer', fields: [{ label: 'Title', value: 'Designer', full: 'Designer' }, { label: 'Description', value: '', full: '' }], problem: 'Description is required.' },
     ];
     const read = renderIntegrationsDialog(state);
-    expect(read).toContain(`${description.slice(0, 160)}… <small>(${description.length.toLocaleString()} characters)</small>`);
+    // A long value is cut short, and opens in full, as it was read.
+    expect(read).toContain(`data-action="open-site-setup-test-value" data-result="0" data-field="1">${description.slice(0, 160)}… <small>(${description.length.toLocaleString()} characters)</small></button>`);
+    expect(read).not.toContain('site-setup-value-dialog');
+    state.siteSetup.test.opened = { result: 0, field: 1 };
+    const opened = renderIntegrationsDialog(state);
+    expect(opened).toContain('<h2>Description</h2>');
+    expect(opened).toContain(`Engineer · ${fullDescription.length.toLocaleString()} characters`);
+    expect(opened).toContain(`<div class="site-setup-value-full">${description}\n\nWhat you bring: &lt;care&gt; &amp; craft.</div>`);
+    expect(opened).toContain('data-action="close-site-setup-test-value"');
     expect(read).toContain('<dd class="site-setup-test-value site-setup-test-empty">Empty</dd>');
     expect(read).toContain('<span class="site-setup-test-problem">Description is required.</span>');
     state.siteSetup = null;

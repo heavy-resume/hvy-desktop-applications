@@ -127,13 +127,16 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
     `${posting ? button('Edit examples', 'item-examples') : ''}${button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows)}`);
   // Two of the list's items found, then read, as a run would with this setup: what each would hold, field by field.
   const test = setup.test;
-  const preview = (value: string) => (value.length > 160 ? `${escapeHtml(value.slice(0, 160))}… <small>(${value.length.toLocaleString()} characters)</small>` : escapeHtml(value));
+  // A long value is cut short, and opens in full: what a run would keep, to check it has all of it and nothing more.
+  const preview = (value: string, result: number, field: number) => (value.length > 160
+    ? `<button type="button" class="site-setup-test-more" data-action="open-site-setup-test-value" data-result="${result}" data-field="${field}">${escapeHtml(value.slice(0, 160))}… <small>(${value.length.toLocaleString()} characters)</small></button>`
+    : escapeHtml(value));
   const testResults = test?.results
-    ? `<ul class="site-setup-test-results">${test.results.map((result) => `
+    ? `<ul class="site-setup-test-results">${test.results.map((result, resultIndex) => `
         <li class="site-setup-test-result">
           <strong class="site-setup-test-title">${escapeHtml(result.title)}</strong>
           ${result.problem ? `<span class="site-setup-test-problem">${escapeHtml(result.problem)}</span>` : ''}
-          <dl class="site-setup-test-fields">${result.fields.map((field) => `<dt class="site-setup-test-label">${escapeHtml(field.label)}</dt><dd class="site-setup-test-value${field.value ? '' : ' site-setup-test-empty'}">${field.value ? preview(field.value) : 'Empty'}</dd>`).join('')}</dl>
+          <dl class="site-setup-test-fields">${result.fields.map((field, fieldIndex) => `<dt class="site-setup-test-label">${escapeHtml(field.label)}</dt><dd class="site-setup-test-value${field.value ? '' : ' site-setup-test-empty'}">${field.value ? preview(field.value, resultIndex, fieldIndex) : 'Empty'}</dd>`).join('')}</dl>
         </li>`).join('')}</ul>`
     : test?.items.length
       ? `<ul class="site-setup-test-results">${test.items.map((found) => `<li class="site-setup-test-result"><strong class="site-setup-test-title">${escapeHtml(found.title)}</strong></li>`).join('')}</ul>`
@@ -143,6 +146,16 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
     `Find 2 ${escapeHtml(item)}s on the list, then read their pages as a run does, to check each field gets what you expect.`,
     `${test?.pending ? `<span class="site-setup-test-pending" role="status">${escapeHtml(test.pending)}</span>` : ''}${test?.problem ? `<span class="site-setup-test-problem">${escapeHtml(test.problem)}</span>` : ''}${testResults}`,
     `${button(`Find ${item}s`, 'test-find', false, !rows || !posting || Boolean(test?.pending))}${button('Read them', 'test-read', Boolean(test?.items.length && !test.results), !test?.items.length || Boolean(test?.pending))}`);
+  const opened = test?.opened ? test.results?.[test.opened.result] : null;
+  const openedField = opened && test?.opened ? opened.fields[test.opened.field] : null;
+  const valueDialog = opened && openedField ? `
+    <div class="modal-backdrop modal-backdrop-stacked" role="presentation">
+      <section class="dialog site-setup-value-dialog" role="dialog" aria-modal="true" aria-label="${escapeAttr(openedField.label)}">
+        <div class="modal-header"><div><h2>${escapeHtml(openedField.label)}</h2><p class="dialog-note">${escapeHtml(opened.title)} · ${openedField.full.length.toLocaleString()} characters</p></div></div>
+        <div class="site-setup-value-full">${escapeHtml(openedField.full)}</div>
+        <div class="dialog-actions"><button type="button" class="hvy-galaxy-button" data-action="close-site-setup-test-value">Close</button></div>
+      </section>
+    </div>` : '';
   const profiles = state.integrationRegistry.profiles;
   return `
     <div class="modal-backdrop" role="presentation">
@@ -156,7 +169,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         <ol class="site-setup-steps">${openStep}${rowsStep}${nextStep}${itemStep}${testStep}</ol>
         <div class="dialog-actions site-setup-footer"><label class="integration-profile-select site-setup-profile"><span>Browser profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Browser profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button" data-action="close-integrations">Cancel</button>${button('Done', 'done', Boolean(rows && posting), !rows)}</div>
       </section>
-    </div>`;
+    </div>${valueDialog}`;
 }
 
 export function renderIntegrationsDialog(state: AppState): string {

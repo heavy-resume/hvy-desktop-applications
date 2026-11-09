@@ -43,7 +43,7 @@ interface RawInspection {
 
 
 // The matcher as the page's inspector matches it: a site setup keeps its fields' snapshots once (storedPattern).
-function matcherOf(pattern: SitePatternDefinition): IntegrationPatternMatcher | null {
+export function matcherOf(pattern: SitePatternDefinition): IntegrationPatternMatcher | null {
   const matcher = pattern.matcher as IntegrationPatternMatcher | undefined;
   return matcher ? { ...matcher, pattern: expandedPattern(matcher.pattern) } : null;
 }
@@ -122,10 +122,12 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
     back: (workerId) => call('back', { workerId }),
 
     async inspect(workerId, request): Promise<PageInspection> {
-      // An item's own page has one record: found, reading stops, rather than scrolling the rest of the page for more.
+      // An item's own page has one record, and a list needs at most its limit: found, reading stops, rather than scrolling
+      // the rest of the page for more.
       const patterns = request.patterns.flatMap((pattern) => {
         const matcher = matcherOf(pattern);
-        return matcher ? [{ id: pattern.id, matcher: { ...matcher.pattern, ...(pattern.role === 'detail' ? { recordLimit: 1 } : {}) } }] : [];
+        const recordLimit = pattern.role === 'detail' ? 1 : pattern.role === 'listing' ? request.listingLimit : undefined;
+        return matcher ? [{ id: pattern.id, matcher: { ...matcher.pattern, ...(recordLimit ? { recordLimit } : {}) } }] : [];
       });
       const raw = await call<RawInspection>('inspect', { workerId, request: { patterns } });
       return {

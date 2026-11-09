@@ -15,7 +15,7 @@ import { publishedService, publishedServices, SERVICE_MANIFEST_FORMAT, SERVICE_M
 import { documentProfileName, resolveProfile, withDocumentProfile, type BrowserProfile } from '../webAutomation/profiles';
 import { DEFAULT_QUEUE_CONFIG, type QueueEntry } from '../webAutomation/queue';
 import type { DocumentAutomationLookup } from '../webAutomation/scripting';
-import { canSetUpSites, setUpSite } from '../webAutomation/siteSetupOpener';
+import { canSetUpSites, canShowSiteMatching, setUpSite, showSiteMatching } from '../webAutomation/siteSetupOpener';
 import {
   fieldsNotRead, newSiteId, patternsOf, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, startPageId, websitesOf, withSiteSetups, withoutSiteSetup,
   type SiteSetup, type SiteSetupPaste,
@@ -1593,12 +1593,21 @@ function openProblemsDialog(ctx: HvyPluginContext, lookup: DocumentAutomationLoo
     // example, keeping those it has; Done saves the setup.
     const site = problem.kind === 'item' && problem.siteId ? collection.sites.find((candidate) => candidate.id === problem.siteId) : undefined;
     if (site && canSetUpSites()) {
-      const addExample = button('Add as example');
-      addExample.classList.add('hvy-web-problem-action');
-      addExample.addEventListener('click', () => {
+      const addAsExample = () => {
         close();
         setUpSiteFor(ctx, currentCollection(ctx, collection), problem.url, site, (setup) => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [setup])), { itemExample: true });
-      });
+      };
+      // The page with its setup's item page matched against it: how close it came, and which fields failed or overlapped.
+      const itemPage = patternsOf(collection, site.id).find((pattern) => pattern.role === 'detail');
+      if (itemPage && canShowSiteMatching()) {
+        const show = button('Show matching');
+        show.classList.add('hvy-web-problem-action');
+        show.addEventListener('click', () => showSiteMatching({ url: problem.url, itemName: collection.itemName?.trim() || 'item', pattern: itemPage, addExample: addAsExample }));
+        entry.append(show);
+      }
+      const addExample = button('Add as example');
+      addExample.classList.add('hvy-web-problem-action');
+      addExample.addEventListener('click', addAsExample);
       entry.append(addExample);
     }
     if (sink) {
@@ -1740,9 +1749,10 @@ function withIncluded(page: StartPage, included: boolean): StartPage {
  * with what reads it, how its last run went (or that it has none), opening it, and editing it. Above it: collecting the
  * pages ticked, adding a page or a pasted site setup, the default limits (on the right), and whether a run reads each
  * item's own page. `collectPages` is null without an output to collect into, and `openPage` until the block has a
- * browser profile.
+ * browser profile. Stop is always there, beside Fetch, and enabled while a run is going (`stop` stops them), so a run
+ * starting or ending never moves what is below the block.
  */
-function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPages: ((pages: StartPage[]) => void) | null, openPage: ((page: StartPage) => void) | null): HTMLElement {
+function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPages: ((pages: StartPage[]) => void) | null, openPage: ((page: StartPage) => void) | null, stop: (() => void) | null): HTMLElement {
   const progressByPage = latestPageProgress(runs);
   const busy = runs.some((run) => run.status === 'running' || run.status === 'needs-attention');
   const included = collection.startPages.filter((page) => page.included !== false);
@@ -1758,6 +1768,9 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   collect.title = 'Fetches from the pages ticked: what collecting everything (a script, AI tools) fetches from.';
   collect.disabled = !collectPages || busy || !included.some((page) => readsWith(collection, page.url));
   collect.addEventListener('click', () => collectPages?.(included.filter((page) => readsWith(collection, page.url))));
+  const stopRuns = button('Stop');
+  stopRuns.disabled = !stop;
+  stopRuns.addEventListener('click', () => stop?.());
   const add = button('+ Add a page');
   add.addEventListener('click', () => openAddPageDialog(ctx, collection));
   // A site setup copied from a site or another document: read from the clipboard and reviewed before it is added.
@@ -1769,7 +1782,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
   const bar = document.createElement('div');
   bar.className = 'hvy-web-pages-bar';
-  bar.append(actions(collect, add, paste), actions(limits));
+  bar.append(actions(collect, stopRuns, add, paste), actions(limits));
 
   // Whether a run reads each item's page as its list is read, or lists them for their pages to be read when chosen.
   const itemPages = checkboxRow(`Visit and read each ${collection.itemName?.trim() || 'item'}'s page`, collection.readItemPages !== false, (on) => {
@@ -1895,7 +1908,11 @@ const collectionView: HvyPluginFactory = (ctx) => {
     const openPage = profile.profile ? (page: StartPage) => {
       lookup.automation.openLink(page.url);
     } : null;
-    root.append(heading(collection.name), ...profileLine(ctx, lookup, profile), pagesSection(ctx, collection, runs, collectPages, openPage));
+    const running = runs.filter((candidate) => candidate.status === 'running');
+    const stop = running.length ? () => {
+      for (const candidate of running) lookup.automation.stopCollection(candidate.runId);
+    } : null;
+    root.append(heading(collection.name), ...profileLine(ctx, lookup, profile), pagesSection(ctx, collection, runs, collectPages, openPage, stop));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
     // Which run this is: of one page, by its name; of several, how many; or items read on their own pages.
@@ -1928,19 +1945,18 @@ const collectionView: HvyPluginFactory = (ctx) => {
       });
       root.append(actions(read));
     }
-    if (run.status === 'running') {
-      const stop = button('Stop');
-      stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
-      root.append(actions(stop));
-    } else if (run.status === 'needs-attention' && run.attention) {
+    if (run.status === 'needs-attention' && run.attention) {
       // The page in its own window, as you would see it; Show is the window collecting it, Galaxy's scripts and all.
       const open = button('Open page', true);
-      open.title = 'Opens the page as you would see it, to sign in, pass a check that you’re human, or accept its cookies. Resume loads it again.';
+      open.title = 'Opens the page as you would see it, to sign in, pass a check that you’re human, or accept its cookies. Retry loads it again.';
       open.addEventListener('click', () => void lookup.automation.openAttentionPage(run.runId));
       const show = button('Show');
       show.addEventListener('click', () => void lookup.automation.showAttention(run.runId));
-      const resume = button('Resume');
-      resume.addEventListener('click', () => lookup.automation.resumeAttention(run.runId));
+      const retry = button('Retry');
+      retry.addEventListener('click', () => lookup.automation.resumeAttention(run.runId));
+      // Let go: the page is reported with the run's problems (and can be read again later), and the run carries on.
+      const skip = button('Skip');
+      skip.addEventListener('click', () => lookup.automation.skipAttention(run.runId));
       const stop = button('Stop');
       stop.addEventListener('click', () => lookup.automation.stopCollection(run.runId));
       // An item's page that is fine, only laid out differently: added to its site setup as another example, as from the
@@ -1956,8 +1972,8 @@ const collectionView: HvyPluginFactory = (ctx) => {
       root.append(needsYouNotice(
         lookup,
         `${run.runId}\0${run.attention.workerId}\0${url}`,
-        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'} (${new URL(url).host}) Open it, deal with it there, then Resume.${addExample.length ? ' If it’s fine as it is, add it as an example.' : ''}`),
-        actions(open, show, resume, ...addExample, stop),
+        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'} (${new URL(url).host}) Open it, deal with it there, and press Retry.${addExample.length ? ' If nothing looks wrong, you can try adding it as an example.' : ''}`),
+        actions(open, show, retry, skip, ...addExample, stop),
       ));
     }
     if (run.error) root.append(paragraph(run.error, 'hvy-web-error'));

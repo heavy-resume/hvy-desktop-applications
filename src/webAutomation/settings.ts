@@ -77,15 +77,20 @@ export function normalizeAutomationSettings(value: unknown): AutomationSettings 
   };
 }
 
-/** How many pages collection reads at once (App Settings, "Web collection"): on one site, and in all. */
+/**
+ * How much web automation does at once (App Settings, "Web collection"): pages collection reads on one site, and in
+ * all; and web API calls a browser profile makes at once (to a service's API, not a site's pages, so not paced as
+ * page loads are).
+ */
 export interface CollectionWorkerLimits {
   perSite: number;
   total: number;
+  apiCalls: number;
 }
 
-export const DEFAULT_COLLECTION_WORKER_LIMITS: CollectionWorkerLimits = { perSite: 2, total: 4 };
-/** Each worker is a webview: these bound what the settings accept. */
-export const COLLECTION_WORKER_LIMIT_BOUNDS: CollectionWorkerLimits = { perSite: 4, total: 8 };
+export const DEFAULT_COLLECTION_WORKER_LIMITS: CollectionWorkerLimits = { perSite: 2, total: 4, apiCalls: 4 };
+/** Each collection worker is a webview, and API calls share one page: these bound what the settings accept. */
+export const COLLECTION_WORKER_LIMIT_BOUNDS: CollectionWorkerLimits = { perSite: 4, total: 8, apiCalls: 8 };
 
 /** The stored limits, each a whole number within its bounds, or its default. */
 export function normalizeCollectionWorkerLimits(value: unknown): CollectionWorkerLimits {
@@ -96,5 +101,5 @@ export function normalizeCollectionWorkerLimits(value: unknown): CollectionWorke
       ? Math.min(COLLECTION_WORKER_LIMIT_BOUNDS[key], Math.max(1, stored))
       : DEFAULT_COLLECTION_WORKER_LIMITS[key];
   };
-  return { perSite: limit('perSite'), total: limit('total') };
+  return { perSite: limit('perSite'), total: limit('total'), apiCalls: limit('apiCalls') };
 }

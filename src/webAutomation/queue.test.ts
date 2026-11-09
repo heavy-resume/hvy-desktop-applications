@@ -38,4 +38,27 @@ describe('DurableQueue', () => {
       expect(calls).toHaveLength(5);
     }
   });
+
+  it('takes the file\'s settings when reopened while still in memory, as a regenerated file sets more calls at once', async () => {
+    const clock = new VirtualClock();
+    let ids = 0;
+    const queue = new DurableQueue({
+      id: 'details',
+      config: { ...DEFAULT_QUEUE_CONFIG, concurrency: 1, minIntervalMs: 200, jitterMs: 0 },
+      clock,
+      random: () => 0,
+      emit: () => undefined,
+      createId: () => `id-${++ids}`,
+      target: async (input) => {
+        await clock.sleep(5_000);
+        return input;
+      },
+    });
+    queue.reopen(null, { ...DEFAULT_QUEUE_CONFIG, concurrency: 3, minIntervalMs: 200, jitterMs: 0 });
+    for (const key of ['a', 'b', 'c', 'd']) queue.enqueue(key, key);
+    const running = () => queue.getState().entries.filter((entry) => entry.status === 'running').length;
+    await clock.runUntil(() => running() === 3);
+    expect(running()).toBe(3);
+    await runUntilIdle(clock, queue);
+  });
 });

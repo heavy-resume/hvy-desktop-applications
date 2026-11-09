@@ -114,9 +114,11 @@ export class DurableQueue {
   /**
    * The document was opened again from its file while this queue was still in memory: the queue is what the file
    * saved. A saved entry this queue still holds (same idempotency key) keeps how far it got, such as a call that
-   * finished while the file was closed; entries the file never saved go, with the rest of the changes not saved.
+   * finished while the file was closed; entries the file never saved go, with the rest of the changes not saved. Its
+   * settings are the file's too, as the queue block has them now.
    */
-  reopen(saved: QueueState | null): void {
+  reopen(saved: QueueState | null, config: QueueConfig): void {
+    this.deps.config = config;
     const progressed = new Map(this.state.entries.map((entry) => [entry.idempotencyKey, entry]));
     this.restore(saved ?? { entries: [], paused: false, pauseReason: null, awaitingResume: false });
     this.state.entries = this.state.entries.map((entry) => progressed.get(entry.idempotencyKey) ?? entry);
@@ -200,11 +202,10 @@ export class DurableQueue {
 
   private pump(): void {
     this.wake?.abort();
-    while (this.loops < this.deps.config.concurrency) {
+    // The loops missing, counted first: one that finds nothing ends at once, and is not started again here.
+    for (let missing = this.deps.config.concurrency - this.loops; missing > 0; missing -= 1) {
       this.loops += 1;
-      void this.loop().finally(() => {
-        this.loops -= 1;
-      });
+      void this.loop();
     }
   }
 
@@ -235,25 +236,33 @@ export class DurableQueue {
     return this.state.entries.find((entry) => (entry.status === 'queued' || entry.status === 'waiting-retry') && (entry.nextAttemptAt ?? 0) <= now) ?? null;
   }
 
+  /**
+   * One of the queue's `concurrency` loops, taking entries in turn. It counts itself out as it ends, at once: a loop
+   * that finds nothing to run ends before the next entry is enqueued (several are, together), which then starts another.
+   */
   private async loop(): Promise<void> {
-    while (!this.blocked()) {
-      const entry = this.nextEligible();
-      if (!entry) {
-        // Entries held back until a later time: retries, and entries enqueued with a delay.
-        const retryTimes = this.state.entries.filter((candidate) => candidate.nextAttemptAt !== null && (candidate.status === 'waiting-retry' || candidate.status === 'queued')).map((candidate) => candidate.nextAttemptAt ?? 0);
-        if (!retryTimes.length) return;
-        this.wake = new AbortController();
-        await this.deps.clock.sleep(Math.max(0, Math.min(...retryTimes) - this.deps.clock.now()), this.wake.signal).catch(() => undefined);
-        continue;
+    try {
+      while (!this.blocked()) {
+        const entry = this.nextEligible();
+        if (!entry) {
+          // Entries held back until a later time: retries, and entries enqueued with a delay.
+          const retryTimes = this.state.entries.filter((candidate) => candidate.nextAttemptAt !== null && (candidate.status === 'waiting-retry' || candidate.status === 'queued')).map((candidate) => candidate.nextAttemptAt ?? 0);
+          if (!retryTimes.length) return;
+          this.wake = new AbortController();
+          await this.deps.clock.sleep(Math.max(0, Math.min(...retryTimes) - this.deps.clock.now()), this.wake.signal).catch(() => undefined);
+          continue;
+        }
+        if (this.lastStartedAt !== null) {
+          const wait = this.lastStartedAt + this.deps.config.minIntervalMs + randomBetween(this.deps.random, 0, this.deps.config.jitterMs) - this.deps.clock.now();
+          if (wait > 0) await this.deps.clock.sleep(wait);
+          if (this.blocked()) return;
+        }
+        const current = this.state.entries.find((candidate) => candidate.key === entry.key);
+        if (current?.status !== 'queued' && current?.status !== 'waiting-retry') continue;
+        await this.attempt(entry.key);
       }
-      if (this.lastStartedAt !== null) {
-        const wait = this.lastStartedAt + this.deps.config.minIntervalMs + randomBetween(this.deps.random, 0, this.deps.config.jitterMs) - this.deps.clock.now();
-        if (wait > 0) await this.deps.clock.sleep(wait);
-        if (this.blocked()) return;
-      }
-      const current = this.state.entries.find((candidate) => candidate.key === entry.key);
-      if (current?.status !== 'queued' && current?.status !== 'waiting-retry') continue;
-      await this.attempt(entry.key);
+    } finally {
+      this.loops -= 1;
     }
   }
 

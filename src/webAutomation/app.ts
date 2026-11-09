@@ -257,14 +257,13 @@ export interface BackgroundRunSummary {
 /** What Background activity shows. Plain data, so the app can keep it in its state and render it. */
 export interface BackgroundActivity {
   /**
-   * Each browser worker: its profile, kind, and the job it is running (null when idle); and whether that job is held on
-   * a page that needs the user (a collection run's attention), so it waits rather than works.
+   * Each job a browser worker is running, with the worker's profile and kind (an idle worker once, its label null); an
+   * API worker runs several at once. Whether the job is held on a page that needs the user (a collection run's
+   * attention), so it waits rather than works, and whether the same call is running or waiting more than once.
    */
-  workers: Array<{ workerId: string; profile: string; kind: 'collection' | 'api'; label: string | null; needsYou: boolean }>;
-  /** Jobs waiting for a worker, in the order they will get one. */
-  waitingJobs: Array<{ profile: string; kind: 'collection' | 'api'; label: string }>;
-  /** Labels running or waiting more than once at the same time: the same call made twice. */
-  duplicates: string[];
+  workers: Array<{ workerId: string; profile: string; kind: 'collection' | 'api'; label: string | null; needsYou: boolean; duplicate: boolean }>;
+  /** Jobs waiting for a worker, in the order they will get one; whether the same call is running or waiting twice. */
+  waitingJobs: Array<{ profile: string; kind: 'collection' | 'api'; label: string; duplicate: boolean }>;
   /** Each open document with collection runs going or queued work. */
   documents: Array<{ path: string; runs: BackgroundRunSummary[]; queues: BackgroundQueueSummary[] }>;
   /** Newest first. */
@@ -274,10 +273,11 @@ export interface BackgroundActivity {
 const ACTIVE_RUN_STATUSES = new Set<CollectionRunState['status']>(['running', 'needs-attention']);
 
 export function backgroundActivity(): BackgroundActivity {
-  if (!host) return { workers: [], waitingJobs: [], duplicates: [], documents: [], events: [] };
+  if (!host) return { workers: [], waitingJobs: [], documents: [], events: [] };
   const scheduler = appRuntime().scheduler.getState();
   const profileName = (profileId: string) => state.integrationRegistry.profiles.find(({ id }) => id === profileId)?.name ?? profileId;
-  const labels = [...scheduler.workers.flatMap(({ label }) => (label ? [label] : [])), ...scheduler.waitingJobs.map(({ label }) => label)];
+  const identities = [...scheduler.workers.flatMap(({ jobs }) => jobs.map(({ identity }) => identity)), ...scheduler.waitingJobs.map(({ identity }) => identity)];
+  const twice = (identity: string) => identities.indexOf(identity) !== identities.lastIndexOf(identity);
   const documents: BackgroundActivity['documents'] = [];
   const attentionWorkers = new Set<string>();
   for (const [document, path] of documentPaths) {
@@ -310,9 +310,13 @@ export function backgroundActivity(): BackgroundActivity {
     if (runs.length || queues.length) documents.push({ path, runs, queues });
   }
   return {
-    workers: scheduler.workers.map(({ workerId, profileId, kind, busy, label }) => ({ workerId, profile: profileName(profileId), kind, label: busy ? label : null, needsYou: busy && attentionWorkers.has(workerId) })),
-    waitingJobs: scheduler.waitingJobs.map(({ profileId, kind, label }) => ({ profile: profileName(profileId), kind, label })),
-    duplicates: [...new Set(labels.filter((label, index) => labels.indexOf(label) !== index))],
+    workers: scheduler.workers.flatMap(({ workerId, profileId, kind, jobs }): BackgroundActivity['workers'] => {
+      const worker = { workerId, profile: profileName(profileId), kind };
+      return jobs.length
+        ? jobs.map(({ label, identity }) => ({ ...worker, label, needsYou: attentionWorkers.has(workerId), duplicate: twice(identity) }))
+        : [{ ...worker, label: null, needsYou: false, duplicate: false }];
+    }),
+    waitingJobs: scheduler.waitingJobs.map(({ profileId, kind, label, identity }) => ({ profile: profileName(profileId), kind, label, duplicate: twice(identity) })),
     documents,
     events: [...recentEvents].reverse(),
   };

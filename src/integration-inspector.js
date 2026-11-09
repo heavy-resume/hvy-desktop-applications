@@ -20,6 +20,8 @@
   let scopeSnapshot = null;
   let scopeAnchorElement = null;
   let inspectionPattern = null;
+  // Showing how a pattern matches the page (Show matching), to look at only: the boxes, and no picking.
+  let matchingView = false;
   let liveMinimumConfidence = null;
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
@@ -37,6 +39,11 @@
   // Changing one boundary of a range field picked before: the end it keeps while its start is picked again.
   let rangeKeptEnd = null;
   let rangeEditing = false;
+  // Range mode (Use range): a click picks where a range starts, then where it ends, rather than a field: the picker's
+  // row clicked is the boundary. `rangeModeChanged` updates its button.
+  let rangeMode = false;
+  let rangeModeChanged = null;
+  const RANGE_MODE_STATUS = 'Pick where the range starts · Esc leaves range mode';
   let toolbarControl = null;
   let inspectionContext = null;
   let captureSequence = 0;
@@ -175,8 +182,10 @@
   };
   const rangeSummary = (start, end, includeStart, includeEnd, text) => `${includeStart ? 'Starts at' : 'Starts after'} “${boundaryLabel(start)}” · ${includeEnd ? 'Ends at' : 'Ends before'} “${boundaryLabel(end)}” · ${text.length.toLocaleString()} characters`;
 
+  // An image, or what holds only an image (a link around a logo): an element with text of its own around an image (the
+  // page around a company's logo) is that text, not the image.
   const imageFor = (element) => {
-    const image = element.matches('img') ? element : element.querySelector('img');
+    const image = element.matches('img') ? element : (element.innerText || element.textContent || '').trim() ? null : element.querySelector('img');
     if (image instanceof HTMLImageElement) {
       return {
         url: (image.currentSrc || image.src).slice(0, 4000),
@@ -1090,11 +1099,16 @@
       ? inspectionKind === 'parent' ? 'Choose the record for this command' : 'Choose the interaction target'
       : inspectionKind === 'scope' ? 'Choose the section that should contain matching items' : inspectionKind === 'parent' ? 'Choose the parent containing one complete item'
         : rangeStart ? candidates.length ? 'Choose where the range ends' : 'Pick something after the start'
-          : rangeKeptEnd ? candidates.length ? 'Choose where the range starts' : 'Pick something before the end' : 'Choose data inside the selected parent';
+          : rangeKeptEnd ? candidates.length ? 'Choose where the range starts' : 'Pick something before the end'
+            : rangeMode ? 'Choose where the range starts' : 'Choose data inside the selected parent';
     // A field can be a range: everything from one element to another, for text split across sections with no container
-    // of its own. Its start and end are picked from this list too, and apply to the highlighted choice.
-    const offersRange = inspectionKind === 'target' && !commandRecorder;
-    let chosen = candidates[0] || null;
+    // of its own. In range mode (or changing a range's boundary), clicking a row starts the range there, or ends it; with
+    // the checkbox ticked, it starts after the row, or ends before it.
+    const pickingRange = inspectionKind === 'target' && !commandRecorder && (rangeMode || rangeEditing);
+    const exclude = document.createElement('input');
+    exclude.type = 'checkbox';
+    // Where the range is: its end once its start is picked, its start otherwise (a start picked again keeps its end).
+    const pickingEnd = Boolean(rangeStart);
     const rangeTo = (element, includeEnd) => textRangeBetween(rangeStart.element, element, rangeStart.includeStart, includeEnd);
     heading.style.cssText = 'padding:7px 8px;font-weight:700;border-bottom:1px solid #c5cec8';
     picker.append(heading);
@@ -1129,16 +1143,12 @@
       choice.addEventListener('mouseenter', () => {
         picker.querySelectorAll('[data-picker-choice]').forEach((button) => { button.style.background = 'transparent'; });
         choice.style.background = '#dce8e1';
-        chosen = element;
-        highlight(element, rangeStart ? rangeTo(element, true) : null);
+        highlight(element, rangeStart ? rangeTo(element, !exclude.checked) : null);
       });
       choice.addEventListener('click', () => {
-        if (rangeStart) {
-          finishRange(element, true);
-          return;
-        }
-        if (rangeKeptEnd) {
-          beginRange(element, true);
+        if (pickingRange) {
+          if (pickingEnd) finishRange(element, !exclude.checked);
+          else beginRange(element, !exclude.checked);
           return;
         }
         if (inspectionKind === 'parent') scopeElement = element;
@@ -1161,25 +1171,21 @@
       });
       picker.append(choice);
     });
-    if (offersRange && candidates.length) {
-      const rangeActions = document.createElement('div');
-      rangeActions.style.cssText = 'display:flex;gap:6px;padding:7px 8px;border-top:1px solid #c5cec8';
-      const rangeAction = (label, onChoose) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = label;
-        button.style.cssText = 'flex:1;padding:6px 8px;border:1px solid #9aa9a1;border-radius:6px;background:#fff;color:#31413e;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
-        button.addEventListener('click', () => { if (chosen) onChoose(chosen); });
-        rangeActions.append(button);
-      };
-      if (rangeStart) {
-        rangeAction('End here', (element) => finishRange(element, true));
-        rangeAction('End before this', (element) => finishRange(element, false));
-      } else {
-        rangeAction('Start a range here', (element) => beginRange(element, true));
-        rangeAction('Start after this', (element) => beginRange(element, false));
-      }
-      picker.append(rangeActions);
+    // Nothing after the range's start here: picking somewhere else, or taking the start back.
+    if (pickingRange && rangeStart && !candidates.length && !rangeEditing) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = 'Cancel range';
+      cancel.style.cssText = 'display:block;margin:7px 8px;padding:6px 8px;border:1px solid #9aa9a1;border-radius:6px;background:#fff;color:#31413e;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+      cancel.addEventListener('click', () => cancelRange());
+      picker.append(cancel);
+    }
+    if (pickingRange && candidates.length) {
+      const excludeRow = document.createElement('label');
+      excludeRow.style.cssText = 'display:flex;align-items:center;gap:6px;padding:7px 8px;border-top:1px solid #c5cec8;font-weight:600;cursor:pointer';
+      exclude.style.cssText = 'margin:0';
+      excludeRow.append(exclude, pickingEnd ? 'End before it' : 'Start after it');
+      picker.append(excludeRow);
     }
     const diagnostics = document.createElement('details');
     diagnostics.style.cssText = 'padding:7px 8px;border-top:1px solid #c5cec8';
@@ -1223,6 +1229,33 @@
     };
   };
 
+  /**
+   * Takes back a range's start while its end is being picked (Undo last, or Cancel range), staying in range mode: the
+   * fields already picked are kept. False when no range is being picked, or when one picked before is being edited.
+   */
+  const cancelRange = () => {
+    if (!rangeStart || rangeEditing) return false;
+    clearRangeStart();
+    return true;
+  };
+
+  /** Leaves range mode (Esc, or Pick element), taking back a range's start if one was picked. */
+  const exitRangeMode = () => {
+    if (!rangeMode) return false;
+    rangeMode = false;
+    rangeModeChanged?.();
+    clearRangeStart();
+    return true;
+  };
+
+  const clearRangeStart = () => {
+    rangeStart = null;
+    document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+    document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+    highlighted = null;
+    rangeStatus?.();
+  };
+
   const setRangeStatus = (text) => {
     if (rangeStart) rangeStart.status = text;
     rangeStatus?.();
@@ -1237,7 +1270,7 @@
       finishRange(end, includeEnd);
       return;
     }
-    setRangeStatus('Pick where the range ends · Esc cancels the range');
+    setRangeStatus('Pick where the range ends · Esc leaves range mode');
   };
 
   /**
@@ -1257,6 +1290,9 @@
     document.getElementById('hvy-galaxy-inspector-picker')?.remove();
     const { element: start, includeStart } = rangeStart;
     rangeStart = null;
+    // A range made: back to picking elements.
+    rangeMode = false;
+    rangeModeChanged?.();
     rangeStatus?.();
     const textRange = textRangeBetween(start, end, includeStart, includeEnd);
     const result = snapshot(start);
@@ -1307,7 +1343,7 @@
     });
   };
   const pointerMoveNow = (event) => {
-    if (!active || pickingPaused || !(event.target instanceof Element)) return;
+    if (!active || pickingPaused || matchingView || !(event.target instanceof Element)) return;
     if (event.target.closest('#hvy-galaxy-inspector-picker')) return;
     if (recordChoice) {
       const choice = recordChoiceAt(event);
@@ -1339,6 +1375,8 @@
     if (!active || pickingPaused || event.target instanceof Element && event.target.closest('#hvy-galaxy-inspector-picker, #hvy-galaxy-inspector-status')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    // Showing matching: the page is to look at; nothing is picked.
+    if (matchingView) return;
     if (recordChoice) {
       const choice = recordChoiceAt(event);
       if (!choice) {
@@ -1358,15 +1396,10 @@
     showPicker(event);
   };
   const keydown = (event) => {
-    // Escape while picking a range's end cancels the range; the fields already picked are kept.
-    if (active && rangeStart && !rangeEditing && event.key === 'Escape') {
+    // Escape in range mode leaves it, taking back a range's start if one was picked; the fields already picked are kept.
+    if (active && event.key === 'Escape' && !rangeEditing && exitRangeMode()) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      rangeStart = null;
-      document.getElementById('hvy-galaxy-inspector-picker')?.remove();
-      document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
-      highlighted = null;
-      rangeStatus?.();
       return;
     }
     // Escape while picking fields takes back the last one picked, as Undo last does; with none picked, it does nothing.
@@ -2603,12 +2636,13 @@
       inspectionPattern = options.existingPattern
         ? { ...options.existingPattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) }
         : null;
+      matchingView = options.matchingView === true && Boolean(inspectionPattern);
       active = true;
       pickingPaused = false;
       removeUi();
       const shield = document.createElement('div');
       shield.id = 'hvy-galaxy-inspector-shield';
-      shield.style.cssText = 'position:fixed;inset:0;z-index:2147483644;background:transparent;cursor:crosshair;pointer-events:auto';
+      shield.style.cssText = `position:fixed;inset:0;z-index:2147483644;background:transparent;cursor:${matchingView ? 'default' : 'crosshair'};pointer-events:auto`;
       document.documentElement.append(shield);
       // The shield takes the wheel. Over a page that scrolls as a whole, the browser scrolls it (the shield is fixed over
       // it), as smoothly as ever. Only a box that scrolls within the page is scrolled here, as the browser does not reach
@@ -2644,6 +2678,7 @@
         if (step.x) wheelScroller.scrollLeft += step.x;
       }, { passive: false });
       const trackedBoxes = [];
+      let matchingSummary = '';
       targetCollection = null;
       undoLastPick = null;
       toolbarControl = null;
@@ -2664,6 +2699,20 @@
           diagnosticCandidates.push(candidate);
           if (diagnosticCandidates.length >= 50) break;
         }
+        // How close the page came, said in the status while showing matching: the best candidate, and why it failed.
+        const best = rankedCandidates[0];
+        const percent = (value) => `${Math.round((value || 0) * 100)}%`;
+        matchingSummary = !best
+          ? 'Nothing on this page is close to its examples'
+          : best.accepted
+            ? `It matches here · ${percent(best.score)}`
+            : [
+              `Closest ${percent(best.score)} (needs ${percent(minimumConfidence)})`,
+              ...best.matchedTargets
+                .filter((target) => !target.optional && (!target.element || target.score < best.minimumTargetConfidence))
+                .map((target) => `${target.label} ${target.element ? `${percent(target.score)} (needs ${percent(best.minimumTargetConfidence)})` : 'not found'}`),
+              ...(best.distinctTargets ? [] : ['fields overlap']),
+            ].join(' · ');
         diagnosticCandidates.sort((left, right) => left.element.getBoundingClientRect().top - right.element.getBoundingClientRect().top);
         diagnosticCandidates.forEach((match, index) => {
           const parentColor = match.accepted ? '#27865f' : '#c56a25';
@@ -2682,7 +2731,10 @@
           existingLayer.append(box);
           trackedBoxes.push({ element: match.element, box });
 
-          if (!match.accepted) return;
+          // Picking one of the records (by what opens it) shows only the records: their fields' boxes would read as what
+          // is being picked.
+          // Showing matching, a candidate that fails shows its fields too: which failed is why.
+          if ((!match.accepted && !matchingView) || options.recordChoice) return;
           match.matchedTargets.forEach((target) => {
             const passes = Boolean(target.element) && target.score >= match.minimumTargetConfidence && uniqueTargetElement(target, match.matchedTargets);
             if (target.optional && !passes) return;
@@ -2777,7 +2829,8 @@
       rangeStart = null;
       rangeKeptEnd = null;
       rangeEditing = false;
-      rangeStatus = () => { statusText.textContent = rangeStart?.status || activeStatusText; };
+      rangeMode = false;
+      rangeStatus = () => { statusText.textContent = rangeStart?.status || (rangeMode ? RANGE_MODE_STATUS : activeStatusText); };
       recordChoice = options.recordChoice && inspectionPattern
         ? { matches: findPatternMatches(inspectionPattern), refuse: () => { statusText.textContent = options.recordChoice.refuse || 'Pick one of the records boxed in green.'; } }
         : null;
@@ -2817,6 +2870,30 @@
           highlighted = null;
         }
       });
+      // Use range: picks a field as a range, from where it starts to where it ends; Pick element (or Esc) goes back to
+      // picking elements. Not while a range picked before has a boundary picked again: that is a range already.
+      const rangeButton = inspectionKind === 'target' && !options.commandRecorder && !rangeEdit ? document.createElement('button') : null;
+      if (rangeButton) {
+        rangeButton.type = 'button';
+        rangeButton.dataset.toolbarId = 'range';
+        rangeButton.style.cssText = navigationButton.style.cssText;
+        rangeModeChanged = () => {
+          rangeButton.textContent = rangeMode ? 'Pick element' : 'Use range';
+        };
+        rangeModeChanged();
+        rangeButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // Either way, picking: navigating the page ends.
+          if (pickingPaused) navigationButton.click();
+          if (!exitRangeMode()) {
+            rangeMode = true;
+            rangeModeChanged();
+            document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+            rangeStatus?.();
+          }
+        });
+      }
       if (options.commandRecorder) {
         status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;width:min(460px,calc(100vw - 24px));display:grid;gap:10px;padding:14px;border:1px solid #f08c7c;border-radius:12px;background:#20232a;color:#fff;box-shadow:0 10px 32px #0008;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
         statusText.style.cssText = 'display:block;white-space:normal;font-weight:650;line-height:1.4';
@@ -3176,7 +3253,36 @@
         }
         status.append(statusText, controls);
       } else {
-        status.append(statusText, navigationButton);
+        status.append(statusText, navigationButton, ...(rangeButton ? [rangeButton] : []));
+      }
+      if (matchingView) {
+        // Says how close it came; Add as example goes on to add the page to its setup, Close leaves it.
+        statusText.textContent = `${options.prompt ? `${options.prompt} · ` : ''}${matchingSummary}`;
+        const matchingButton = (label, id, onClick, primary = false) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = label;
+          button.dataset.toolbarId = id;
+          if (primary) button.dataset.toolbarPrimary = 'true';
+          button.style.cssText = navigationButton.style.cssText;
+          button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+          });
+          return button;
+        };
+        status.append(
+          matchingButton('Add as example', 'add-example', () => {
+            publish({ kind: 'integration-matching-add-example', ...(inspectionContext ? { context: inspectionContext } : {}) });
+            window.__hvyGalaxyInspector.stop();
+          }, true),
+          matchingButton('Close', 'close', () => {
+            if (host.cancel) host.cancel();
+            else window.location.href = messageUrl('inspection-cancel');
+            window.__hvyGalaxyInspector.stop();
+          }),
+        );
       }
       if (!options.commandRecorder && inspectionKind === 'target' && options.multiSelect) {
         const selectedItems = [];
@@ -3204,7 +3310,7 @@
         const updateCollectionStatus = () => {
           const picked = selectedItems.map((item) => item.result.fieldId).filter(Boolean);
           const left = fieldChoices.filter((choice) => !picked.includes(choice.id)).map((choice) => choice.label);
-          statusText.textContent = rangeStart?.status || (assigning
+          statusText.textContent = rangeStart?.status || (rangeMode ? RANGE_MODE_STATUS : assigning
             ? `Which field is this? “${(assigning.result.range?.summary || visibleText(assigning.element)).slice(0, 80)}”`
             : fieldChoices.length
               ? selectedItems.length
@@ -3213,12 +3319,13 @@
               : selectedItems.length
                 ? `${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
                 : options.prompt || (undoesParent ? 'Select fields, or Undo last to pick the box again' : 'Select fields, or choose Done to cancel'));
-          undoButton.disabled = selectedItems.length === 0 && !undoesParent;
+          undoButton.disabled = selectedItems.length === 0 && !undoesParent && !rangeStart;
         };
         const finishAssigning = () => {
           assigning = null;
           fieldButtons.replaceChildren();
           navigationButton.hidden = false;
+          if (rangeButton) rangeButton.hidden = false;
           doneButton.hidden = false;
           if (wrongPageButton) wrongPageButton.hidden = false;
           pickingPaused = false;
@@ -3230,6 +3337,7 @@
           pickingPaused = true;
           document.getElementById('hvy-galaxy-inspector-picker')?.remove();
           navigationButton.hidden = true;
+          if (rangeButton) rangeButton.hidden = true;
           doneButton.hidden = true;
           if (wrongPageButton) wrongPageButton.hidden = true;
           const taken = new Set(selectedItems.map((selected) => selected.result.fieldId).filter(Boolean));
@@ -3281,6 +3389,8 @@
         undoButton.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
+          // Picking a range's end: the range's start is what was picked last.
+          if (cancelRange()) return;
           const removed = selectedItems.pop();
           if (!removed && undoesParent) {
             publish({ kind: 'integration-target-collection-undo-parent' });
@@ -3359,7 +3469,10 @@
       rangeStatus = null;
       rangeKeptEnd = null;
       rangeEditing = false;
+      rangeMode = false;
+      rangeModeChanged = null;
       inspectionPattern = null;
+      matchingView = false;
       targetCollection = null;
       undoLastPick = null;
       commandRecorder = null;

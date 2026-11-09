@@ -3,18 +3,18 @@ import { state } from '../state';
 import type { BackgroundActivity } from '../webAutomation/app';
 import { backgroundActivityLabel, renderBackgroundActivityDialog, renderBackgroundActivityIndicator } from './render-background-activity';
 
-const idle: BackgroundActivity = { workers: [], waitingJobs: [], duplicates: [], documents: [], events: [] };
+const idle: BackgroundActivity = { workers: [], waitingJobs: [], documents: [], events: [] };
 
 const queue = { queueId: 'evaluate', queued: 0, running: 0, retrying: 0, failed: 0, failures: [], paused: false, pauseReason: null, awaitingResume: false };
 
 describe('Background activity', () => {
   it('is hidden while nothing runs or waits, shows a word or two, and says in full what runs and what waits behind it', () => {
     expect(backgroundActivityLabel(null)).toBeNull();
-    expect(backgroundActivityLabel({ ...idle, workers: [{ workerId: 'w1', profile: 'Personal', kind: 'api', label: null, needsYou: false }] })).toBeNull();
+    expect(backgroundActivityLabel({ ...idle, workers: [{ workerId: 'w1', profile: 'Personal', kind: 'api', label: null, needsYou: false, duplicate: false }] })).toBeNull();
     expect(backgroundActivityLabel({
       ...idle,
-      workers: [{ workerId: 'w1', profile: 'Personal', kind: 'api', label: 'Heavy Resume: Files', needsYou: false }],
-      waitingJobs: [{ profile: 'Personal', kind: 'api', label: 'Heavy Resume: Session' }, { profile: 'Personal', kind: 'api', label: 'Heavy Resume: Report' }],
+      workers: [{ workerId: 'w1', profile: 'Personal', kind: 'api', label: 'Heavy Resume: Files', needsYou: false, duplicate: false }],
+      waitingJobs: [{ profile: 'Personal', kind: 'api', label: 'Heavy Resume: Session', duplicate: false }, { profile: 'Personal', kind: 'api', label: 'Heavy Resume: Report', duplicate: false }],
     })).toEqual({ short: 'Working', full: 'Background: Heavy Resume: Files (2 waiting)' });
     expect(backgroundActivityLabel({
       ...idle,
@@ -23,11 +23,11 @@ describe('Background activity', () => {
   });
 
   it('says a run held on a page that needs you needs you, and Working while other work goes on', () => {
-    const collecting = { workerId: 'w1', profile: 'Personal', kind: 'collection' as const, label: 'Careers pages: jobs.html', needsYou: true };
+    const collecting = { workerId: 'w1', profile: 'Personal', kind: 'collection' as const, label: 'Careers pages: jobs.html', needsYou: true, duplicate: false };
     const run = { runId: 'run-1', name: 'Careers pages', status: 'needs-attention' as const, collected: 30, skipped: 0, problems: 0 };
     const waiting: BackgroundActivity = { ...idle, workers: [collecting], documents: [{ path: '/w/Search.hvy', runs: [run], queues: [] }] };
     expect(backgroundActivityLabel(waiting)).toEqual({ short: 'Needs you', full: 'Background: Careers pages: needs you' });
-    expect(backgroundActivityLabel({ ...waiting, workers: [collecting, { ...collecting, workerId: 'w2', label: 'Heavy Resume: Files', needsYou: false }] }))
+    expect(backgroundActivityLabel({ ...waiting, workers: [collecting, { ...collecting, workerId: 'w2', label: 'Heavy Resume: Files', needsYou: false, duplicate: false }] }))
       .toEqual({ short: 'Working', full: 'Background: Heavy Resume: Files (1 run needing you)' });
   });
 
@@ -35,9 +35,8 @@ describe('Background activity', () => {
     state.documentTabs = [];
     state.backgroundActivityOpen = true;
     state.backgroundActivity = {
-      workers: [{ workerId: 'w1', profile: 'Personal', kind: 'api', label: 'Heavy Resume: Files', needsYou: false }],
-      waitingJobs: [{ profile: 'Personal', kind: 'api', label: 'Heavy Resume: Files' }],
-      duplicates: ['Heavy Resume: Files'],
+      workers: [{ workerId: 'w1', profile: 'Personal', kind: 'api', label: 'Heavy Resume: Files', needsYou: false, duplicate: true }],
+      waitingJobs: [{ profile: 'Personal', kind: 'api', label: 'Heavy Resume: Files', duplicate: true }],
       documents: [{
         path: '/w/Search.hvy',
         runs: [{ runId: 'run-1', name: 'Careers pages', status: 'running', collected: 3, skipped: 1, problems: 0 }],
@@ -75,7 +74,8 @@ describe('Background activity', () => {
     expect(html).toContain('evaluate: 1 failed');
     expect(html).toContain('https://jobs.example/1</span> The job description is empty.');
     expect(html).not.toContain('pause-background-queue');
-    expect(html).not.toContain('pause-all-background-queues');
+    // Pause all stays, so the Queues header keeps its height, with nothing to pause.
+    expect(html).toContain('data-action="pause-all-background-queues" disabled');
     state.backgroundActivityOpen = false;
   });
 });

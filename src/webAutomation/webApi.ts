@@ -104,20 +104,33 @@ export function signedOutStatuses(capability: WebApiCapability): number[] {
 
 /** Runs one endpoint request in the profile's API worker. Does not check authorization. */
 export class ApiTransport {
-  private readonly locations = new Map<string, string>();
+  /** Each API worker's way to its page: calls sharing the worker wait for the one load there, rather than each loading it. */
+  private readonly arrivals = new Map<string, { origin: string; arrived: Promise<unknown>; url?: string }>();
 
   constructor(private readonly deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock; emit: AutomationEmit }) {}
 
   call(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>, options: CallOptions = {}): Promise<HostResponse> {
     const pageUrl = capability.apiPageUrl ?? capability.pageUrl;
     const request = resolveEndpointRequest(pageUrl, endpoint, input, options);
-    return this.deps.scheduler.run({ profileId, kind: 'api', label: `${capability.name}: ${endpoint.name}`, interactive: options.interactive }, async (lease) => {
-      const origin = new URL(pageUrl).origin;
-      const current = this.locations.get(lease.workerId);
-      if (!current || new URL(current).origin !== origin) {
-        const location = await this.deps.host.navigate(lease.workerId, pageUrl);
-        this.locations.set(lease.workerId, location.url);
+    const origin = new URL(pageUrl).origin;
+    // The call itself, so the same call made twice is told from two calls of one endpoint.
+    const identity = `${capability.name}: ${endpoint.name}\0${request.method} ${request.url}\0${typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? null)}`;
+    return this.deps.scheduler.run({ profileId, kind: 'api', origin, label: `${capability.name}: ${endpoint.name}`, identity, interactive: options.interactive }, async (lease) => {
+      // Loaded again when the worker is elsewhere: on another site's page, or sent off this one (to sign in).
+      let arrival = this.arrivals.get(lease.workerId);
+      if (!arrival || arrival.origin !== origin || (arrival.url !== undefined && new URL(arrival.url).origin !== origin)) {
+        const next: { origin: string; arrived: Promise<unknown>; url?: string } = { origin, arrived: Promise.resolve() };
+        next.arrived = this.deps.host.navigate(lease.workerId, pageUrl).then((location) => {
+          next.url = location.url;
+        }, (error: unknown) => {
+          // A load that failed is tried again by the next call.
+          if (this.arrivals.get(lease.workerId) === next) this.arrivals.delete(lease.workerId);
+          throw error;
+        });
+        arrival = next;
+        this.arrivals.set(lease.workerId, arrival);
       }
+      await arrival.arrived;
       this.deps.emit('api', `${request.method} ${new URL(request.url).pathname}`, { workerId: lease.workerId });
       const controller = new AbortController();
       const timeoutMs = endpointTimeoutMs(endpoint);

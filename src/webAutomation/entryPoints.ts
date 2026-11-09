@@ -94,8 +94,8 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
   });
   const documentQueues = new Map<string, DurableQueue>();
   const heardSessions = new Map<string, SessionStatus>();
-  // Site setup's Test: runs of a setup not saved yet, for no document, written nowhere.
-  const setupTests = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, unattended: true });
+  // Site setup's Test: runs of a setup not saved yet, for no document, written nowhere. The user waits on them.
+  const setupTests = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, unattended: true, interactive: true });
   return {
     deps,
     /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
@@ -438,12 +438,13 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return collections.openPage(runId);
     },
 
-    // UI: Needs attention window, "Resume".
+    // UI: Needs attention notice, "Retry".
     resumeAttention(runId: string): void {
       collections.resume(runId);
     },
 
-    // UI: Needs attention item, "Add as example": the page is let go, reported as a problem, while its site is set up.
+    // UI: Needs attention notice, "Skip", and "Add as example" (while its site is set up): the page is let go, reported as
+    // a problem, and the run carries on.
     skipAttention(runId: string): void {
       collections.skip(runId);
     },
@@ -454,14 +455,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // Document load: openDocumentAutomation opens each queue block, from the state saved in it. A queue still in
-    // memory from an earlier open of this file is reattached with that state: what it did since for the saved entries
-    // stays (a call that finished while the file was closed), and entries never saved go with the unsaved changes.
+    // memory from an earlier open of this file is reattached with that state, and the block's settings now: what it did
+    // since for the saved entries stays (a call that finished while the file was closed), and entries never saved go
+    // with the unsaved changes.
     openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG, saved: QueueState | null = null): void {
       const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey });
       const registryKey = `${deps.documentPath()}\u0000${queueId}`;
       const existing = runtime.queues.get(registryKey);
       if (existing) {
-        existing.reopen(saved);
+        existing.reopen(saved, config);
         existing.attach(call);
         queues.set(queueId, existing);
         resumeAfterSignIn(queueId, target);

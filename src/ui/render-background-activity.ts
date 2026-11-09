@@ -104,16 +104,15 @@ function time(at: number): string {
  */
 export function renderBackgroundActivityDialog(state: AppState): string {
   if (!state.backgroundActivityOpen) return '';
-  const activity = state.backgroundActivity ?? { workers: [], waitingJobs: [], duplicates: [], documents: [], events: [] };
-  const duplicates = new Set(activity.duplicates);
-  const duplicate = (label: string) => (duplicates.has(label) ? ' <span class="background-activity-duplicate">same call twice</span>' : '');
+  const activity = state.backgroundActivity ?? { workers: [], waitingJobs: [], documents: [], events: [] };
+  const duplicate = (twice: boolean) => (twice ? ' <span class="background-activity-duplicate">same call twice</span>' : '');
   const workers = activity.workers.map((worker) => `
     <li class="background-activity-row">
-      <span class="background-activity-row-text">${escapeHtml(worker.profile)} · ${worker.kind === 'api' ? 'API' : 'collection'} · ${worker.label ? `${escapeHtml(worker.label)}${duplicate(worker.label)}` : 'idle'}</span>
+      <span class="background-activity-row-text">${escapeHtml(worker.profile)} · ${worker.kind === 'api' ? 'API' : 'collection'} · ${worker.label ? `${escapeHtml(worker.label)}${duplicate(worker.duplicate)}` : 'idle'}</span>
     </li>`).join('');
   const waiting = activity.waitingJobs.map((job) => `
     <li class="background-activity-row is-waiting">
-      <span class="background-activity-row-text">Waiting: ${escapeHtml(job.profile)} · ${job.kind === 'api' ? 'API' : 'collection'} · ${escapeHtml(job.label)}${duplicate(job.label)}</span>
+      <span class="background-activity-row-text">Waiting: ${escapeHtml(job.profile)} · ${job.kind === 'api' ? 'API' : 'collection'} · ${escapeHtml(job.label)}${duplicate(job.duplicate)}</span>
     </li>`).join('');
   const withRuns = activity.documents.filter(({ runs }) => runs.length);
   const withQueues = activity.documents.filter(({ queues }) => queues.length);
@@ -128,24 +127,24 @@ export function renderBackgroundActivityDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <section class="dialog background-activity-dialog" role="dialog" aria-modal="true" aria-labelledby="backgroundActivityTitle">
         <h2 id="backgroundActivityTitle">Background activity</h2>
-        <section class="background-activity-section">
+        <section class="background-activity-section background-activity-now">
           <h3 class="background-activity-heading">Now</h3>
-          ${workers || waiting ? `<ul class="background-activity-list">${workers}${waiting}</ul>` : '<p class="dialog-note">No browser workers yet.</p>'}
+          <div class="background-activity-scroll">${workers || waiting ? `<ul class="background-activity-list">${workers}${waiting}</ul>` : '<p class="dialog-note">No browser workers yet.</p>'}</div>
         </section>
-        <section class="background-activity-section">
+        <section class="background-activity-section background-activity-collections">
           <h3 class="background-activity-heading">Collections</h3>
-          ${withRuns.length ? withRuns.map(({ path, runs }) => `${documentHeading(state, path)}<ul class="background-activity-list">${runs.map((run) => runRow(path, run)).join('')}</ul>`).join('') : '<p class="dialog-note">No collection running.</p>'}
+          <div class="background-activity-scroll">${withRuns.length ? withRuns.map(({ path, runs }) => `${documentHeading(state, path)}<ul class="background-activity-list">${runs.map((run) => runRow(path, run)).join('')}</ul>`).join('') : '<p class="dialog-note">No collection running.</p>'}</div>
         </section>
-        <section class="background-activity-section">
+        <section class="background-activity-section background-activity-queues">
           <div class="background-activity-section-header">
             <h3 class="background-activity-heading">Queues</h3>
-            ${canPauseAll ? '<button class="hvy-galaxy-button" type="button" data-action="pause-all-background-queues">Pause all</button>' : ''}
+            <button class="hvy-galaxy-button" type="button" data-action="pause-all-background-queues" ${canPauseAll ? '' : 'disabled'}>Pause all</button>
           </div>
-          ${withQueues.length ? withQueues.map(({ path, queues }) => `${documentHeading(state, path)}<ul class="background-activity-list">${queues.map((queue) => queueRow(path, queue)).join('')}</ul>`).join('') : '<p class="dialog-note">No queued work.</p>'}
+          <div class="background-activity-scroll">${withQueues.length ? withQueues.map(({ path, queues }) => `${documentHeading(state, path)}<ul class="background-activity-list">${queues.map((queue) => queueRow(path, queue)).join('')}</ul>`).join('') : '<p class="dialog-note">No queued work.</p>'}</div>
         </section>
-        <section class="background-activity-section">
+        <section class="background-activity-section background-activity-recent">
           <h3 class="background-activity-heading">Recent activity</h3>
-          ${events ? `<ol class="background-activity-events">${events}</ol>` : '<p class="dialog-note">Nothing yet.</p>'}
+          <div class="background-activity-scroll">${events ? `<ol class="background-activity-events">${events}</ol>` : '<p class="dialog-note">Nothing yet.</p>'}</div>
         </section>
         <div class="dialog-actions">
           <button class="hvy-galaxy-button primary-button" type="button" data-action="close-background-activity">Close</button>

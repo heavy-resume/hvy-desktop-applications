@@ -350,6 +350,11 @@ export class CollectionService {
     emit: AutomationEmit;
     /** Runs no one is watching (a site setup's Test): a page that needs the user is reported, not waited on. */
     unattended?: boolean;
+    /**
+     * Runs the user waits on (a site setup's Test): as their own clicks would, they take a worker ahead of other work and
+     * load without the pause between loads.
+     */
+    interactive?: boolean;
   }) {}
 
   getState(): CollectionRunState[] {
@@ -362,7 +367,7 @@ export class CollectionService {
       run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, listed: 0, leftUnread: 0, read: 0, collected: 0, problems: 0, current: null };
     }
     const done = this.withConsumer(run, () => Promise.allSettled(startPages.map((startPage) => this.deps.scheduler.run(
-      { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, signal: run.controller.signal },
+      { profileId, kind: 'collection', origin: new URL(startPage.url).origin, label: `${definition.name}: ${new URL(startPage.url).host}`, interactive: this.deps.interactive, signal: run.controller.signal },
       (lease) => this.collectFrom(run, lease, startPage),
     )))).then((results) => this.finish(run, results));
     return { runId: run.state.runId, done };
@@ -384,7 +389,7 @@ export class CollectionService {
       if (key) run.waiting.set(item.url, key);
     }
     const done = this.withConsumer(run, () => Promise.allSettled([...sites].map(([origin, siteItems]) => this.deps.scheduler.run(
-      { profileId, kind: 'collection', origin, label: `${definition.name}: ${siteItems.length === 1 ? siteItems[0].url : `${siteItems.length} pages on ${new URL(origin).host}`}`, interactive: items.length === 1, signal: run.controller.signal },
+      { profileId, kind: 'collection', origin, label: `${definition.name}: ${siteItems.length === 1 ? siteItems[0].url : `${siteItems.length} pages on ${new URL(origin).host}`}`, interactive: this.deps.interactive || items.length === 1, signal: run.controller.signal },
       async (lease) => {
         for (const item of siteItems) {
           const key = this.keyFor(run, item.url, item.values ?? {});
@@ -536,7 +541,7 @@ export class CollectionService {
     return this.stoppable(run, lease.paced(url, () => {
       this.checkStopped(run);
       return load();
-    }));
+    }, this.deps.interactive ? { delay: false } : undefined));
   }
 
   private checkStopped(run: ActiveRun): void {
@@ -576,7 +581,9 @@ export class CollectionService {
     progress.status = 'reading';
     this.assertAllowed(run, startUrl, false);
     await this.paced(run, lease, startUrl, () => host.navigate(lease.workerId, startUrl));
-    const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease), 'listing');
+    // With nothing known to skip, every row is new, so the start page's list needs no more rows than the run takes from it.
+    const listingLimit = run.consumer.isKnown ? undefined : startPage.maxItems ?? run.definition.maxItems;
+    const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease, listingLimit), 'listing');
     if (start.kind !== 'match') {
       // Not a listing we know: the start page may be one item's own page. If nothing reads it as one, the site needs
       // setting up (or its list setup no longer matches); that is the start page's problem, not an item.
@@ -728,7 +735,7 @@ export class CollectionService {
    * frame and fingerprint pattern (which only the page itself can rule out). Matching is the slow part of an
    * inspection, so patterns for other sites are not run.
    */
-  private async inspectAt(run: ActiveRun, lease: WorkerLease): Promise<PageInspection> {
+  private async inspectAt(run: ActiveRun, lease: WorkerLease, listingLimit?: number): Promise<PageInspection> {
     for (;;) {
       this.checkStopped(run);
       const { url } = await this.stoppable(run, this.deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} }));
@@ -736,6 +743,7 @@ export class CollectionService {
       const inspection = await this.stoppable(run, this.deps.host.inspect(lease.workerId, {
         patterns,
         fingerprints: patternFingerprints(patterns),
+        ...(listingLimit ? { listingLimit } : {}),
       }));
       if (inspection.ready) return inspection;
       // Let go, the page is read as it is: what it doesn't show is its problem.

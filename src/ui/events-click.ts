@@ -54,6 +54,10 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.closeDebugLog();
           return;
         }
+        if (backdrop.querySelector('.background-activity-dialog')) {
+          handlers.closeBackgroundActivity();
+          return;
+        }
         if (backdrop.querySelector('.document-key-dialog')) {
           if (state.documentKeyImportDialogOpen) handlers.cancelImportDocumentKeys();
           else if (state.documentKeyDeleteId) handlers.cancelDeleteDocumentKey();
@@ -334,6 +338,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'add-command-for-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.addCommandForIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
     if (action === 'add-command-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.addCommandForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'site-setup-step' && target.dataset.step) handlers.siteSetupStep(target.dataset.step);
+    if (action === 'open-site-setup-test-value') handlers.openSiteSetupTestValue({ result: Number(target.dataset.result), field: Number(target.dataset.field) });
+    if (action === 'close-site-setup-test-value') handlers.openSiteSetupTestValue(null);
     if (action === 'cancel-integration-command-builder') handlers.cancelIntegrationCommandBuilder();
     if (action === 'request-delete-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) handlers.requestDeleteIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId);
     if (action === 'request-delete-integration-page-command' && target.dataset.integrationId && target.dataset.pageId && target.dataset.commandId) handlers.requestDeleteIntegrationPageCommand(target.dataset.integrationId, target.dataset.pageId, target.dataset.commandId);

@@ -536,7 +536,10 @@ function renderWebServiceApprovals(state: AppState, settings: AppState['appSetti
         </fieldset>`;
 }
 
-/** How many pages web collection reads at once: on one site (their requests there still take turns), and in all. */
+/**
+ * How many pages web collection reads at once: on one site (their requests there still take turns), and in all; and how
+ * many web API calls a browser profile makes at once.
+ */
 function renderWebCollectionLimits(settings: AppState['appSettings']): string {
   const limit = (name: string, label: string, value: number, max: number) => `<label>
             <span>${label}</span>
@@ -547,6 +550,8 @@ function renderWebCollectionLimits(settings: AppState['appSettings']): string {
           <p class="dialog-note">Each page being read uses a hidden browser window. Pages on the same site take turns loading.</p>
           ${limit('webCollectionPerSite', 'Pages read at once on one site', settings.webCollectionLimits.perSite, COLLECTION_WORKER_LIMIT_BOUNDS.perSite)}
           ${limit('webCollectionTotal', 'Pages read at once in all', settings.webCollectionLimits.total, COLLECTION_WORKER_LIMIT_BOUNDS.total)}
+          <p class="dialog-note">Calls to a service's API, such as job fit reports, go out side by side from one hidden window per browser profile.</p>
+          ${limit('webApiCalls', 'Max API calls at once', settings.webCollectionLimits.apiCalls, COLLECTION_WORKER_LIMIT_BOUNDS.apiCalls)}
         </fieldset>`;
 }
 

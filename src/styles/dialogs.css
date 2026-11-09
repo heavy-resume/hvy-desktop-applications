@@ -1248,12 +1248,44 @@
 }
 
 .background-activity-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(720px, 100%);
+  height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
 }
 
+/* Each part keeps its height as work comes and goes, scrolling within it, so nothing below it moves (Close least). */
 .background-activity-section {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: none;
   gap: 6px;
+  min-height: 0;
+}
+
+.background-activity-now {
+  height: 7rem;
+}
+
+.background-activity-collections {
+  height: 5.5rem;
+}
+
+.background-activity-queues {
+  height: 11rem;
+}
+
+.background-activity-recent {
+  flex: 1 1 auto;
+}
+
+.background-activity-scroll {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
 }
 
 .background-activity-section-header {
@@ -1327,7 +1359,6 @@
 
 .background-activity-events {
   display: grid;
-  max-height: 260px;
   gap: 2px;
   margin: 0;
   overflow: auto;

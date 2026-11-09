@@ -7,7 +7,7 @@ import { findFileInWorkspaces, siteSetupFields, state } from './state';
 import { applyAppColorTheme, handlers, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
-import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
+import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, openSetupTestValue, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { BrowserRequestCancelledError, IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
@@ -1103,6 +1103,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }, { preserveMountedDocument: true });
   },
   siteSetupStep: (step) => runSiteSetupStep(step as SiteSetupStep),
+  openSiteSetupTestValue: (opened) => openSetupTestValue(opened),
   closeIntegrations: () => {
     integrationPageRequests.abort(new BrowserRequestCancelledError());
     integrationPageRequests = new AbortController();

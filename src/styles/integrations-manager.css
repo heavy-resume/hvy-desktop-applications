@@ -922,6 +922,33 @@
   overflow-wrap: anywhere;
 }
 
+.site-setup-test-more {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.site-setup-value-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.site-setup-value-full {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 6px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .site-setup-test-value.site-setup-test-empty {
   color: var(--hvy-danger, #c0392b);
   font-style: italic;

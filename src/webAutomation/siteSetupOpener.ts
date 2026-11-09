@@ -38,3 +38,33 @@ export function canSetUpSites(): boolean {
 export function setUpSite(request: SiteSetupRequest): void {
   opener?.(request);
 }
+
+/**
+ * Showing how a site setup's item page pattern matches one of its item pages a run couldn't read: the page opens in the
+ * app's browser with every close candidate boxed and scored, and each of its fields boxed pass or fail. Nothing is
+ * picked; Add as example goes on to add the page to the setup, as the reader's own Add as example does.
+ */
+export interface SiteMatchingRequest {
+  url: string;
+  /** What one item is called ("job"). */
+  itemName: string;
+  /** The setup's item page pattern, as runs match it. */
+  pattern: SitePatternDefinition;
+  addExample(): void;
+}
+
+let matchingViewer: ((request: SiteMatchingRequest) => void) | null = null;
+
+/** The app's browser, showing matching. Until one is set, readers do not offer it. */
+export function setSiteMatchingViewer(next: ((request: SiteMatchingRequest) => void) | null): void {
+  matchingViewer = next;
+}
+
+export function canShowSiteMatching(): boolean {
+  return matchingViewer !== null;
+}
+
+// UI: collection reader, a problem page's "Show matching".
+export function showSiteMatching(request: SiteMatchingRequest): void {
+  matchingViewer?.(request);
+}

@@ -1,14 +1,14 @@
-import { controlIntegrationBrowser } from './integrationBrowser';
+import { controlIntegrationBrowser, openIntegrationPage } from './integrationBrowser';
 import { actionPatternPayload, createCustomPageIntegration, matcherSnapshot, onIntegrationRegistrySaved, saveIntegrationRegistry, type IntegrationDefinition } from './integrationRegistry';
 import { handlers, rerender } from './main';
 import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
-import { setSiteSetupOpener, type SiteSetupRequest } from './webAutomation/siteSetupOpener';
+import { setSiteMatchingViewer, setSiteSetupOpener, type SiteMatchingRequest, type SiteSetupRequest } from './webAutomation/siteSetupOpener';
 import { listSetupExamples, openListedItem, openListedItemByClick, openProfilePage, readSetupExamples } from './webAutomation/app';
 import type { CollectionDefinition, CollectionRunState, ExtractItem } from './webAutomation/collection';
 import { withSiteSetups } from './webAutomation/siteSetups';
-import { recordValues, type InspectorRecord } from './webAutomation/nativeHost';
+import { matcherOf, recordValues, type InspectorRecord } from './webAutomation/nativeHost';
 
 /**
  * Setting up a site for a document's collection, by pointing at it in the
@@ -279,7 +279,19 @@ function runProblem(run: CollectionRunState): string | null {
 }
 
 function shownValue(value: unknown): string {
-  return value === undefined || value === null ? '' : String(value).replace(/\s+/g, ' ').trim();
+  return fullValue(value).replace(/\s+/g, ' ').trim();
+}
+
+/** A value as it was read, its lines kept: a list's items one to a line. */
+function fullValue(value: unknown): string {
+  return value === undefined || value === null ? '' : (Array.isArray(value) ? value.map(String).join('\n') : String(value)).trim();
+}
+
+/** Test: a long value opened in full, or closed (null). */
+export function openSetupTestValue(opened: { result: number; field: number } | null): void {
+  if (!state.siteSetup?.test) return;
+  state.siteSetup.test.opened = opened;
+  rerender({ preserveMountedDocument: true });
 }
 
 /**
@@ -301,7 +313,7 @@ function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'tes
   };
   if (step === 'test-find') {
     session.testItems = [];
-    setup.test = { pending: `Finding ${TEST_ITEMS} ${name}s on the list…`, items: [], results: null, problem: null };
+    setup.test = { pending: `Finding ${TEST_ITEMS} ${name}s on the list…`, items: [], results: null, problem: null, opened: null };
     rerender({ preserveMountedDocument: true });
     void listSetupExamples(state.selectedIntegrationProfileId, definition, setup.url, TEST_ITEMS).then(({ items, run }) => {
       if (!state.siteSetup || active !== session) return;
@@ -311,6 +323,7 @@ function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'tes
         items: session.testItems.map((item) => ({ url: item.url, title: title(item) })),
         results: null,
         problem: session.testItems.length ? null : runProblem(run) ?? `The list showed no ${name}s.`,
+        opened: null,
       };
       rerender({ preserveMountedDocument: true });
     }, failed);
@@ -318,7 +331,7 @@ function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'tes
   }
   const items = session.testItems;
   if (!items.length || !setup.test) return;
-  setup.test = { ...setup.test, pending: `Reading ${items.length === 1 ? `the ${name}’s page` : `the ${items.length} ${name}s’ pages`}…`, results: null, problem: null };
+  setup.test = { ...setup.test, pending: `Reading ${items.length === 1 ? `the ${name}’s page` : `the ${items.length} ${name}s’ pages`}…`, results: null, problem: null, opened: null };
   rerender({ preserveMountedDocument: true });
   void readSetupExamples(state.selectedIntegrationProfileId, definition, items).then(({ records, run }) => {
     if (!state.siteSetup?.test || active !== session) return;
@@ -328,7 +341,7 @@ function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'tes
       return {
         url: item.url,
         title: shownValue(record?.values.title) || title(item),
-        fields: session.request.collection.fields.map((field) => ({ label: field.label, value: shownValue(record?.values[field.id]) })),
+        fields: session.request.collection.fields.map((field) => ({ label: field.label, value: shownValue(record?.values[field.id]), full: fullValue(record?.values[field.id]) })),
         problem: record ? record.problem ?? null : runProblem(run) ?? 'Its page wasn’t read.',
       };
     });
@@ -411,8 +424,37 @@ export function endSiteSetup(): void {
   if (ids.has(state.selectedIntegrationId)) state.selectedIntegrationId = state.integrationRegistry.integrations[0]?.id ?? '';
 }
 
+/** The page showing matching now: what its Add as example adds. */
+let matching: SiteMatchingRequest | null = null;
+
+/**
+ * Show matching: the page opens in the browser, in the profile chosen for setting up sites, with the item page pattern
+ * matched against it, to look at: how close it came, and which fields failed or overlapped.
+ */
+function showMatching(request: SiteMatchingRequest): void {
+  const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+  const matcher = matcherOf(request.pattern);
+  if (!profile || !matcher) return;
+  matching = request;
+  const origin = new URL(request.url).origin;
+  void openIntegrationPage(request.url, [origin], profile.id, profile.browserStoreId, false, {
+    kind: 'command-target',
+    context: { expectedOrigin: origin, expectedOrigins: [origin] },
+    inspectionKind: 'parent',
+    options: { existingPattern: matcher.pattern, matchingView: true, prompt: `${capitalized(request.itemName)} page` },
+  }, true, profile.name);
+}
+
+/** Show matching's Add as example, from the page. */
+export function addMatchingExample(): void {
+  const request = matching;
+  matching = null;
+  request?.addExample();
+}
+
 export function installSiteSetup(): void {
   setSiteSetupOpener(startSiteSetup);
+  setSiteMatchingViewer(showMatching);
   // The handler that saved rerenders, showing what the block would refuse.
   onIntegrationRegistrySaved(checkSiteSetup);
 }
