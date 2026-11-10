@@ -920,7 +920,8 @@
 
   const snapshotByteLength = (element) => new TextEncoder().encode(JSON.stringify(snapshot(element))).byteLength;
 
-  const highlight = (element, textRange = null) => {
+  // `reading`: a field read from part of the element, shown as such: its label, and the children it leaves out, struck out.
+  const highlight = (element, textRange = null, reading = null) => {
     highlighted = element;
     let box = document.getElementById('hvy-galaxy-inspector-highlight');
     if (!box) {
@@ -940,10 +941,20 @@
       width: `${Math.max(2, right - left)}px`,
       height: `${Math.max(2, bottom - top)}px`,
     });
-    box.textContent = textRange
+    box.textContent = reading?.label ?? (textRange
       ? `Range · ${readableText(null, textRange).length.toLocaleString()} characters`
-      : `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`;
+      : `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`);
     box.style.padding = '3px 5px';
+    // What the field leaves out, struck out where it is (inside the box, so it goes when the box does).
+    for (const excluded of reading?.excluded ?? []) {
+      const area = excluded.getBoundingClientRect();
+      if (!area.width || !area.height) continue;
+      const strike = document.createElement('div');
+      strike.dataset.inspectorExcluded = 'true';
+      // Placed from inside the box's border (3px), which is where its children start.
+      strike.style.cssText = `position:absolute;left:${area.left - left - 3}px;top:${area.top - top - 3}px;width:${area.width}px;height:${area.height}px;box-sizing:border-box;border:2px dashed #e0563f;background:linear-gradient(to bottom,transparent calc(50% - 1px),#e0563f calc(50% - 1px),#e0563f calc(50% + 1px),transparent calc(50% + 1px)),#e0563f22;pointer-events:none`;
+      box.append(strike);
+    }
   };
 
   // The elements under a point that hit testing skips (`pointer-events: none`, as a card its title link covers sets on its
@@ -1145,14 +1156,10 @@
         choice.style.background = '#dce8e1';
         highlight(element, rangeStart ? rangeTo(element, !exclude.checked) : null);
       });
-      choice.addEventListener('click', () => {
-        if (pickingRange) {
-          if (pickingEnd) finishRange(element, !exclude.checked);
-          else beginRange(element, !exclude.checked);
-          return;
-        }
+      // Picked, whole or (`reading`) one part of its text or its own text alone.
+      const pick = (reading = {}) => {
         if (inspectionKind === 'parent') scopeElement = element;
-        const result = snapshot(element);
+        const result = { ...snapshot(element), ...reading };
         if (inspectionKind === 'parent' && inspectionPattern) {
           result.suggestedTargets = suggestTargetsForParent(element, inspectionPattern);
         }
@@ -1168,8 +1175,42 @@
         }
         publish(result);
         window.__hvyGalaxyInspector.stop();
+      };
+      choice.addEventListener('click', () => {
+        if (pickingRange) {
+          if (pickingEnd) finishRange(element, !exclude.checked);
+          else beginRange(element, !exclude.checked);
+          return;
+        }
+        pick();
       });
       picker.append(choice);
+      // A field can be part of the element's text: a label in a line of them, or its own text without its children's.
+      if (inspectionKind === 'target' && !commandRecorder && !pickingRange) {
+        const readings = [];
+        const own = offeredOwnText(element);
+        if (own) readings.push([`Text: ${own}`, { ownText: true, textPreview: own }]);
+        const parts = offeredTextParts(element);
+        // The last part counts from the end, so a row without an earlier part still reads it.
+        parts.forEach((part, index) => readings.push([`Part ${index + 1} of ${parts.length}${index === parts.length - 1 ? ' (last)' : ''}: ${part}`, { textPart: { index: index === parts.length - 1 ? -1 : index, count: parts.length }, textPreview: part }]));
+        for (const [label, reading] of readings) {
+          const partChoice = document.createElement('button');
+          partChoice.type = 'button';
+          partChoice.textContent = label;
+          partChoice.dataset.pickerChoice = 'true';
+          partChoice.dataset.pickerPart = 'true';
+          partChoice.style.cssText = `${choice.style.cssText};padding-left:24px;color:#31413e`;
+          // Boxed as it reads: the part's own text, or the element with what its text leaves out struck out.
+          partChoice.addEventListener('mouseenter', () => {
+            picker.querySelectorAll('[data-picker-choice]').forEach((button) => { button.style.background = 'transparent'; });
+            partChoice.style.background = '#dce8e1';
+            if (reading.textPart) highlight(element, textPartRange(element, reading.textPart.index), { label: `Part · ${reading.textPreview}` });
+            else highlight(element, null, { label: 'Text', excluded: [...element.children].filter((child) => visibleText(child)) });
+          });
+          partChoice.addEventListener('click', () => pick(reading));
+          picker.append(partChoice);
+        }
+      }
     });
     // Nothing after the range's start here: picking somewhere else, or taking the start back.
     if (pickingRange && rangeStart && !candidates.length && !rangeEditing) {
@@ -1221,9 +1262,13 @@
     const within = (selected) => window.__hvyGalaxyInspector.snapshotElement(resolveCapturedElement(selected), box, 'target');
     return {
       parent: window.__hvyGalaxyInspector.snapshotElement(box, box, 'parent'),
+      // Each as it was picked, now within the box: a range with its end, which part of its text it reads, its field.
       items: fields.map((field) => ({
         ...within(field.selected),
         ...(field.range ? { range: { ...field.range, end: within(field.range.end.selected) } } : {}),
+        ...(field.textPart ? { textPart: field.textPart } : {}),
+        ...(field.ownText ? { ownText: true } : {}),
+        ...(field.textPreview ? { textPreview: field.textPreview } : {}),
         ...(field.fieldId ? { fieldId: field.fieldId } : {}),
       })),
     };
@@ -1485,7 +1530,7 @@
   // Whether a matched field is the only one on its element. A range field reads between its boundaries, so it may start
   // at another field (the title it starts after) and is not counted.
   const uniqueTargetElement = (target, matchedTargets) => Boolean(target.textRange)
-    || matchedTargets.filter((other) => !other.textRange && other.element === target.element).length === 1;
+    || matchedTargets.filter((other) => !other.textRange && other.element === target.element && fieldTextSlot(other.matchedSnapshot) === fieldTextSlot(target.matchedSnapshot)).length === 1;
 
   const patternScopes = (pattern = {}) => {
     const expected = pattern.scope?.selected?.shape;
@@ -1528,11 +1573,14 @@
           assigned.set(match.fieldIndex, match);
           return;
         }
+        // One element is one field's, unless each reads a different part of its text (two labels in a line of them).
+        const slot = fieldTextSlot(match.matchedSnapshot);
         const conflicts = occupied.filter((entry) => elementsOverlap(entry.element, match.element));
-        if (conflicts.some((entry) => entry.element === match.element
-          || !learnedNestedRelationship(targets[entry.fieldIndex], targets[match.fieldIndex]))) return;
+        if (conflicts.some((entry) => (entry.element === match.element
+          ? entry.slot === slot || entry.slot === 'whole' || slot === 'whole'
+          : !learnedNestedRelationship(targets[entry.fieldIndex], targets[match.fieldIndex])))) return;
         assigned.set(match.fieldIndex, match);
-        occupied.push({ fieldIndex: match.fieldIndex, element: match.element, score: match.score });
+        occupied.push({ fieldIndex: match.fieldIndex, element: match.element, score: match.score, slot });
       });
     const matchedTargets = targetEvaluations.map(({ target, fieldIndex, matches }) => {
       const best = assigned.get(fieldIndex);
@@ -1548,6 +1596,8 @@
         return { label: target.label, cardinality: 'single', optional, ...best, score, end: end.element, textRange, elements: [{ ...best, score }] };
       }
       const elements = best ? [best] : [];
+      // Its examples, for reading a part of a line of labels by the one with as many parts.
+      const variants = (target.snapshots?.length ? target.snapshots : [target.snapshot]).filter(Boolean);
       if (cardinality === 'list' && best && best.score >= minimumTargetConfidence) {
         matches.forEach((match) => {
           if (match === best || match.score < minimumTargetConfidence || best.score - match.score >= 0.035) return;
@@ -1557,7 +1607,7 @@
           occupied.push({ fieldIndex, element: match.element, score: match.score });
         });
       }
-      return { label: target.label, cardinality, optional, ...best, elements };
+      return { label: target.label, cardinality, optional, ...best, elements, variants };
     });
     const scoredTargetIndexes = matchedTargets.flatMap((target, index) => !target.optional || target.element && target.score >= minimumTargetConfidence ? [index] : []);
     const scoredTargets = scoredTargetIndexes.map((index) => matchedTargets[index]);
@@ -1650,8 +1700,9 @@
       .map((candidate) => {
         const evaluated = evaluateParentCandidate(candidate.element, candidate.parentScore, targets, minimumTargetConfidence);
         const presentTargets = evaluated.matchedTargets.filter((target) => !target.textRange && (!target.optional || target.element && target.score >= minimumTargetConfidence));
-        const targetElements = presentTargets.map((target) => target.element).filter(Boolean);
-        const distinctTargets = new Set(targetElements).size === targetElements.length;
+        // No two fields read the same text of one element (two parts of it are two fields).
+        const targetSlots = presentTargets.filter((target) => target.element).map((target) => `${cssPath(target.element)}\u0000${fieldTextSlot(target.matchedSnapshot)}`);
+        const distinctTargets = new Set(targetSlots).size === targetSlots.length;
         const targetsPass = evaluated.matchedTargets.every((target) => target.optional || target.element && target.score >= minimumTargetConfidence);
         const hasMatchedTarget = !targets.length || evaluated.matchedTargets.some((target) => target.element && target.score >= minimumTargetConfidence);
         const hasLearnedAbsence = evaluated.matchedTargets.some((target) => target.optional && target.rejectedByNegative);
@@ -1864,6 +1915,82 @@
     const anchor = element.closest?.('a[href]');
     return anchor ? new URL(anchor.getAttribute('href'), location.href).href : null;
   };
+
+  // Labels run together in one element, set apart by a separator with a space each side ("Acme · 3 months ago ·
+  // Seattle, WA"): a middle dot, a bullet or a dot like one, or a bar. Not a comma, which a value can hold.
+  const TEXT_PART_SEPARATOR = /\s+[\u00B7\u2022\u2219\u22C5|]\s+/;
+  const TEXT_PARTS_MAX = 500;
+  const TEXT_PART_MAX = 100;
+  const textParts = (element) => visibleText(element).split(TEXT_PART_SEPARATOR).map((part) => part.trim());
+  // The parts offered as fields of their own: of a line of labels, not of prose (on one line, short, every part short).
+  const offeredTextParts = (element) => {
+    const whole = (element.innerText || element.textContent || '').trim();
+    if (!whole || whole.length > TEXT_PARTS_MAX || /\n/.test(whole)) return [];
+    const parts = textParts(element);
+    return parts.length >= 2 && parts.every((part) => part && part.length <= TEXT_PART_MAX) ? parts : [];
+  };
+  // An element's own text, without what its child elements hold ("Senior Engineer" of a title with its date in a span).
+  const ownText = (element) => [...element.childNodes]
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Where part `index` of an element's text is on the page, to box it: the text between its separators.
+  const textPartRange = (element, index) => {
+    const nodes = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+    const raw = nodes.map((node) => node.textContent).join('');
+    const bounds = [];
+    let from = 0;
+    for (const separator of raw.matchAll(new RegExp(TEXT_PART_SEPARATOR.source, 'g'))) {
+      bounds.push([from, separator.index]);
+      from = separator.index + separator[0].length;
+    }
+    bounds.push([from, raw.length]);
+    const [start, end] = bounds[index < 0 ? bounds.length + index : index] ?? [];
+    if (start === undefined) return null;
+    // Its trimmed ends, as offsets into the text nodes.
+    const startAt = start + (raw.slice(start, end).length - raw.slice(start, end).trimStart().length);
+    const endAt = end - (raw.slice(start, end).length - raw.slice(start, end).trimEnd().length);
+    const range = document.createRange();
+    let offset = 0;
+    for (const node of nodes) {
+      const length = node.textContent.length;
+      if (startAt >= offset && startAt <= offset + length) range.setStart(node, startAt - offset);
+      if (endAt >= offset && endAt <= offset + length) {
+        range.setEnd(node, endAt - offset);
+        break;
+      }
+      offset += length;
+    }
+    return range;
+  };
+  // Own text offered when it is some of the element's text, not all or none of it.
+  const offeredOwnText = (element) => {
+    const own = ownText(element);
+    return own && own !== visibleText(element) && [...element.children].some((child) => visibleText(child)) ? own : '';
+  };
+  // A field's value as its example says to read it: one part of its text (`textPart.index`, -1 the last), its own
+  // text, or all of it. A line of labels can leave one out (a job that doesn't say it is remote): read by the example
+  // whose line had as many parts (`textPart.count`), if the field has one; otherwise a part counted from the start is
+  // still where it was (a part after it is what is missing), and the last part of a longer or shorter line can't be
+  // told from the one before it, so it is missing. `variants`: the field's examples.
+  const fieldValue = (element, snapshot, variants = []) => {
+    if (snapshot?.ownText) return ownText(element) || null;
+    if (snapshot?.textPart) {
+      const parts = textParts(element);
+      const reading = (variants.find((variant) => variant?.textPart?.count === parts.length) ?? snapshot).textPart;
+      if (typeof reading.count === 'number' && reading.count !== parts.length && reading.index < 0) return null;
+      const index = reading.index < 0 ? parts.length + reading.index : reading.index;
+      return parts[index] || null;
+    }
+    return extractedValue(element);
+  };
+  // Which of an element's text a field reads, so two fields reading different parts of one element are not one field
+  // read twice.
+  const fieldTextSlot = (snapshot) => (snapshot?.ownText ? 'own' : snapshot?.textPart ? `part:${snapshot.textPart.index}` : 'whole');
 
   const extractedValue = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
@@ -2299,8 +2426,8 @@
               : target.textRange
                 ? readableText(null, target.textRange)
                 : target.cardinality === 'list'
-                  ? target.elements.map((item) => extractedValue(item.element))
-                  : extractedValue(target.element),
+                  ? target.elements.map((item) => fieldValue(item.element, item.matchedSnapshot ?? target.matchedSnapshot, target.variants))
+                  : fieldValue(target.element, target.matchedSnapshot, target.variants),
             // The link a field points at, such as a job title linking to its posting.
             href: missing || target.cardinality === 'list' || target.textRange ? null : linkHref(target.element),
           } : {}),
@@ -2323,6 +2450,8 @@
   };
 
   let extractionRun = 0;
+  // How long reading a page scrolls it at most.
+  const EXTRACTION_SCROLL_BUDGET_MS = 30_000;
 
   const extractAcrossPage = async (pattern = {}, runId = extractionRun, checkPage = () => ({ ready: true })) => {
     let pageFailure = null;
@@ -2410,7 +2539,11 @@
         structuralRecords.push(entry);
       }
     };
+    // Scrolling stops after a while however much page is left (one that keeps loading more as it scrolls): what was
+    // found by then is the answer, said to have stopped early.
+    let stoppedEarly = false;
     if (scroller && pattern.scrollPage !== false) {
+      const scrollStartedAt = Date.now();
       const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       const step = Math.max(240, scroller.clientHeight * 0.9);
       const positions = [];
@@ -2418,6 +2551,10 @@
       positions.push(maximum);
       for (const top of positions) {
         if (runId !== extractionRun) break;
+        if (Date.now() - scrollStartedAt > EXTRACTION_SCROLL_BUDGET_MS) {
+          stoppedEarly = true;
+          break;
+        }
         scroller.scrollTop = top;
         await settle();
         if (runId !== extractionRun) break;
@@ -2439,6 +2576,7 @@
     return {
       matches: selected.length,
       records: selected,
+      ...(stoppedEarly ? { stoppedEarly: true } : {}),
       diagnostics: selected.length ? null : diagnosePattern(effectivePattern),
       minimumConfidence: patternThresholds(effectivePattern).minimumConfidence,
     };
@@ -3311,7 +3449,7 @@
           const picked = selectedItems.map((item) => item.result.fieldId).filter(Boolean);
           const left = fieldChoices.filter((choice) => !picked.includes(choice.id)).map((choice) => choice.label);
           statusText.textContent = rangeStart?.status || (rangeMode ? RANGE_MODE_STATUS : assigning
-            ? `Which field is this? “${(assigning.result.range?.summary || visibleText(assigning.element)).slice(0, 80)}”`
+            ? `Which field is this? “${(assigning.result.range?.summary || assigning.result.textPreview || visibleText(assigning.element)).slice(0, 80)}”`
             : fieldChoices.length
               ? selectedItems.length
                 ? `Picked: ${picked.map(fieldLabel).join(', ') || 'nothing named yet'}${left.length ? ` · Still to pick: ${left.join(', ')}` : ''} · then Done`
@@ -3366,8 +3504,10 @@
         targetCollection = {
           // A range is boxed over its text. It may start at an element already picked as a field (the title it starts after).
           add(element, result, textRange = null) {
-            if (!textRange && selectedElements.has(element)) return;
-            if (!textRange) selectedElements.add(element);
+            // An element is picked once whole; a part of its text (or its own text) is a field of its own, as a range is.
+            const whole = !textRange && !result.textPart && !result.ownText;
+            if (whole && selectedElements.has(element)) return;
+            if (whole) selectedElements.add(element);
             const box = document.createElement('div');
             box.dataset.collectionSelection = 'true';
             box.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;border:3px solid #27865f;background:#27865f1f;box-sizing:border-box;color:#fff;font:11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
@@ -3399,7 +3539,7 @@
           }
           if (!removed) return;
           if (removed === assigning) finishAssigning();
-          if (!removed.textRange) selectedElements.delete(removed.element);
+          if (!removed.textRange && !removed.result.textPart && !removed.result.ownText) selectedElements.delete(removed.element);
           removed.tracked.box.remove();
           const trackedIndex = trackedBoxes.indexOf(removed.tracked);
           if (trackedIndex >= 0) trackedBoxes.splice(trackedIndex, 1);
@@ -3789,6 +3929,8 @@
         liveMinimumConfidence = currentPattern.minimumConfidence;
         renderMatches();
       });
+      // Let go, the record type being built takes it as its minimum match confidence.
+      slider.addEventListener('change', () => publish({ kind: 'integration-pattern-confidence', minimumConfidence: currentPattern.minimumConfidence }));
       status.append(statusText, slider, confidenceOutput, scopeButton, compareButton, comparison);
       document.documentElement.append(status);
       renderMatches();

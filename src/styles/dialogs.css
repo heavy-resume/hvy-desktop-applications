@@ -1255,29 +1255,28 @@
   overflow: hidden;
 }
 
-/* Each part keeps its height as work comes and goes, scrolling within it, so nothing below it moves (Close least). */
 .background-activity-section {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  flex: none;
+  align-content: start;
   gap: 6px;
-  min-height: 0;
 }
 
-.background-activity-now {
-  height: 7rem;
-}
-
-.background-activity-collections {
-  height: 5.5rem;
-}
-
-.background-activity-queues {
-  height: 11rem;
+/* The work going on (Now, Collections, Queues) shares one area of a set height, each part as tall as it needs, scrolling
+   together: as work comes and goes, nothing below it moves (Close least). */
+.background-activity-work {
+  display: grid;
+  flex: none;
+  align-content: start;
+  gap: 16px;
+  height: min(22rem, 45vh);
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .background-activity-recent {
   flex: 1 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
 }
 
 .background-activity-scroll {

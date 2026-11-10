@@ -457,6 +457,8 @@ const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
     result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind == "integration-ready-check-validation" || kind == "integration-page-readiness")
         || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-record-watch-result")
+        // Highlight matches' confidence, told as it is set: the page stays in front.
+        || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-pattern-confidence")
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
         && (result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples")
             || result.pointer("/context/foreground").and_then(serde_json::Value::as_bool) == Some(false)))

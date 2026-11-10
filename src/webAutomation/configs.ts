@@ -502,7 +502,8 @@ function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[])
     }
     // Its own limits, where it has them; the collection's are its defaults.
     const limits = Object.fromEntries((['maxPages', 'maxItems'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
-    return id && url ? [{ id, url: url.href, ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}) }] : [];
+    const name = text(page.name).trim();
+    return id && url ? [{ id, url: url.href, ...(name ? { name } : {}), ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}) }] : [];
   });
   const ids = pages.map((page) => page.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);

@@ -271,6 +271,7 @@ export function matcherSnapshot(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown; pagePath?: unknown } }).selected;
   const range = (value as { range?: InspectionRange }).range;
+  const { textPart, ownText } = value as { textPart?: { index?: unknown; count?: unknown }; ownText?: unknown };
   return {
     selected: {
       shape: selected?.shape,
@@ -278,6 +279,9 @@ export function matcherSnapshot(value: unknown): unknown {
       ...(selected?.pagePath ? { pagePath: selected.pagePath } : {}),
     },
     ...(range ? { range: { includeStart: range.includeStart === true, includeEnd: range.includeEnd === true, end: matcherSnapshot(range.end) } } : {}),
+    // Which of the element's text the field reads: one part of it (-1 the last), or its own text alone.
+    ...(typeof textPart?.index === 'number' ? { textPart: { index: textPart.index, ...(typeof textPart.count === 'number' ? { count: textPart.count } : {}) } } : {}),
+    ...(ownText === true ? { ownText: true } : {}),
   };
 }
 
@@ -374,7 +378,10 @@ export function matchingInspectionPrivacyRules(value: unknown, path: string, act
 export function selectedInspectionContent(value: unknown): string {
   if (!value || typeof value !== 'object') return '';
   const range = (value as { range?: InspectionRange }).range;
+  // A part of the element's text, or its own text, as it was picked (shown only while it is being built: not saved).
+  const { textPreview } = value as { textPreview?: unknown };
   if (range) return `Range · ${range.summary ?? 'Saved start and end'}`;
+  if (typeof textPreview === 'string' && textPreview.trim()) return textPreview.trim();
   const selected = (value as { selected?: unknown }).selected;
   if (!selected || typeof selected !== 'object') return '';
   const item = selected as Record<string, unknown>;

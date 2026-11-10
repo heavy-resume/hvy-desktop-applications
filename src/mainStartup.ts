@@ -206,6 +206,15 @@ export async function boot(): Promise<void> {
         if (record && opener) itemPicked(record, opener);
         return;
       }
+      // Highlight matches' confidence, set on the page: the record type being built takes it.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-pattern-confidence') {
+        const { minimumConfidence } = result as { minimumConfidence?: unknown };
+        if (typeof minimumConfidence === 'number' && state.integrationActionBuilderOpen) {
+          state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, minimumConfidence));
+          rerender({ preserveMountedDocument: true });
+        }
+        return;
+      }
       // Show matching's Add as example: the page goes on to its site setup as another example.
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-matching-add-example') {
         addMatchingExample();

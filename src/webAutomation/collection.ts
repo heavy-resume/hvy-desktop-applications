@@ -62,6 +62,8 @@ export interface CollectionField {
 export interface StartPage {
   id: string;
   url: string;
+  /** What the page is called where it is listed; without one, its address. */
+  name?: string;
   values?: Record<string, string>;
   /** False when collecting everything skips this start page; it can still be collected on its own. */
   included?: false;

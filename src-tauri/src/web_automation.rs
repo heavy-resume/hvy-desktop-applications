@@ -253,11 +253,16 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
             let (_, finished) = loads.counts();
             let before = web_automation_location(&window, &loads)?;
             let url = web_automation_url(args, "url")?;
+            // The page now is marked: a load replaces it, so the mark still there after is a load that failed. The address
+            // alone can't tell: a site that rewrites its address shows the same one after loading it again.
+            let marker = format!("navigation-{}", web_automation_next_id());
+            let marked = finished > 0 && matches!(web_automation_eval(&window, format!("window.__hvyGalaxyNavigation = {marker:?}; true"))?, Some(serde_json::Value::Bool(true)));
             window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             loads.wait(0, finished, None)?;
-            // A page that fails to load still finishes, leaving the window where it was.
+            // A page that fails to load still finishes, leaving the window where it was, its page still marked.
             let after = web_automation_location(&window, &loads)?;
-            if after == before && after["url"].as_str() != Some(url.as_str()) {
+            let stayed = marked && matches!(web_automation_eval(&window, format!("window.__hvyGalaxyNavigation === {marker:?}"))?, Some(serde_json::Value::Bool(true)));
+            if after == before && after["url"].as_str() != Some(url.as_str()) && (stayed || !marked) {
                 return Err(AppError::Message(format!("The page failed to load: {url}")));
             }
             Ok(after)

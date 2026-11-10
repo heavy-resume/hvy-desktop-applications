@@ -51,6 +51,8 @@ describe('Set up this site', () => {
     expect(opened).toContain(`<div class="site-setup-value-full">${description}\n\nWhat you bring: &lt;care&gt; &amp; craft.</div>`);
     expect(opened).toContain('data-action="close-site-setup-test-value"');
     expect(read).toContain('<dd class="site-setup-test-value site-setup-test-empty">Empty</dd>');
+    // Each result's page can be looked at with the setup matched against it.
+    expect(read).toContain('data-action="show-site-setup-test-matching" data-result="1">Show matching</button>');
     expect(read).toContain('<span class="site-setup-test-problem">Description is required.</span>');
     state.siteSetup = null;
     state.integrationsDialogOpen = false;

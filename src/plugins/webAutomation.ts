@@ -1069,9 +1069,9 @@ function shortAddress(value: string): string {
 }
 
 /** What a start page is called: its first fixed value (a careers page's company), or its address. */
-function pageName(collection: CollectionDefinition, page: StartPage): string {
-  const named = collection.fields.find((field) => page.values?.[field.id]);
-  return named ? page.values![named.id] : shortAddress(page.url);
+/** A start page as it is listed: its name, or without one, its address. */
+function pageName(_collection: CollectionDefinition, page: StartPage): string {
+  return page.name?.trim() || shortAddress(page.url);
 }
 
 function items(collection: CollectionDefinition): string {
@@ -1463,6 +1463,9 @@ function copySetup(collection: CollectionDefinition, siteId: string, control: HT
  */
 function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition, startPage: StartPage): void {
   const { form, body, errors, row, close } = openModal('Edit Page', 'hvy-web-page-dialog wide-dialog');
+  const name = textInput('name', startPage.name ?? '');
+  name.placeholder = shortAddress(startPage.url);
+  name.autocomplete = 'off';
   const address = textInput('url', startPage.url);
   address.type = 'url';
   address.required = true;
@@ -1485,6 +1488,7 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
     setupActions.append(copy);
   }
   body.append(
+    labelled('Name', name, 'Optional: without a name, the page is listed by its address.'),
     labelled('Address', address),
     paragraph(reads ? `Reads with: ${reads}` : 'Not set up: runs skip this page.', 'hvy-web-page-hint'),
     ...(setupActions.childElementCount ? [setupActions] : []),
@@ -1518,8 +1522,8 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   row.append(removePage, cancel, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, ...rest } = startPage;
-    const next: StartPage = { ...rest, url: address.value.trim(), values: values.read(), ...limits.read() };
+    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, name: _name, ...rest } = startPage;
+    const next: StartPage = { ...rest, ...(name.value.trim() ? { name: name.value.trim() } : {}), url: address.value.trim(), values: values.read(), ...limits.read() };
     if (!Object.keys(next.values!).length) delete next.values;
     const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => (page.id === startPage.id ? next : page)) });
     if (problems.length) errors.textContent = problems.join(' ');

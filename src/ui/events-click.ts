@@ -330,6 +330,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'remove-integration-action-scope') handlers.removeIntegrationActionScope();
     if (action === 'test-integration-action-pattern') handlers.testIntegrationActionPattern();
     if (action === 'preview-integration-action') handlers.previewIntegrationAction();
+    if (action === 'stop-integration-action-preview') handlers.stopIntegrationActionPreview();
     if (action === 'continue-integration-action-builder') handlers.continueIntegrationActionBuilder();
     if (action === 'back-integration-action-builder') handlers.backIntegrationActionBuilder();
     if (action === 'save-integration-action-draft') handlers.saveIntegrationActionDraft();
@@ -340,6 +341,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'site-setup-step' && target.dataset.step) handlers.siteSetupStep(target.dataset.step);
     if (action === 'open-site-setup-test-value') handlers.openSiteSetupTestValue({ result: Number(target.dataset.result), field: Number(target.dataset.field) });
     if (action === 'close-site-setup-test-value') handlers.openSiteSetupTestValue(null);
+    if (action === 'show-site-setup-test-matching') handlers.showSiteSetupTestMatching(Number(target.dataset.result));
     if (action === 'cancel-integration-command-builder') handlers.cancelIntegrationCommandBuilder();
     if (action === 'request-delete-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) handlers.requestDeleteIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId);
     if (action === 'request-delete-integration-page-command' && target.dataset.integrationId && target.dataset.pageId && target.dataset.commandId) handlers.requestDeleteIntegrationPageCommand(target.dataset.integrationId, target.dataset.pageId, target.dataset.commandId);

@@ -7,7 +7,7 @@ import { findFileInWorkspaces, siteSetupFields, state } from './state';
 import { applyAppColorTheme, handlers, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
-import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, openSetupTestValue, runSiteSetupStep, type SiteSetupStep } from './siteSetupSession';
+import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, openSetupTestValue, runSiteSetupStep, showSetupTestMatching, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
 import { BrowserRequestCancelledError, IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
@@ -16,7 +16,7 @@ import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionK
 import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './documentKeyMigration';
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
-import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, defaultIntegrationPageReadyChecks, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, beginIntegrationWebMcpScan, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 import { analyzeWebMcpStructuredData, webMcpExtractionRecords, webMcpRecordSetAtPath } from './integrationWebMcpStructuredData';
@@ -265,6 +265,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         await reopenIntegrationActionPage(request, false);
       }
     });
+  /**
+   * What the page must be before it is read: as its ready checks say; but a site setup's page stands for every page
+   * like it (any job's page, the list as it is now), so any page on its site.
+   */
+  const pageReadyChecks = (page: Parameters<typeof integrationPageReadyChecks>[0] & { id: string }) => (state.integrationRegistry.integrations.some((integration) => integration.siteSetup && integration.pages.some((candidate) => candidate.id === page.id))
+    ? defaultIntegrationPageReadyChecks(page.url, 'strict-domain')
+    : integrationPageReadyChecks(page));
   /** What every extraction's answer carries: the confidence it used, and whether the page was ready (said when not). */
   const integrationActionPageReady = (result: Record<string, unknown>): boolean => {
     if (result.status === 'not-ready') {
@@ -372,7 +379,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
       if (!integration || !action || !command || !payload || !page) throw new Error('The saved command is incomplete.');
       void runBusy(`Running ${command.name}...`, async () => {
-        await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, { ...payload, readyChecks: integrationPageReadyChecks(page) });
+        await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, { ...payload, readyChecks: pageReadyChecks(page) });
         state.status = `Ran ${command.name}`;
       }, { preserveMountedDocument: true });
       return;
@@ -383,7 +390,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!integration || !page || !command || !payload || !profile) throw new Error('The saved page command is incomplete.');
     void runBusy(`Running ${command.name}...`, async () => {
-      const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, payload: { ...payload, readyChecks: integrationPageReadyChecks(page) } };
+      const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, payload: { ...payload, readyChecks: pageReadyChecks(page) } };
       if (page.id === 'gmail' || page.id === 'google-calendar') await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name);
       else await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name, integration.id, page.id);
       state.status = `Ran ${command.name}`;
@@ -1104,6 +1111,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   siteSetupStep: (step) => runSiteSetupStep(step as SiteSetupStep),
   openSiteSetupTestValue: (opened) => openSetupTestValue(opened),
+  showSiteSetupTestMatching: (result) => showSetupTestMatching(result),
   closeIntegrations: () => {
     integrationPageRequests.abort(new BrowserRequestCancelledError());
     integrationPageRequests = new AbortController();
@@ -1608,7 +1616,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     void requestFromIntegrationPage(profile.id, ['integration-extraction'], async (requestId) => {
       const liveExampleExtraction = {
         pattern: { ...actionPatternPayload(action), scrollPage: false },
-        context: { mode: 'examples', actionId: action.id, browserRequestId: requestId, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
+        context: { mode: 'examples', actionId: action.id, browserRequestId: requestId, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: pageReadyChecks(page) },
         foreground: false,
       };
       try {
@@ -1911,18 +1919,20 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }));
     state.integrationActionPreviewDiagnostics = null;
     state.integrationActionPreviewPending = true;
+    state.integrationActionFetchError = null;
     state.integrationActionBuilderOpen = true;
     state.status = 'Reviewing extraction in the background...';
     rerender({ preserveMountedDocument: true });
     const extraction = {
       pattern: { minimumConfidence: state.integrationActionMinimumConfidence, scrollPage: state.integrationActionScrollPage, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets },
-      context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
+      context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: pageReadyChecks(page) },
       foreground: false,
     };
     void extractOnIntegrationActionPage(extraction).then(async (result) => {
       if (!integrationActionPageReady(result)) return;
       state.integrationActionPreviewRecords = (result.records as unknown[] | undefined) ?? [];
       state.integrationActionPreviewDiagnostics = result.diagnostics ?? null;
+      state.integrationActionPreviewStoppedEarly = result.stoppedEarly === true;
       state.integrationActionBuilderStep = 'preview';
       state.integrationActionBuilderOpen = true;
       state.status = `Extracted ${state.integrationActionPreviewRecords.length} matching items`;
@@ -1930,10 +1940,22 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
     }, (error: unknown) => {
       state.error = integrationPageRequestFailed(error, 'Review extraction failed');
+      // Said in the builder, where Preview was pressed: a site setup's dialog, where a setup's errors go, is behind it.
+      // Stopped (Stop) or closed, nothing went wrong.
+      if (!(error instanceof IntegrationBrowserClosedError) && !(error instanceof BrowserRequestCancelledError)) {
+        state.integrationActionFetchError = error instanceof Error ? error.message : String(error);
+      }
     }).finally(() => {
       state.integrationActionPreviewPending = false;
       rerender({ preserveMountedDocument: true });
     });
+  },
+  // Stop, while Preview reads the page: the page stops, and the builder stops waiting for it.
+  stopIntegrationActionPreview: () => {
+    void controlIntegrationBrowser('cancel-extraction', state.selectedIntegrationProfileId).catch(() => undefined);
+    integrationPageRequests.abort(new BrowserRequestCancelledError());
+    integrationPageRequests = new AbortController();
+    state.status = 'Preview stopped';
   },
   continueIntegrationActionBuilder: () => {
     state.integrationActionBuilderStep = 'save';

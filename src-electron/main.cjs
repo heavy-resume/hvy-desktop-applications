@@ -841,6 +841,8 @@ function receiveIntegrationResult(browser, result) {
   const isBackgroundResult = result?.kind === 'integration-page-readiness'
     || result?.kind === 'integration-ready-check-validation'
     || result?.kind === 'integration-record-watch-result'
+    // Highlight matches' confidence, told as it is set: the page stays in front.
+    || result?.kind === 'integration-pattern-confidence'
     || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
     || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
     || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);

@@ -189,6 +189,8 @@ export interface AppState {
   integrationActionLiveExampleRecords: unknown[];
   integrationActionPreviewDiagnostics: unknown;
   integrationActionPreviewPending: boolean;
+  /** The preview's page stopped scrolling before its end (it kept going): what it found by then is shown. */
+  integrationActionPreviewStoppedEarly: boolean;
   integrationActionEditPageLoading: boolean;
   integrationActionResultOpen: boolean;
   integrationActionResultName: string;
@@ -592,6 +594,7 @@ export const state: AppState = {
   integrationActionLiveExampleRecords: [],
   integrationActionPreviewDiagnostics: null,
   integrationActionPreviewPending: false,
+  integrationActionPreviewStoppedEarly: false,
   integrationActionEditPageLoading: false,
   integrationActionResultOpen: false,
   integrationActionResultName: '',

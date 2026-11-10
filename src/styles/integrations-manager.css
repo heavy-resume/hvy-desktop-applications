@@ -977,3 +977,10 @@
 .site-setup-profile {
   margin-right: auto;
 }
+
+.site-setup-test-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

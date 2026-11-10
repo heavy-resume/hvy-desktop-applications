@@ -1073,6 +1073,102 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
+  it('picks a label out of a line of them, or an element\'s own text without its children\'s, and reads every row that way', async () => {
+    const row = (title: string, date: string, company: string, place: string) => `
+      <article class="job">
+        <div class="title">${title} <span class="date">${date}</span></div>
+        <span class="meta">${company} · ${date} · ${place}</span>
+      </article>`;
+    await page.setContent(`<main>${row('Senior System Software Engineer', '3 months ago', 'Nvidia', 'Seattle, WA')}${row('Staff Engineer', '2 days ago', 'Acme', 'Remote, US')}
+      <p class="prose">This long paragraph · with a dot in it ${'is prose, not a line of labels, '.repeat(20)}</p></main>`);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.job')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '.job', parentSnapshot: snapshot, multiSelect: true }), parentSnapshot);
+    const picker = page.locator('#hvy-galaxy-inspector-picker');
+
+    // The title without its date: the element's own text.
+    await clickPointerAt(page, '.job:first-of-type .title');
+    // Hovered, it is boxed with the date it leaves out struck out.
+    await picker.locator('button', { hasText: 'Text: Senior System Software Engineer' }).hover();
+    expect(await page.locator('#hvy-galaxy-inspector-highlight [data-inspector-excluded]').count()).toBe(1);
+    await picker.locator('button', { hasText: 'Text: Senior System Software Engineer' }).click();
+    // The company and the place, each a part of the line (the place the last, counted from the end).
+    await clickPointerAt(page, '.job:first-of-type .meta');
+    expect(await picker.locator('[data-picker-part]').allTextContents()).toEqual(['Part 1 of 3: Nvidia', 'Part 2 of 3: 3 months ago', 'Part 3 of 3 (last): Seattle, WA']);
+    // Hovered, a part is boxed alone: narrower than the line it is in.
+    await picker.locator('button', { hasText: 'Part 1 of 3: Nvidia' }).hover();
+    const partBox = (await page.locator('#hvy-galaxy-inspector-highlight').boundingBox())!;
+    expect(await page.locator('#hvy-galaxy-inspector-highlight').textContent()).toBe('Part · Nvidia');
+    expect(partBox.width).toBeLessThan((await page.locator('.job:first-of-type .meta').boundingBox())!.width / 2);
+    await picker.locator('button', { hasText: 'Part 1 of 3: Nvidia' }).click();
+    await clickPointerAt(page, '.job:first-of-type .meta');
+    await picker.locator('button', { hasText: 'Part 3 of 3 (last): Seattle, WA' }).click();
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(3);
+    await page.getByRole('button', { name: 'Done' }).click();
+    const picked = (await page.evaluate(() => window.__commandRecordingResult as { items: Array<InspectorSnapshot & { textPart?: { index: number }; ownText?: boolean }> })).items;
+    expect(picked.map((item) => ({ ownText: item.ownText ?? false, textPart: item.textPart ?? null }))).toEqual([
+      { ownText: true, textPart: null }, { ownText: false, textPart: { index: 0, count: 3 } }, { ownText: false, textPart: { index: -1, count: 3 } },
+    ]);
+
+    // Every row read that way, the two parts of one element two fields.
+    const values = await page.evaluate(({ parent, items }) => window.__hvyGalaxyInspector.extractPattern({
+      parents: [parent],
+      targets: items.map((item, index) => ({ label: ['title', 'company', 'place'][index], snapshot: item })),
+    }).records.map((record) => record.targets.map((target) => target.value)), { parent: parentSnapshot, items: picked });
+    expect(values).toEqual([['Senior System Software Engineer', 'Nvidia', 'Seattle, WA'], ['Staff Engineer', 'Acme', 'Remote, US']]);
+
+    // On an item's own page, its fields are picked first and the box taken around them: they keep how they read.
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true, deriveParent: true }));
+    await clickPointerAt(page, '.job:first-of-type .title');
+    await picker.locator('button', { hasText: 'Text: Senior System Software Engineer' }).click();
+    await clickPointerAt(page, '.job:first-of-type .meta');
+    await picker.locator('button', { hasText: 'Part 3 of 3 (last): Seattle, WA' }).click();
+    await page.getByRole('button', { name: 'Done' }).click();
+    const derived = (await page.evaluate(() => window.__commandRecordingResult as { parent: InspectorSnapshot; items: Array<{ textPart?: { index: number }; ownText?: boolean }> }));
+    expect(derived.items.map((item) => ({ ownText: item.ownText ?? false, textPart: item.textPart ?? null }))).toEqual([{ ownText: true, textPart: null }, { ownText: false, textPart: { index: -1, count: 3 } }]);
+
+    // Asked which field it is, the part picked is what is quoted, not the whole line.
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '.job', parentSnapshot: snapshot, multiSelect: true, fieldChoices: [{ id: 'place', label: 'Location' }] }), parentSnapshot);
+    await clickPointerAt(page, '.job:first-of-type .meta');
+    await picker.locator('button', { hasText: 'Part 3 of 3 (last): Seattle, WA' }).click();
+    expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('Which field is this? “Seattle, WA”');
+
+    // A long line of prose with a dot in it is not offered in parts.
+    await page.evaluate(() => window.__hvyGalaxyInspector.start('target', { multiSelect: true }));
+    await clickPointerAt(page, '.prose');
+    expect(await picker.locator('[data-picker-part]').count()).toBe(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('reads a line of labels that leaves one out: a part counted from the start is still there, the last of a different line is missing, and an example with as many parts reads it', async () => {
+    const row = (meta: string) => `<article class="job"><h3 class="title">Engineer</h3><span class="meta">${meta}</span></article>`;
+    await page.setContent(`<main>${row('Nvidia · 3 months ago · Seattle, WA · Remote')}${row('Acme · 2 days ago · Denver, CO')}</main>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const read = (counts: number[][]) => page.evaluate((exampleParts) => {
+      const first = document.querySelector('.job')!;
+      const meta = first.querySelector('.meta')!;
+      const snapshot = (textPart: { index: number; count: number }) => ({ ...window.__hvyGalaxyInspector.snapshotElement(meta, first, 'target'), textPart });
+      // Each field's examples: [index, count] of the line it was picked in.
+      const field = (label: string, examples: number[][]) => {
+        const snapshots = examples.map(([index, count]) => snapshot({ index, count }));
+        return { label, snapshot: snapshots[0], snapshots, optional: true };
+      };
+      return window.__hvyGalaxyInspector.extractPattern({
+        parents: [window.__hvyGalaxyInspector.snapshotElement(first, null, 'parent')],
+        targets: [field('company', [[0, 4]]), field('place', [[2, 4]]), field('remote', exampleParts)],
+      }).records.map((record) => record.targets.map((target) => target.value));
+    }, counts);
+    // Picked on the four-part line, Remote the last: the three-part line has none, and its place is still its place.
+    expect(await read([[-1, 4]])).toEqual([['Nvidia', 'Seattle, WA', 'Remote'], ['Acme', 'Denver, CO', null]]);
+    // An example of a three-part line whose last part is the field: that line reads by it.
+    expect((await read([[-1, 4], [-1, 3]]))[1]).toEqual(['Acme', 'Denver, CO', 'Denver, CO']);
+    expect(pageErrors).toEqual([]);
+  });
+
   it('offers an image, or what holds only an image, as an image; a section holding a logo among its text is offered as that text', async () => {
     await page.setContent(`
       <main>

@@ -445,6 +445,27 @@ function showMatching(request: SiteMatchingRequest): void {
   }, true, profile.name);
 }
 
+/**
+ * Test, a result's Show matching: its page with the setup's item page matched against it, as Test read it, to see what
+ * each field landed on. Add as example adds it as another example of the item page, as one a run couldn't read is.
+ */
+export function showSetupTestMatching(result: number): void {
+  const session = active;
+  const url = state.siteSetup?.test?.results?.[result]?.url;
+  const pattern = session ? sessionPatterns(session).find((candidate) => candidate.role === 'detail') : undefined;
+  if (!session || !url || !pattern) return;
+  showMatching({
+    url,
+    itemName: itemName(session.request),
+    pattern,
+    addExample: () => {
+      if (active !== session) return;
+      session.openedItem = addItemExample(url);
+      rerender({ preserveMountedDocument: true });
+    },
+  });
+}
+
 /** Show matching's Add as example, from the page. */
 export function addMatchingExample(): void {
   const request = matching;

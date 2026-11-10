@@ -127,21 +127,23 @@ export function renderBackgroundActivityDialog(state: AppState): string {
     <div class="modal-backdrop" role="presentation">
       <section class="dialog background-activity-dialog" role="dialog" aria-modal="true" aria-labelledby="backgroundActivityTitle">
         <h2 id="backgroundActivityTitle">Background activity</h2>
-        <section class="background-activity-section background-activity-now">
-          <h3 class="background-activity-heading">Now</h3>
-          <div class="background-activity-scroll">${workers || waiting ? `<ul class="background-activity-list">${workers}${waiting}</ul>` : '<p class="dialog-note">No browser workers yet.</p>'}</div>
-        </section>
-        <section class="background-activity-section background-activity-collections">
-          <h3 class="background-activity-heading">Collections</h3>
-          <div class="background-activity-scroll">${withRuns.length ? withRuns.map(({ path, runs }) => `${documentHeading(state, path)}<ul class="background-activity-list">${runs.map((run) => runRow(path, run)).join('')}</ul>`).join('') : '<p class="dialog-note">No collection running.</p>'}</div>
-        </section>
-        <section class="background-activity-section background-activity-queues">
-          <div class="background-activity-section-header">
-            <h3 class="background-activity-heading">Queues</h3>
-            <button class="hvy-galaxy-button" type="button" data-action="pause-all-background-queues" ${canPauseAll ? '' : 'disabled'}>Pause all</button>
-          </div>
-          <div class="background-activity-scroll">${withQueues.length ? withQueues.map(({ path, queues }) => `${documentHeading(state, path)}<ul class="background-activity-list">${queues.map((queue) => queueRow(path, queue)).join('')}</ul>`).join('') : '<p class="dialog-note">No queued work.</p>'}</div>
-        </section>
+        <div class="background-activity-work">
+          <section class="background-activity-section">
+            <h3 class="background-activity-heading">Now</h3>
+            ${workers || waiting ? `<ul class="background-activity-list">${workers}${waiting}</ul>` : '<p class="dialog-note">No browser workers yet.</p>'}
+          </section>
+          <section class="background-activity-section">
+            <h3 class="background-activity-heading">Collections</h3>
+            ${withRuns.length ? withRuns.map(({ path, runs }) => `${documentHeading(state, path)}<ul class="background-activity-list">${runs.map((run) => runRow(path, run)).join('')}</ul>`).join('') : '<p class="dialog-note">No collection running.</p>'}
+          </section>
+          <section class="background-activity-section">
+            <div class="background-activity-section-header">
+              <h3 class="background-activity-heading">Queues</h3>
+              <button class="hvy-galaxy-button" type="button" data-action="pause-all-background-queues" ${canPauseAll ? '' : 'disabled'}>Pause all</button>
+            </div>
+            ${withQueues.length ? withQueues.map(({ path, queues }) => `${documentHeading(state, path)}<ul class="background-activity-list">${queues.map((queue) => queueRow(path, queue)).join('')}</ul>`).join('') : '<p class="dialog-note">No queued work.</p>'}
+          </section>
+        </div>
         <section class="background-activity-section background-activity-recent">
           <h3 class="background-activity-heading">Recent activity</h3>
           <div class="background-activity-scroll">${events ? `<ol class="background-activity-events">${events}</ol>` : '<p class="dialog-note">Nothing yet.</p>'}</div>

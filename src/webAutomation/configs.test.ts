@@ -21,6 +21,13 @@ describe('a start page left out of collecting all', () => {
   });
 });
 
+describe('a start page\'s name', () => {
+  it('is kept trimmed, and left out when blank', () => {
+    const read = readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages: [{ id: 'a', url: 'https://jobs.test/a', name: '  Acme careers ' }, { id: 'b', url: 'https://jobs.test/b', name: '  ' }] });
+    expect(read.ok && read.value.collection.startPages).toEqual([{ id: 'a', url: 'https://jobs.test/a', name: 'Acme careers' }, { id: 'b', url: 'https://jobs.test/b' }]);
+  });
+});
+
 describe('block configuration readers', () => {
   it('round-trips the web API snapshot and its MCP exposure', () => {
     const result = readWebApiBlockConfig(rawWebApi());

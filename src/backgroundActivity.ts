@@ -1,4 +1,4 @@
-import { rerender } from './main';
+import { renderAllAroundDocument } from './main';
 import { state } from './state';
 import { backgroundActivityLabel } from './ui/render-background-activity';
 import { backgroundActivity, documentsNeedingYou, hasWebAutomationHost, subscribeWebAutomation } from './webAutomation/app';
@@ -11,7 +11,7 @@ let lingering: ReturnType<typeof setTimeout> | null = null;
 /**
  * Keeps the app's view of background work current: the tabs of open documents whose work waits for the user (the
  * notice itself, and what to do, is in the document beside the block that needs them), and the toolbar's Background
- * activity indicator and panel. The app rerenders only when the marked documents or the indicator change, or on any
+ * activity indicator and panel. They are drawn again only when the marked documents or the indicator change, or on any
  * event while the panel is open, not on every automation event otherwise.
  */
 export function installBackgroundActivity(): void {
@@ -49,7 +49,10 @@ function update(linger: boolean): void {
   state.documentsNeedingYou = paths;
   state.backgroundActivity = activity;
   state.backgroundActivityLabel = label;
-  if (changed) rerender({ preserveMountedDocument: true });
+  // Only what is around the document: its tabs, the toolbar's indicator, and the panel. The document is not touched, so
+  // its scroll is the reader's own while the work goes on (redrawing the app keeps the document's scroll by putting it
+  // back, which undoes scrolling done in between).
+  if (changed) renderAllAroundDocument();
 }
 
 /** Reads background work now: when the panel opens, rather than waiting for the next event. */
