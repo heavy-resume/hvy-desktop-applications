@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { createHvyCliSession, executeHvyCliCommand } from '../../../heavy-file-format/src/cli-core';
 import { deserializeDocument, serializeDocument } from '../../../heavy-file-format/src/serialization';
 import { createCliItemStore } from './cliItemStore';
@@ -271,6 +271,35 @@ describe('mock integration: job search flow', () => {
     expect(flow!.print()).toMatch(/retry .*eng-1 in \d+s/);
   });
 
+  it('7b. out of credits: the service\'s response rule pauses the queue with what it said, each report waits rather than failing, and Resume goes on once topped up', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    flow!.service.outOfCredits = true;
+
+    await flow!.evaluate([acmeJob('eng-1'), acmeJob('eng-2')]);
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: true, pauseReason: 'response', pauseMessage: 'Not enough credits for this analysis.' });
+    expect(flow!.listQueue(EVALUATE_QUEUE).map((entry) => entry.status)).toEqual(['queued', 'queued']);
+    // Told once: the other report was not sent to be refused too.
+    expect(flow!.service.createCalls).toBe(1);
+
+    flow!.service.outOfCredits = false;
+    flow!.automation.resumeQueue(EVALUATE_QUEUE);
+    await flow!.settle();
+    expect(flow!.item(acmeJob('eng-1'))?.fields.evaluation).toBe('ready');
+    expect(flow!.item(acmeJob('eng-2'))?.fields.evaluation).toBe('ready');
+
+    // Out again, and the user gives up on the rest: Stop cancels what waits, and the queue is no longer paused.
+    flow!.service.outOfCredits = true;
+    await flow!.evaluate([acmeJob('eng-3'), acmeJob('data-1')]);
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: true, pauseReason: 'response' });
+    flow!.automation.stopQueue(EVALUATE_QUEUE);
+    await flow!.settle();
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: false, pauseReason: null, pauseMessage: null });
+    expect(flow!.listQueue(EVALUATE_QUEUE).filter((entry) => entry.status === 'queued')).toEqual([]);
+    expect(flow!.item(acmeJob('eng-3'))?.fields.evaluation).toBeUndefined();
+  });
+
   it('8. sign-out mid-queue: the queue pauses, and signing in again resumes it', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
@@ -405,6 +434,50 @@ describe('mock integration: job search flow', () => {
     expect(run).toMatchObject({ status: 'done', collected: 2 });
     expect(flow!.item(`${SIDE_PANE_ORIGIN}/view/2`)).toMatchObject({ provenance: { patternId: 'pane-detail' }, fields: { title: 'ML Engineer', company: 'Sidepane Inc' } });
     expect(flow!.print()).toContain('click open-card on card-1');
+    expect(flow!.print()).not.toContain('← back');
+  });
+
+  it('14b. click through: a site set up to be browsed has each item opened from its list page by a click, before the next page', async () => {
+    const opener = { selected: { shape: 'card' } };
+    const browsed = (id: string, listing: SitePatternDefinition, detail: SitePatternDefinition) => ({
+      id, name: id, browse: true as const,
+      patterns: [{ ...listing, siteId: id, matcher: { pattern: { opener }, commands: {} } }, { ...detail, siteId: id }],
+    });
+    // Listed only: a browsed site's items are read anyway, as its list is.
+    const boards = listingCollection([ACME], { patterns: [], readItemPages: false });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, browsed('acme-ats', atsListingPattern, atsDetailPattern));
+    const run = await flow!.collect(setup);
+    expect(run).toMatchObject({ status: 'done', collected: 5, problems: 0 });
+    expect(flow!.item(`${ATS_ORIGIN}/acme/jobs/eng-3?utm_source=board`)).toMatchObject({ state: 'ok', fields: { title: 'Frontend Engineer', company: 'Acme' } });
+    const timeline = flow!.print();
+    expect(timeline).toContain('click open-item-by-click on acme-eng-1');
+    expect(timeline).toContain('← back to boards.mock-ats.test/acme/jobs');
+    // Back on the list, it is read only as far as the next item's row, not scrolled for every row.
+    expect(timeline).toContain('read the first 2 rows of boards.mock-ats.test/acme/jobs');
+    // The first page's items are all read before Next.
+    expect(timeline.indexOf('click open-item-by-click on acme-pm-1')).toBeLessThan(timeline.indexOf('click next-page'));
+    expect(timeline.indexOf('click next-page')).toBeLessThan(timeline.indexOf('click open-item-by-click on acme-eng-3'));
+
+    // A list that isn't there after going back stops the start page there: its problem, the rest still listed.
+    const hooli = listingCollection([`${ATS_ORIGIN}/hooli/jobs`], { patterns: [] });
+    await signedInFlow(hooli);
+    const hooliSetup = flow!.addSiteSetups(hooli, browsed('hooli-ats', atsListingPattern, atsDetailPattern));
+    const stopped = await flow!.collect(hooliSetup);
+    expect(stopped).toMatchObject({ collected: 1, problems: 1 });
+    expect(Object.values(stopped.startPageProblems)).toEqual(['The list wasn’t there after going back from Engineer I.']);
+    expect(flow!.item(`${ATS_ORIGIN}/hooli/jobs/eng-2?utm_source=board`)).toMatchObject({ state: 'listed' });
+
+    // A board that opens the item beside its list: each read where it opened, with nothing to go back from. Its item
+    // page was set up at another address than the list's, and the pane shows the first item before any click.
+    const pane = listingCollection([`${SIDE_PANE_ORIGIN}/search`], { patterns: [] });
+    await signedInFlow(pane);
+    const { itemCommandId: _itemCommandId, ...cards } = sidePaneListingPattern;
+    const elsewhere = { ...sidePaneDetailPattern, appliesTo: [{ target: 'page' as const, host: 'www.sidepane.test', path: '/view/*' }] };
+    const paneSetup = flow!.addSiteSetups(pane, browsed('pane', cards, elsewhere));
+    expect(await flow!.collect(paneSetup)).toMatchObject({ status: 'done', collected: 2, problems: 0 });
+    expect(flow!.item(`${SIDE_PANE_ORIGIN}/view/1`)).toMatchObject({ fields: { title: 'Data Scientist' } });
+    expect(flow!.item(`${SIDE_PANE_ORIGIN}/view/2`)).toMatchObject({ fields: { title: 'ML Engineer' } });
     expect(flow!.print()).not.toContain('← back');
   });
 
@@ -840,15 +913,6 @@ describe('mock integration: job search flow', () => {
     expect(flow.automation.getState().sessions).toMatchObject([{ status: 'signed-out' }]);
   });
 
-  it('31e. the profile\'s API worker is kept as it is between calls: only collection workers have their history cleared', async () => {
-    const boards = listingCollection([ACME]);
-    await signedInFlow(boards);
-    const reset = vi.spyOn(flow!.host, 'resetWorker');
-    await flow!.callEndpoint('profile');
-    await flow!.callEndpoint('profile');
-    expect(reset).not.toHaveBeenCalled();
-  });
-
   it('32.a delayed entry waits its turn, and its context comes back with the result without reaching the service', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);
@@ -856,15 +920,20 @@ describe('mock integration: job search flow', () => {
     const job = flow!.item(acmeJob('eng-1'))!;
     const results: unknown[] = [];
     flow!.automation.onQueueResult(EVALUATE_QUEUE, (result) => results.push(result));
+    // Told when its call starts, not when it is enqueued: a delayed entry is waiting until then.
+    const started: string[] = [];
+    flow!.automation.onQueueStart(EVALUATE_QUEUE, ({ key }) => started.push(key));
     const startedAt = flow!.clock.now();
     flow!.automation.enqueue(EVALUATE_QUEUE, job.key, flow!.api.createInput(job), { delayMs: 8_000, context: { polls: 2 } });
 
     await flow!.advance(7_000);
     expect(flow!.service.createCalls).toBe(0);
+    expect(started).toEqual([]);
     await flow!.settle();
     expect(flow!.clock.now() - startedAt).toBeGreaterThanOrEqual(8_000);
     // The endpoint refuses unknown inputs, so a completed call also shows the context was not sent.
     expect(results).toMatchObject([{ key: job.key, status: 'done', context: { polls: 2 } }]);
+    expect(started).toEqual([job.key]);
   });
 
   it('30. quitting without saving: the queue comes back as of the last save, which keeps no delivered results', async () => {

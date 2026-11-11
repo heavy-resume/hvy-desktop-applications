@@ -70,6 +70,23 @@ describe('worker scheduler', () => {
     expect(log).toContain('worker closed (idle)');
   });
 
+  it('gives a job on a site the idle worker whose page is still there, and leaves that page as it is', async () => {
+    const { clock, scheduler, host } = setup({ perProfile: 4 });
+    const workerOf = (origin: string) => scheduler.run({ profileId: 'p1', kind: 'collection', origin, label: origin }, async (lease) => {
+      await host.navigate(lease.workerId, `${origin}/jobs`);
+      return lease.workerId;
+    });
+    const [onA, onB] = await Promise.all([workerOf('https://a.test'), workerOf('https://b.test')]);
+    expect(onA).not.toBe(onB);
+    await clock.step(0);
+    const again = scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://b.test', label: 'b again' }, async (lease) => ({
+      workerId: lease.workerId,
+      url: (await host.inspect(lease.workerId, { patterns: [], fingerprints: {} })).url,
+    }));
+    await clock.step(0);
+    expect(await again).toEqual({ workerId: onB, url: 'https://b.test/jobs' });
+  });
+
   it('waits a random delay between loads from the same site', async () => {
     const { clock, scheduler } = setup();
     const times: number[] = [];

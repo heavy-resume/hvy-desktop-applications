@@ -47,9 +47,10 @@ export interface WorkerLease {
    * turn, so loads there never overlap however many workers are on it, then a random delay since the last load there
    * finished, then runs `load`. `delay: false` skips the random delay (not the turn): a load the user asked for just
    * now, as a person's click would be, such as site setup opening the item picked. It still counts as the site's last
-   * load, so the next load there waits after it.
+   * load, so the next load there waits after it. A range instead of the usual delay is a pause of its own, such as
+   * the shorter one between items opened from a list a person is clicking through.
    */
-  paced<T>(url: string, load: () => Promise<T>, options?: { delay?: false }): Promise<T>;
+  paced<T>(url: string, load: () => Promise<T>, options?: { delay?: false | { min: number; max: number } }): Promise<T>;
 }
 
 export interface SchedulerState {
@@ -68,6 +69,8 @@ interface WorkerRecord {
   /** An API worker's site while it runs jobs. */
   origin: string | null;
   site: string | null;
+  /** The site its page was left on, by its last job: a collection job there takes this worker first, its page still warm. */
+  at: string | null;
   creating: Promise<string> | null;
   idle: AbortController | null;
 }
@@ -161,7 +164,7 @@ export class WorkerScheduler {
         await previous;
         const last = this.lastLoad.get(key);
         if (last !== undefined && options?.delay !== false) {
-          const { min, max } = this.options.navigationDelayMs;
+          const { min, max } = options?.delay ?? this.options.navigationDelayMs;
           const scale = this.options.navigationDelayScale;
           const full = randomBetween(this.options.random, min, max);
           const wait = last + full * scale - this.options.clock.now();
@@ -217,7 +220,9 @@ export class WorkerScheduler {
     // the profile's own cap.
     const interactive = Boolean(request.interactive);
     if (!interactive && site && (this.siteWorkers.get(site) ?? 0) >= limits.perSite) return null;
-    const idle = this.workers.find((worker) => worker.profileId === request.profileId && worker.kind === 'collection' && !worker.busy);
+    const idle = this.workers
+      .filter((worker) => worker.profileId === request.profileId && worker.kind === 'collection' && !worker.busy)
+      .sort((a, b) => Number(b.at === (request.origin ?? null)) - Number(a.at === (request.origin ?? null)))[0];
     if (idle) return this.claim(idle, request, site);
     const collectionWorkers = this.workers.filter((worker) => worker.kind === 'collection');
     const profileWorkers = collectionWorkers.filter((worker) => worker.profileId === request.profileId);
@@ -235,6 +240,7 @@ export class WorkerScheduler {
       jobs: [],
       origin: null,
       site: null,
+      at: null,
       creating: this.options.host.createWorker(profileId),
       idle: null,
     };
@@ -246,6 +252,7 @@ export class WorkerScheduler {
     record.busy = true;
     record.jobs.push(request);
     record.origin = request.origin ?? null;
+    record.at = request.origin ?? null;
     record.idle?.abort();
     record.idle = null;
     if (site) {
@@ -265,10 +272,6 @@ export class WorkerScheduler {
           record.creating = null;
           this.options.emit('scheduler', `worker created (${record.kind})`, { workerId: record.id, profileId: record.profileId });
         }
-      } else if (record.kind === 'collection') {
-        // Only collections go back through a page's history. An API job stays on the page it needs, and resetting would
-        // reload that page (Tauri rebuilds the webview) before every request.
-        await this.options.host.resetWorker(record.id);
       }
     } catch (error) {
       if (this.workers.includes(record)) this.workers.splice(this.workers.indexOf(record), 1);

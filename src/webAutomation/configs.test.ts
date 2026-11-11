@@ -51,6 +51,22 @@ describe('block configuration readers', () => {
     expect(read.ok && read.value.capability?.published?.permissions.map((permission) => permission.id)).toEqual(['analyses']);
   });
 
+  it('reads response rules: a status or several, body values by JSON pointer, an action, and where the message is', () => {
+    const read = readWebApiBlockConfig(rawWebApi({ responses: [{ status: 402, body: { '/code': 'credits_exhausted', '/retryable': false }, action: 'pause', message: '/error' }, { status: [429, 503], action: 'retry' }] }));
+    expect(read.ok && read.value.capability?.responses).toEqual([
+      { status: [402], body: { '/code': 'credits_exhausted', '/retryable': false }, action: 'pause', message: '/error' },
+      { status: [429, 503], action: 'retry' },
+    ]);
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ responses: { status: 402 } })))).toEqual(['The response rules must be a list.']);
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ responses: [{ status: 99, action: 'wait', body: { code: 'x', '/n': { deep: 1 } }, message: 'error' }] })))).toEqual([
+      'Response rule 1 needs a status, or a list of them, from 100 to 599.',
+      'Response rule 1\'s action must be retry, pause, or fail.',
+      'Response rule 1\'s body condition "code" must be a JSON pointer, starting with "/".',
+      'Response rule 1\'s body condition "/n" must be a string, number, boolean, or null.',
+      'Response rule 1\'s message must be a JSON pointer, starting with "/".',
+    ]);
+  });
+
   it('rejects web API snapshots that could reach other origins or are incomplete', () => {
     expect(errorsOf(readWebApiBlockConfig(rawWebApi({ pageUrl: 'http://app.example.test/' })))).toEqual(['The page URL must use HTTPS.']);
     const endpoints = structuredClone(analysisServiceCapability.endpoints);

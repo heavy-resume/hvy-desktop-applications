@@ -2651,6 +2651,21 @@ fn read_document_file_metadata(app: AppHandle, path: String) -> AppResult<Docume
     Ok(metadata)
 }
 
+/// Diagnostics: one line of the page's trace (src/traceLog.ts), appended to trace.log in the app's log folder as it
+/// comes, so what the page did last is on disk even when it hangs. The file starts over past 50 MB.
+#[tauri::command]
+fn append_trace_line(app: AppHandle, line: String) -> AppResult<()> {
+    let directory = app.path().app_log_dir().map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("trace.log");
+    if fs::metadata(&path).map(|metadata| metadata.len() > 50 * 1024 * 1024).unwrap_or(false) {
+        fs::remove_file(&path)?;
+    }
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    writeln!(file, "{line}")?;
+    Ok(())
+}
+
 #[tauri::command]
 fn read_document_file_stamp(path: String) -> AppResult<String> {
     let metadata = fs::metadata(path)?;

@@ -157,6 +157,7 @@ export function sidePaneSite(): MockSite {
         matches: {
           'pane-listing': { confidence: 0.91, records: jobs.map((item) => ({ ref: `card-${item.slug}`, values: { title: item.title, link: `/view/${item.slug}` } })) },
         },
+        shownPane: 'card-1',
         panes: Object.fromEntries(jobs.map((item) => [`card-${item.slug}`, {
           matches: { 'pane-detail': { confidence: 0.88, records: [{ ref: `pane-${item.slug}`, values: { title: item.title, company: 'Sidepane Inc', description: item.description } }] } },
         }])),

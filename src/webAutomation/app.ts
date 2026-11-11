@@ -211,7 +211,8 @@ export function relocateWebAutomationDocument(previousPath: string, nextPath: st
   runtime?.relocateDocument(previousPath, nextPath);
 }
 
-const UNATTENDED_PAUSES = new Set(['not_authenticated', 'not_authorized']);
+// Paused for the user: to sign in, allow the service, or deal with what the service's response said (such as quota).
+const UNATTENDED_PAUSES = new Set(['not_authenticated', 'not_authorized', 'response']);
 
 /**
  * The open documents with background work waiting for the user: a collection run that needs them (a page to deal
@@ -242,6 +243,8 @@ export interface BackgroundQueueSummary {
   failures: Array<{ key: string; error: string }>;
   paused: boolean;
   pauseReason: string | null;
+  /** What the service said, when its response paused the queue. */
+  pauseMessage: string | null;
   awaitingResume: boolean;
 }
 
@@ -304,6 +307,7 @@ export function backgroundActivity(): BackgroundActivity {
         failures: queue.entries.filter((entry) => entry.status === 'failed').map((entry) => ({ key: entry.key, error: entry.lastError ?? 'Failed.' })),
         paused: queue.paused,
         pauseReason: queue.pauseReason,
+        pauseMessage: queue.pauseMessage ?? null,
         awaitingResume: queue.awaitingResume,
       };
     }).filter((queue) => queue.queued + queue.running + queue.retrying + queue.failed > 0);
@@ -343,4 +347,16 @@ export function resumeBackgroundQueue(path: string, queueId: string): void {
 
 export function pauseAllBackgroundQueues(): void {
   for (const { path, queues } of backgroundActivity().documents) for (const { queueId, paused } of queues) if (!paused) pauseBackgroundQueue(path, queueId);
+}
+
+// UI: Background activity, a queue's "Stop", and "Stop all", which stops every collection run too.
+export function stopBackgroundQueue(path: string, queueId: string): void {
+  openDocumentAt(path)?.automation.stopQueue(queueId);
+}
+
+export function stopAllBackgroundWork(): void {
+  for (const { path, runs, queues } of backgroundActivity().documents) {
+    for (const { runId } of runs) stopBackgroundRun(path, runId);
+    for (const queue of queues) if (queue.queued + queue.retrying > 0 || queue.paused || queue.awaitingResume) stopBackgroundQueue(path, queue.queueId);
+  }
 }

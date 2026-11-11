@@ -10,6 +10,7 @@ import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '.
 import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
 import { createWebAutomationPlugins, profileNameIn, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
+import { copyIcon } from '../ui/render-shell';
 import { isIgnoredProfileContext, profileContextFor } from '../webAutomation/profileContexts';
 import { publishedService, publishedServices, SERVICE_MANIFEST_FORMAT, SERVICE_MANIFEST_PATH } from '../webAutomation/serviceManifests';
 import { documentProfileName, resolveProfile, withDocumentProfile, type BrowserProfile } from '../webAutomation/profiles';
@@ -173,7 +174,7 @@ function openProfileDialog(options: { current: string | null; note: string; onCh
 const KEPT_BY_NAME = 'The document keeps it by name. A site is asked about again before it is used with another profile.';
 
 /** The file's profile, for the web plugins outside any web profile context, saved in the front matter. */
-function chooseFileProfile(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, then: () => void = () => {}): void {
+function chooseFileProfile(ctx: HvyPluginContext, lookup: DocumentAutomationLookup, then: () => void = () => { }): void {
   openProfileDialog({
     current: documentProfileName(ctx.rawDocument.meta),
     note: `For the web plugins in this file outside a web profile context. ${KEPT_BY_NAME}`,
@@ -1451,7 +1452,10 @@ function copySetup(collection: CollectionDefinition, siteId: string, control: HT
   const setup = siteSetupOf(collection, siteId);
   if (!setup) return;
   navigator.clipboard.writeText(siteSetupText([setup])).then(() => {
-    control.textContent = 'Copied';
+    // An icon button: it says so in its label, and shows a check.
+    control.title = 'Copied';
+    control.setAttribute('aria-label', 'Copied');
+    control.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
   }, (error: unknown) => {
     errors.textContent = `Couldn’t copy: ${errorMessage(error)}`;
   });
@@ -1462,7 +1466,7 @@ function copySetup(collection: CollectionDefinition, siteId: string, control: HT
  * checks the whole block's configuration first, so a change that breaks a reference is refused here.
  */
 function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition, startPage: StartPage): void {
-  const { form, body, errors, row, close } = openModal('Edit Page', 'hvy-web-page-dialog wide-dialog');
+  const { form, body, errors, row, close } = openModal('Edit Page', 'hvy-web-page-dialog hvy-web-edit-page-dialog wide-dialog');
   const name = textInput('name', startPage.name ?? '');
   name.placeholder = shortAddress(startPage.url);
   name.autocomplete = 'off';
@@ -1482,16 +1486,30 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
     });
     setupActions.append(again);
   }
+  // A site whose list opens items by clicking in their rows can be read by clicking through it, as a person browses.
+  const opens = site !== null && patternsOf(collection, site.id).some((pattern) => pattern.role === 'listing' && Boolean((pattern.matcher as { pattern?: { opener?: unknown } } | undefined)?.pattern?.opener));
+  let browse = site?.browse === true;
+  const item = collection.itemName?.trim() || 'item';
+  const browseBox = opens ? fieldset(`${item[0].toUpperCase()}${item.slice(1)} pages`, checkboxRow(`Click through ${items(collection)}`, browse, (on) => {
+    browse = on;
+  }), paragraph(`Automatically reuses the ${item} page window to visit each ${item} rather treating each ${item} visit as its own page and opening each ${item} page in its own window.`, 'hvy-web-page-hint')) : null;
+  // Copy: the whole setup (its list and item pages, and the pages it reads), so in the dialog's corner, apart from
+  // what this page alone has.
   if (site) {
-    const copy = button('Copy Setup to Clipboard');
+    const copy = button('');
+    copy.classList.add('icon-button', 'hvy-web-dialog-corner');
+    copy.title = 'Copy setup to clipboard';
+    copy.setAttribute('aria-label', 'Copy setup to clipboard');
+    copy.innerHTML = copyIcon();
     copy.addEventListener('click', () => copySetup(currentCollection(ctx, collection), site.id, copy, errors));
-    setupActions.append(copy);
+    form.append(copy);
   }
   body.append(
     labelled('Name', name, 'Optional: without a name, the page is listed by its address.'),
     labelled('Address', address),
     paragraph(reads ? `Reads with: ${reads}` : 'Not set up: runs skip this page.', 'hvy-web-page-hint'),
     ...(setupActions.childElementCount ? [setupActions] : []),
+    ...(browseBox ? [browseBox] : []),
     values.element,
   );
   // This page's own limits; blank fields use the default limits.
@@ -1525,7 +1543,15 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
     const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, name: _name, ...rest } = startPage;
     const next: StartPage = { ...rest, ...(name.value.trim() ? { name: name.value.trim() } : {}), url: address.value.trim(), values: values.read(), ...limits.read() };
     if (!Object.keys(next.values!).length) delete next.values;
-    const problems = saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => (page.id === startPage.id ? next : page)) });
+    const now = currentCollection(ctx, collection);
+    const sites = site && browse !== (site.browse === true)
+      ? now.sites.map((other) => {
+        if (other.id !== site.id) return other;
+        const { browse: _browse, ...rest } = other;
+        return browse ? { ...rest, browse: true as const } : rest;
+      })
+      : null;
+    const problems = saveCollection(ctx, { startPages: now.startPages.map((page) => (page.id === startPage.id ? next : page)), ...(sites ? { sites } : {}) });
     if (problems.length) errors.textContent = problems.join(' ');
     else close();
   });
@@ -2013,20 +2039,30 @@ const queueView: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) =>
     lookup.automation.resumeQueue(queueId);
     sync();
   });
-  // Paused for something only the user can do (sign in, allow, or resume after reopening): a notice here, by the queue.
-  if (queue.paused && (queue.pauseReason === 'not_authenticated' || queue.pauseReason === 'not_authorized' || queue.pauseReason === 'no_profile')) {
-    root.append(needsYouNotice(lookup, `queue\0${queueId}\0${queue.pauseReason}`, paragraph(PAUSE_REASONS[queue.pauseReason] ?? `Paused (${queue.pauseReason}).`), actions(resume)));
+  // Stop: what waits is cancelled (a call already sent finishes).
+  const stop = button('Stop');
+  stop.addEventListener('click', () => {
+    lookup.automation.stopQueue(queueId);
+    sync();
+  });
+  const controls = (...first: HTMLButtonElement[]) => actions(...first, ...(waiting > 0 ? [stop] : []));
+  // Paused for something only the user can do (sign in, allow, deal with what the service said, or resume after
+  // reopening): a notice here, by the queue.
+  if (queue.paused && queue.pauseReason === 'response') {
+    root.append(needsYouNotice(lookup, `queue\0${queueId}\0response`, paragraph(`Paused: ${queue.pauseMessage ?? 'the service asked to wait.'} Resume once it is dealt with.`), controls(resume)));
+  } else if (queue.paused && (queue.pauseReason === 'not_authenticated' || queue.pauseReason === 'not_authorized' || queue.pauseReason === 'no_profile')) {
+    root.append(needsYouNotice(lookup, `queue\0${queueId}\0${queue.pauseReason}`, paragraph(PAUSE_REASONS[queue.pauseReason] ?? `Paused (${queue.pauseReason}).`), controls(resume)));
   } else if (queue.paused) {
-    root.append(paragraph(PAUSE_REASONS[queue.pauseReason ?? 'paused'] ?? `Paused (${queue.pauseReason}).`), actions(resume));
+    root.append(paragraph(PAUSE_REASONS[queue.pauseReason ?? 'paused'] ?? `Paused (${queue.pauseReason}).`), controls(resume));
   } else if (queue.awaitingResume) {
-    root.append(needsYouNotice(lookup, `queue\0${queueId}\0reopened`, paragraph('Work from before this file was opened waits until you resume it.'), actions(resume)));
+    root.append(needsYouNotice(lookup, `queue\0${queueId}\0reopened`, paragraph('Work from before this file was opened waits until you resume it.'), controls(resume)));
   } else if (waiting + running > 0) {
     const pause = button('Pause');
     pause.addEventListener('click', () => {
       lookup.automation.pauseQueue(queueId);
       sync();
     });
-    root.append(actions(pause));
+    root.append(controls(pause));
   }
   // Every entry not finished, in the order they run, then those that failed: each can be run next (on its own, while
   // the queue is paused), cancelled, or retried.

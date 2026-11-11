@@ -1,3 +1,4 @@
+import { trace } from './traceLog';
 import { renderAllAroundDocument } from './main';
 import { state } from './state';
 import { backgroundActivityLabel } from './ui/render-background-activity';
@@ -28,6 +29,7 @@ export function installBackgroundActivity(): void {
 }
 
 function update(linger: boolean): void {
+  trace('backgroundActivity:update');
   const paths = documentsNeedingYou();
   const activity = backgroundActivity();
   let label = backgroundActivityLabel(activity);

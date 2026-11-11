@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { compileFunction, runInThisContext } from 'node:vm';
 import { visitBlocks } from '../../../../heavy-file-format/src/block-traversal';
 import type { VisualBlock } from '../../../../heavy-file-format/src/editor/types';
-import { FORM_PLUGIN_VERSION, parseFormSpec, type FormFieldValue } from '../../../../heavy-file-format/src/plugins/form';
+import { FORM_PLUGIN_VERSION, parseFormSpec, type FormFieldValue } from '../../../../heavy-file-format/src/plugins/form-spec/form-spec';
 import { createLiveState, reconcileLiveState, type LiveFormState } from '../../../../heavy-file-format/src/plugins/form-live-state/form-live-state';
 import { resetPluginDocumentHookState, runPluginDocumentHooks } from '../../../../heavy-file-format/src/plugins/hooks';
 import { FORM_PLUGIN_ID, registerHostPlugin } from '../../../../heavy-file-format/src/plugins/registry';
@@ -128,6 +128,10 @@ function createFormApi(live: LiveFormState): ScriptingFormApi {
     clear_error: (label) => {
       delete live.errors[label];
     },
+    set_field_disabled: (label, disabled) => {
+      live.disabled[label] = disabled === true;
+    },
+    get_field_disabled: (label) => live.disabled[label] === true,
     set_submit_disabled: (disabled, reason) => {
       live.submit = { disabled: disabled === true, reason: disabled === true ? String(reason ?? '') : '' };
     },

@@ -108,6 +108,18 @@
   font-weight: 650;
 }
 
+/* Edit Page: no taller than most of the window (it scrolls inside), with Copy setup in its top right corner. */
+.dialog.hvy-web-edit-page-dialog {
+  position: relative;
+  max-height: 80vh;
+}
+
+.hvy-web-dialog-corner {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+
 /* A dialog's title may be a page's address, long and unbroken: it wraps, so the dialog keeps its width. */
 .hvy-web-dialog-title {
   overflow-wrap: anywhere;

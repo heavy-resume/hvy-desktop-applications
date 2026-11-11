@@ -75,6 +75,9 @@ function runRow(path: string, run: BackgroundRunSummary): string {
 /** Whether a queue has work to pause: failed entries wait on nothing. */
 const hasWork = (queue: BackgroundQueueSummary) => queue.queued + queue.running + queue.retrying > 0;
 
+/** Whether a queue has work to stop: entries waiting their turn, or to retry (a call already sent finishes). */
+const canStop = (queue: BackgroundQueueSummary) => queue.queued + queue.retrying > 0;
+
 function queueRow(path: string, queue: BackgroundQueueSummary): string {
   const counts = [
     queue.running ? `${queue.running} running` : '',
@@ -82,12 +85,16 @@ function queueRow(path: string, queue: BackgroundQueueSummary): string {
     queue.retrying ? `${queue.retrying} retrying` : '',
     queue.failed ? `${queue.failed} failed` : '',
   ].filter(Boolean).join(', ');
-  const paused = queue.awaitingResume ? 'waiting for Resume' : queue.paused ? `paused${queue.pauseReason ? ` (${queue.pauseReason.replaceAll('_', ' ')})` : ''}` : '';
+  const paused = queue.awaitingResume ? 'waiting for Resume' : queue.paused ? (queue.pauseMessage ? `paused: ${queue.pauseMessage}` : `paused${queue.pauseReason ? ` (${queue.pauseReason.replaceAll('_', ' ')})` : ''}`) : '';
   const action = queue.paused || queue.awaitingResume ? 'resume' : hasWork(queue) ? 'pause' : null;
+  const data = `data-path="${escapeAttr(path)}" data-queue-id="${escapeAttr(queue.queueId)}"`;
   return `
     <li class="background-activity-row">
       <span class="background-activity-row-text">${escapeHtml(queue.queueId)}: ${escapeHtml(counts)}${paused ? ` · ${escapeHtml(paused)}` : ''}</span>
-      ${action ? `<button class="hvy-galaxy-button" type="button" data-action="${action}-background-queue" data-path="${escapeAttr(path)}" data-queue-id="${escapeAttr(queue.queueId)}">${action === 'resume' ? 'Resume' : 'Pause'}</button>` : ''}
+      <span class="background-activity-actions">
+        ${action ? `<button class="hvy-galaxy-button" type="button" data-action="${action}-background-queue" ${data}>${action === 'resume' ? 'Resume' : 'Pause'}</button>` : ''}
+        ${canStop(queue) ? `<button class="hvy-galaxy-button" type="button" data-action="stop-background-queue" ${data}>Stop</button>` : ''}
+      </span>
     </li>${queue.failures.map(({ key, error }) => `
     <li class="background-activity-failure"><span class="background-activity-failure-key">${escapeHtml(key)}</span> ${escapeHtml(error)}</li>`).join('')}`;
 }
@@ -117,6 +124,7 @@ export function renderBackgroundActivityDialog(state: AppState): string {
   const withRuns = activity.documents.filter(({ runs }) => runs.length);
   const withQueues = activity.documents.filter(({ queues }) => queues.length);
   const canPauseAll = withQueues.some(({ queues }) => queues.some((queue) => !queue.paused && !queue.awaitingResume && hasWork(queue)));
+  const canStopAll = withRuns.length > 0 || withQueues.some(({ queues }) => queues.some(canStop));
   const events = activity.events.map((event) => `
     <li class="background-activity-event">
       <time class="background-activity-event-time">${time(event.at)}</time>
@@ -139,7 +147,10 @@ export function renderBackgroundActivityDialog(state: AppState): string {
           <section class="background-activity-section">
             <div class="background-activity-section-header">
               <h3 class="background-activity-heading">Queues</h3>
-              <button class="hvy-galaxy-button" type="button" data-action="pause-all-background-queues" ${canPauseAll ? '' : 'disabled'}>Pause all</button>
+              <span class="background-activity-actions">
+                <button class="hvy-galaxy-button" type="button" data-action="pause-all-background-queues" ${canPauseAll ? '' : 'disabled'}>Pause all</button>
+                <button class="hvy-galaxy-button" type="button" data-action="stop-all-background-work" ${canStopAll ? '' : 'disabled'}>Stop all</button>
+              </span>
             </div>
             ${withQueues.length ? withQueues.map(({ path, queues }) => `${documentHeading(state, path)}<ul class="background-activity-list">${queues.map((queue) => queueRow(path, queue)).join('')}</ul>`).join('') : '<p class="dialog-note">No queued work.</p>'}
           </section>

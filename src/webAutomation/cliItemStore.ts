@@ -4,7 +4,7 @@ import { executeHvyCliCommandSync, writeHvyVirtualFileSync } from '../../../heav
 import { getComponentDefsFromMeta } from '../../../heavy-file-format/src/component-definition-helpers';
 import { extractReusableTemplateVariablesFromDefinition } from '../../../heavy-file-format/src/reusable-template-values';
 import { findSortValueAnnotations, formatSortValueAnnotation, replaceSortValueAnnotations } from '../../../heavy-file-format/src/sort-values';
-import { parseFormSpec, serializeFormSpec } from '../../../heavy-file-format/src/plugins/form';
+import { parseFormSpec, serializeFormSpec } from '../../../heavy-file-format/src/plugins/form-spec/form-spec';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import type { DocumentItem, DocumentItemStore } from './recordSink';
 

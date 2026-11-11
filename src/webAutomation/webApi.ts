@@ -3,7 +3,7 @@ import type { Clock } from './clock';
 import { documentInputLinks, documentTextInputs, endpointTimeoutMs, onlyInput, readJsonPointer, resolveEndpointRequest, type ApiEndpointDefinition } from './endpoints';
 import { readServedDocument, type ServedDocumentDefinition } from './servedDocuments';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
-import { WebAutomationError } from './errors';
+import { WebAutomationError, type ResponseAction } from './errors';
 import type { AutomationEmit } from './events';
 import type { BrowserHost, HostResponse } from './host';
 import type { WorkerScheduler } from './scheduler';
@@ -35,11 +35,32 @@ export interface WebApiCapability {
   endpoints: ApiEndpointDefinition[];
   /** Origins a served document may be read from (for example, a storage bucket), besides the page's own. */
   readOrigins?: string[];
+  /** What to do about particular responses, the first that matches: see ResponseRule. */
+  responses?: ResponseRule[];
   /**
    * Built from what the service publishes about itself (serviceManifests.ts): the permissions this document was
    * granted, in the service's words. Its endpoints are the ones those permissions grant, and the sign-in's.
    */
   published?: { permissions: PublishedPermission[] };
+}
+
+/**
+ * A response the service gives that calls for something particular, such as one saying the user ran out of quota:
+ * any of its statuses, with the body's values at these JSON pointers ("/code": "quota_exceeded"), if any. Its action
+ * (ResponseAction) is the call's error's, and its message, the text at `message` in the body, when it has one.
+ * Responses no rule matches are handled as before: an error status fails, and a queue retries the statuses it retries.
+ */
+export interface ResponseRule {
+  status: number[];
+  body?: Record<string, string | number | boolean | null>;
+  action: ResponseAction;
+  message?: string;
+}
+
+/** The first of the service's response rules this response matches, if any. */
+export function matchingResponseRule(capability: WebApiCapability, response: { status: number; body: unknown }): ResponseRule | null {
+  return capability.responses?.find((rule) => rule.status.includes(response.status)
+    && Object.entries(rule.body ?? {}).every(([pointer, value]) => readJsonPointer(response.body, pointer) === value)) ?? null;
 }
 
 /** A permission a service publishes: what it lets a document do, in the service's words. */
@@ -244,6 +265,13 @@ export class WebApiService {
     if (signedOutStatuses(capability).includes(response.status)) {
       this.deps.sessions.markSignedOut(capability, profileId);
       throw new WebAutomationError('not_authenticated', `Sign in to ${capability.name} again.`, response.status);
+    }
+    const rule = matchingResponseRule(capability, response);
+    if (rule) {
+      const said = rule.message ? readJsonPointer(response.body, rule.message) : null;
+      const detail = endpoint.errorMessagePointer ? readJsonPointer(response.body, endpoint.errorMessagePointer) : null;
+      const message = [said, detail].find((text) => typeof text === 'string' && text) as string | undefined;
+      throw new WebAutomationError('http_error', message ?? `"${endpoint.name}" returned ${response.status}.`, response.status, rule.action);
     }
     if (response.status < 200 || response.status >= 300) {
       const detail = endpoint.errorMessagePointer ? readJsonPointer(response.body, endpoint.errorMessagePointer) : null;

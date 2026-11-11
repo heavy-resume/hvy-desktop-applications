@@ -34,6 +34,18 @@ every close (`integration-browser-closed`), which fails every request still
 waiting on that profile. Don't add a pending flag that a case in the result
 switch (`mainStartup.ts`) clears; it is left set when the window closes first.
 
+## Tracing a hang or out-of-memory page
+
+When the app freezes or runs out of memory, devtools is often unusable. The
+Tauri app can write each step to a file as it happens instead (`src/traceLog.ts`):
+the debug log's events and timed work, renders, and all console output, each
+line before the step runs, so the file's last lines say what the page was doing.
+It is off by default, as it costs an IPC call per line. To turn it on, run
+`localStorage.setItem('hvyTrace', '1')` in the page's console and reload; to turn
+it off, `localStorage.removeItem('hvyTrace')` and reload. The file is
+`~/Library/Logs/com.heavyresume.hvy-galaxy/trace.log` on macOS, started over past
+50 MB. Electron has no trace.
+
 ## Development
 
 Prerequisites:

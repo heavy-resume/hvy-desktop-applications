@@ -203,7 +203,6 @@ function createWebAutomationHost(deps) {
         workers.set(workerId, { window: await createWindow(args.profileId, false), profileId: args.profileId });
         return workerId;
       }
-      case 'reset-worker': worker(args.workerId).window.webContents.navigationHistory.clear(); return null;
       case 'close-worker': {
         const entry = workers.get(args.workerId);
         workers.delete(args.workerId);

@@ -8,8 +8,6 @@ import type { PlatformSignal, SitePatternDefinition } from './sitePatterns';
  */
 export interface BrowserHost {
   createWorker(profileId: string): Promise<string>;
-  /** Clears navigation history so one job cannot go "back" into another job's pages. */
-  resetWorker(workerId: string): Promise<void>;
   closeWorker(workerId: string): Promise<void>;
   showWorker(workerId: string): Promise<void>;
   hideWorker(workerId: string): Promise<void>;

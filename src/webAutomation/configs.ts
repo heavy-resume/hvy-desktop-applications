@@ -7,7 +7,8 @@ import type { RecordSinkConfig } from './recordSink';
 import { SQL_IDENTIFIER, type SqlItemStoreConfig } from './sqlItemStore';
 import { PUBLISHED_SERVICES_OFF, publishedService, publishedServices, SERVICE_MANIFEST_FORMAT } from './serviceManifests';
 import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
-import type { SessionDefinition, WebApiCapability } from './webApi';
+import type { ResponseRule, SessionDefinition, WebApiCapability } from './webApi';
+import type { ResponseAction } from './errors';
 
 export const WEB_API_PLUGIN_ID = 'galaxy.web-api';
 export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
@@ -264,6 +265,39 @@ function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition |
   };
 }
 
+const RESPONSE_ACTIONS = new Set<ResponseAction>(['retry', 'pause', 'fail']);
+
+/** A service's response rules (ResponseRule): each a status or several, body values by JSON pointer, an action, and where its message is. */
+function readResponseRules(value: unknown, errors: string[]): ResponseRule[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push('The response rules must be a list.');
+    return [];
+  }
+  return value.flatMap((rule, index): ResponseRule[] => {
+    const label = `Response rule ${index + 1}`;
+    if (!isRecord(rule)) {
+      errors.push(`${label} is not an object.`);
+      return [];
+    }
+    const status = (Array.isArray(rule.status) ? rule.status : [rule.status]).filter((code): code is number => Number.isInteger(code) && Number(code) >= 100 && Number(code) < 600);
+    if (!status.length) errors.push(`${label} needs a status, or a list of them, from 100 to 599.`);
+    const action = text(rule.action) as ResponseAction;
+    if (!RESPONSE_ACTIONS.has(action)) errors.push(`${label}'s action must be retry, pause, or fail.`);
+    const body: NonNullable<ResponseRule['body']> = {};
+    if (rule.body !== undefined && !isRecord(rule.body)) errors.push(`${label}'s body must map JSON pointers to values.`);
+    for (const [pointer, expected] of Object.entries(isRecord(rule.body) ? rule.body : {})) {
+      if (!pointer.startsWith('/')) errors.push(`${label}'s body condition "${pointer}" must be a JSON pointer, starting with "/".`);
+      else if (expected !== null && !['string', 'number', 'boolean'].includes(typeof expected)) errors.push(`${label}'s body condition "${pointer}" must be a string, number, boolean, or null.`);
+      else body[pointer] = expected as string | number | boolean | null;
+    }
+    const message = text(rule.message);
+    if (message && !message.startsWith('/')) errors.push(`${label}'s message must be a JSON pointer, starting with "/".`);
+    if (!status.length || !RESPONSE_ACTIONS.has(action)) return [];
+    return [{ status, ...(Object.keys(body).length ? { body } : {}), action, ...(message.startsWith('/') ? { message } : {}) }];
+  });
+}
+
 function readSession(value: unknown, origin: string, endpoints: ApiEndpointDefinition[], errors: string[]): SessionDefinition | undefined {
   if (value === undefined || value === null) return undefined;
   if (!isRecord(value) || !isRecord(value.probe)) {
@@ -351,6 +385,7 @@ function readPublishedWebApiBlockConfig(value: Record<string, unknown>): ConfigR
     } : {}),
     endpoints: published_endpoints.filter((endpoint) => wanted.has(text(endpoint.id))),
     readOrigins: manifest.readOrigins,
+    ...(manifest.responses !== undefined ? { responses: manifest.responses } : {}),
     mcp: { endpointIds: exposed },
   });
   if (!inline.ok) return { ok: false, errors: inline.errors.map((error) => `${where}: ${error}`) };
@@ -401,6 +436,7 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
   });
   const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
   if (exposed.some((id) => !ids.includes(id))) errors.push('MCP exposes an endpoint that is not defined.');
+  const responses = readResponseRules(value.responses, errors);
   if (errors.length) return { ok: false, errors };
   return {
     ok: true,
@@ -414,6 +450,7 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
         ...(session ? { session } : {}),
         endpoints,
         ...(readOrigins.length ? { readOrigins: [...new Set(readOrigins)] } : {}),
+        ...(responses.length ? { responses } : {}),
       },
       mcp: { endpointIds: exposed },
     },
@@ -519,7 +556,7 @@ function readSites(value: unknown, errors: string[]): CollectionSite[] {
       return [];
     }
     const from = isRecord(site.from) && text(site.from.name) ? { name: text(site.from.name), version: number(site.from.version, 1, 1, Number.MAX_SAFE_INTEGER) } : null;
-    return [{ id, name: text(site.name) || id, ...(from ? { from } : {}) }];
+    return [{ id, name: text(site.name) || id, ...(from ? { from } : {}), ...(site.browse === true ? { browse: true as const } : {}) }];
   });
   const ids = sites.map((site) => site.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Site setup id "${id}" is used twice.`);
@@ -670,6 +707,7 @@ function readQueueState(value: unknown): QueueState | null {
     entries,
     paused: value.paused === true,
     pauseReason: typeof value.pauseReason === 'string' ? value.pauseReason : null,
+    pauseMessage: typeof value.pauseMessage === 'string' ? value.pauseMessage : null,
     awaitingResume: false,
   };
 }
@@ -691,6 +729,7 @@ export function switchToPublishedService(config: Record<string, unknown>, origin
     session: undefined,
     endpoints: undefined,
     readOrigins: undefined,
+    responses: undefined,
     service: origin,
     permissions,
     mcp: { ...(isRecord(config.mcp) ? config.mcp : {}), endpointIds: exposed.filter((id) => allowed.has(id)) },

@@ -5,7 +5,7 @@ import { backgroundActivityLabel, renderBackgroundActivityDialog, renderBackgrou
 
 const idle: BackgroundActivity = { workers: [], waitingJobs: [], documents: [], events: [] };
 
-const queue = { queueId: 'evaluate', queued: 0, running: 0, retrying: 0, failed: 0, failures: [], paused: false, pauseReason: null, awaitingResume: false };
+const queue = { queueId: 'evaluate', queued: 0, running: 0, retrying: 0, failed: 0, failures: [], paused: false, pauseReason: null, pauseMessage: null, awaitingResume: false };
 
 describe('Background activity', () => {
   it('is hidden while nothing runs or waits, shows a word or two, and says in full what runs and what waits behind it', () => {
@@ -51,6 +51,9 @@ describe('Background activity', () => {
     expect(html).toContain('evaluate: 1 running, 2 queued');
     expect(html).toContain('data-action="pause-background-queue"');
     expect(html).toContain('data-action="pause-all-background-queues"');
+    // What waits can be stopped, by queue or all at once (the runs too).
+    expect(html).toContain('data-action="stop-background-queue" data-path="/w/Search.hvy" data-queue-id="evaluate"');
+    expect(html).toContain('data-action="stop-all-background-work" >Stop all');
     expect(html).toContain('call Files');
     state.backgroundActivityOpen = false;
     expect(renderBackgroundActivityDialog(state)).toBe('');
@@ -76,6 +79,22 @@ describe('Background activity', () => {
     expect(html).not.toContain('pause-background-queue');
     // Pause all stays, so the Queues header keeps its height, with nothing to pause.
     expect(html).toContain('data-action="pause-all-background-queues" disabled');
+    expect(html).not.toContain('stop-background-queue');
+    expect(html).toContain('data-action="stop-all-background-work" disabled');
+    state.backgroundActivityOpen = false;
+  });
+
+  it('says what the service said when its response paused a queue, which can be resumed or stopped', () => {
+    state.documentTabs = [];
+    state.backgroundActivityOpen = true;
+    state.backgroundActivity = {
+      ...idle,
+      documents: [{ path: '/w/Search.hvy', runs: [], queues: [{ ...queue, queued: 4, paused: true, pauseReason: 'response', pauseMessage: 'Not enough premium HVY tokens for this request.' }] }],
+    };
+    const html = renderBackgroundActivityDialog(state);
+    expect(html).toContain('evaluate: 4 queued · paused: Not enough premium HVY tokens for this request.');
+    expect(html).toContain('data-action="resume-background-queue"');
+    expect(html).toContain('data-action="stop-background-queue"');
     state.backgroundActivityOpen = false;
   });
 });

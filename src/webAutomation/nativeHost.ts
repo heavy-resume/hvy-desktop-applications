@@ -106,9 +106,6 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
   const call = <T>(command: string, args: Record<string, unknown> = {}) => transport.call<T>(command, args);
   return {
     createWorker: (profileId) => call<string>('create-worker', { profileId, browserStoreId: browserStoreOf(profileId) }),
-    resetWorker: async (workerId) => {
-      await call('reset-worker', { workerId });
-    },
     closeWorker: async (workerId) => {
       await call('close-worker', { workerId });
     },

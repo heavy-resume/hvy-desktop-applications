@@ -1,3 +1,4 @@
+import { startTrace } from './traceLog';
 import { installAiChatClient } from './aiClient';
 import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationBrowserEvent, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
@@ -38,6 +39,8 @@ if (import.meta.hot) {
 }
 
 export async function boot(): Promise<void> {
+  // Diagnostics, when asked for (localStorage.hvyTrace): before anything else, so a hang during startup is traced too.
+  startTrace();
   setupErrorSurface();
   try {
     loadZoomSettings();

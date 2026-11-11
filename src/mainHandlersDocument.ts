@@ -1,7 +1,7 @@
 import { reloadExternalFileChange, dismissExternalFileChange } from './mainDocumentFileMonitor';
 import { setPluginAcceptances } from './pluginManager';
 import { refreshBackgroundActivity } from './backgroundActivity';
-import { pauseAllBackgroundQueues, pauseBackgroundQueue, resumeBackgroundQueue, stopBackgroundRun } from './webAutomation/app';
+import { pauseAllBackgroundQueues, pauseBackgroundQueue, resumeBackgroundQueue, stopAllBackgroundWork, stopBackgroundQueue, stopBackgroundRun } from './webAutomation/app';
 import { archiveDocumentFile, chooseWorkspaceFolder, deleteDocumentFile, deleteEncryptedFolderDocument, listDocumentKeyMetadata, openDocumentFile, openFileDialog, pasteSystemFilesToWorkspace, readDocumentFile, renameDocumentFile, restoreDocumentBackup, restoreDocumentFile, revealDocumentFile, saveDocumentAsDialog, saveAppSettings, saveDocumentToWorkspace, saveDocumentTemplate, updateEncryptedFolderManifest, updateWorkspaceFileAiAccess, updateWorkspaceTemplateVisibility, writeSystemFileClipboard, type TemplateExtension } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
@@ -173,6 +173,8 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   pauseBackgroundQueue: (path, queueId) => pauseBackgroundQueue(path, queueId),
   resumeBackgroundQueue: (path, queueId) => resumeBackgroundQueue(path, queueId),
   pauseAllBackgroundQueues: () => pauseAllBackgroundQueues(),
+  stopBackgroundQueue: (path, queueId) => stopBackgroundQueue(path, queueId),
+  stopAllBackgroundWork: () => stopAllBackgroundWork(),
   // Saves every checked approval at once, then reopens the document once so its scripts run with the plugins.
   allowPlugins: (acceptanceKeys) => {
     state.pluginApprovalDialogOpen = false;

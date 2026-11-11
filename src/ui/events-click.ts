@@ -437,6 +437,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'pause-background-queue') handlers.pauseBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
     if (action === 'resume-background-queue') handlers.resumeBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
     if (action === 'pause-all-background-queues') handlers.pauseAllBackgroundQueues();
+    if (action === 'stop-background-queue') handlers.stopBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
+    if (action === 'stop-all-background-work') handlers.stopAllBackgroundWork();
     if (action === 'confirm-plugin-approvals') {
       const dialog = target.closest<HTMLElement>('.plugin-approval-dialog');
       handlers.allowPlugins([...(dialog?.querySelectorAll<HTMLInputElement>('input[data-plugin-acceptance-key]:checked') ?? [])].map((input) => input.dataset.pluginAcceptanceKey ?? ''));

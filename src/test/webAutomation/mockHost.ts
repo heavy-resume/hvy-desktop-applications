@@ -32,6 +32,8 @@ export interface MockPage {
   frames?: Array<{ src: string }>;
   /** Side-pane boards: record ref → what the pane shows after the item command. */
   panes?: Record<string, Pick<MockPage, 'matches'>>;
+  /** Side-pane boards: the record ref whose pane shows before any is clicked. */
+  shownPane?: string;
   /** Lists whose items a click opens (what opens them has no link): record ref → where clicking in it goes. */
   opens?: Record<string, string>;
 }
@@ -93,14 +95,6 @@ export class MockHost implements BrowserHost {
     return workerId;
   }
 
-  async resetWorker(workerId: string): Promise<void> {
-    const worker = this.worker(workerId);
-    const current = worker.history[worker.index];
-    worker.history = current ? [current] : [];
-    worker.index = worker.history.length - 1;
-    worker.restored = true;
-  }
-
   async closeWorker(workerId: string): Promise<void> {
     this.workers.delete(workerId);
   }
@@ -152,7 +146,8 @@ export class MockHost implements BrowserHost {
     if (page?.wall && !this.cookies(worker.profileId, new URL(url).origin)[CLEARANCE_COOKIE]) {
       return { url, ready: true, matches: {}, fingerprintMatches: {}, frames: [] };
     }
-    const pane = worker.pane ? page?.panes?.[worker.pane] : undefined;
+    const paneRef = worker.pane ?? page?.shownPane;
+    const pane = paneRef ? page?.panes?.[paneRef] : undefined;
     const visible = { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
     const matches = worker.restored
       ? Object.fromEntries(Object.entries(visible).filter(([patternId]) => request.patterns.some((pattern) => pattern.id === patternId)))

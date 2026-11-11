@@ -220,6 +220,8 @@ export interface UiHandlers {
   pauseBackgroundQueue(path: string, queueId: string): void;
   resumeBackgroundQueue(path: string, queueId: string): void;
   pauseAllBackgroundQueues(): void;
+  stopBackgroundQueue(path: string, queueId: string): void;
+  stopAllBackgroundWork(): void;
   cancelDocumentEncryption(): void;
   closeAbout(): void;
   openDebugLog(): void;

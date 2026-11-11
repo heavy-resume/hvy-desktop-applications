@@ -215,24 +215,6 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
             web_automation_create_worker(app, &worker_id, web_automation_text(args, "profileId")?, web_automation_text(args, "browserStoreId")?)?;
             Ok(serde_json::Value::String(worker_id))
         }
-        // History cannot be cleared in a webview, so the worker gets a fresh window in the same profile, on the page
-        // the old one was on: as in Electron, only the history goes (an API worker stays on its service's page).
-        "reset-worker" => {
-            let worker_id = web_automation_text(args, "workerId")?;
-            let (window, loads) = web_automation_worker(app, worker_id)?;
-            let location = web_automation_location(&window, &loads)?;
-            if let Some((profile_id, browser_store_id)) = web_automation_close_worker(app, worker_id)? {
-                web_automation_create_worker(app, worker_id, &profile_id, &browser_store_id)?;
-                if let Some(url) = location["url"].as_str().filter(|url| *url != "about:blank") {
-                    let (window, loads) = web_automation_worker(app, worker_id)?;
-                    let (_, finished) = loads.counts();
-                    window.navigate(url.parse::<tauri::Url>().map_err(|error| AppError::Message(error.to_string()))?)
-                        .map_err(|error| AppError::Message(error.to_string()))?;
-                    loads.wait(0, finished, None)?;
-                }
-            }
-            Ok(serde_json::Value::Null)
-        }
         "close-worker" => {
             web_automation_close_worker(app, web_automation_text(args, "workerId")?)?;
             Ok(serde_json::Value::Null)

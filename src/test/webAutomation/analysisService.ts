@@ -41,6 +41,8 @@ function storedSource() {
 export interface MockAnalysisServiceState {
   /** The next N analysis creations answer 429. */
   rateLimitNextCreates: number;
+  /** While set, analysis creations answer 402: the account is out of credits, until it is topped up (cleared). */
+  outOfCredits: boolean;
   createCalls: number;
   lastSourceText: string | null;
   lastSourceRevision: string | null;
@@ -64,6 +66,7 @@ export function analysisServiceManifest(): Record<string, unknown> {
     page: '/',
     session: { loginPath: '/login', completePath: '/login/done', probe: 'session', logout: 'logout' },
     readOrigins: analysisServiceCapability.readOrigins,
+    responses: analysisServiceCapability.responses,
     endpoints: structuredClone(analysisServiceCapability.endpoints),
     permissions: [
       { id: 'account', description: 'See your account defaults', endpoints: ['profile'] },
@@ -79,6 +82,8 @@ export const analysisServiceCapability: WebApiCapability = {
   name: 'Mock Analysis',
   pageUrl: `${ANALYSIS_ORIGIN}/`,
   readOrigins: [STORAGE_ORIGIN],
+  // Out of credits: nothing more will go through until the account is topped up, so a queue waits rather than failing each call.
+  responses: [{ status: [402], body: { '/code': 'credits_exhausted' }, action: 'pause', message: '/error' }],
   session: {
     loginUrl: `${ANALYSIS_ORIGIN}/login`,
     completeUrl: `${ANALYSIS_ORIGIN}/login/done`,
@@ -146,7 +151,7 @@ export function mockAnalysisService(): MockApiIntegration<MockAnalysisServiceSta
   // Encrypting the stored copy is real asynchronous work; start it now so a request never waits on it in virtual time.
   void storedSource();
   const state: MockAnalysisServiceState = {
-    rateLimitNextCreates: 0, createCalls: 0, lastSourceText: null, lastSourceRevision: null, sourceOpens: 0, servedUrlOverride: null, corruptStoredSource: false, analysesByKey: new Map(), analyses: new Map(), published: analysisServiceManifest(),
+    rateLimitNextCreates: 0, outOfCredits: false, createCalls: 0, lastSourceText: null, lastSourceRevision: null, sourceOpens: 0, servedUrlOverride: null, corruptStoredSource: false, analysesByKey: new Map(), analyses: new Map(), published: analysisServiceManifest(),
   };
   const accounts: Record<string, { id: string; name: string }> = {
     'mock-session': { id: 'a-1', name: 'Pat Example' },
@@ -174,6 +179,7 @@ export function mockAnalysisService(): MockApiIntegration<MockAnalysisServiceSta
           state.rateLimitNextCreates -= 1;
           return { status: 429, body: { error: 'The service is busy.' } };
         }
+        if (state.outOfCredits) return { status: 402, body: { error: 'Not enough credits for this analysis.', code: 'credits_exhausted' } };
         const request = body as { url: string; text: string; sourceText: string; sourceRevision?: string };
         if (!request.text || request.text.length < 10) return { status: 400, body: { error: 'The text is too short to analyze.' } };
         state.lastSourceText = request.sourceText;

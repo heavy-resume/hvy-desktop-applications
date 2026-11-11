@@ -52,7 +52,7 @@ registerHvyCliPluginCommands({
   helpTopic: 'hvy plugin galaxy-queue',
   componentHints: [
     'This plugin is a paced, retrying queue in front of another plugin method (its target), as indented JSON in plugin.txt (its pluginConfig in plugin.json stays empty).',
-    'Scripts add work with doc.plugins.call("galaxy.queue", "enqueue", {"queueId": ..., "key": ..., "input": {...}}) and receive results through "on_result".',
+    'Scripts add work with doc.plugins.call("galaxy.queue", "enqueue", {"queueId": ..., "key": ..., "input": {...}}) and receive results through "on_result" (with "batch": true, a list of the results that arrive together, such as those a stop cancels); "on_start" tells them as each call starts; "stop" cancels everything waiting.',
     'Its "state" is the queue as of the last save; it is written by the app, not by hand.',
   ],
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.queue', description: 'Create a queue block. Edit plugin.txt (indented JSON) for its target, pacing, and retries.' }],

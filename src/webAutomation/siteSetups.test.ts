@@ -90,6 +90,14 @@ describe('site setups', () => {
     expect(valid(applied).ok).toBe(true);
   });
 
+  it('keeps a setup read by clicking through its list so when copied, pasted, and saved', () => {
+    const browsed = { ...collection(), sites: collection().sites.map((site) => (site.id === 'boards' ? { ...site, browse: true as const } : site)) };
+    const [pasted] = readSiteSetupText(siteSetupText([siteSetupOf(browsed, 'boards')!]))!;
+    expect(pasted.browse).toBe(true);
+    const checked = valid({ ...browsed, ...withSiteSetups(browsed, [pasted]) });
+    expect(checked.ok && checked.value.collection.sites.find((site) => site.id === 'boards')?.browse).toBe(true);
+  });
+
   it('keeps a pasted pattern in its setup, and refuses a setup reading a field the collection lacks', () => {
     const text = siteSetupText([{ id: 'salaries', name: 'Salaries', patterns: [{ ...pattern('other', 'list', ['salary'], { host: 'pay.test' }) }] }]);
     const [setup] = readSiteSetupText(text)!;

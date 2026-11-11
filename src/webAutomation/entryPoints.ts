@@ -143,10 +143,11 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     },
 
     // UI: Set up this site, Test, "Find": the first `count` items on the list page, as a run lists them with this setup.
-    // Only that page is read, and nothing is kept.
+    // Only that page is read, not its items' (even on a site read by clicking through its list), and nothing is kept.
     async listSetupExamples(profileId: string, definition: CollectionDefinition, listUrl: string, count: number): Promise<SetupTestRun & { items: ExtractItem[] }> {
       const startPage = { id: 'setup-test', url: listUrl };
-      const trial: CollectionDefinition = { ...definition, startPages: [startPage], maxItems: count, maxPages: 1, readItemPages: false };
+      const sites = definition.sites.map(({ browse: _browse, ...site }) => site);
+      const trial: CollectionDefinition = { ...definition, sites, startPages: [startPage], maxItems: count, maxPages: 1, readItemPages: false };
       const run = await setupTests.start(trial, profileId, { onRecord: () => undefined }, [startPage]).done;
       return { items: run.listedItems, run };
     },
@@ -499,6 +500,12 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       queue(queueId).onResult(handler);
     },
 
+    // UI: scripting doc.plugins.call(queue, "on_start", { handler }), registered by the document's load script: told as
+    // each entry's call starts.
+    onQueueStart(queueId: string, handler: (started: { key: string; context: unknown }) => void): void {
+      queue(queueId).onStart(handler);
+    },
+
     // UI: queue reader, "Resume" (also after reopening a document with waiting entries).
     resumeQueue(queueId: string): void {
       queue(queueId).resume();
@@ -507,6 +514,11 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // UI: queue reader, "Pause".
     pauseQueue(queueId: string): void {
       queue(queueId).pause();
+    },
+
+    // UI: queue reader and Background activity, "Stop" (and "Stop all"): what waits is cancelled.
+    stopQueue(queueId: string): void {
+      queue(queueId).stop();
     },
 
     // UI: queue reader, failed entry "Retry".

@@ -1,3 +1,4 @@
+import { trace } from './traceLog';
 export type DebugLogKind = 'load' | 'close' | 'llm' | 'event' | 'perf';
 
 export interface DebugLogEntry {
@@ -28,6 +29,7 @@ export function configureDebugLog(options: { maxBytes?: number }): void {
 }
 
 export function logDebugEvent(kind: DebugLogKind, label: string, details?: Record<string, unknown>): DebugLogEntry {
+  trace(`${kind} ${label}`, details);
   const entry: DebugLogEntry = {
     id: nextDebugLogId,
     kind,
@@ -49,6 +51,7 @@ export async function measureDebugAsync<T>(
   details: Record<string, unknown> | undefined,
   callback: () => Promise<T>,
 ): Promise<T> {
+  trace(`start ${kind} ${label}`, details);
   const start = performance.now();
   try {
     return await callback();
@@ -66,6 +69,7 @@ export function measureDebug<T>(
   details: Record<string, unknown> | undefined,
   callback: () => T,
 ): T {
+  trace(`start ${kind} ${label}`, details);
   const start = performance.now();
   try {
     return callback();

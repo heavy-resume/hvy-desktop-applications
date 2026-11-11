@@ -2,6 +2,7 @@ import { queueWebCapabilityScriptOperation, type WebCapabilityScriptCallback } f
 import type { CollectedRecord } from './records';
 import type { CollectionDefinition, ExtractItem, RecordConsumer } from './collection';
 import type { WebAutomation } from './entryPoints';
+import type { QueueResult } from './queue';
 import { WebAutomationError } from './errors';
 import type { WebApiCapability } from './webApi';
 import { matchRows, rankRows, type EmbeddingSource, type FetchedQuery, type UseDatabase } from './similarity';
@@ -206,14 +207,42 @@ export function queueScriptingMethods(resolve: DocumentAutomationResolver): Reco
       resolve(ctx).automation.pauseQueue(queueId(args));
       return null;
     },
+    // Everything waiting is cancelled (its results delivered as cancelled); a call already sent finishes.
+    stop: (args, ctx) => {
+      resolve(ctx).automation.stopQueue(queueId(args));
+      return null;
+    },
     resume: (args, ctx) => {
       resolve(ctx).automation.resumeQueue(queueId(args));
       return null;
     },
-    /** Registered by the document's load script; results survive reloads, callbacks do not. */
+    /** Registered by the document's load script: told as each entry's call starts, with its key. */
+    on_start: (args, ctx) => {
+      const handler = required(callback(args.handler), 'on_start needs a handler function.');
+      resolve(ctx).automation.onQueueStart(queueId(args), (started) => handler(started as unknown as Record<string, unknown>));
+      return null;
+    },
+    /**
+     * Registered by the document's load script; results survive reloads, callbacks do not. With `batch`, the handler is
+     * given a list: the results that arrive together (such as every entry a Stop cancels) in one call, as one script
+     * run, rather than a run each.
+     */
     on_result: (args, ctx) => {
       const handler = required(callback(args.handler), 'on_result needs a handler function.');
-      resolve(ctx).automation.onQueueResult(queueId(args), (result) => handler(result as unknown as Record<string, unknown>));
+      if (args.batch !== true) {
+        resolve(ctx).automation.onQueueResult(queueId(args), (result) => handler(result as unknown as Record<string, unknown>));
+        return null;
+      }
+      let arrived: QueueResult[] = [];
+      resolve(ctx).automation.onQueueResult(queueId(args), (result) => {
+        arrived.push(result);
+        if (arrived.length > 1) return;
+        queueMicrotask(() => {
+          const results = arrived;
+          arrived = [];
+          handler(results as unknown as Record<string, unknown>);
+        });
+      });
       return null;
     },
   };

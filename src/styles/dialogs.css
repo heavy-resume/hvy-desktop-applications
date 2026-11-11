@@ -1335,6 +1335,13 @@
   overflow-wrap: anywhere;
 }
 
+/* A row's (or the Queues header's) buttons, side by side at its right. */
+.background-activity-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
 .background-activity-failure {
   padding: 0 8px;
   color: var(--hvy-danger, #b3261e);

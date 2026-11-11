@@ -1,5 +1,5 @@
 import { randomBetween, type Clock, type Random } from './clock';
-import { errorCode, errorMessage, errorStatus } from './errors';
+import { errorAction, errorCode, errorMessage, errorStatus } from './errors';
 import type { AutomationEmit } from './events';
 
 export type QueueEntryStatus = 'queued' | 'running' | 'waiting-retry' | 'done' | 'failed' | 'cancelled';
@@ -41,6 +41,8 @@ export interface QueueState {
   entries: QueueEntry[];
   paused: boolean;
   pauseReason: string | null;
+  /** What the service said when its response paused the queue (pauseReason "response"), such as that quota ran out. */
+  pauseMessage?: string | null;
   /** True after the document is reopened until the user resumes; nothing runs unattended. */
   awaitingResume: boolean;
 }
@@ -70,6 +72,8 @@ export type QueueTarget = (input: unknown, context: { idempotencyKey: string }) 
 export class DurableQueue {
   private state: QueueState = { entries: [], paused: false, pauseReason: null, awaitingResume: false };
   private handler: ((result: QueueResult) => void) | null = null;
+  /** Told as each entry's call starts (`onStart`): what a document shows as being done, rather than waiting. */
+  private startHandler: ((started: { key: string; context: unknown }) => void) | null = null;
   private lastStartedAt: number | null = null;
   private wake: AbortController | null = null;
   private loops = 0;
@@ -108,7 +112,7 @@ export class DurableQueue {
   restore(state: QueueState): void {
     const entries = state.entries.map((entry) => (entry.status === 'running' ? { ...entry, status: 'queued' as const } : { ...entry }));
     const pending = entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry');
-    this.state = { entries, paused: state.paused, pauseReason: state.pauseReason, awaitingResume: pending };
+    this.state = { entries, paused: state.paused, pauseReason: state.pauseReason, pauseMessage: state.pauseMessage ?? null, awaitingResume: pending };
   }
 
   /**
@@ -148,6 +152,23 @@ export class DurableQueue {
     return structuredClone(this.state.entries);
   }
 
+  /**
+   * Stops the queue's work: every entry waiting its turn (or to retry) is cancelled, and a pause goes with them, as
+   * nothing is left to hold. A call already sent finishes, and its result is delivered; failed entries stay, to retry
+   * or dismiss.
+   */
+  stop(): void {
+    const waiting = new Set(this.state.entries.filter((entry) => entry.status === 'queued' || entry.status === 'waiting-retry').map((entry) => entry.key));
+    // Stopped first, all of it, and then told: whatever a handler does with the news, nothing waiting is left to run.
+    for (const key of waiting) this.update(key, (entry) => ({ ...entry, status: 'cancelled', delivered: false }));
+    this.state.paused = false;
+    this.state.pauseReason = null;
+    this.state.pauseMessage = null;
+    this.state.awaitingResume = false;
+    this.deps.emit('queue', `${this.deps.id}: stopped, ${waiting.size} cancelled`);
+    for (const entry of this.state.entries.filter((candidate) => waiting.has(candidate.key))) this.deliver(entry);
+  }
+
   /** Cancels an entry waiting its turn, or dismisses a failed one. */
   cancel(key: string): void {
     const before = this.state.entries.find((entry) => entry.key === key)?.status;
@@ -173,18 +194,24 @@ export class DurableQueue {
     this.pump();
   }
 
-  pause(reason = 'paused'): void {
+  pause(reason = 'paused', message: string | null = null): void {
     this.state.paused = true;
     this.state.pauseReason = reason;
-    this.deps.emit('queue', `${this.deps.id}: paused (${reason})`);
+    this.state.pauseMessage = message;
+    this.deps.emit('queue', `${this.deps.id}: paused (${message ?? reason})`);
   }
 
   resume(): void {
     this.state.paused = false;
     this.state.pauseReason = null;
+    this.state.pauseMessage = null;
     this.state.awaitingResume = false;
     this.deps.emit('queue', `${this.deps.id}: resumed`);
     this.pump();
+  }
+
+  onStart(handler: (started: { key: string; context: unknown }) => void): void {
+    this.startHandler = handler;
   }
 
   onResult(handler: (result: QueueResult) => void): void {
@@ -217,6 +244,7 @@ export class DurableQueue {
   detach(): void {
     this.detached = true;
     this.handler = null;
+    this.startHandler = null;
     this.wake?.abort();
   }
 
@@ -271,6 +299,7 @@ export class DurableQueue {
     if (!entry) return;
     this.lastStartedAt = this.deps.clock.now();
     this.deps.emit('queue', `${this.deps.id}: run ${key} (attempt ${entry.attempts})`);
+    this.startHandler?.({ key, context: entry.context ?? null });
     try {
       const result = await this.target(entry.input, { idempotencyKey: entry.idempotencyKey });
       const done = this.update(key, (current) => ({ ...current, status: 'done', result, lastError: null }));
@@ -285,8 +314,17 @@ export class DurableQueue {
         this.pause(code);
         return;
       }
+      const action = errorAction(error);
+      if (action === 'pause') {
+        // The service's response says to wait for the user (such as quota run out): the entry waits its turn again, and
+        // so does every other, rather than each failing the same way.
+        this.update(key, (current) => ({ ...current, status: 'queued', attempts: current.attempts - 1, lastError: errorMessage(error) }));
+        this.pause('response', errorMessage(error));
+        return;
+      }
       const retry = this.deps.config.retry;
-      const retryable = (status !== undefined && retry.statuses.includes(status)) || retry.codes.includes(code);
+      // The service's rule says, when one matched; else the queue's own statuses and codes to retry.
+      const retryable = action ? action === 'retry' : (status !== undefined && retry.statuses.includes(status)) || retry.codes.includes(code);
       if (retryable && entry.attempts < retry.maxAttempts) {
         const delay = Math.min(retry.baseDelayMs * 2 ** (entry.attempts - 1), retry.maxDelayMs) + randomBetween(this.deps.random, 0, this.deps.config.jitterMs);
         this.update(key, (current) => ({ ...current, status: 'waiting-retry', lastError: errorMessage(error), nextAttemptAt: this.deps.clock.now() + delay }));

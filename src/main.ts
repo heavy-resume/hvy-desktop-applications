@@ -4,6 +4,7 @@ import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
 import { readDocumentFile, saveAppSettings, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
+import { trace } from './traceLog';
 import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
@@ -115,6 +116,7 @@ export function measurePerf<T>(
   callback: () => T,
   thresholdMs = CHANGE_PERF_LOG_THRESHOLD_MS,
 ): T {
+  trace(`start perf ${label}`, details);
   const startedAt = performance.now();
   try {
     return callback();
@@ -933,6 +935,7 @@ export function updateModeMetaChrome(): void {
   metaButton?.setAttribute('aria-pressed', openDocument.metaOpen ? 'true' : 'false');
 }
 export function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
+  trace('rerender', options);
   const mountScrollRatio = options.preserveMountedDocument ? captureMountScrollRatio(mountRoot) : null;
   syncDocumentTabs();
   if (!options.preserveMountedDocument) {
@@ -947,6 +950,7 @@ export function rerender(options: { preserveMountedDocument?: boolean } = {}): v
   restoreMountScrollRatio(mountRoot, mountScrollRatio);
 }
 export function renderAllAroundDocument(): void {
+  trace('renderAllAroundDocument');
   renderUiAroundDocument(state);
   applyZoomSettings();
   syncFileMenuState();
