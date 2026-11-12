@@ -120,6 +120,11 @@
   right: 14px;
 }
 
+/* Its icon centered: an icon button's bottom padding is for a text glyph's baseline, which an SVG icon doesn't have. */
+.icon-button.hvy-web-dialog-corner {
+  padding: 0;
+}
+
 /* A dialog's title may be a page's address, long and unbroken: it wraps, so the dialog keeps its width. */
 .hvy-web-dialog-title {
   overflow-wrap: anywhere;

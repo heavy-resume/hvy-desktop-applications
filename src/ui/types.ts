@@ -297,8 +297,6 @@ export interface UiHandlers {
   discardBeforeWorkspaceFileOperation(): void;
   cancelWorkspaceFileOperation(): void;
   closeDocumentWithoutSaving(): void;
-  discardCloseDocumentDraft(): void;
-  reviewCloseDocumentLater(): void;
   saveAndCloseApp(): void;
   closeAppWithoutSaving(): void;
   cancelAppClose(): void;

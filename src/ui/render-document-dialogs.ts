@@ -89,27 +89,6 @@ export function renderCloseDocumentDialog(state: AppState): string {
     </div>`;
 }
 
-export function renderCloseDocumentDraftDialog(state: AppState): string {
-  if (!state.closeDocumentDraftDialogOpen) {
-    return '';
-  }
-  const targetPath = state.closeDocumentTargetPath;
-  const target = state.documentTabs.find((tab) => tab.versionId === targetPath) ?? state.documentTabs.find((tab) => tab.active);
-  const documentName = target?.name ?? state.document?.source.name ?? 'this document';
-  return `
-    <div class="modal-backdrop" role="presentation">
-      <section class="dialog close-document-dialog" role="dialog" aria-modal="true" aria-labelledby="closeDocumentDraftTitle">
-        <h2 id="closeDocumentDraftTitle">Keep Recovery Draft?</h2>
-        <p class="dialog-note">You can discard the unsaved edits in ${escapeHtml(documentName)} or keep the recovery draft to review later.</p>
-        <div class="dialog-actions">
-          <button class="hvy-galaxy-button" type="button" data-action="review-close-document-later">Review Later</button>
-          <button type="button" class="hvy-galaxy-button danger-button" data-action="discard-close-document-draft">Discard Draft</button>
-          <button class="hvy-galaxy-button" type="button" data-action="cancel-close-document">Cancel</button>
-        </div>
-      </section>
-    </div>`;
-}
-
 export function renderWorkspaceFileOperationPrompt(state: AppState): string {
   const operation = state.pendingWorkspaceFileOperation;
   if (!state.workspaceFileOperationPromptOpen || !operation) return '';

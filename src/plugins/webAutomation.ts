@@ -1455,7 +1455,7 @@ function copySetup(collection: CollectionDefinition, siteId: string, control: HT
     // An icon button: it says so in its label, and shows a check.
     control.title = 'Copied';
     control.setAttribute('aria-label', 'Copied');
-    control.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+    control.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6.5 9 17.5l-5-5"/></svg>';
   }, (error: unknown) => {
     errors.textContent = `Couldn’t copy: ${errorMessage(error)}`;
   });

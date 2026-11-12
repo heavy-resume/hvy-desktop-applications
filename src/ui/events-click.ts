@@ -637,8 +637,6 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'close-document') handlers.closeDocument();
     if (action === 'save-and-close-document') handlers.saveAndCloseDocument();
     if (action === 'close-document-without-saving') handlers.closeDocumentWithoutSaving();
-    if (action === 'discard-close-document-draft') handlers.discardCloseDocumentDraft();
-    if (action === 'review-close-document-later') handlers.reviewCloseDocumentLater();
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
     if (action === 'reload-external-file-change') handlers.reloadExternalFileChange();
     if (action === 'dismiss-external-file-change') handlers.dismissExternalFileChange();

@@ -326,6 +326,20 @@ export function backgroundActivity(): BackgroundActivity {
   };
 }
 
+/**
+ * Whether a document's background work is running, so it can't be saved now: one of its queues is working through its
+ * entries (a call is out, or it isn't paused and has entries waiting), or one of its collections is collecting. Each
+ * writes the document as it goes. Paused queues are saved with their entries, which wait for Resume when it opens again.
+ */
+export function backgroundWorkRunning(document: object): boolean {
+  const lookup = openedByDocument.get(document)?.lookup;
+  if (!lookup) return false;
+  const { runs, queues } = lookup.automation.getState();
+  return Object.values(queues).some((queue) => queue.entries.some((entry) => entry.status === 'running')
+    || (!queue.paused && !queue.awaitingResume && queue.entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry')))
+    || runs.some((run) => run.status === 'running');
+}
+
 function openDocumentAt(path: string): DocumentAutomation | null {
   for (const [document, documentPath] of documentPaths) if (documentPath === path) return openedByDocument.get(document) ?? null;
   return null;

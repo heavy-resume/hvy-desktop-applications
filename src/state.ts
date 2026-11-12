@@ -322,7 +322,6 @@ export interface AppState {
   selectedSavedVersionId: string | null;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
-  closeDocumentDraftDialogOpen: boolean;
   saveConflictDialogOpen: boolean;
   saveConflictKind: import('./recoveryDocuments').SaveConflictKind | null;
   saveConflictSavingDocumentId: string | null;
@@ -687,7 +686,6 @@ export const state: AppState = {
   selectedSavedVersionId: null,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
-  closeDocumentDraftDialogOpen: false,
   saveConflictDialogOpen: false,
   saveConflictKind: null,
   saveConflictSavingDocumentId: null,

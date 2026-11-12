@@ -6,7 +6,7 @@ import { applyWorkspaceSidebarWidth, bindEscapeEvents, bindWorkspaceSidebarResiz
 import { bindWorkspaceEvents } from './events-workspace';
 import { renderAiSettingsDialog, renderAiSettingsDiscardDialog, renderMcpSettingsDialog, renderMcpSettingsDiscardDialog, syncAiRangeFields } from './render-ai-mcp';
 import { renderAppSettingsDialog, renderAppSettingsDiscardDialog, renderDebugLogDialog, renderHomepageErrorDialog, renderHomepagePickerDialog, renderScriptingReviewDialog } from './render-app-settings';
-import { renderExternalFileChangeDialog, renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
+import { renderExternalFileChangeDialog, renderAppCloseDialog, renderCloseDocumentDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
 import { renderAboutDialog, renderExportedPdfDialog, renderExportPdfSavePrompt, renderImportDialog, renderImportProgressDialog, renderNewDocumentDialog, updateImportSubmit } from './render-import';
 import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageDeleteDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
@@ -317,7 +317,6 @@ export function renderModals(state: AppState): void {
     ${renderExternalFileChangeDialog(state)}
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
-    ${renderCloseDocumentDraftDialog(state)}
     ${renderWorkspaceFileOperationPrompt(state)}
     ${renderSaveConflictDialog(state)}
     ${renderAppCloseDialog(state)}

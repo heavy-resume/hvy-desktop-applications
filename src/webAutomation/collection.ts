@@ -673,23 +673,25 @@ export class CollectionService {
         if (seen.has(linkKey)) continue;
         seen.add(linkKey);
         newLinks += 1;
-        progress.found += 1;
         const listingValues = { ...fixed, ...this.mapFields(pattern, record.values) };
         // A key from listing values alone lets the consumer skip the page; field keys
         // that only appear on the detail page are checked by the consumer when it receives the record.
         const knownKey = this.keyFor(run, link, listingValues);
         if (knownKey && run.consumer.isKnown?.(knownKey)) {
+          progress.found += 1;
           run.state.skipped += 1;
           progress.known += 1;
           knownOnPage += 1;
           emit('collection', `skip known ${knownKey}`);
           continue;
         }
+        // Found once taken: the new item past the limit is left for the next run, so it isn't counted.
         if (progress.toCollect + progress.listed >= maxItems) {
           emit('collection', `${startPage.id}: reached its limit of ${maxItems} new items`);
           full = true;
           break;
         }
+        progress.found += 1;
         const title = typeof listingValues.title === 'string' && listingValues.title ? listingValues.title : link;
         if (pattern.siteId) run.itemSites.set(link, pattern.siteId);
         const itemCommandId = pattern.itemCommandId;

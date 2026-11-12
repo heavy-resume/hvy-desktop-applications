@@ -13,7 +13,7 @@ import { mockWebSites } from '../test/webAutomation/sites';
 import { capabilityOrigin } from './webApi';
 import { MockHost } from '../test/webAutomation/mockHost';
 import { relocatedDocumentSettings } from '../documentSettingsRelocation';
-import { relocateWebAutomationDocument, releaseWebAutomation, saveWebAutomationQueues, setOpenDocumentCheck, setWebAutomationHost } from './app';
+import { backgroundWorkRunning, relocateWebAutomationDocument, releaseWebAutomation, saveWebAutomationQueues, setOpenDocumentCheck, setWebAutomationHost } from './app';
 import { resolveDocumentAutomation } from './documentAutomation';
 
 vi.mock('../backend', async (importOriginal) => ({
@@ -167,5 +167,18 @@ describe('web automation in the app', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const reopened = mountedDocument(serializeDocument(mountedDocument().document)).open();
     expect(reopened.automation.listQueue(EVALUATE_QUEUE)).toEqual([]);
+  });
+
+  it('blocks saving while a queue works through its entries, not while it is paused with entries waiting', () => {
+    const mounted = mountedDocument();
+    const { automation } = mounted.open();
+    automation.pauseQueue(EVALUATE_QUEUE);
+    automation.enqueue(EVALUATE_QUEUE, 'job-1', { url: 'https://boards.example.test/1' });
+    expect(backgroundWorkRunning(mounted.document)).toBe(false);
+
+    // UI: Resume: the entry goes, so the document changes as it does.
+    automation.resumeQueue(EVALUATE_QUEUE);
+    expect(backgroundWorkRunning(mounted.document)).toBe(true);
+    automation.stopQueue(EVALUATE_QUEUE);
   });
 });

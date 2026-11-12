@@ -70,6 +70,12 @@ vi.mock('./hvy', () => ({
   serializeMountedDocumentAsync: vi.fn(async () => new Uint8Array([1, 2, 3])),
 }));
 vi.mock('./main', () => mainMocks);
+const webAutomationMocks = vi.hoisted(() => ({
+  backgroundWorkRunning: vi.fn((_document: object) => false),
+}));
+vi.mock('./webAutomation/app', () => webAutomationMocks);
+const toastMocks = vi.hoisted(() => ({ showToast: vi.fn() }));
+vi.mock('./ui/toast', () => toastMocks);
 vi.mock('./mainWorkspaceUtils', () => ({
   refreshOpenWorkspaceForFile: vi.fn(async () => undefined),
 }));
@@ -153,6 +159,38 @@ describe('saveCurrentDocument', () => {
     expect(state.document.dirty).toBe(false);
     expect(mainMocks.updateDirtyChrome).toHaveBeenCalledTimes(2);
     expect(mainMocks.renderAllAroundDocument).toHaveBeenCalledOnce();
+  });
+
+  it('does not save while the document\'s background work runs, and says so in a toast', async () => {
+    const document = { sections: [] };
+    state.document = {
+      documentId: 'document:example',
+      versionId: 'version:example',
+      source: {
+        documentId: 'document:example',
+        workingVersionId: 'version:example',
+        path: '/workspace/Example.hvy',
+        name: 'Example.hvy',
+        extension: '.hvy',
+      },
+      mode: 'editor',
+      dirty: true,
+      readOnly: false,
+      hiddenFromAI: false,
+      isNew: false,
+      metaOpen: false,
+      mounted: { document, mount: {} } as never,
+      recoveryBackupId: null,
+      recoveryModified: false,
+    };
+    webAutomationMocks.backgroundWorkRunning.mockReturnValueOnce(true);
+
+    await saveCurrentDocument();
+
+    expect(webAutomationMocks.backgroundWorkRunning).toHaveBeenCalledWith(document);
+    expect(backendMocks.saveDocumentFile).not.toHaveBeenCalled();
+    expect(toastMocks.showToast).toHaveBeenCalledWith('Unable to save while background work is running');
+    expect(state.document.dirty).toBe(true);
   });
 
   it('rebuilds the tab strip after promoting a recovery draft to the working version', async () => {

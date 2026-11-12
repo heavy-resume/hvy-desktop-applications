@@ -81,6 +81,8 @@ export interface MountedDocument {
   mount: HvyMount;
   document: VisualDocument;
   unsavedBaseline?: boolean;
+  /** Changes reported since it was mounted: a save compares it before and after, to tell edits made while it wrote. */
+  changeCount?: number;
   /** Plugins this document uses that still need approval in this file. */
   blockedPlugins?: BlockedPlugin[];
 }

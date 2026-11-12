@@ -1001,8 +1001,9 @@ describe('mock integration: job search flow', () => {
     const limited = { ...boards, startPages: boards.startPages.map((page) => (page.url === ACME ? { ...page, maxPages: 2, maxItems: 4 } : page)) };
     await signedInFlow(limited);
     const run = await flow!.collect(limited);
-    expect(run.startPages['start-1']).toMatchObject({ pages: 2, toCollect: 4, collected: 4 });
-    expect(run.startPages['start-2']).toMatchObject({ pages: 1, toCollect: 1, collected: 1 });
+    // Found counts what was taken: the new job past the limit is left for the next run, not counted as found.
+    expect(run.startPages['start-1']).toMatchObject({ pages: 2, found: 4, toCollect: 4, collected: 4 });
+    expect(run.startPages['start-2']).toMatchObject({ pages: 1, found: 1, toCollect: 1, collected: 1 });
   });
   it('35. two pages on one site both need you: the run asks about one, then the other, and neither is lost', async () => {
     const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`, `${ATS_ORIGIN}/cyberdyne/jobs`]);

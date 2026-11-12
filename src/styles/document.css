@@ -403,6 +403,29 @@
   overflow: hidden;
 }
 
+.app-toast {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 20;
+  max-width: calc(100% - 32px);
+  transform: translate(-50%, -4px);
+  border: 1px solid var(--hvy-border, #d7dedb);
+  border-radius: 6px;
+  background: var(--hvy-surface, #ffffff);
+  color: var(--hvy-text, #17211f);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.14);
+  padding: 8px 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.app-toast.is-shown {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .document-host {
   width: 100%;
   height: 100%;
