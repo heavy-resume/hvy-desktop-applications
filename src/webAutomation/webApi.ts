@@ -2,6 +2,7 @@ import { reviewAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock } from './clock';
 import { documentInputLinks, documentTextInputs, endpointTimeoutMs, onlyInput, readJsonPointer, resolveEndpointRequest, type ApiEndpointDefinition } from './endpoints';
 import { readServedDocument, type ServedDocumentDefinition } from './servedDocuments';
+import type { ScriptingSessionState } from '../../../heavy-file-format/src/plugins/scripting/scripting-session';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { WebAutomationError, type ResponseAction } from './errors';
 import type { AutomationEmit } from './events';
@@ -76,6 +77,27 @@ export interface CallOptions {
   idempotencyKey?: string;
   /** Someone is waiting on the answer (an account check): it goes ahead of queued background calls. */
   interactive?: boolean;
+  /** The calling document's session (its scripts' `session.state`), which keeps the documents its document-text inputs send. */
+  session?: ScriptingSessionState;
+}
+
+/**
+ * Where a session keeps a served document's text and revision, as `{ text, revision }`: the web API block, the
+ * endpoint serving it, and the document's ID there. Prefixed apart from the keys the document's scripts choose.
+ */
+export function servedDocumentSessionKey(capabilityId: string, endpointId: string, documentId: string): string {
+  return `galaxy-document:${[capabilityId, endpointId, documentId].map(encodeURIComponent).join('/')}`;
+}
+
+interface ServedDocumentText {
+  text: string;
+  revision: string | null;
+}
+
+function keptDocumentText(session: ScriptingSessionState | undefined, key: string): ServedDocumentText | null {
+  const kept = session?.get(key);
+  if (!kept || typeof kept !== 'object' || Array.isArray(kept) || typeof kept.text !== 'string') return null;
+  return { text: kept.text, revision: typeof kept.revision === 'string' ? kept.revision : null };
 }
 
 
@@ -201,12 +223,19 @@ export class WebApiService {
   /**
    * Fills document-text inputs the caller did not supply. Each declares the
    * endpoint that serves its document (`x-hvy-document-endpoint`), the input
-   * holding the document's ID, and the input its revision fills. The document
-   * is opened when the call runs, so the text and its back reference always
-   * come from the same response.
+   * holding the document's ID, and the input its revision fills. The text and
+   * its revision always come from the same response: the copy the calling
+   * document's session keeps, or the document opened when the call runs.
    */
-  private async withDocumentInputs(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async withDocumentInputs(
+    capability: WebApiCapability,
+    profileId: string,
+    endpoint: ApiEndpointDefinition,
+    input: Record<string, unknown>,
+    session?: ScriptingSessionState,
+  ): Promise<{ filled: Record<string, unknown>; fetched: Array<{ key: string; value: ServedDocumentText }> }> {
     const filled = { ...input };
+    const fetched: Array<{ key: string; value: ServedDocumentText }> = [];
     for (const name of documentTextInputs(endpoint)) {
       if (filled[name] !== undefined) continue;
       const { endpointId, idInput, revisionInput } = documentInputLinks(endpoint, name);
@@ -214,11 +243,18 @@ export class WebApiService {
       if (!endpointId || documentId === undefined || documentId === '') {
         throw new WebAutomationError('invalid_request', `"${name}" needs a document ID in "${idInput ?? '(none declared)'}".`);
       }
-      const served = await this.openServedDocument(capability, profileId, endpointId, documentId);
-      filled[name] = this.deps.exportDocumentText(served.document);
-      if (revisionInput && served.revision !== null) filled[revisionInput] = served.revision;
+      // The document's text as the calling document's session keeps it; else fetched, and kept once the call is accepted.
+      const key = servedDocumentSessionKey(capability.capabilityId, endpointId, String(documentId));
+      let value = keptDocumentText(session, key);
+      if (!value) {
+        const served = await this.openServedDocument(capability, profileId, endpointId, documentId);
+        value = { text: this.deps.exportDocumentText(served.document), revision: served.revision };
+        fetched.push({ key, value });
+      }
+      filled[name] = value.text;
+      if (revisionInput && value.revision !== null) filled[revisionInput] = value.revision;
     }
-    return filled;
+    return { filled, fetched };
   }
 
   /** Asks the endpoint that serves a document for it, and opens it: fetched from the read URL it names, and decrypted. */
@@ -255,7 +291,10 @@ export class WebApiService {
     const endpoint = findEndpoint(capability, endpointId);
     // An endpoint whose key is not derived from inputs gets a fresh key per direct call; queued calls bring their own.
     const idempotencyKey = options.idempotencyKey ?? (endpoint.idempotency && !endpoint.idempotency.fromInputs ? this.deps.createId() : undefined);
-    const response = await this.send(capability, profileId, endpoint, await this.withDocumentInputs(capability, profileId, endpoint, input), { idempotencyKey });
+    const { filled, fetched } = await this.withDocumentInputs(capability, profileId, endpoint, input, options.session);
+    const response = await this.send(capability, profileId, endpoint, filled, { idempotencyKey });
+    // Kept only once the service accepted it: text it called stale is not kept, so it is fetched again, not sent again.
+    for (const { key, value } of fetched) options.session?.set(key, value);
     return { status: response.status, body: response.body };
   }
 

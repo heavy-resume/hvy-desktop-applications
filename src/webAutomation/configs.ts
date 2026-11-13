@@ -697,6 +697,7 @@ function readQueueState(value: unknown): QueueState | null {
       status: raw.status as QueueEntryStatus,
       attempts: Number.isInteger(raw.attempts) ? Number(raw.attempts) : 0,
       lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+      lastStatus: typeof raw.lastStatus === 'number' ? raw.lastStatus : null,
       result: raw.result ?? null,
       nextAttemptAt: typeof raw.nextAttemptAt === 'number' ? raw.nextAttemptAt : null,
       delivered: raw.delivered === true,

@@ -17,6 +17,8 @@ export interface QueueEntry {
   status: QueueEntryStatus;
   attempts: number;
   lastError: string | null;
+  /** The HTTP status the last failed attempt got, when it got one. */
+  lastStatus?: number | null;
   result: unknown;
   nextAttemptAt: number | null;
   delivered: boolean;
@@ -61,6 +63,8 @@ export interface QueueResult {
   status: 'done' | 'failed' | 'cancelled';
   result?: unknown;
   error?: string;
+  /** Failed: the HTTP status the call got, if it got one (null otherwise), so the script can act on what it meant. */
+  httpStatus?: number | null;
 }
 
 export const DEFAULT_QUEUE_CONFIG: QueueConfig = {
@@ -335,7 +339,7 @@ export class DurableQueue {
         this.deps.emit('queue', `${this.deps.id}: retry ${key} in ${(delay / 1000).toFixed(0)}s (${errorMessage(error)})`);
         return;
       }
-      const failed = this.update(key, (current) => ({ ...current, status: 'failed', lastError: errorMessage(error) }));
+      const failed = this.update(key, (current) => ({ ...current, status: 'failed', lastError: errorMessage(error), lastStatus: status ?? null }));
       if (failed) this.deliver(failed);
     }
   }
@@ -348,7 +352,7 @@ export class DurableQueue {
     const handed = this.handler(entry.status === 'done'
       ? { ...base, status: 'done', result: entry.result }
       : entry.status === 'failed'
-        ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.' }
+        ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.', httpStatus: entry.lastStatus ?? null }
         : { ...base, status: 'cancelled' });
     void handed?.then((ran) => {
       if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));

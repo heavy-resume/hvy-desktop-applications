@@ -4,13 +4,16 @@ import type { CollectionDefinition, ExtractItem, RecordConsumer } from './collec
 import type { WebAutomation } from './entryPoints';
 import type { QueueResult } from './queue';
 import { WebAutomationError } from './errors';
-import type { WebApiCapability } from './webApi';
+import { servedDocumentSessionKey, type WebApiCapability } from './webApi';
+import type { ScriptingSession } from '../../../heavy-file-format/src/plugins/scripting/scripting-session';
 import { matchRows, rankRows, type EmbeddingSource, type FetchedQuery, type UseDatabase } from './similarity';
 import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
 
 /** The subset of HvyPluginScriptingContext these methods use. */
 export interface ScriptingContext {
   rawDocument: object;
+  /** The open document's session, its scripts' `session`. */
+  session: ScriptingSession;
 }
 
 export type ScriptingMethod = (args: Record<string, unknown>, ctx: ScriptingContext) => unknown;
@@ -33,7 +36,7 @@ export interface DocumentAutomationLookup {
   openInBrowser(capabilityId: string, url: string): Promise<void>;
 }
 
-export type DocumentAutomationResolver = (ctx: ScriptingContext) => DocumentAutomationLookup;
+export type DocumentAutomationResolver = (ctx: Pick<ScriptingContext, 'rawDocument'>) => DocumentAutomationLookup;
 
 function scriptFunction(value: unknown): WebCapabilityScriptCallback | null {
   return typeof value === 'function' ? value as WebCapabilityScriptCallback : null;
@@ -84,7 +87,19 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
       const lookup = resolve(ctx);
       // A queue passes its entry's stable idempotency key, so a retried call never creates a second result.
       const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined;
-      return operation(lookup, args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey }));
+      // A document its document-text inputs send is read from the copy the document's session keeps, if it keeps one.
+      return operation(lookup, args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey, session: ctx.session.state }));
+    },
+    /**
+     * Forgets the copy the document's session keeps of a served document (`endpointId` serving it, and `documentId`): the next call that
+     * sends it fetches it again. For when the service says the copy sent is stale (a resume saved since). True when a
+     * copy was kept; false when none was, so the one just sent was fetched fresh.
+     */
+    forget_document: (args, ctx) => {
+      const key = servedDocumentSessionKey(capability(resolve(ctx), args).capabilityId, String(args.endpointId ?? ''), String(args.documentId ?? ''));
+      if (!ctx.session.state.has(key)) return false;
+      ctx.session.state.remove(key);
+      return true;
     },
     /**
      * Calls `handler` with `{ status }` whenever the account this

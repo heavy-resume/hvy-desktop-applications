@@ -34,6 +34,20 @@ every close (`integration-browser-closed`), which fails every request still
 waiting on that profile. Don't add a pending flag that a case in the result
 switch (`mainStartup.ts`) clears; it is left set when the window closes first.
 
+## Calling into a document's scripts
+
+Every callback a script registers with a Galaxy plugin (queue results and
+starts, finished calls, sign-in changes, records written) is called through
+the document's automation (`callScript`, `src/webAutomation/scriptCalls.ts`),
+never directly. heavy-file-format stops a script that renders 10 times within
+2 s, and a run's callbacks share one step budget until 3 s pass with none
+running; background work answering every moment would run into either, and a
+callback stopped that way fails silently. `ScriptCalls` starts calls in order
+and no faster than those limits allow, and resolves false for a call the
+document closed before it ran (the queue then keeps that result for the next
+copy). Keep callbacks small too: write what arrived, and leave drawing to the
+document's own hook run.
+
 ## Tracing a hang or out-of-memory page
 
 When the app freezes or runs out of memory, devtools is often unusable. The

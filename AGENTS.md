@@ -18,3 +18,5 @@ When evaluating decisions, consider the forward looking risks of each decision a
 When suggesting UI labels consider whether they are unnecessary or redundant and choose labels with minimal text, often one or two words
 
 When evaluating new libraries always consider: size, maintenance frequency, security, etc.
+
+Don't run full test suites unless there's a good reason. Tests should be organized by features / code and integration versus unit.

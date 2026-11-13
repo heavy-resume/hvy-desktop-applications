@@ -3,6 +3,7 @@ import { runPluginDocumentHooks } from '../../../heavy-file-format/src/plugins/h
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { openExternalUrl, saveAppSettings } from '../backend';
 import { state } from '../state';
+import { trace } from '../traceLog';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
 import type { CollectionDefinition, CollectionRunState, ExtractItem } from './collection';
@@ -26,6 +27,9 @@ const openedByDocument = new WeakMap<object, DocumentAutomation>();
 // Each open document's path, kept current when a document is renamed or moved.
 const documentPaths = new Map<object, string>();
 
+// Each evaluation of this module starts with no host: a second one in the same page explains "needs a browser host".
+trace('webAutomation app module evaluated', import.meta.url);
+
 export const WEB_AUTOMATION_PLUGIN_IDS = new Set(WEB_AUTOMATION_PLUGINS.map((plugin) => plugin.id));
 
 /** Web automation's settings, kept in the app settings beside Galaxy's other web capability settings. */
@@ -46,6 +50,7 @@ const settings: AutomationSettingsStore = {
 
 /** The browser host web automation runs on. Until one is set, documents get no web automation plugins. */
 export function setWebAutomationHost(next: BrowserHost): void {
+  trace('webAutomation host set', import.meta.url);
   host = next;
   runtime = null;
 }

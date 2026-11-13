@@ -5,6 +5,7 @@ import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 import { createScriptingDbRuntime } from '../../../heavy-file-format/src/plugins/db-table';
 import { deserializeDocument } from '../../../heavy-file-format/src/serialization';
 import { collectionScriptingMethods, queueScriptingMethods, webApiScriptingMethods, type DocumentAutomationResolver } from './scripting';
+import { getDocumentScriptingSession } from '../../../heavy-file-format/src/plugins/scripting/scripting-session';
 
 async function setup() {
   const flow = createMockFlow();
@@ -14,7 +15,8 @@ async function setup() {
   await flow.signIn();
   await flow.completeLogin();
   // A document's own database, as the app gives the methods.
-  const { api: db } = await createScriptingDbRuntime(deserializeDocument('---\nhvy_version: 0.1\n---\n', '.hvy'));
+  const document = deserializeDocument('---\nhvy_version: 0.1\n---\n', '.hvy');
+  const { api: db } = await createScriptingDbRuntime(document);
   const resolve: DocumentAutomationResolver = () => ({
     automation: flow.automation,
     webApi: (id) => (id === analysisServiceCapability.capabilityId ? analysisServiceCapability : null),
@@ -24,7 +26,7 @@ async function setup() {
     databaseChanged: () => undefined,
     openInBrowser: async () => undefined,
   });
-  return { flow, boards, resolve, ctx: { rawDocument: {} } };
+  return { flow, boards, resolve, ctx: { rawDocument: {}, session: getDocumentScriptingSession(document) } };
 }
 
 describe('scripting methods', () => {
