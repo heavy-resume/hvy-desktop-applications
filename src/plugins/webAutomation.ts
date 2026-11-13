@@ -1679,7 +1679,7 @@ type Limit = 'maxPages' | 'maxItems';
 type Limits = Partial<Record<Limit, number>> & { stopAtKnownPage?: boolean };
 
 /**
- * How far a run goes at a page: list pages read, new items, and whether a list page of items already in the list ends it.
+ * How far a run goes at a page: list pages read, items taken from its list (known ones included), and whether a list page of items already in the list ends it.
  * For the default limits the numbers are required; for a page, a blank field (or "Default") uses the default, which
  * it shows.
  */
@@ -1695,15 +1695,15 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
     return field;
   };
   const pages = input('maxPages');
-  const newItems = input('maxItems');
+  const itemCount = input('maxItems');
   const capitalized = `${items(collection).charAt(0).toUpperCase()}${items(collection).slice(1)}`;
   const stopText = `Stop at a list page of ${items(collection)} already in the list`;
   const stopHint = 'For lists with the newest first: the pages after it are older.';
-  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', newItems]] as const)
+  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', itemCount]] as const)
     .flatMap(([limit, field]) => (field.value.trim() ? [[limit, Number(field.value)]] : [])));
   const elements = [
     labelled('Pages to read', pages, 'The page itself, then each Next.'),
-    labelled(`New ${items(collection)} to read`, newItems, `${capitalized} already in the list don’t count.`),
+    labelled(`${capitalized} to read`, itemCount, `The first this many on the list, ${items(collection)} already in it included.`),
   ];
   if (defaults) {
     const stop = document.createElement('input');
@@ -1743,7 +1743,7 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
 function ownLimitsText(collection: CollectionDefinition, page: StartPage): string | null {
   const parts = [
     ...(page.maxPages !== undefined ? [`${page.maxPages} ${page.maxPages === 1 ? 'page' : 'pages'}`] : []),
-    ...(page.maxItems !== undefined ? [`${page.maxItems} new ${items(collection)}`] : []),
+    ...(page.maxItems !== undefined ? [`${page.maxItems} ${items(collection)}`] : []),
     ...(page.stopAtKnownPage !== undefined ? [page.stopAtKnownPage ? 'stops at a page already in the list' : 'keeps going past pages already in the list'] : []),
   ];
   return parts.length ? `Limits: ${parts.join(', ')}` : null;
@@ -1808,7 +1808,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
   // How far a run goes at each page that doesn't set its own limits.
   const limits = button('Default limits…');
-  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} new ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}.`;
+  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}.`;
   limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
   const bar = document.createElement('div');
   bar.className = 'hvy-web-pages-bar';

@@ -1004,6 +1004,13 @@ describe('mock integration: job search flow', () => {
     // Found counts what was taken: the new job past the limit is left for the next run, not counted as found.
     expect(run.startPages['start-1']).toMatchObject({ pages: 2, found: 4, toCollect: 4, collected: 4 });
     expect(run.startPages['start-2']).toMatchObject({ pages: 1, found: 1, toCollect: 1, collected: 1 });
+    // The limit counts every job taken from the list, those already listed included: run again over the same lists, it
+    // takes the same jobs, all known, and adds nothing (not Acme's fifth job, past its limit of four).
+    const again = await flow!.collect(limited);
+    expect(again).toMatchObject({ status: 'done', collected: 0, skipped: 5 });
+    expect(again.startPages['start-1']).toMatchObject({ pages: 2, found: 4, known: 4, toCollect: 0 });
+    expect(again.startPages['start-2']).toMatchObject({ pages: 1, found: 1, known: 1, toCollect: 0 });
+    expect(flow!.item(acmeJob('data-1'))).toBeNull();
   });
   it('35. two pages on one site both need you: the run asks about one, then the other, and neither is lost', async () => {
     const boards = listingCollection([`${ATS_ORIGIN}/initech/jobs`, `${ATS_ORIGIN}/cyberdyne/jobs`]);

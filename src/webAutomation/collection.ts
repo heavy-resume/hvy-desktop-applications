@@ -106,7 +106,10 @@ export interface CollectionDefinition {
   startPages: StartPage[];
   sites: CollectionSite[];
   patterns: SitePatternDefinition[];
-  /** Default limits for each start page: list pages read, following Next, and new items read. */
+  /**
+   * Default limits for each start page: list pages read, following Next, and items listed, the first that many, those
+   * already in the document included (so a run over a list that has not changed finds nothing new).
+   */
   maxPages: number;
   maxItems: number;
   /**
@@ -610,8 +613,8 @@ export class CollectionService {
     progress.status = 'reading';
     this.assertAllowed(run, startUrl, false);
     await this.paced(run, lease, startUrl, () => host.navigate(lease.workerId, startUrl));
-    // With nothing known to skip, every row is new, so the start page's list needs no more rows than the run takes from it.
-    const listingLimit = run.consumer.isKnown ? undefined : startPage.maxItems ?? run.definition.maxItems;
+    // The run takes no more of the start page's list than its limit, known items included.
+    const listingLimit = startPage.maxItems ?? run.definition.maxItems;
     const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease, listingLimit), 'listing');
     if (start.kind !== 'match') {
       // Not a listing we know: the start page may be one item's own page. If nothing reads it as one, the site needs
@@ -648,7 +651,8 @@ export class CollectionService {
     const { host, emit } = this.deps;
     const queue: Array<{ link: string; title: string; values: Record<string, unknown> }> = [];
     const seen = new Set<string>();
-    // This page's limits, or the collection's defaults: new items to read from it, and list pages to walk.
+    // This page's limits, or the collection's defaults: items to take from its list (known ones included), and list pages
+    // to walk.
     const maxItems = startPage.maxItems ?? run.definition.maxItems;
     const maxPages = startPage.maxPages ?? run.definition.maxPages;
     const stopAtKnown = startPage.stopAtKnownPage ?? run.definition.stopAtKnownPage ?? false;
@@ -673,6 +677,12 @@ export class CollectionService {
         if (seen.has(linkKey)) continue;
         seen.add(linkKey);
         newLinks += 1;
+        // The first maxItems of the list, known or not: the item past the limit is left for the next run, so it isn't counted.
+        if (progress.found >= maxItems) {
+          emit('collection', `${startPage.id}: reached its limit of ${maxItems} items`);
+          full = true;
+          break;
+        }
         const listingValues = { ...fixed, ...this.mapFields(pattern, record.values) };
         // A key from listing values alone lets the consumer skip the page; field keys
         // that only appear on the detail page are checked by the consumer when it receives the record.
@@ -684,12 +694,6 @@ export class CollectionService {
           knownOnPage += 1;
           emit('collection', `skip known ${knownKey}`);
           continue;
-        }
-        // Found once taken: the new item past the limit is left for the next run, so it isn't counted.
-        if (progress.toCollect + progress.listed >= maxItems) {
-          emit('collection', `${startPage.id}: reached its limit of ${maxItems} new items`);
-          full = true;
-          break;
         }
         progress.found += 1;
         const title = typeof listingValues.title === 'string' && listingValues.title ? listingValues.title : link;
@@ -729,6 +733,11 @@ export class CollectionService {
         }
         (browsing ? clicking : queue).push({ link, title, values: listingValues });
         progress.toCollect += 1;
+      }
+      // A page that ends at the limit ends the list too: a list shown only as far as the limit has no item past it.
+      if (!full && progress.found >= maxItems) {
+        emit('collection', `${startPage.id}: reached its limit of ${maxItems} items`);
+        full = true;
       }
       if (!full) {
         // A page that adds nothing (Next on the last page often shows it again) is not one of the start page's pages.

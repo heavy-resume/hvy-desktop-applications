@@ -21,7 +21,7 @@ export const WEB_PROFILE_CONTEXT_PLUGIN_ID = 'galaxy.web-profile-context';
 export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
 export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
 
-/** The most a collection reads from one start page: list pages, and new items. */
+/** The most a collection reads from one start page: list pages, and items listed. */
 export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500 } as const;
 
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
