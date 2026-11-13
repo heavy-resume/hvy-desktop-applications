@@ -22,13 +22,14 @@ import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/doc
 import { createEventChannel, type AutomationEvent } from './events';
 import type { BrowserHost } from './host';
 import { resolveProfile, type BrowserProfile } from './profiles';
-import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResult, type QueueState, type QueueTarget } from './queue';
+import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResultHandler, type QueueState, type QueueTarget } from './queue';
 import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './scheduler';
 import { SessionService, type SessionState, type SessionStatus } from './session';
 import { loadPublishedService, type PublishedService } from './serviceManifests';
 import type { AutomationSettingsStore } from './settings';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { ApiTransport, capabilityOrigin, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
+import { ScriptCalls } from './scriptCalls';
 
 /** A plugin method the queue can target, resolved through the plugin-to-plugin call interface. */
 /** What an on_records handler is told: the records written, or the item whose page a run starts reading. */
@@ -191,6 +192,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   const deps = { ...runtime.deps, ...document };
   const collections = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit });
   const queues = new Map<string, DurableQueue>();
+  // Every call into the document's scripts (the callbacks they register), paced to stay within heavy-file-format's limits.
+  const scriptCalls = new ScriptCalls(deps.clock);
   // Script callbacks for sign-in changes, by capability and key. They do not survive the document closing.
   const sessionWatchers = new Map<string, () => void>();
   // Each script handler's handover of the account's current state, by capability and key: run again once the document
@@ -496,7 +499,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: scripting doc.plugins.call(queue, "on_result", { handler }), registered by the document load script.
-    onQueueResult(queueId: string, handler: (result: QueueResult) => void): void {
+    onQueueResult(queueId: string, handler: QueueResultHandler): void {
       queue(queueId).onResult(handler);
     },
 
@@ -542,7 +545,21 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // Document close: DocumentAutomation.close. Calls already sent finish and their results wait for the next open.
+    /**
+     * Calls into one of the document's scripts: a callback it registered with a plugin. In order with the others, once
+     * heavy-file-format's limits allow (ScriptCalls). Resolves whether it ran: false if the document closed first.
+     */
+    callScript(run: () => void): Promise<boolean> {
+      return scriptCalls.call(run);
+    },
+
+    /** Calls into the document's scripts waiting their turn. */
+    scriptCallsPending(): number {
+      return scriptCalls.pending();
+    },
+
     closeDocument(): void {
+      scriptCalls.close();
       for (const run of collections.getState()) collections.stop(run.runId);
       for (const item of queues.values()) item.detach();
       for (const stop of sessionWatchers.values()) stop();

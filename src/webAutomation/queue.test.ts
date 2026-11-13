@@ -84,7 +84,7 @@ describe('DurableQueue', () => {
         return input;
       },
     });
-    queue.onResult((result) => results.push(result));
+    queue.onResult((result) => { results.push(result); });
     for (const key of ['a', 'b', 'c', 'd']) queue.enqueue(key, key);
     await runUntilIdle(clock, queue);
     // The first went through; the second was told quota ran out, and waits again with the rest: none was sent after it.

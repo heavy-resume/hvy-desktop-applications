@@ -171,7 +171,9 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       // A call made directly (a script's, not a queue's) holds an API worker, or waits for one. Collections are their
       // runs (a run waiting on the user holds its worker).
       || state.scheduler.workers.some((worker) => worker.kind === 'api' && worker.busy)
-      || state.scheduler.waitingJobs.some((job) => job.kind === 'api');
+      || state.scheduler.waitingJobs.some((job) => job.kind === 'api')
+      // A call into the document's scripts waiting its turn (ScriptCalls).
+      || automation.scriptCallsPending() > 0;
   }
 
   /**

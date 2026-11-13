@@ -35,8 +35,19 @@ export interface DocumentAutomationLookup {
 
 export type DocumentAutomationResolver = (ctx: ScriptingContext) => DocumentAutomationLookup;
 
-function callback(value: unknown): WebCapabilityScriptCallback | null {
+function scriptFunction(value: unknown): WebCapabilityScriptCallback | null {
   return typeof value === 'function' ? value as WebCapabilityScriptCallback : null;
+}
+
+/**
+ * A callback a script passed, called through its document's automation: in turn with the document's other calls into
+ * its scripts, as heavy-file-format's limits allow (ScriptCalls). Resolves whether it ran.
+ */
+function callback(lookup: DocumentAutomationLookup, value: unknown): ((result: Record<string, unknown>) => Promise<boolean>) | null {
+  const run = scriptFunction(value);
+  return run ? (result) => lookup.automation.callScript(() => {
+    run(result);
+  }) : null;
 }
 
 /**
@@ -44,10 +55,10 @@ function callback(value: unknown): WebCapabilityScriptCallback | null {
  * the call returns `{ jobId, status: 'queued' }` and reports later. Power
  * scripts may omit the callbacks and await the promise.
  */
-function operation(args: Record<string, unknown>, run: () => Promise<unknown>): unknown {
-  const onComplete = callback(args.on_complete);
+function operation(lookup: DocumentAutomationLookup, args: Record<string, unknown>, run: () => Promise<unknown>): unknown {
+  const onComplete = callback(lookup, args.on_complete);
   if (!onComplete) return run();
-  return queueWebCapabilityScriptOperation(run, { onComplete, onError: callback(args.on_error) });
+  return queueWebCapabilityScriptOperation(run, { onComplete, onError: callback(lookup, args.on_error) });
 }
 
 function input(value: unknown): Record<string, unknown> {
@@ -67,13 +78,13 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
   return {
     session: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(args, () => lookup.automation.probeSession(capability(lookup, args)));
+      return operation(lookup, args, () => lookup.automation.probeSession(capability(lookup, args)));
     },
     call: (args, ctx) => {
       const lookup = resolve(ctx);
       // A queue passes its entry's stable idempotency key, so a retried call never creates a second result.
       const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined;
-      return operation(args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey }));
+      return operation(lookup, args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey }));
     },
     /**
      * Calls `handler` with `{ status }` whenever the account this
@@ -82,14 +93,14 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
      */
     on_session: (args, ctx) => {
       const lookup = resolve(ctx);
-      const handler = required(callback(args.handler), 'on_session needs a handler function.');
+      const handler = required(callback(lookup, args.handler), 'on_session needs a handler function.');
       lookup.automation.onSessionChange(capability(lookup, args), String(args.key ?? 'default'), (state) => handler({ status: state.status }));
       return null;
     },
     /** Opens the site's login window. Scripts cannot complete a sign-in. */
     sign_in: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(args, () => lookup.automation.beginSignIn(capability(lookup, args)));
+      return operation(lookup, args, () => lookup.automation.beginSignIn(capability(lookup, args)));
     },
   };
 }
@@ -100,7 +111,7 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
  * the block's output sink.
  */
 function consumer(lookup: DocumentAutomationLookup, args: Record<string, unknown>): RecordConsumer {
-  const onRecord = callback(args.on_record);
+  const onRecord = callback(lookup, args.on_record);
   if (!onRecord) {
     return required(lookup.sink(String(args.capabilityId ?? '')), 'Pass on_record, or give the collection block an output.');
   }
@@ -140,7 +151,7 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
           ...(page.maxItems !== undefined ? { maxItems: lower('maxItems', page.maxItems) } : {}),
         })),
       };
-      return operation(args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls).done);
+      return operation(lookup, args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls).done);
     },
     // One item (`url`), or several (`items`, each { url, values }: what its list showed, as its record has it, kept).
     extract: (args, ctx) => {
@@ -151,7 +162,7 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
           ...(item?.values && typeof item.values === 'object' ? { values: item.values as Record<string, unknown> } : {}),
         }))
         : [{ url: String(args.url ?? '') }];
-      return operation(args, () => lookup.automation.extractItems(collection(lookup, args), items, consumer(lookup, args)).done);
+      return operation(lookup, args, () => lookup.automation.extractItems(collection(lookup, args), items, consumer(lookup, args)).done);
     },
     // The items the collection's runs are reading on their own pages now, by key: { waiting: [...], reading: [...] }.
     in_progress: (args, ctx) => {
@@ -163,7 +174,10 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       return null;
     },
     // An item of the collection, in the default browser.
-    open_in_browser: (args, ctx) => operation(args, () => resolve(ctx).openInBrowser(String(args.capabilityId ?? ''), String(args.url ?? ''))),
+    open_in_browser: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(lookup, args, () => lookup.openInBrowser(String(args.capabilityId ?? ''), String(args.url ?? '')));
+    },
     /**
      * Calls `handler` with `{ keys }` each time the collection block's output writes records, however the run was
      * started. Registered by the document's load script; the same `key` replaces an earlier handler.
@@ -171,7 +185,7 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
     on_records: (args, ctx) => {
       const lookup = resolve(ctx);
       const capabilityId = collection(lookup, args).capabilityId;
-      const handler = required(callback(args.handler), 'on_records needs a handler function.');
+      const handler = required(callback(lookup, args.handler), 'on_records needs a handler function.');
       lookup.automation.onRecordsWritten(capabilityId, String(args.key ?? 'default'), (change) => handler({ keys: change.keys, reading: change.reading }));
       return null;
     },
@@ -218,8 +232,11 @@ export function queueScriptingMethods(resolve: DocumentAutomationResolver): Reco
     },
     /** Registered by the document's load script: told as each entry's call starts, with its key. */
     on_start: (args, ctx) => {
-      const handler = required(callback(args.handler), 'on_start needs a handler function.');
-      resolve(ctx).automation.onQueueStart(queueId(args), (started) => handler(started as unknown as Record<string, unknown>));
+      const lookup = resolve(ctx);
+      const handler = required(callback(lookup, args.handler), 'on_start needs a handler function.');
+      lookup.automation.onQueueStart(queueId(args), (started) => {
+        void handler(started as unknown as Record<string, unknown>);
+      });
       return null;
     },
     /**
@@ -228,20 +245,34 @@ export function queueScriptingMethods(resolve: DocumentAutomationResolver): Reco
      * run, rather than a run each.
      */
     on_result: (args, ctx) => {
-      const handler = required(callback(args.handler), 'on_result needs a handler function.');
+      const lookup = resolve(ctx);
       if (args.batch !== true) {
-        resolve(ctx).automation.onQueueResult(queueId(args), (result) => handler(result as unknown as Record<string, unknown>));
+        const handler = required(callback(lookup, args.handler), 'on_result needs a handler function.');
+        lookup.automation.onQueueResult(queueId(args), (result) => handler(result as unknown as Record<string, unknown>));
         return null;
       }
-      let arrived: QueueResult[] = [];
-      resolve(ctx).automation.onQueueResult(queueId(args), (result) => {
-        arrived.push(result);
-        if (arrived.length > 1) return;
-        queueMicrotask(() => {
-          const results = arrived;
-          arrived = [];
-          handler(results as unknown as Record<string, unknown>);
-        });
+      const handler = required(scriptFunction(args.handler), 'on_result needs a handler function.');
+      // The results that arrive together, and those that arrive while their call waits its turn, reach the script in it.
+      let open: { results: QueueResult[]; ran: Promise<boolean> } | null = null;
+      lookup.automation.onQueueResult(queueId(args), (result) => {
+        if (open) {
+          open.results.push(result);
+          return open.ran;
+        }
+        const results = [result];
+        const batch: { results: QueueResult[]; ran: Promise<boolean> } = { results, ran: Promise.resolve(false) };
+        batch.ran = new Promise<boolean>((settle) => queueMicrotask(() => {
+          void lookup.automation.callScript(() => {
+            // Begun: results after this go in a call of their own.
+            if (open === batch) open = null;
+            handler(results as unknown as Record<string, unknown>);
+          }).then((ran) => {
+            if (open === batch) open = null;
+            settle(ran);
+          });
+        }));
+        open = batch;
+        return batch.ran;
       });
       return null;
     },
@@ -311,7 +342,7 @@ export function similarityScriptingMethods(resolve: DocumentAutomationResolver):
   return {
     rank: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(args, async () => {
+      return operation(lookup, args, async () => {
         const write = input(args.write);
         const result = await rankRows(lookup.database, endpointEmbeddingSource(lookup, args.embeddings), {
           rows: String(args.rows ?? ''),
@@ -328,7 +359,7 @@ export function similarityScriptingMethods(resolve: DocumentAutomationResolver):
     // service: its words and groups of words, weighted by rarity (similarity.ts).
     match: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(args, async () => {
+      return operation(lookup, args, async () => {
         const write = input(args.write);
         const result = await matchRows(lookup.database, {
           rows: String(args.rows ?? ''),

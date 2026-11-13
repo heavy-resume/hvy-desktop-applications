@@ -50,6 +50,9 @@ export interface QueueState {
 /** An entry that will not run again: its script hears of it through on_result. */
 const FINISHED: QueueEntry['status'][] = ['done', 'failed', 'cancelled'];
 
+/** Told each finished entry's result. Returning a promise: whether the result reached the script that registered it. */
+export type QueueResultHandler = (result: QueueResult) => void | Promise<boolean>;
+
 export interface QueueResult {
   key: string;
   /** The context the entry was enqueued with. */
@@ -71,7 +74,8 @@ export type QueueTarget = (input: unknown, context: { idempotencyKey: string }) 
 
 export class DurableQueue {
   private state: QueueState = { entries: [], paused: false, pauseReason: null, awaitingResume: false };
-  private handler: ((result: QueueResult) => void) | null = null;
+  /** Resolving false (if it returns a promise): the result never reached the script, so it is kept for the next handler. */
+  private handler: QueueResultHandler | null = null;
   /** Told as each entry's call starts (`onStart`): what a document shows as being done, rather than waiting. */
   private startHandler: ((started: { key: string; context: unknown }) => void) | null = null;
   private lastStartedAt: number | null = null;
@@ -214,7 +218,7 @@ export class DurableQueue {
     this.startHandler = handler;
   }
 
-  onResult(handler: (result: QueueResult) => void): void {
+  onResult(handler: QueueResultHandler): void {
     this.handler = handler;
     for (const entry of this.state.entries.filter((candidate) => !candidate.delivered && FINISHED.includes(candidate.status))) {
       this.deliver(entry);
@@ -341,11 +345,14 @@ export class DurableQueue {
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
     this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}${entry.status === 'failed' ? ` (${entry.lastError ?? 'Failed.'})` : ''}`);
     const base = { key: entry.key, context: entry.context ?? null };
-    this.handler(entry.status === 'done'
+    const handed = this.handler(entry.status === 'done'
       ? { ...base, status: 'done', result: entry.result }
       : entry.status === 'failed'
         ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.' }
         : { ...base, status: 'cancelled' });
+    void handed?.then((ran) => {
+      if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
+    });
   }
 
   private update(key: string, change: (entry: QueueEntry) => QueueEntry): QueueEntry | null {

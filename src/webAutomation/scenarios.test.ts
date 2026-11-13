@@ -919,7 +919,7 @@ describe('mock integration: job search flow', () => {
     await flow!.collect(boards);
     const job = flow!.item(acmeJob('eng-1'))!;
     const results: unknown[] = [];
-    flow!.automation.onQueueResult(EVALUATE_QUEUE, (result) => results.push(result));
+    flow!.automation.onQueueResult(EVALUATE_QUEUE, (result) => { results.push(result); });
     // Told when its call starts, not when it is enqueued: a delayed entry is waiting until then.
     const started: string[] = [];
     flow!.automation.onQueueStart(EVALUATE_QUEUE, ({ key }) => started.push(key));
