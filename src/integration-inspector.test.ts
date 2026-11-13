@@ -663,7 +663,7 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('asks which field each pick is, and says what is picked and what is left, so the fields need no remembering', async () => {
+  it('shows the fields as pills, filled once picked, and asks which field each pick is by the pills not yet filled', async () => {
     await page.setContent(`<main class="board" style="display:flex;gap:20px">
       <section class="pane" style="flex:1"><h2 class="title">Senior Engineer</h2><p class="pay">\$140,000 a year</p><div class="description"><p>Build the console.</p></div></section>
     </main>`);
@@ -680,30 +680,46 @@ describe('integration structural inspector', () => {
       prompt: 'Pick what to read from the job',
       fieldChoices: [{ id: 'title', label: 'Title' }, { id: 'pay', label: 'Pay' }, { id: 'description', label: 'Description' }],
     }));
-    type Toolbar = { status: string; buttons: Array<{ id: string; label: string }> };
+    type Toolbar = { status: string; buttons: Array<{ id: string; label: string }>; fields: Array<{ id: string; label: string; picked: boolean; disabled: boolean }> };
     const toolbar = () => page.evaluate(() => window.__toolbarState as Toolbar);
     const settled = (status: string) => page.waitForFunction((expected) => (window.__toolbarState as Toolbar).status === expected, status);
     const press = async (label: string) => {
-      const id = (await toolbar()).buttons.find((button) => button.label === label)!.id;
+      const { buttons, fields } = await toolbar();
+      const id = [...buttons, ...fields].find((button) => button.label === label)!.id;
       await page.evaluate((buttonId) => window.__hvyGalaxyInspector.control(buttonId), id);
     };
-    expect((await toolbar()).status).toBe('Pick what to read from the job · Fields: Title, Pay, Description');
+    // Every field, there from the start, none filled; nothing to answer yet.
+    const pills = async () => (await toolbar()).fields.map(({ label, picked, disabled }) => `${label}${picked ? ' ✓' : ''}${disabled ? '' : ' (choose)'}`);
+    expect((await toolbar()).status).toBe('Pick what to read from the job');
+    expect(await pills()).toEqual(['Title', 'Pay', 'Description']);
 
     await clickPointerAt(page, '.pane .title');
     await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'h2 — Senior Engineer' }).click();
     await settled('Which field is this? “Senior Engineer”');
-    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Title', 'Pay', 'Description', 'Skip', 'Undo last']);
+    expect(await pills()).toEqual(['Title (choose)', 'Pay (choose)', 'Description (choose)']);
+    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Skip', 'Undo last']);
     await press('Title');
-    await settled('Picked: Title · Still to pick: Pay, Description · then Done');
+    await settled('Pick what to read from the job · then Done');
+    expect(await pills()).toEqual(['Title ✓', 'Pay', 'Description']);
     expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Navigate page', 'Use range', 'Undo last', 'Done']);
 
     await clickPointerAt(page, '.pane .pay');
     await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'p — \$140,000 a year' }).click();
     await settled('Which field is this? “\$140,000 a year”');
-    // A field already picked is not offered again.
-    expect((await toolbar()).buttons.map((button) => button.label)).toEqual(['Pay', 'Description', 'Skip', 'Undo last']);
+    // A field already picked stays filled, and is not offered again.
+    expect(await pills()).toEqual(['Title ✓', 'Pay (choose)', 'Description (choose)']);
     await press('Pay');
-    await settled('Picked: Title, Pay · Still to pick: Description · then Done');
+    await settled('Pick what to read from the job · then Done');
+    expect(await pills()).toEqual(['Title ✓', 'Pay ✓', 'Description']);
+    // Undo last empties its pill again.
+    await press('Undo last');
+    await page.waitForFunction(() => !(window.__toolbarState as { fields: Array<{ picked: boolean }> }).fields[1].picked);
+    expect(await pills()).toEqual(['Title ✓', 'Pay', 'Description']);
+    await clickPointerAt(page, '.pane .pay');
+    await page.locator('#hvy-galaxy-inspector-picker button').filter({ hasText: 'p — \$140,000 a year' }).click();
+    await settled('Which field is this? “\$140,000 a year”');
+    await press('Pay');
+    await settled('Pick what to read from the job · then Done');
     await press('Done');
 
     const published = await page.evaluate(() => window.__commandRecordingResult as { items: Array<{ fieldId?: string }> });
@@ -2251,6 +2267,7 @@ describe('integration structural inspector', () => {
       active: true,
       status: 'Pick the box around the whole job posting.',
       buttons: [{ id: 'navigate', label: 'Navigate page', primary: false, disabled: false }],
+      fields: [],
     });
 
     await page.evaluate(() => window.__hvyGalaxyInspector.control('navigate'));

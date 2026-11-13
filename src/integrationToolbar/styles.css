@@ -94,6 +94,21 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
+.integration-toolbar-fields { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; }
+.integration-toolbar-fields[hidden] { display: none; }
+.integration-toolbar-field {
+  padding: 3px 9px;
+  border: 1px solid #ffb19f;
+  border-radius: 999px;
+  background: transparent;
+  color: #ffb19f;
+  font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.integration-toolbar-field:hover:not(:disabled) { background: #ffb19f22; }
+.integration-toolbar-field:disabled { cursor: default; }
+.integration-toolbar-field.is-picked { background: #ffb19f; color: #17191e; }
 .integration-toolbar-inspection-buttons { display: flex; align-items: center; gap: 7px; height: 100%; }
 .integration-toolbar-primary { border-color: #e0563f; background: #e0563f; font-weight: 700; }
 .integration-toolbar-primary:hover { background: #ed6650; }

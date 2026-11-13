@@ -24,6 +24,8 @@ export interface IntegrationToolbarInspectionState {
   active?: boolean;
   status?: string;
   buttons?: Array<{ id: string; label: string; primary?: boolean; disabled?: boolean }>;
+  /** A site setup's fields, as pills: filled once picked; one not yet picked is clicked to say which field a pick is. */
+  fields?: Array<{ id: string; label: string; picked?: boolean; disabled?: boolean }>;
 }
 
 export interface IntegrationToolbar {
@@ -79,9 +81,10 @@ export function mountIntegrationToolbar(root: HTMLElement, send: (message: Integ
   });
 
   const status = element('span', 'integration-toolbar-status');
+  const inspectionFields = element('div', 'integration-toolbar-fields');
   const inspectionButtons = element('div', 'integration-toolbar-inspection-buttons');
   const inspection = element('div', 'integration-toolbar-inspection', { hidden: true });
-  inspection.append(status, inspectionButtons);
+  inspection.append(status, inspectionFields, inspectionButtons);
 
   const menu = element('div', 'integration-toolbar-menu', { hidden: true });
   menu.setAttribute('role', 'menu');
@@ -142,10 +145,19 @@ export function mountIntegrationToolbar(root: HTMLElement, send: (message: Integ
       security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${originAllowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
     },
     // What picking in the page says, and its buttons: each sends its id back to the page's picker.
-    setInspectionState({ active = false, status: text = '', buttons = [] } = {}) {
+    setInspectionState({ active = false, status: text = '', buttons = [], fields = [] } = {}) {
       inspection.hidden = !active;
       status.textContent = text;
       status.title = text;
+      inspectionFields.hidden = !fields.length;
+      inspectionFields.replaceChildren(...fields.map(({ id, label, picked, disabled }) => {
+        const created = element('button', `integration-toolbar-field${picked ? ' is-picked' : ''}`, { type: 'button', textContent: label });
+        created.setAttribute('aria-pressed', String(Boolean(picked)));
+        created.dataset.inspectorControl = id;
+        created.disabled = Boolean(disabled);
+        created.addEventListener('click', () => send({ kind: 'inspector-control', id }));
+        return created;
+      }));
       inspectionButtons.replaceChildren(...buttons.map(({ id, label, primary, disabled }) => {
         const created = button(`integration-toolbar-inspection-button${primary ? ' integration-toolbar-primary' : ''}`, label);
         created.dataset.inspectorControl = id;

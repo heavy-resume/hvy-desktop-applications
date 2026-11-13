@@ -101,7 +101,7 @@ export function mockAtsSite(): MockSite {
       ...atsCompany('acme-robotics', 'Acme Robotics', [[
         placedJob('eng-1', 'Staff Engineer', 'Denver, CO', 'The salary is $150,000 – $180,000 a year.'),
         placedJob('eng-2', 'Backend Engineer', 'Austin, TX; Denver, CO', 'The salary is $120,000 a year.'),
-        placedJob('contract-1', 'Contract Developer', 'Remote (US)', 'This contract pays $60–$75 an hour.'),
+        placedJob('contract-1', 'Contract Developer', 'Remote (US)', 'This part-time contract pays $60–$75 an hour.'),
         placedJob('design-1', 'Product Designer', 'Remote', 'This is a project budget of $8,000.'),
         // Its posting says nothing of pay; its row in the list does.
         placedJob('pm-1', 'Product Manager', 'Boston, MA', '', '$95,000 – $110,000 a year'),

@@ -86,6 +86,22 @@ describe('integration browser toolbar', () => {
     await page.getByRole('button', { name: 'Done' }).click();
     expect(await page.evaluate(() => window.sent)).toEqual([{ kind: 'inspector-control', id: 'done' }]);
 
+    // A site setup's fields, as pills: filled once picked; one not yet picked answers which field a pick is.
+    await page.evaluate(() => window.mountedToolbar.setInspectionState({
+      active: true,
+      status: 'Which field is this? “$140,000 a year”',
+      buttons: [{ id: 'field-skip', label: 'Skip' }],
+      fields: [
+        { id: 'field-0', label: 'Title', picked: true, disabled: true },
+        { id: 'field-1', label: 'Pay' },
+      ],
+    }));
+    expect(await page.locator('.integration-toolbar-field.is-picked').allTextContents()).toEqual(['Title']);
+    expect(await page.getByRole('button', { name: 'Title' }).getAttribute('aria-pressed')).toBe('true');
+    expect(await page.getByRole('button', { name: 'Title' }).isDisabled()).toBe(true);
+    await page.getByRole('button', { name: 'Pay' }).click();
+    expect(await page.evaluate(() => window.sent.at(-1))).toEqual({ kind: 'inspector-control', id: 'field-1' });
+
     // Picking over: the address and the menu are back.
     await page.evaluate(() => window.mountedToolbar.setInspectionState({}));
     expect(await page.getByLabel('Address').isVisible()).toBe(true);

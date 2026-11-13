@@ -899,16 +899,23 @@
       publishToolbarState({
         active: true,
         status: statusText.textContent,
-        buttons: [...status.querySelectorAll('button[data-toolbar-id]')].filter((button) => !button.hidden).map((button) => ({
+        buttons: [...status.querySelectorAll('button[data-toolbar-id]:not([data-toolbar-pill])')].filter((button) => !button.hidden).map((button) => ({
           id: button.dataset.toolbarId,
           label: button.textContent,
           primary: button.dataset.toolbarPrimary === 'true',
           disabled: button.disabled,
         })),
+        // A site setup's fields, as pills: filled once picked; the others answer which field a pick is, while it is asked.
+        fields: [...status.querySelectorAll('button[data-toolbar-pill]')].map((pill) => ({
+          id: pill.dataset.toolbarId,
+          label: pill.textContent,
+          picked: pill.dataset.toolbarPill === 'picked',
+          disabled: pill.disabled,
+        })),
       });
     };
     new MutationObserver(() => { if (!pending) pending = setTimeout(sync, 0); })
-      .observe(status, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden'] });
+      .observe(status, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'data-toolbar-pill'] });
     toolbarControl = (id) => status.querySelector(`button[data-toolbar-id="${CSS.escape(String(id))}"]`)?.click();
     sync();
   };
@@ -3437,23 +3444,53 @@
         // Picking the first example's fields, the box picked just before is the last thing to undo: with no fields
         // picked, Undo last goes back to picking the box.
         const undoesParent = Boolean(options.undoParent);
-        // With the fields there are to fill (a site setup's collection: Title, Company, Pay…), each pick is asked which it
-        // is, and what is picked and what is left is said as picking goes, so nothing has to be remembered. A pick can be
-        // skipped and assigned later, in the builder. The answer goes with the pick (`fieldId`).
+        // With the fields there are to fill (a site setup's collection: Title, Company, Pay…), each is a pill, there as
+        // picking goes, filled once a pick is that field, so nothing has to be remembered. Each pick is asked which it is:
+        // the pills not yet filled are what answer it, or Skip, to assign it later in the builder. The answer goes with the
+        // pick (`fieldId`). The toolbar shows the pills as pills (`data-toolbar-pill`).
         const fieldChoices = Array.isArray(options.fieldChoices) ? options.fieldChoices.filter((choice) => choice?.id && choice?.label) : [];
-        const fieldButtons = document.createElement('span');
-        fieldButtons.style.cssText = 'display:contents';
         let assigning = null;
-        const fieldLabel = (id) => fieldChoices.find((choice) => choice.id === id)?.label || id;
+        const fieldPills = fieldChoices.map((choice, index) => {
+          const pill = document.createElement('button');
+          pill.type = 'button';
+          pill.textContent = choice.label;
+          pill.dataset.toolbarId = `field-${index}`;
+          pill.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!assigning || pill.dataset.toolbarPill === 'picked') return;
+            assigning.result.fieldId = choice.id;
+            finishAssigning();
+          });
+          return pill;
+        });
+        const skipButton = document.createElement('button');
+        skipButton.type = 'button';
+        skipButton.textContent = 'Skip';
+        skipButton.dataset.toolbarId = 'field-skip';
+        skipButton.hidden = true;
+        skipButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          finishAssigning();
+        });
+        const updateFieldPills = () => {
+          const taken = new Set(selectedItems.map((item) => item.result.fieldId).filter(Boolean));
+          fieldPills.forEach((pill, index) => {
+            const picked = taken.has(fieldChoices[index].id);
+            pill.dataset.toolbarPill = picked ? 'picked' : 'open';
+            pill.setAttribute('aria-pressed', String(picked));
+            // Answers which field a pick is: those not yet filled, while one is asked.
+            pill.disabled = !assigning || picked;
+            pill.style.cssText = `padding:4px 9px;border:1px solid #fff;border-radius:999px;font:700 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:${pill.disabled ? 'default' : 'pointer'};${picked ? 'background:#fff;color:#8b2d20' : 'background:transparent;color:#fff'}`;
+          });
+        };
         const updateCollectionStatus = () => {
-          const picked = selectedItems.map((item) => item.result.fieldId).filter(Boolean);
-          const left = fieldChoices.filter((choice) => !picked.includes(choice.id)).map((choice) => choice.label);
+          updateFieldPills();
           statusText.textContent = rangeStart?.status || (rangeMode ? RANGE_MODE_STATUS : assigning
             ? `Which field is this? “${(assigning.result.range?.summary || assigning.result.textPreview || visibleText(assigning.element)).slice(0, 80)}”`
             : fieldChoices.length
-              ? selectedItems.length
-                ? `Picked: ${picked.map(fieldLabel).join(', ') || 'nothing named yet'}${left.length ? ` · Still to pick: ${left.join(', ')}` : ''} · then Done`
-                : `${options.prompt || 'Pick what to read'} · Fields: ${left.join(', ')}`
+              ? `${options.prompt || 'Pick what to read'}${selectedItems.length ? ' · then Done' : ''}`
               : selectedItems.length
                 ? `${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
                 : options.prompt || (undoesParent ? 'Select fields, or Undo last to pick the box again' : 'Select fields, or choose Done to cancel'));
@@ -3461,7 +3498,7 @@
         };
         const finishAssigning = () => {
           assigning = null;
-          fieldButtons.replaceChildren();
+          skipButton.hidden = true;
           navigationButton.hidden = false;
           if (rangeButton) rangeButton.hidden = false;
           doneButton.hidden = false;
@@ -3469,7 +3506,8 @@
           pickingPaused = false;
           updateCollectionStatus();
         };
-        // The page waits for the answer: picking is paused, and only the fields, Skip, and Undo last are offered.
+        // The page waits for the answer: picking is paused, and only the fields not yet filled, Skip, and Undo last are
+        // offered.
         const askField = (item) => {
           assigning = item;
           pickingPaused = true;
@@ -3478,25 +3516,7 @@
           if (rangeButton) rangeButton.hidden = true;
           doneButton.hidden = true;
           if (wrongPageButton) wrongPageButton.hidden = true;
-          const taken = new Set(selectedItems.map((selected) => selected.result.fieldId).filter(Boolean));
-          const fieldButton = (label, id, fieldId) => {
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.textContent = label;
-            button.dataset.toolbarId = id;
-            button.style.cssText = doneButton.style.cssText;
-            button.addEventListener('click', (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (fieldId) item.result.fieldId = fieldId;
-              finishAssigning();
-            });
-            return button;
-          };
-          fieldButtons.replaceChildren(
-            ...fieldChoices.filter((choice) => !taken.has(choice.id)).map((choice, index) => fieldButton(choice.label, `field-${index}`, choice.id)),
-            fieldButton('Skip', 'field-skip', null),
-          );
+          skipButton.hidden = false;
           updateCollectionStatus();
         };
         navigationButton.addEventListener('click', () => { if (!pickingPaused) updateCollectionStatus(); });
@@ -3573,7 +3593,8 @@
             window.__hvyGalaxyInspector.stop();
           });
         }
-        status.append(fieldButtons, ...(wrongPageButton ? [wrongPageButton] : []), undoButton, doneButton);
+        skipButton.style.cssText = doneButton.style.cssText;
+        status.append(...fieldPills, skipButton, ...(wrongPageButton ? [wrongPageButton] : []), undoButton, doneButton);
         updateCollectionStatus();
       }
       if (externalToolbar) mirrorStatusToToolbar(status, statusText);
