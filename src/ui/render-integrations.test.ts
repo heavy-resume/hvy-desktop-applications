@@ -22,9 +22,10 @@ describe('Set up this site', () => {
       listIntegrationId: list.id, itemIntegrationId: item.id,
       fields: [{ id: 'title', label: 'Title' }, { id: 'description', label: 'Description' }],
       prompts: null, offerWrongPage: false, pending: null, error: null,
-      test: null,
+      test: null, rowKey: null,
     };
     const before = renderIntegrationsDialog(state);
+    expect(before).not.toContain('site-setup-row-key');
     expect(before).toContain('<h3 class="site-setup-step-title">Test</h3>');
     expect(before).toMatch(/data-step="test-find" >Find jobs</);
     expect(before).toMatch(/data-step="test-read" disabled>Read them</);
@@ -56,5 +57,23 @@ describe('Set up this site', () => {
     expect(read).toContain('<span class="site-setup-test-problem">Description is required.</span>');
     state.siteSetup = null;
     state.integrationsDialogOpen = false;
+  });
+  it('says when items open by clicking, and which fields tell rows apart, each a checkbox before its label', () => {
+    const list = picked('Job list', ['title', 'company']);
+    const item = picked('Job page', ['description']);
+    state.integrationRegistry = { ...state.integrationRegistry, integrations: [list, item] as never };
+    state.integrationsDialogOpen = true;
+    state.siteSetup = {
+      collectionName: 'Mail', documentName: 'Search.hvy', itemName: 'job', siteName: 'mail.google.com', url: 'https://mail.google.com/mail/u/0/#label/job+spam',
+      listIntegrationId: list.id, itemIntegrationId: item.id,
+      fields: [{ id: 'title', label: 'Title' }, { id: 'company', label: 'Company' }, { id: 'description', label: 'Description' }],
+      prompts: null, offerWrongPage: false, pending: null, error: null, test: null,
+      rowKey: { choices: [{ id: 'title', label: 'Title' }, { id: 'company', label: 'Company' }], chosen: ['title'] },
+    };
+    const html = renderIntegrationsDialog(state);
+    expect(html).toContain('Jobs here open by clicking: runs click each one.');
+    expect(html).toContain('<legend>Tell jobs apart by</legend>');
+    expect(html).toContain('<label class="checkbox-row"><input class="hvy-galaxy-input" type="checkbox" data-action="site-setup-row-key" data-field="title" checked><span>Title</span></label>');
+    expect(html).toContain('<label class="checkbox-row"><input class="hvy-galaxy-input" type="checkbox" data-action="site-setup-row-key" data-field="company" ><span>Company</span></label>');
   });
 });

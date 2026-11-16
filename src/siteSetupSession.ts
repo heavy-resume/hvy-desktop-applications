@@ -4,7 +4,7 @@ import { handlers, rerender } from './main';
 import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
-import { setSiteMatchingViewer, setSiteSetupOpener, type SiteMatchingRequest, type SiteSetupRequest } from './webAutomation/siteSetupOpener';
+import { setSiteMatchingViewer, setSiteSetupOpener, type SiteMatchingRequest, type SiteSetupRequest, type SiteSetupSettings } from './webAutomation/siteSetupOpener';
 import { listSetupExamples, openListedItem, openListedItemByClick, openProfilePage, readSetupExamples } from './webAutomation/app';
 import type { CollectionDefinition, CollectionRunState, ExtractItem } from './webAutomation/collection';
 import { withSiteSetups } from './webAutomation/siteSetups';
@@ -30,8 +30,14 @@ let active: {
   itemId: string | null;
   /** The item page opened from the list just now, while its fields are picked: what Wrong page takes back. */
   openedItem: OpenedItem | null;
-  /** The list's items open without a link (their page's script opens them), which runs can't follow yet. */
-  openerWithoutLink: boolean;
+  /**
+   * The list's items open without a link (their page's script opens them on a click): runs click through the list, and
+   * tell its rows apart by `rowKey`, fields its rows show.
+   */
+  opensWithoutLink: boolean;
+  rowKey: string[];
+  /** Opening an item changed only the part of the address after #: on this site that part names the page. */
+  keepUrlFragment: boolean;
   /** Test: the items found on the list, to read. */
   testItems: ExtractItem[];
 } | null = null;
@@ -70,7 +76,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
     : { ...createCustomPageIntegration(`${item} list`, request.url), siteSetup: true as const };
   const itemPage = existing.find((integration) => integration.id !== list.id) ?? null;
   for (const integration of [list, ...(itemPage ? [itemPage] : [])]) addToRegistry(integration);
-  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, openerWithoutLink: false, testItems: [] };
+  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, opensWithoutLink: Boolean(request.site.rowKey), rowKey: request.site.rowKey ?? [], keepUrlFragment: request.site.keepUrlFragment === true, testItems: [] };
   state.siteSetup = {
     collectionName: request.collection.name,
     documentName: state.document?.source.name ?? '',
@@ -85,7 +91,9 @@ function startSiteSetup(request: SiteSetupRequest): void {
     pending: null,
     error: null,
     test: null,
+    rowKey: null,
   };
+  showRowKey(active);
   state.selectedIntegrationId = list.id;
   handlers.openIntegrations();
   if (request.itemExample) addItemExample(request.url);
@@ -177,9 +185,48 @@ function pickExampleItem(session: NonNullable<typeof active>): void {
   });
 }
 
-/** Runs read a list's items by following each row's link, so a list whose items open without one gives them nothing. */
-function openerWithoutLinkNote(name: string): string {
-  return `Runs can't open ${name}s on this site yet: its ${name}s open without a link.`;
+/** The site's settings as this setup has decided them (`SiteSetupSettings`). */
+function sessionSettings(session: NonNullable<typeof active>): SiteSetupSettings {
+  return {
+    ...(session.opensWithoutLink || session.request.site.browse ? { browse: true as const } : {}),
+    ...(session.keepUrlFragment ? { keepUrlFragment: true as const } : {}),
+    ...(session.opensWithoutLink && session.rowKey.length ? { rowKey: session.rowKey } : {}),
+  };
+}
+
+/** The fields the list's rows are read into: those a row can be told apart by. */
+function rowKeyChoices(session: NonNullable<typeof active>): Array<{ id: string; label: string }> {
+  const listing = sessionPatterns(session).find((pattern) => pattern.role === 'listing');
+  const read = new Set((listing?.fields ?? []).filter((field) => field.kind !== 'link').map((field) => field.id));
+  return session.request.collection.fields.filter((field) => read.has(field.id)).map((field) => ({ id: field.id, label: field.label }));
+}
+
+/** Tell items apart by: shown while the list's items open without a link, its choices as the rows are read now. */
+function showRowKey(session: NonNullable<typeof active>): void {
+  if (!state.siteSetup) return;
+  if (!session.opensWithoutLink) {
+    state.siteSetup.rowKey = null;
+    return;
+  }
+  const choices = rowKeyChoices(session);
+  session.rowKey = session.rowKey.filter((id) => choices.some((choice) => choice.id === id));
+  state.siteSetup.rowKey = { choices, chosen: session.rowKey };
+}
+
+/** An address that differs from another only after #: on a site where that part names the page (Gmail). */
+function onlyFragmentChanged(from: string, to: string): boolean {
+  const before = new URL(from);
+  const after = new URL(to);
+  return before.hash !== after.hash && after.hash !== '' && before.href.slice(0, before.href.length - before.hash.length) === after.href.slice(0, after.href.length - after.hash.length);
+}
+
+// UI: site setup, Tell items apart by: a field ticked or unticked.
+export function toggleSiteSetupRowKey(fieldId: string): void {
+  const session = active;
+  if (!session || !state.siteSetup) return;
+  session.rowKey = session.rowKey.includes(fieldId) ? session.rowKey.filter((id) => id !== fieldId) : [...session.rowKey, fieldId];
+  checkSiteSetup();
+  rerender({ preserveMountedDocument: true });
 }
 
 /**
@@ -200,7 +247,7 @@ export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown;
   saveIntegrationRegistry(state.integrationRegistry);
   const listing = sessionPatterns(session).find((pattern) => pattern.role === 'listing');
   if (!listing) return;
-  session.openerWithoutLink = !opener.href;
+  const withoutLink = !opener.href;
   state.siteSetup.error = null;
   state.siteSetup.pending = `Opening the ${name} as a run does…`;
   rerender({ preserveMountedDocument: true });
@@ -211,7 +258,6 @@ export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown;
     if (!state.siteSetup) return;
     state.siteSetup.pending = null;
     if (!opened) {
-      session.openerWithoutLink = false;
       pickExampleItem(session);
       state.siteSetup.error = `That didn't open a ${name}. Click what opens one.`;
       rerender({ preserveMountedDocument: true });
@@ -219,7 +265,12 @@ export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown;
     }
     state.siteSetup.offerWrongPage = true;
     session.openedItem = addItemExample(opened.url);
-    if (session.openerWithoutLink) state.siteSetup.error = openerWithoutLinkNote(name);
+    // What opening it showed of the site: whether its items open without a link (runs click through, telling the rows
+    // apart by every field they show, to begin with), and whether only the part after # changed (it names the page).
+    if (onlyFragmentChanged(listUrl, opened.url)) session.keepUrlFragment = true;
+    if (withoutLink && !session.opensWithoutLink) session.rowKey = rowKeyChoices(session).map((choice) => choice.id);
+    session.opensWithoutLink = withoutLink;
+    showRowKey(session);
     rerender({ preserveMountedDocument: true });
   }, (error: unknown) => {
     if (state.siteSetup) {
@@ -270,7 +321,8 @@ function sessionPatterns(session: NonNullable<typeof active>): SitePatternDefini
 /** The collection as it would be with this setup: what Test runs. */
 function sessionCollection(session: NonNullable<typeof active>): CollectionDefinition {
   const { collection, site } = session.request;
-  return { ...collection, ...withSiteSetups(collection, [{ ...site, patterns: sessionPatterns(session) }]) };
+  const { browse: _browse, keepUrlFragment: _keepUrlFragment, rowKey: _rowKey, ...rest } = site;
+  return { ...collection, ...withSiteSetups(collection, [{ ...rest, ...sessionSettings(session), patterns: sessionPatterns(session) }]) };
 }
 
 /** Why a Test run found or read nothing: its own words, or what its page said. */
@@ -359,7 +411,7 @@ export function runSiteSetupStep(step: SiteSetupStep): void {
   const list = sessionIntegration(session.listId);
   if (!list) return;
   if (step === 'done') {
-    const errors = session.request.finish(sessionPatterns(session));
+    const errors = session.request.finish(sessionPatterns(session), sessionSettings(session));
     if (errors.length) {
       state.siteSetup.error = errors.join(' ');
       rerender({ preserveMountedDocument: true });
@@ -385,9 +437,10 @@ export function editingSetupItemPage(): boolean {
 /** After each save in the session, what the block would refuse, shown before Done. */
 function checkSiteSetup(): void {
   if (!active || !state.siteSetup) return;
+  showRowKey(active);
   const errors = [
-    ...active.request.check(sessionPatterns(active)),
-    ...(active.openerWithoutLink ? [openerWithoutLinkNote(itemName(active.request))] : []),
+    ...active.request.check(sessionPatterns(active), sessionSettings(active)),
+    ...(active.opensWithoutLink && !active.rowKey.length ? [`Tell ${itemName(active.request)}s apart by at least one field.`] : []),
   ];
   state.siteSetup.error = errors.length ? errors.join(' ') : null;
   // What was tested is not the setup any more.

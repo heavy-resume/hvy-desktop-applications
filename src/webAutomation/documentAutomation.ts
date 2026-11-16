@@ -17,6 +17,7 @@ import { contextProfileName, profileContextFor } from './profileContexts';
 import { documentProfileName } from './profiles';
 import { createRecordSink } from './recordSink';
 import { recordKey } from './records';
+import { recognizeAddress } from './siteSetups';
 import { publishedServices } from './serviceManifests';
 import { createSqlRecordConsumer, useDocumentDatabase, type OpenedDatabase } from './sqlSink';
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
@@ -209,10 +210,15 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
     database: (use) => useDocumentDatabase(document, openDatabase, use),
     databaseChanged: () => options.onDatabaseChange?.(stateRuntime),
-    openInBrowser: async (capabilityId, url) => {
+    openInBrowser: async (capabilityId, url, givenKey) => {
       const definition = collectionBlock(capabilityId)?.collection;
-      const key = definition ? recordKey(definition.key ?? { kind: 'url' }, url, {}, definition.ignoredQueryParameters) : null;
-      const held = key ? await lookup.sink(capabilityId)?.fieldsOf?.(key) : null;
+      // Its record's key: given, for an item its address doesn't key (one opened without a link), else its address's, as
+      // the site that reads it tells addresses apart.
+      const site = definition ? recognizeAddress(definition, url)?.site : null;
+      const key = givenKey ?? (definition ? recordKey(definition.key ?? { kind: 'url' }, url, {}, { ignoredQueryParameters: definition.ignoredQueryParameters, keepUrlFragment: site?.keepUrlFragment === true }) : null);
+      const fields = key ? await lookup.sink(capabilityId)?.fieldsOf?.(key) : null;
+      // A key given opens only its own record's address.
+      const held = fields && (!givenKey || fields.url === url) ? fields : null;
       if (!held) throw new WebAutomationError('not_authorized', 'Only an item this collection collected opens in the default browser.');
       if (!options.openInBrowser) throw new WebAutomationError('invalid_request', 'This app has no default browser to open it in.');
       await options.openInBrowser(url);

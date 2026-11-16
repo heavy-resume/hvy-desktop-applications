@@ -52,11 +52,22 @@ function parameterMatcher(pattern: string): (name: string) => boolean {
   return lower.endsWith('*') ? (name) => name.toLowerCase().startsWith(lower.slice(0, -1)) : (name) => name.toLowerCase() === lower;
 }
 
-/** Canonical URL: no fragment, lowercase host, no ignored parameters, sorted query, no trailing slash. */
-export function canonicalUrl(value: string, ignoredParameters: string[] = DEFAULT_IGNORED_QUERY_PARAMETERS): string {
+/** How a collection tells two addresses are the same page (its settings of these names). */
+export interface UrlKeyOptions {
+  /** Query parameters ignored (the default covers tracking parameters). */
+  ignoredQueryParameters?: string[];
+  /** The fragment is kept: on a single-page site it names the page (Gmail's `#label/…/<message>`). */
+  keepUrlFragment?: boolean;
+}
+
+/**
+ * Canonical URL: lowercase host, no ignored parameters, sorted query, no trailing slash, and no fragment unless it is
+ * kept (`keepUrlFragment`).
+ */
+export function canonicalUrl(value: string, { ignoredQueryParameters = DEFAULT_IGNORED_QUERY_PARAMETERS, keepUrlFragment = false }: UrlKeyOptions = {}): string {
   const url = new URL(value);
-  const ignored = ignoredParameters.map(parameterMatcher);
-  url.hash = '';
+  const ignored = ignoredQueryParameters.map(parameterMatcher);
+  if (!keepUrlFragment) url.hash = '';
   url.hostname = url.hostname.toLowerCase();
   const kept = [...url.searchParams.entries()]
     .filter(([name]) => !ignored.some((matches) => matches(name)))
@@ -77,9 +88,9 @@ export function recordKey(
   strategy: RecordKeyStrategy,
   url: string,
   values: Record<string, unknown>,
-  ignoredParameters?: string[],
+  urlOptions?: UrlKeyOptions,
 ): string | null {
-  if (strategy.kind === 'url') return canonicalUrl(url, ignoredParameters);
+  if (strategy.kind === 'url') return canonicalUrl(url, urlOptions);
   const fields = strategy.kind === 'field' ? [strategy.field] : strategy.fields;
   const parts = fields.map((field) => valueText(values[field]));
   return parts.every(Boolean) ? parts.join('\u001f') : null;

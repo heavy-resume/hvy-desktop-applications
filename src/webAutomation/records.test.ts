@@ -5,7 +5,15 @@ describe('record keys', () => {
   it('canonicalizes URLs, ignoring tracking parameters by default and others on request', () => {
     expect(canonicalUrl('https://Boards.Example.test/acme/items/1/?utm_source=x&ref=a&b=2&a=1#apply'))
       .toBe('https://boards.example.test/acme/items/1?a=1&b=2&ref=a');
-    expect(canonicalUrl('https://example.test/items/1?ref=a&session=9', ['ref', 'session'])).toBe('https://example.test/items/1');
+    expect(canonicalUrl('https://example.test/items/1?ref=a&session=9', { ignoredQueryParameters: ['ref', 'session'] })).toBe('https://example.test/items/1');
+  });
+
+  it('keeps the fragment when the collection says it names the page, as on a single-page site', () => {
+    const message = (id: string) => `https://mail.google.com/mail/u/0/#label/job+spam/${id}`;
+    // Dropped by default: every message would be the same page.
+    expect(canonicalUrl(message('A1'))).toBe(canonicalUrl(message('B2')));
+    expect(canonicalUrl(message('A1'), { keepUrlFragment: true })).toBe('https://mail.google.com/mail/u/0#label/job+spam/A1');
+    expect(recordKey({ kind: 'url' }, message('A1'), {}, { keepUrlFragment: true })).not.toBe(recordKey({ kind: 'url' }, message('B2'), {}, { keepUrlFragment: true }));
   });
 
   it('derives keys from the URL, one field, or several fields', () => {

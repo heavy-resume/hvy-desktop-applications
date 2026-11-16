@@ -211,6 +211,7 @@ include!("workspace_files.rs");
 include!("state_settings.rs");
 include!("utils.rs");
 include!("web_automation.rs");
+include!("site_security.rs");
 
 #[cfg(test)]
 mod tests {

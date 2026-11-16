@@ -16,7 +16,7 @@ import { publishedService, publishedServices, SERVICE_MANIFEST_FORMAT, SERVICE_M
 import { documentProfileName, resolveProfile, withDocumentProfile, type BrowserProfile } from '../webAutomation/profiles';
 import { DEFAULT_QUEUE_CONFIG, type QueueEntry } from '../webAutomation/queue';
 import type { DocumentAutomationLookup } from '../webAutomation/scripting';
-import { canSetUpSites, canShowSiteMatching, setUpSite, showSiteMatching } from '../webAutomation/siteSetupOpener';
+import { canSetUpSites, canShowSiteMatching, setUpSite, showSiteMatching, type SiteSetupSettings } from '../webAutomation/siteSetupOpener';
 import {
   fieldsNotRead, newSiteId, patternsOf, startPagesReadBy, planSiteSetupPaste, readSiteSetupText, recognizeAddress, siteSetupOf, siteSetupText, startPageId, websitesOf, withSiteSetups, withoutSiteSetup,
   type SiteSetup, type SiteSetupPaste,
@@ -1061,12 +1061,15 @@ const RUN_STATUS: Record<string, string> = {
   failed: 'Failed',
 };
 
-/** An address short enough to scan: the host, and the path's last two parts when it is longer. */
+/**
+ * An address short enough to scan: the host, and the path's last two parts when it is longer. Its query and fragment
+ * stay: on a single-page site the fragment is the page (Gmail's `#label/…`), so two pages differ only there.
+ */
 function shortAddress(value: string): string {
   const url = new URL(value);
   const parts = url.pathname.split('/').filter(Boolean);
   const path = parts.length > 2 ? `/…/${parts.slice(-2).join('/')}` : url.pathname === '/' ? '' : url.pathname;
-  return `${url.host}${path}${url.search}`;
+  return `${url.host}${path}${url.search}${url.hash}`;
 }
 
 /** What a start page is called: its first fixed value (a careers page's company), or its address. */
@@ -1214,9 +1217,15 @@ function setUpSiteFor(ctx: HvyPluginContext, collection: CollectionDefinition, u
     ...options,
     site: setup,
     patterns: site ? patternsOf(collection, site.id) : [],
-    check: (patterns) => checkCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [{ ...setup, patterns }])),
-    finish: (patterns) => finish({ ...setup, patterns }),
+    check: (patterns, settings) => checkCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [{ ...withSettings(setup, settings), patterns }])),
+    finish: (patterns, settings) => finish({ ...withSettings(setup, settings), patterns }),
   });
+}
+
+/** A site with the settings setup decided: each it leaves unset is removed. */
+function withSettings(site: CollectionSite, settings: SiteSetupSettings): CollectionSite {
+  const { browse: _browse, keepUrlFragment: _keepUrlFragment, rowKey: _rowKey, ...rest } = site;
+  return { ...rest, ...settings };
 }
 
 /** Adding a start page nothing reads: set its site up, then the fields the setup doesn't read, then the start page. Cancelling adds nothing. */

@@ -121,9 +121,20 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
   // An example item: one of the list's rows picked in the browser, opened as a run opens it, and its fields picked there.
   // Each one picked after the first is another example, for pages laid out differently.
   const examples = posting?.pattern?.parents.length ?? 0;
+  // Items that open without a link: runs click each one, and tell the rows apart by the fields ticked here, as the list
+  // shows them (so a row already collected is skipped without clicking it).
+  const rowKey = setup.rowKey
+    ? `<div class="site-setup-row-key">
+        <p class="site-setup-step-text">${escapeHtml(item.charAt(0).toUpperCase() + item.slice(1))}s here open by clicking: runs click each one.</p>
+        <fieldset class="site-setup-row-key-fields">
+          <legend>Tell ${escapeHtml(item)}s apart by</legend>
+          ${setup.rowKey.choices.map((choice) => `<label class="checkbox-row"><input class="hvy-galaxy-input" type="checkbox" data-action="site-setup-row-key" data-field="${escapeAttr(choice.id)}" ${setup.rowKey!.chosen.includes(choice.id) ? 'checked' : ''}><span>${escapeHtml(choice.label)}</span></label>`).join('')}
+        </fieldset>
+      </div>`
+    : '';
   const itemStep = step(4, `Pick an example ${item}`, Boolean(posting), false,
     `Pick one of the ${escapeHtml(item)}s in the list. Galaxy opens it as a run does, then you pick what to read from it, such as its description and title. Pick another to add an example of a ${escapeHtml(item)} page laid out differently.`,
-    posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : '',
+    `${posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : ''}${rowKey}`,
     `${posting ? button('Edit examples', 'item-examples') : ''}${button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows)}`);
   // Two of the list's items found, then read, as a run would with this setup: what each would hold, field by field.
   const test = setup.test;

@@ -1,5 +1,5 @@
 import type { CliItemStoreConfig, ItemFieldBinding } from './cliItemStore';
-import { RECORD_URL_FIELD, type CollectionDefinition, type CollectionField, type CollectionSite, type StartPage } from './collection';
+import { readSiteSettings, RECORD_URL_FIELD, type CollectionDefinition, type CollectionField, type CollectionSite, type StartPage } from './collection';
 import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
 import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntryStatus, type QueueState } from './queue';
 import type { ServedDocumentDefinition } from './servedDocuments';
@@ -556,7 +556,7 @@ function readSites(value: unknown, errors: string[]): CollectionSite[] {
       return [];
     }
     const from = isRecord(site.from) && text(site.from.name) ? { name: text(site.from.name), version: number(site.from.version, 1, 1, Number.MAX_SAFE_INTEGER) } : null;
-    return [{ id, name: text(site.name) || id, ...(from ? { from } : {}), ...(site.browse === true ? { browse: true as const } : {}) }];
+    return [{ id, name: text(site.name) || id, ...(from ? { from } : {}), ...readSiteSettings(site) }];
   });
   const ids = sites.map((site) => site.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Site setup id "${id}" is used twice.`);
@@ -587,6 +587,9 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
   const ids = patterns.map((pattern) => pattern.id);
   if (new Set(ids).size !== ids.length) errors.push('Pattern ids must be unique.');
   for (const pattern of patterns) checkPatternReferences(pattern, fieldIds, errors);
+  for (const site of sites) {
+    for (const field of (site.rowKey ?? []).filter((id) => !fieldIds.has(id))) errors.push(`Site setup "${site.name}" tells its rows apart by "${field}", which is not one of the fields.`);
+  }
   const siteIds = new Set(sites.map((site) => site.id));
   for (const pattern of patterns.filter((candidate) => candidate.siteId && !siteIds.has(candidate.siteId))) {
     errors.push(`Pattern "${pattern.name}" belongs to site setup "${pattern.siteId}", which is not one of the site setups.`);

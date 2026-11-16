@@ -21,6 +21,18 @@ describe('a start page left out of collecting all', () => {
   });
 });
 
+describe('a site setup\'s settings', () => {
+  it('keeps clicking through, the fragment, and the row key, and refuses a row key that is not a field', () => {
+    const block = (site: Record<string, unknown>) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'mail', fields: [{ id: 'title', label: 'Subject' }], startPages: [], sites: [{ id: 'gmail', name: 'Gmail', ...site }] });
+    const read = block({ browse: true, keepUrlFragment: true, rowKey: ['title'] });
+    expect(read.ok && read.value.collection.sites).toEqual([{ id: 'gmail', name: 'Gmail', browse: true, keepUrlFragment: true, rowKey: ['title'] }]);
+    // Each unset unless stored as set.
+    const plain = block({ browse: false, keepUrlFragment: 'yes', rowKey: [] });
+    expect(plain.ok && plain.value.collection.sites).toEqual([{ id: 'gmail', name: 'Gmail' }]);
+    expect(errorsOf(block({ rowKey: ['sender'] }))).toEqual(['Site setup "Gmail" tells its rows apart by "sender", which is not one of the fields.']);
+  });
+});
+
 describe('a start page\'s name', () => {
   it('is kept trimmed, and left out when blank', () => {
     const read = readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages: [{ id: 'a', url: 'https://jobs.test/a', name: '  Acme careers ' }, { id: 'b', url: 'https://jobs.test/b', name: '  ' }] });

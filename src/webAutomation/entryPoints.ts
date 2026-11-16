@@ -147,10 +147,20 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     // Only that page is read, not its items' (even on a site read by clicking through its list), and nothing is kept.
     async listSetupExamples(profileId: string, definition: CollectionDefinition, listUrl: string, count: number): Promise<SetupTestRun & { items: ExtractItem[] }> {
       const startPage = { id: 'setup-test', url: listUrl };
-      const sites = definition.sites.map(({ browse: _browse, ...site }) => site);
+      // A site whose rows have no link is listed only by clicking through it, as its runs do: each item is where its click
+      // went, with its row's key, and what its row showed of it (its key fields), as Read takes it.
+      const rowKeyed = definition.sites.find((site) => site.rowKey);
+      const sites = rowKeyed ? definition.sites : definition.sites.map(({ browse: _browse, ...site }) => site);
       const trial: CollectionDefinition = { ...definition, sites, startPages: [startPage], maxItems: count, maxPages: 1, readItemPages: false };
-      const run = await setupTests.start(trial, profileId, { onRecord: () => undefined }, [startPage]).done;
-      return { items: run.listedItems, run };
+      const clicked: ExtractItem[] = [];
+      const run = await setupTests.start(trial, profileId, {
+        onRecord: (record) => {
+          if (rowKeyed?.rowKey && record.state === 'ok') {
+            clicked.push({ url: record.url, key: record.key, values: Object.fromEntries(rowKeyed.rowKey.map((field) => [field, record.values[field]])) });
+          }
+        },
+      }, [startPage]).done;
+      return { items: rowKeyed ? clicked : run.listedItems, run };
     },
 
     // UI: Set up this site, Test, "Read": those items' own pages, read as a run reads them with this setup: what each

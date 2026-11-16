@@ -1,4 +1,4 @@
-import type { CollectionDefinition, CollectionField, CollectionSite, StartPage } from './collection';
+import { readSiteSettings, type CollectionDefinition, type CollectionField, type CollectionSite, type StartPage } from './collection';
 import { resolveSitePattern, type SitePatternDefinition } from './sitePatterns';
 
 /**
@@ -121,7 +121,7 @@ export function readSiteSetupText(text: string): SiteSetup[] | null {
       id,
       name: typeof site.name === 'string' && site.name.trim() ? site.name.trim() : id,
       ...(from ? { from } : {}),
-      ...(site.browse === true ? { browse: true as const } : {}),
+      ...readSiteSettings(site),
       patterns: (site.patterns as SitePatternDefinition[]).map((pattern) => ({ ...pattern, siteId: id })),
       // Whether they are start pages this collection takes is the integrity check's to say, as for the patterns.
       ...(Array.isArray(site.pages) ? { pages: site.pages.filter(isRecord).map(({ id: _id, ...page }) => page as unknown as SiteSetupPage) } : {}),

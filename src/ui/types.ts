@@ -81,6 +81,8 @@ export interface UiHandlers {
   closeIntegrations(): void;
   /** A step of setting up a site for a document's collection, or Done (see siteSetupSession.ts). */
   siteSetupStep(step: string): void;
+  /** Site setup, Tell items apart by: a field ticked or unticked. */
+  siteSetupRowKey(fieldId: string): void;
   stopIntegrationActionPreview(): void;
   openSiteSetupTestValue(opened: { result: number; field: number } | null): void;
   showSiteSetupTestMatching(result: number): void;

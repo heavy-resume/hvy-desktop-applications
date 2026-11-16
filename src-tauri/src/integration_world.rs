@@ -28,6 +28,7 @@ mod native {
   publish: (value) => window.webkit.messageHandlers.hvyGalaxy.postMessage(JSON.stringify({ kind: 'publish', value })),
   toolbarState: (value) => window.webkit.messageHandlers.hvyGalaxy.postMessage(JSON.stringify({ kind: 'toolbar-state', value })),
   cancel: () => window.webkit.messageHandlers.hvyGalaxy.postMessage(JSON.stringify({ kind: 'cancel' })),
+  location: (value) => window.webkit.messageHandlers.hvyGalaxy.postMessage(JSON.stringify({ kind: 'location', value })),
 };";
 
     pub struct HandlerIvars {

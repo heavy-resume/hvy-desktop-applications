@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { transform } from 'esbuild';
 import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { IntegrationToolbarBrowserState, IntegrationToolbarInspectionState, IntegrationToolbarMessage } from './toolbar';
+import type { IntegrationToolbarBrowserState, IntegrationToolbarInspectionState, IntegrationToolbarMessage, IntegrationToolbarSiteInfo } from './toolbar';
 
 // The toolbar module, as the page runs it: compiled to a script that leaves `IntegrationToolbar` on the window.
 let toolbarScript = '';
@@ -11,7 +11,7 @@ let page: Page;
 
 declare global {
   interface Window {
-    IntegrationToolbar: { mountIntegrationToolbar: (root: HTMLElement, send: (message: IntegrationToolbarMessage) => void) => { setBrowserState(state?: IntegrationToolbarBrowserState): void; setInspectionState(state?: IntegrationToolbarInspectionState): void } };
+    IntegrationToolbar: { mountIntegrationToolbar: (root: HTMLElement, send: (message: IntegrationToolbarMessage) => void) => { setBrowserState(state?: IntegrationToolbarBrowserState): void; setInspectionState(state?: IntegrationToolbarInspectionState): void; setSiteInfo(info: IntegrationToolbarSiteInfo | null): void } };
     mountedToolbar: ReturnType<Window['IntegrationToolbar']['mountIntegrationToolbar']>;
     sent: IntegrationToolbarMessage[];
   }
@@ -81,6 +81,8 @@ describe('integration browser toolbar', () => {
     }));
     expect(await page.locator('.integration-toolbar-status').textContent()).toBe('Select fields, or choose Done to cancel');
     expect(await page.getByLabel('Address').isHidden()).toBe(true);
+    // The page's security stays in view while picking.
+    expect(await page.getByRole('button', { name: 'Site information' }).isVisible()).toBe(true);
     expect(await page.getByRole('button', { name: 'Page actions' }).isHidden()).toBe(true);
     expect(await page.getByRole('button', { name: 'Undo last' }).isDisabled()).toBe(true);
     await page.getByRole('button', { name: 'Done' }).click();
@@ -106,5 +108,48 @@ describe('integration browser toolbar', () => {
     await page.evaluate(() => window.mountedToolbar.setInspectionState({}));
     expect(await page.getByLabel('Address').isVisible()).toBe(true);
     expect(await page.locator('.integration-toolbar-inspection').isHidden()).toBe(true);
+  });
+  it('asks for the site\'s information, shows what the host tells, and closes it', async () => {
+    await page.setViewportSize({ width: 1000, height: 360 });
+    await page.evaluate(() => window.mountedToolbar.setBrowserState({ url: 'https://mail.google.com/mail/u/0/#label/job+spam', allowed: ['https://mail.google.com'] }));
+    await page.getByRole('button', { name: 'Site information' }).click();
+    expect(await page.evaluate(() => window.sent)).toEqual([{ kind: 'site-info', open: true }]);
+    expect(await page.getByRole('button', { name: 'Site information' }).getAttribute('aria-expanded')).toBe('true');
+    await page.evaluate(() => window.mountedToolbar.setSiteInfo({
+      url: 'https://mail.google.com/mail/u/0/#label/job+spam',
+      allowed: ['https://mail.google.com'],
+      profileName: 'Work',
+      certificate: { subject: 'mail.google.com', issuer: 'WR2 (Google Trust Services)', validFrom: '2026-10-20T08:00:00Z', validTo: '2027-01-12T08:00:00Z', sha256: 'AB:CD' },
+      onlySecureContent: true,
+    }));
+    const panel = page.getByRole('region', { name: 'Site information' });
+    expect(await panel.locator('.integration-toolbar-site-info-heading').textContent()).toBe('mail.google.com');
+    const rows = await panel.locator('.integration-toolbar-site-info-row').evaluateAll((elements) => elements.map((row) => [row.querySelector('dt')!.textContent, row.querySelector('dd')!.textContent]));
+    expect(rows).toEqual([
+      ['Connection', 'Secure (HTTPS)'],
+      ['Address', 'https://mail.google.com/mail/u/0/#label/job+spam'],
+      ['Site', 'Allowed for this integration'],
+      ['Profile', 'Work: its sign-ins and cookies'],
+      ['Issued to', 'mail.google.com'],
+      ['Issued by', 'WR2 (Google Trust Services)'],
+      ['Valid', expect.stringMatching(/2026.*–.*2027/)],
+      ['SHA-256', 'AB:CD'],
+    ]);
+
+    // Closed: the host is told, and the panel goes.
+    await page.getByRole('button', { name: 'Close site information' }).click();
+    expect(await page.evaluate(() => window.sent.at(-1))).toEqual({ kind: 'site-info', open: false });
+    expect(await panel.isHidden()).toBe(true);
+
+    // A page not on a secure connection, and a browser that doesn't tell its certificate, say so.
+    await page.evaluate(() => window.mountedToolbar.setSiteInfo({ url: 'http://localhost:5173/', allowed: [], profileName: 'Work', certificate: null, certificateNote: 'This page isn’t on a secure connection, so it has no certificate.', onlySecureContent: false }));
+    expect(await panel.locator('.integration-toolbar-site-info-row.is-warning dd').allTextContents()).toEqual(['Not secure', 'Some of this page loaded without a secure connection']);
+    expect(await panel.locator('.integration-toolbar-site-info-note').textContent()).toBe('This page isn’t on a secure connection, so it has no certificate.');
+    // A page the browser refused says so first, and why.
+    await page.evaluate(() => window.mountedToolbar.setSiteInfo({ url: 'https://expired.example.test/', allowed: [], profileName: 'Work', certificate: null, certificateNote: 'This browser doesn’t show a certificate it refused.', blocked: 'its certificate has expired.' }));
+    expect(await panel.locator('.integration-toolbar-site-info-blocked').textContent()).toBe('Blocked: its certificate has expired.');
+    // Escape closes it too.
+    await page.keyboard.press('Escape');
+    expect(await page.evaluate(() => window.sent.at(-1))).toEqual({ kind: 'site-info', open: false });
   });
 });

@@ -272,6 +272,11 @@ export interface AppState {
       /** The long value opened in full: its result and field. */
       opened: { result: number; field: number } | null;
     } | null;
+    /**
+     * While the list's items open without a link: the fields its rows show (`choices`), and those that tell one row from
+     * another (`chosen`). Null otherwise.
+     */
+    rowKey: { choices: Array<{ id: string; label: string }>; chosen: string[] } | null;
   } | null;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;

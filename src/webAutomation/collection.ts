@@ -7,6 +7,7 @@ import {
   canonicalUrl,
   recordKey,
   validateRecord,
+  type UrlKeyOptions,
   type CollectedRecord,
   type CollectedRecordProvenance,
   type CollectedRecordState,
@@ -94,6 +95,28 @@ export interface CollectionSite {
    * that reads only lists. A page that changes so the list's next item can't be found stops the start page there.
    */
   browse?: true;
+  /**
+   * The part of its addresses after # names the page (Gmail's `#label/…/<message>`), so it is kept in their keys: without
+   * it every item would be one. Elsewhere a fragment is a place on the page. Set by setup, when opening an item changed
+   * only that part of the address.
+   */
+  keepUrlFragment?: true;
+  /**
+   * Its list's items open without a link (the page's script opens one on a click), so a run reads them by clicking
+   * through (`browse`): the fields, as its list shows them, that tell one row from another. They are its records' key,
+   * so a row already collected is skipped without clicking it, and its address is where clicking it went.
+   */
+  rowKey?: string[];
+}
+
+/** A site's settings beyond its id and name, as a block or a pasted setup stores them: unset unless stored as set. */
+export function readSiteSettings(site: Record<string, unknown>): Pick<CollectionSite, 'browse' | 'keepUrlFragment' | 'rowKey'> {
+  const rowKey = Array.isArray(site.rowKey) ? site.rowKey.filter((field): field is string => typeof field === 'string' && field.trim() !== '') : [];
+  return {
+    ...(site.browse === true ? { browse: true as const } : {}),
+    ...(site.keepUrlFragment === true ? { keepUrlFragment: true as const } : {}),
+    ...(rowKey.length ? { rowKey } : {}),
+  };
 }
 
 /** The document snapshot stored in a galaxy.web-collection block. Its patterns are its own: runs use nothing else. */
@@ -181,6 +204,8 @@ export interface ExtractItem {
   values?: Record<string, unknown>;
   /** The site setup whose list showed it, for its problem. */
   siteId?: string;
+  /** Its record's key, when its address doesn't make it (an item opened without a link, keyed by its row). */
+  key?: string;
 }
 
 export interface CollectionRunState {
@@ -331,6 +356,14 @@ export async function testSitePattern(
   });
 }
 
+/** A row of a list a run takes: its link (none on a site whose items open without one), what tells it apart, and what it shows. */
+interface ListedItem {
+  link: string | null;
+  id: string;
+  title: string;
+  values: Record<string, unknown>;
+}
+
 interface ActiveRun {
   state: CollectionRunState;
   definition: CollectionDefinition;
@@ -345,6 +378,8 @@ interface ActiveRun {
   consumer: RecordConsumer;
   /** Each item's site setup (its list's), for its problem. */
   itemSites: Map<string, string>;
+  /** Each item's key, by its address, where the address doesn't make it: an item opened without a link (`rowKey`). */
+  itemKeys: Map<string, string>;
   /** An `extract` run's items not opened yet, and those whose page is open and being read: each item's key by its URL. */
   waiting: Map<string, string>;
   reading: Map<string, string>;
@@ -417,6 +452,7 @@ export class CollectionService {
       const origin = new URL(item.url).origin;
       sites.set(origin, [...(sites.get(origin) ?? []), item]);
       if (item.siteId) run.itemSites.set(item.url, item.siteId);
+      if (item.key) run.itemKeys.set(item.url, item.key);
       const key = this.keyFor(run, item.url, item.values ?? {});
       if (key) run.waiting.set(item.url, key);
     }
@@ -529,6 +565,7 @@ export class CollectionService {
       attentionTurn: Promise.resolve(),
       consumer,
       itemSites: new Map(),
+      itemKeys: new Map(),
       waiting: new Map(),
       reading: new Map(),
       state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, listed: 0, leftUnread: 0, problems: 0, startPageProblems: {}, problemPages: [], listedItems: [], startPages: {}, attention: null, error: null },
@@ -647,9 +684,9 @@ export class CollectionService {
     progress: StartPageProgress,
     fixed: Record<string, unknown>,
     start: { pattern: SitePatternDefinition; match: PatternMatch; inspection: PageInspection },
-  ): Promise<Array<{ link: string; title: string; values: Record<string, unknown> }>> {
+  ): Promise<Array<ListedItem & { link: string }>> {
     const { host, emit } = this.deps;
-    const queue: Array<{ link: string; title: string; values: Record<string, unknown> }> = [];
+    const queue: Array<ListedItem & { link: string }> = [];
     const seen = new Set<string>();
     // This page's limits, or the collection's defaults: items to take from its list (known ones included), and list pages
     // to walk.
@@ -665,17 +702,18 @@ export class CollectionService {
       const pattern: SitePatternDefinition = listing.pattern;
       // A site read by clicking through its list: this page's new items, opened from it before the next page.
       const browsing = run.definition.sites.some((site) => site.id === pattern.siteId && site.browse) && !pattern.itemCommandId;
-      const clicking: Array<{ link: string; title: string; values: Record<string, unknown> }> = [];
+      const clicking: ListedItem[] = [];
       let full = false;
       let newLinks = 0;
       let knownOnPage = 0;
       for (const record of listing.match.records) {
         this.checkStopped(run);
-        const link = itemLink(pattern, record.values, listingUrl);
-        if (!link) continue;
-        const linkKey = canonicalUrl(link, run.definition.ignoredQueryParameters);
-        if (seen.has(linkKey)) continue;
-        seen.add(linkKey);
+        // A row without a link is taken only on a site read by clicking through its list.
+        const row = this.listedRow(run, pattern, record.values, listingUrl, fixed);
+        if (!row || (!row.link && !browsing)) continue;
+        const { link, title, values: listingValues } = row;
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
         newLinks += 1;
         // The first maxItems of the list, known or not: the item past the limit is left for the next run, so it isn't counted.
         if (progress.found >= maxItems) {
@@ -683,10 +721,11 @@ export class CollectionService {
           full = true;
           break;
         }
-        const listingValues = { ...fixed, ...this.mapFields(pattern, record.values) };
+        if (link && pattern.siteId) run.itemSites.set(link, pattern.siteId);
         // A key from listing values alone lets the consumer skip the page; field keys
-        // that only appear on the detail page are checked by the consumer when it receives the record.
-        const knownKey = this.keyFor(run, link, listingValues);
+        // that only appear on the detail page are checked by the consumer when it receives the record. A row without a
+        // link is keyed by its row.
+        const knownKey = link ? this.keyFor(run, link, listingValues) : row.id;
         if (knownKey && run.consumer.isKnown?.(knownKey)) {
           progress.found += 1;
           run.state.skipped += 1;
@@ -696,8 +735,12 @@ export class CollectionService {
           continue;
         }
         progress.found += 1;
-        const title = typeof listingValues.title === 'string' && listingValues.title ? listingValues.title : link;
-        if (pattern.siteId) run.itemSites.set(link, pattern.siteId);
+        // Clicked in its turn: its address is where the click goes, so it isn't listed before then.
+        if (!link) {
+          clicking.push(row);
+          progress.toCollect += 1;
+          continue;
+        }
         const itemCommandId = pattern.itemCommandId;
         if (itemCommandId) {
           // Side-pane board: the item opens beside the listing; there is no navigation to undo. It is read as the list
@@ -731,7 +774,8 @@ export class CollectionService {
           emit('collection', `leave unread ${knownKey}`);
           continue;
         }
-        (browsing ? clicking : queue).push({ link, title, values: listingValues });
+        if (browsing) clicking.push(row);
+        else queue.push({ ...row, link });
         progress.toCollect += 1;
       }
       // A page that ends at the limit ends the list too: a list shown only as far as the limit has no item past it.
@@ -778,7 +822,7 @@ export class CollectionService {
     progress: StartPageProgress,
     listing: NonNullable<ListingResolution>,
     listingUrl: string,
-    items: Array<{ link: string; title: string; values: Record<string, unknown> }>,
+    items: ListedItem[],
   ): Promise<boolean> {
     const { host, emit } = this.deps;
     const { pattern } = listing;
@@ -792,19 +836,22 @@ export class CollectionService {
     };
     let rows = listing.match.records;
     let listUrl = listingUrl;
+    // Which item a row is: its link's address, or its key fields (`listedRow`).
+    const fixed = { ...(startPage.values ?? {}) };
+    const rowId = (record: (typeof rows)[number]) => this.listedRow(run, pattern, record.values, listUrl, fixed)?.id;
     // Each item's row in the list: the list is read again only as far as the next one's, not scrolled for every row.
-    const positions = new Map(items.map((item) => [item.link, rows.findIndex((record) => itemLink(pattern, record.values, listUrl) === item.link)]));
+    const positions = new Map(items.map((item) => [item.id, rows.findIndex((record) => rowId(record) === item.id)]));
     // The site's item page patterns: only those are run while waiting for a click to open an item.
     const details = run.definition.patterns.filter((candidate) => candidate.role === 'detail' && (!pattern.siteId || candidate.siteId === pattern.siteId));
     // What the page shows of an item now, if anything (a pane may show one before any click): an item opened shows another.
     let shown = await this.shownItem(run, lease, details);
     for (const [index, item] of items.entries()) {
       this.checkStopped(run);
-      const row = rows.find((record) => itemLink(pattern, record.values, listUrl) === item.link);
+      const row = rows.find((record) => rowId(record) === item.id);
       if (!row) return stop(`The list changed while clicking through it: ${item.title} wasn’t in it any more.`);
       progress.current = item.title;
       emit('collection', `${startPage.id}: clicking ${item.title}`);
-      const clicked = await this.paced(run, lease, item.link, () => host.runCommand(lease.workerId, { pattern: clicking, commandId: OPEN_BY_CLICK_COMMAND_ID, recordRef: row.ref }), BROWSE_DELAY_MS);
+      const clicked = await this.paced(run, lease, item.link ?? listUrl, () => host.runCommand(lease.workerId, { pattern: clicking, commandId: OPEN_BY_CLICK_COMMAND_ID, recordRef: row.ref }), BROWSE_DELAY_MS);
       if (clicked.status !== 'executed') return stop(`Clicking ${item.title} in the list didn’t work (${clicked.status}).`);
       const deadline = this.deps.clock.now() + OPENED_BY_CLICK_MS;
       // Opened: the page shows another item than before the click, or this one (a pane may show it before any click).
@@ -815,10 +862,16 @@ export class CollectionService {
         opened = await this.shownItem(run, lease, details);
       }
       shown = opened;
-      await this.tracked(run, progress, () => this.writeDetail(run, lease, item.link, opened.inspection, item.values));
+      // An item opened without a link is where the click went, keyed by its row.
+      const url = item.link ?? opened.inspection.url;
+      if (!item.link) {
+        run.itemKeys.set(url, item.id);
+        if (pattern.siteId) run.itemSites.set(url, pattern.siteId);
+      }
+      await this.tracked(run, progress, () => this.writeDetail(run, lease, url, opened.inspection, item.values));
       // Back to the list: still beside the item (a pane), or Back from the item's page. Read as far as the next item's row.
       const next = items[index + 1];
-      const upTo = next ? (positions.get(next.link) ?? 0) + 1 : 1;
+      const upTo = next ? (positions.get(next.id) ?? 0) + 1 : 1;
       let list = this.matchPattern(await this.inspectAt(run, lease, upTo, [pattern]), pattern);
       if (!list) {
         await this.paced(run, lease, listUrl, () => host.back(lease.workerId), false);
@@ -1028,7 +1081,28 @@ export class CollectionService {
   }
 
   private keyFor(run: ActiveRun, url: string, values: Record<string, unknown>): string | null {
-    return recordKey(run.definition.key ?? { kind: 'url' }, url, values, run.definition.ignoredQueryParameters);
+    return run.itemKeys.get(url) ?? recordKey(run.definition.key ?? { kind: 'url' }, url, values, this.urlOptions(run, run.itemSites.get(url)));
+  }
+
+  /** How an item's addresses are told apart: the collection's ignored parameters, and whether its site keeps the fragment. */
+  private urlOptions(run: ActiveRun, siteId: string | undefined): UrlKeyOptions {
+    const site = run.definition.sites.find((candidate) => candidate.id === siteId);
+    return { ignoredQueryParameters: run.definition.ignoredQueryParameters, keepUrlFragment: site?.keepUrlFragment === true };
+  }
+
+  /**
+   * A row of a list, as a run takes it: its link, what its list shows (with the start page's fixed values), and what
+   * tells it from the other rows: its link's address, or, on a site whose items open without one, its key fields
+   * (`CollectionSite.rowKey`). Null for a row with neither.
+   */
+  private listedRow(run: ActiveRun, pattern: SitePatternDefinition, recordValues: Record<string, unknown>, listingUrl: string, fixed: Record<string, unknown>): ListedItem | null {
+    const values = { ...fixed, ...this.mapFields(pattern, recordValues) };
+    const link = itemLink(pattern, recordValues, listingUrl);
+    const title = typeof values.title === 'string' && values.title ? values.title : null;
+    if (link) return { link, id: canonicalUrl(link, this.urlOptions(run, pattern.siteId)), title: title ?? link, values };
+    const rowKey = run.definition.sites.find((site) => site.id === pattern.siteId)?.rowKey;
+    const id = rowKey ? recordKey({ kind: 'fields', fields: rowKey }, '', values) : null;
+    return id ? { link: null, id, title: title ?? id.replaceAll('\u001f', ' · '), values } : null;
   }
 
   private writeRecord(run: ActiveRun, url: string, values: Record<string, unknown>, patternId: string): void {
@@ -1047,7 +1121,7 @@ export class CollectionService {
     const siteId = run.itemSites.get(url) ?? run.definition.patterns.find((pattern) => pattern.id === patternId)?.siteId;
     const record: CollectedRecord = {
       // A record whose key fields are missing is still reported, keyed by its URL and marked invalid.
-      key: key ?? canonicalUrl(url, run.definition.ignoredQueryParameters),
+      key: key ?? canonicalUrl(url, this.urlOptions(run, siteId)),
       url,
       values: { ...values, url },
       provenance: { sourceUrl: url, collectedAt: this.deps.clock.now(), ...(patternId ? { patternId } : {}), ...(siteId ? { siteId } : {}) },

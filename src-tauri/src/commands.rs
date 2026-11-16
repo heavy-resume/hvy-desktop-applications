@@ -437,6 +437,8 @@ fn write_plugin_project_build(request: WritePluginProjectBuildRequest) -> AppRes
 
 const INTEGRATION_BROWSER_LABEL: &str = "integration-browser";
 const INTEGRATION_TOOLBAR_HEIGHT: f64 = 52.0;
+/// The toolbar's height while it shows Site information, below its bar and over the page.
+const INTEGRATION_SITE_INFO_HEIGHT: f64 = 360.0;
 #[cfg(target_os = "macos")]
 const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 15.0;
 #[cfg(not(target_os = "macos"))]
@@ -489,7 +491,26 @@ fn receive_integration_page_message(app: &AppHandle, action_mode: &AtomicBool, p
         Some("publish") => emit_integration_result(app, action_mode, profile_id, value),
         Some("toolbar-state") => show_integration_toolbar_state(app, profile_id, &value),
         Some("cancel") => cancel_integration_inspection(app, action_mode, profile_id),
+        Some("location") => show_integration_location(app, profile_id, value.as_str().unwrap_or_default()),
         _ => {}
+    }
+}
+
+/// Where the page is now, as the page reports it moving without a page load (a single-page site going to another of its
+/// pages): the toolbar's address follows, and so does what the browser takes as its address. Only an address on the
+/// origin it loaded is taken, as no move without a load leaves it: a page can't make the toolbar show another site.
+fn show_integration_location(app: &AppHandle, profile_id: &str, href: &str) {
+    let Ok(url) = href.parse::<tauri::Url>() else { return };
+    let Ok(current) = integration_current_url(profile_id) else { return };
+    let Ok(mut current) = current.lock() else { return };
+    if current.as_ref().map(tauri::Url::origin) != Some(url.origin()) {
+        return;
+    }
+    *current = Some(url.clone());
+    let allowed = integration_allowed_origins(profile_id).ok().and_then(|origins| origins.lock().ok().map(|origins| origins.clone())).unwrap_or_default();
+    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+        let state = serde_json::json!({ "url": url.as_str(), "allowed": allowed });
+        let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
     }
 }
 
@@ -644,6 +665,8 @@ enum IntegrationToolbarMessage {
     Navigate { url: String },
     ToolbarAction { action: String },
     InspectorControl { id: String },
+    /// Site information, opened (the toolbar is made taller over the page for it) or closed.
+    SiteInfo { open: bool },
 }
 
 type IntegrationToolbarHandler = Arc<dyn Fn(IntegrationToolbarMessage) + Send + Sync>;
@@ -1561,6 +1584,16 @@ fn allowed_integration_url(url: &tauri::Url) -> bool {
     allowed_integration_url_for_origins(url, &[])
 }
 
+/// Whether going from one address to the other only changes the part after #: the page stays, and no page load follows
+/// (a single-page site such as Gmail, whose `#label/…/<message>` is the page shown).
+fn same_document_url(current: &tauri::Url, next: &tauri::Url) -> bool {
+    let mut current_document = current.clone();
+    current_document.set_fragment(None);
+    let mut next_document = next.clone();
+    next_document.set_fragment(None);
+    current_document == next_document && current.fragment() != next.fragment()
+}
+
 fn is_local_integration_http(url: &tauri::Url) -> bool {
     url.scheme() == "http" && url.host_str().is_some_and(|host| {
         host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|address| address.is_loopback())
@@ -1689,15 +1722,25 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
             window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
                 .map_err(|error| AppError::Message(error.to_string()))?;
-            if profile_current_url.lock().map(|current| current.as_ref() == Some(&url)).unwrap_or(false) {
+            let current_url = profile_current_url.lock().map(|current| current.clone()).unwrap_or(None);
+            // On the page already, or going to another part of it (only the part after # changes): no page load comes to
+            // start picking or the extraction waiting for one, so it starts now.
+            let on_page = current_url.as_ref() == Some(&url);
+            let same_document = current_url.as_ref().is_some_and(|current| same_document_url(current, &url));
+            if !on_page {
+                content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            }
+            // No load reports where it is now, so it is noted here.
+            if same_document {
+                *profile_current_url.lock().map_err(|error| AppError::Message(error.to_string()))? = Some(url.clone());
+            }
+            if on_page || same_document {
                 if action_mode_pending.load(Ordering::SeqCst) {
                     integration_world::eval(&content, format!("{}\n{}", integration_inspector_source(&profile_id), integration_inspection_start(&profile_id)))
                         .map_err(|error| AppError::Message(error.to_string()))?;
                 } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
                     run_integration_extraction(&app, &content, action_mode_pending.clone(), &profile_id, &extraction).map_err(|error| AppError::Message(error.to_string()))?;
                 }
-            } else {
-                content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             }
             if foreground {
                 raise_integration_window(&window)?;
@@ -1883,6 +1926,12 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 }
                 return false;
             }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://location/") {
+                if let Ok(href) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ()).and_then(|bytes| serde_json::from_slice::<String>(&bytes).map_err(|_| ())) {
+                    show_integration_location(&integration_app, &result_profile_id, &href);
+                }
+                return false;
+            }
             if requested_url.as_str() == "hvy-integration://inspection-cancel" {
                 cancel_integration_inspection(&integration_app, &navigation_action_mode, &result_profile_id);
                 return false;
@@ -1910,6 +1959,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             action_mode_pending.clone(),
             profile_id.clone(),
         )?;
+        keep_fraudulent_website_warnings(&remote_webview).map_err(|error| AppError::Message(error.to_string()))?;
         let world_app = app.clone();
         let world_action_mode = action_mode_pending.clone();
         let world_profile_id = profile_id.clone();
@@ -1922,6 +1972,71 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let toolbar_profile_id = profile_id.clone();
         let toolbar_origins = toolbar_allowed_origins;
         let toolbar_current_url = profile_current_url;
+        // Site information: whether it is open (the window's resizing keeps the toolbar's height then), and the browser
+        // profile it names.
+        let site_info_open = Arc::new(AtomicBool::new(false));
+        let toolbar_site_info_open = site_info_open.clone();
+        let toolbar_site_label = toolbar_label.clone();
+        // Site information, opened on the page shown, or on a page the browser refused (`blocked`: its address, and why):
+        // the toolbar made taller over the page, and told what Galaxy knows of the site.
+        let show_site_info: Arc<dyn Fn(Option<(String, String)>) + Send + Sync> = {
+            let app = app.clone();
+            let label = toolbar_label.clone();
+            let window = native_window.clone();
+            let open = site_info_open.clone();
+            let current_url = toolbar_current_url.clone();
+            let origins = toolbar_origins.clone();
+            let page = remote_webview.clone();
+            let profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
+            Arc::new(move |blocked: Option<(String, String)>| {
+                open.store(true, Ordering::SeqCst);
+                let Some(toolbar) = app.get_webview(&label) else { return };
+                let width = window.inner_size().map(|size| size.to_logical::<f64>(scale).width).unwrap_or(0.0);
+                let _ = toolbar.set_size(tauri::LogicalSize::new(width, INTEGRATION_SITE_INFO_HEIGHT));
+                let allowed = origins.lock().map(|origins| origins.clone()).unwrap_or_default();
+                let profile_name = profile_name.clone();
+                // A refused page has no certificate to read: the page shown is still the one before it.
+                if let Some((url, reason)) = blocked {
+                    let info = serde_json::json!({
+                        "url": url,
+                        "allowed": allowed,
+                        "profileName": profile_name,
+                        "certificate": null,
+                        "certificateNote": "This browser doesn’t show a certificate it refused.",
+                        "blocked": reason,
+                    });
+                    let _ = toolbar.eval(format!("window.hvySetSiteInfo?.({info})"));
+                    return;
+                }
+                let url = current_url.lock().ok().and_then(|url| url.as_ref().map(ToString::to_string)).unwrap_or_default();
+                let secure = url.starts_with("https:");
+                let _ = integration_page_security(&page, move |certificate, only_secure_content| {
+                    let note = if certificate.is_some() {
+                        None
+                    } else if !secure {
+                        Some("This page isn’t on a secure connection, so it has no certificate.")
+                    } else if cfg!(target_os = "macos") {
+                        Some("The certificate couldn’t be read.")
+                    } else {
+                        Some("This browser doesn’t show certificate details for a secure connection.")
+                    };
+                    let info = serde_json::json!({
+                        "url": url,
+                        "allowed": allowed,
+                        "profileName": profile_name,
+                        "certificate": certificate,
+                        "certificateNote": note,
+                        "onlySecureContent": only_secure_content,
+                    });
+                    let _ = toolbar.eval(format!("window.hvySetSiteInfo?.({info})"));
+                });
+            })
+        };
+        let toolbar_show_site_info = show_site_info.clone();
+        // A page the browser refuses for its certificate or secure connection opens Site information on it, saying why.
+        let refused_show_site_info = show_site_info.clone();
+        watch_refused_pages(&remote_webview, Arc::new(move |url: String, reason: String| refused_show_site_info(Some((url, reason)))))
+            .map_err(|error| AppError::Message(error.to_string()))?;
         // What the toolbar asks (src/integrationToolbar/toolbar.ts) comes over IPC (integration_toolbar_message), to this
         // browser's handler: the toolbar is known by its webview's label.
         register_integration_toolbar_handler(&toolbar_label, Arc::new(move |message: IntegrationToolbarMessage| match message {
@@ -1942,6 +2057,16 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                 "close" => { let _ = toolbar_window.close(); }
                 _ => {}
             },
+            IntegrationToolbarMessage::SiteInfo { open } => {
+                if open {
+                    toolbar_show_site_info(None);
+                    return;
+                }
+                toolbar_site_info_open.store(false, Ordering::SeqCst);
+                let Some(toolbar) = toolbar_app.get_webview(&toolbar_site_label) else { return };
+                let width = toolbar_window.inner_size().map(|size| size.to_logical::<f64>(scale).width).unwrap_or(0.0);
+                let _ = toolbar.set_size(tauri::LogicalSize::new(width, toolbar_view_height));
+            }
             IntegrationToolbarMessage::InspectorControl { id } => {
                 // A button the page's picker put on the toolbar, by its id.
                 if !id.is_empty() && id.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-') {
@@ -1996,9 +2121,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     position: tauri::LogicalPosition::new(0.0, toolbar_view_height).into(),
                     size: tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)).into(),
                 });
+                let height = if site_info_open.load(Ordering::SeqCst) { INTEGRATION_SITE_INFO_HEIGHT } else { toolbar_view_height };
                 let _ = resized_toolbar.set_bounds(tauri::Rect {
                     position: tauri::LogicalPosition::new(0.0, 0.0).into(),
-                    size: tauri::LogicalSize::new(logical_size.width, toolbar_view_height).into(),
+                    size: tauri::LogicalSize::new(logical_size.width, height).into(),
                 });
             }
         });

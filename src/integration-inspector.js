@@ -925,6 +925,23 @@
     else sendMessage('toolbar-state', value);
   };
 
+  // Where the page is, told to the host as it changes without a page load (a single-page site such as Gmail going to
+  // another message), so the toolbar's address follows it. A host with its own way to know (Electron's in-page
+  // navigation event) has no location method, and is not told; the host takes only an address on the page's own origin.
+  if (host.location || !host.publish) {
+    let reportedLocation = window.location.href;
+    const followLocation = () => {
+      if (window.location.href === reportedLocation) return;
+      reportedLocation = window.location.href;
+      if (host.location) host.location(reportedLocation);
+      else sendMessage('location', reportedLocation);
+    };
+    window.addEventListener('hashchange', followLocation);
+    window.addEventListener('popstate', followLocation);
+    // A page's own history.pushState tells no one: looked at now and then.
+    setInterval(followLocation, 1000);
+  }
+
   const snapshotByteLength = (element) => new TextEncoder().encode(JSON.stringify(snapshot(element))).byteLength;
 
   // `reading`: a field read from part of the element, shown as such: its label, and the children it leaves out, struck out.

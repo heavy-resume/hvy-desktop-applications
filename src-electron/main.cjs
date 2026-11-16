@@ -769,6 +769,8 @@ const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 
 // The isolated world Galaxy's scripts run in, in every page it reads (runInIntegrationWorld).
 const INTEGRATION_WORLD_ID = 1001;
 const INTEGRATION_TOOLBAR_HEIGHT = 52;
+/** The toolbar's height while it shows Site information, below its bar and over the page. */
+const INTEGRATION_SITE_INFO_HEIGHT = 360;
 // Web automation's browser host: workers, the sign-in window, and inspection (web-automation-host.cjs).
 const webAutomationHost = createWebAutomationHost({
   // A profile's saved cookies, shared with the integration browser through the integration vault, once it is set up.
@@ -814,8 +816,66 @@ ipcMain.on('hvy:integration-toolbar', (event, message) => {
   } else if (message.kind === 'navigate' && typeof message.url === 'string') {
     if (isAllowedIntegrationUrl(message.url, browser.allowedOrigins)) void browser.contents.loadURL(message.url);
     else requestIntegrationNavigationApproval(browser, message.url, 'address');
+  } else if (message.kind === 'site-info') {
+    browser.siteInfoOpen = message.open === true;
+    browser.layout();
+    if (browser.siteInfoOpen) void browser.toolbarContents.executeJavaScript(`window.hvySetSiteInfo?.(${JSON.stringify(integrationSiteInfo(browser))})`);
   }
 });
+
+/** Why Chromium refused a page, for Site information: its certificate, or its secure connection. Null for anything else. */
+const BLOCKED_REASONS = {
+  'net::ERR_CERT_DATE_INVALID': 'its certificate has expired, or isn’t valid yet.',
+  'net::ERR_CERT_AUTHORITY_INVALID': 'its certificate isn’t from an authority this browser trusts.',
+  'net::ERR_CERT_COMMON_NAME_INVALID': 'its certificate is for a different site.',
+  'net::ERR_CERT_REVOKED': 'its certificate has been revoked.',
+};
+function blockedReason(description) {
+  const code = String(description || '');
+  if (BLOCKED_REASONS[code]) return BLOCKED_REASONS[code];
+  if (code.startsWith('net::ERR_CERT_')) return `its certificate isn’t valid (${code.slice('net::'.length)}).`;
+  if (code.startsWith('net::ERR_SSL_')) return `a secure connection to it couldn’t be set up (${code.slice('net::'.length)}).`;
+  return null;
+}
+
+/** What Site information shows of the page's site: its address, whether it is allowed, its profile, and its certificate. */
+function integrationSiteInfo(browser, url = browser.contents.getURL()) {
+  let host = '';
+  let secure = false;
+  try {
+    const parsed = new URL(url);
+    host = parsed.hostname;
+    secure = parsed.protocol === 'https:';
+  } catch {
+    // Not an address: nothing loaded yet.
+  }
+  const certificate = secure ? browser.certificates.get(host) : null;
+  return {
+    url,
+    allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [],
+    profileName: browser.name,
+    certificate: certificate ? certificateSummary(certificate) : null,
+    ...(certificate ? {} : { certificateNote: secure ? 'The certificate couldn’t be read.' : 'This page isn’t on a secure connection, so it has no certificate.' }),
+  };
+}
+
+/** A certificate as Site information shows it: who it was issued to and by, when it is valid, its SHA-256 fingerprint. */
+function certificateSummary(certificate) {
+  const name = (principal) => {
+    const organization = principal?.organizations?.[0];
+    const commonName = principal?.commonName;
+    if (commonName && organization && commonName !== organization) return `${commonName} (${organization})`;
+    return commonName || organization || 'Unknown';
+  };
+  const der = Buffer.from(String(certificate.data).replace(/-----[^-]+-----/g, '').replace(/\s+/g, ''), 'base64');
+  return {
+    subject: name(certificate.subject),
+    issuer: name(certificate.issuer),
+    validFrom: new Date(certificate.validStart * 1000).toISOString(),
+    validTo: new Date(certificate.validExpiry * 1000).toISOString(),
+    sha256: crypto.createHash('sha256').update(der).digest('hex').toUpperCase().match(/.{2}/g).join(':'),
+  };
+}
 
 // What an integration browser's preload asks (integration-preload.cjs): the isolated world Galaxy's scripts run in, which
 // it gives Galaxy's channel. Only an integration browser's page is told.
@@ -1537,14 +1597,21 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     });
     integrationWindow.contentView.addChildView(browserView);
     integrationWindow.contentView.addChildView(toolbarView);
+    // The certificate each host presented, as Chromium verified it (its verdict stands), for Site information.
+    const certificates = new Map();
+    browserView.webContents.session.setCertificateVerifyProc((request, callback) => {
+      certificates.set(request.hostname, request.certificate);
+      callback(-3);
+    });
     const layoutBrowserView = () => {
       const [width, height] = integrationWindow.getContentSize();
-      toolbarView.setBounds({ x: 0, y: 0, width, height: INTEGRATION_TOOLBAR_HEIGHT });
+      // Site information makes the toolbar taller, over the page, which stays where it is.
+      toolbarView.setBounds({ x: 0, y: 0, width, height: browser?.siteInfoOpen ? INTEGRATION_SITE_INFO_HEIGHT : INTEGRATION_TOOLBAR_HEIGHT });
       browserView.setBounds({ x: 0, y: INTEGRATION_TOOLBAR_HEIGHT, width, height: Math.max(0, height - INTEGRATION_TOOLBAR_HEIGHT) });
     };
     layoutBrowserView();
     integrationWindow.on('resize', layoutBrowserView);
-    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null, integrationId, pageId };
+    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null, integrationId, pageId, certificates, siteInfoOpen: false, layout: layoutBrowserView };
     integrationBrowsers.set(profileId, browser);
     buildMenu();
     const browserUserAgent = browser.contents.getUserAgent()
@@ -1576,6 +1643,19 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
       event.preventDefault();
       requestIntegrationNavigationApproval(browser, requestedUrl, 'main-frame');
+    });
+    // A page refused for its certificate or secure connection: Site information opens on it, saying why.
+    browser.contents.on('did-fail-load', (_event, _errorCode, errorDescription, validatedURL, isMainFrame) => {
+      const reason = isMainFrame ? blockedReason(errorDescription) : null;
+      if (!reason) return;
+      browser.siteInfoOpen = true;
+      browser.layout();
+      void browser.toolbarContents.executeJavaScript(`window.hvySetSiteInfo?.(${JSON.stringify({ ...integrationSiteInfo(browser, validatedURL), blocked: reason })})`);
+    });
+    // A move without a page load (a single-page site going to another of its pages): the toolbar's address follows it.
+    browser.contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
     });
     browser.contents.on('did-finish-load', () => {
       const currentUrl = browser.contents.getURL();
@@ -1636,7 +1716,11 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.pendingExtraction = pendingExtraction || null;
   await loadIntegrationToolbar(browser.toolbarContents);
   browser.window.removeMenu();
-  if (browser.contents.getURL() === url && !browser.contents.isLoadingMainFrame()) {
+  const currentUrl = browser.contents.getURL();
+  // On the page already, or going to another part of it (only the part after # changes): no load comes to start picking
+  // or the extraction waiting for one, so it starts now.
+  if (!browser.contents.isLoadingMainFrame() && (currentUrl === url || sameDocumentUrl(currentUrl, url))) {
+    if (currentUrl !== url) await runInIntegrationWorld(browser.contents, `location.assign(${JSON.stringify(url)})`);
     await runInIntegrationWorld(browser.contents, INTEGRATION_INSPECTOR);
     if (browser.actionModePending) {
       await runInIntegrationWorld(browser.contents, browser.inspectionStart || DEFAULT_INSPECTION_START);
@@ -1647,6 +1731,20 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     await browser.contents.loadURL(url);
   }
   if (foreground) raiseWindow(browser.window);
+}
+
+/** Whether going from one address to the other only changes the part after #: the page stays, and no load follows. */
+function sameDocumentUrl(current, next) {
+  try {
+    const before = new URL(current);
+    const after = new URL(next);
+    if (before.hash === after.hash) return false;
+    before.hash = '';
+    after.hash = '';
+    return before.href === after.href;
+  } catch {
+    return false;
+  }
 }
 
 function isAllowedIntegrationUrl(value, allowedOrigins = null) {

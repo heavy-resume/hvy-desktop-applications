@@ -115,7 +115,8 @@ interface InspectorApi {
 declare global {
   interface Window {
     __hvyGalaxyInspector: InspectorApi;
-    __hvyGalaxyHost?: { publish?: (value: unknown) => void; toolbarState?: (value: unknown) => void; cancel?: () => void };
+    __hvyGalaxyHost?: { publish?: (value: unknown) => void; toolbarState?: (value: unknown) => void; cancel?: () => void; location?: (href: string) => void };
+    __locations?: string[];
     __toolbarState?: unknown;
     __commandRecordingResult?: unknown;
     __readyCheckResult?: unknown;
@@ -660,6 +661,34 @@ describe('integration structural inspector', () => {
     expect(result.kind).toBe('integration-target-collection');
     expect(result.isPane, result.box).toBe(true);
     expect(result.records).toEqual([['Senior Engineer', 'Build the console.']]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('tells a host that asks where the page is as it moves without a page load, and tells no host that knows its own way', async () => {
+    await page.goto('about:blank');
+    await page.setContent('<main>Inbox</main>');
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__locations = [];
+      window.__hvyGalaxyHost = { publish: () => undefined, location: (href) => window.__locations!.push(href) };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    await page.evaluate(() => { window.location.hash = '#label/job+spam/FMfcgz'; });
+    await page.waitForFunction(() => window.__locations!.length === 1);
+    expect(await page.evaluate(() => window.__locations)).toEqual([expect.stringMatching(/#label\/job\+spam\/FMfcgz$/)]);
+
+    // A host with its own way to know (Electron's in-page navigation event) has no location method: nothing is sent.
+    const other = await browser.newPage();
+    await other.setContent('<main>Inbox</main>');
+    await other.evaluate(() => {
+      window.__locations = [];
+      window.__hvyGalaxyHost = { publish: () => undefined };
+    });
+    await other.addScriptTag({ content: inspectorSource });
+    await other.evaluate(() => { window.location.hash = '#inbox'; });
+    await other.waitForTimeout(1_200);
+    expect(await other.evaluate(() => window.__locations)).toEqual([]);
+    await other.close();
     expect(pageErrors).toEqual([]);
   });
 

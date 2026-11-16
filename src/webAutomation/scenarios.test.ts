@@ -558,6 +558,38 @@ describe('mock integration: job search flow', () => {
     expect(unread.records.map((record) => record.problem)).toEqual(['It didn’t look as its site setup expects.', 'It didn’t look as its site setup expects.']);
   });
 
+  it('14c. rows without a link: a click-through site tells them apart by the fields its rows show, records each where its click went, and skips those it has without clicking', async () => {
+    const opener = { selected: { shape: 'card' } };
+    // The list's rows show no link: its page's script opens each on a click.
+    const { linkFieldId: _linkFieldId, ...unlinked } = atsListingPattern;
+    const rows = { ...unlinked, fields: unlinked.fields.filter((field) => field.kind !== 'link') };
+    const boards = listingCollection([ACME], { patterns: [] });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, {
+      id: 'acme-ats', name: 'acme-ats', browse: true, rowKey: ['title'],
+      patterns: [{ ...rows, siteId: 'acme-ats', matcher: { pattern: { opener }, commands: {} } }, { ...atsDetailPattern, siteId: 'acme-ats' }],
+    });
+    expect(await flow!.collect(setup)).toMatchObject({ status: 'done', collected: 5, problems: 0 });
+    // Keyed by its row's title; its address is where clicking it went.
+    expect(flow!.items.get('Frontend Engineer')).toMatchObject({ state: 'ok', url: `${ATS_ORIGIN}/acme/jobs/eng-3`, fields: { company: 'Acme' } });
+    expect(flow!.print()).toContain('click open-item-by-click on acme-eng-3');
+
+    // Run again: every row is one it has, known by its title, so none is clicked.
+    const again = await flow!.collect(setup);
+    expect(again).toMatchObject({ status: 'done', collected: 0, skipped: 5 });
+    expect(flow!.print().split('run-2 started')[1]).not.toContain('open-item-by-click');
+
+    // Setup's Test finds its items by clicking through too: each where its click went, with its row's key, then reads
+    // their pages as a run would, keyed the same.
+    const { items } = await flow!.listSetupExamples(setup, ACME, 2);
+    expect(items).toEqual([
+      { url: `${ATS_ORIGIN}/acme/jobs/eng-1`, key: 'Senior Engineer', values: { title: 'Senior Engineer' } },
+      { url: `${ATS_ORIGIN}/acme/jobs/eng-2`, key: 'Platform Engineer', values: { title: 'Platform Engineer' } },
+    ]);
+    const { records } = await flow!.readSetupExamples(setup, items);
+    expect(records.map((record) => [record.key, record.state, record.values.company])).toEqual([['Senior Engineer', 'ok', 'Acme'], ['Platform Engineer', 'ok', 'Acme']]);
+  });
+
   it('19d. setup opens a row whose opener has no link by clicking it in the row; a click that goes nowhere in 3 seconds opened nothing', async () => {
     const opener = { selected: { shape: 'card' } };
     const withOpener = (pattern: SitePatternDefinition) => ({ ...pattern, matcher: { pattern: { opener }, commands: {} } });

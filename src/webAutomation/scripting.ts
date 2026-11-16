@@ -33,7 +33,7 @@ export interface DocumentAutomationLookup {
    * Opens an item of a collection in the default browser, outside Galaxy (as you see it there, signed in or not as you
    * are): only an item the collection's output holds, so a script opens no other address.
    */
-  openInBrowser(capabilityId: string, url: string): Promise<void>;
+  openInBrowser(capabilityId: string, url: string, key?: string): Promise<void>;
 }
 
 export type DocumentAutomationResolver = (ctx: Pick<ScriptingContext, 'rawDocument'>) => DocumentAutomationLookup;
@@ -168,15 +168,18 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       };
       return operation(lookup, args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls).done);
     },
-    // One item (`url`), or several (`items`, each { url, values }: what its list showed, as its record has it, kept).
+    // One item (`url`), or several (`items`, each { url, values, key }: what its list showed, as its record has it, kept;
+    // and its record's key, for an item whose address doesn't make it, one opened without a link).
     extract: (args, ctx) => {
       const lookup = resolve(ctx);
+      const keyOf = (value: unknown) => (typeof value === 'string' && value ? { key: value } : {});
       const items: ExtractItem[] = Array.isArray(args.items)
-        ? args.items.map((item: { url?: unknown; values?: unknown }) => ({
+        ? args.items.map((item: { url?: unknown; values?: unknown; key?: unknown }) => ({
           url: String(item?.url ?? ''),
           ...(item?.values && typeof item.values === 'object' ? { values: item.values as Record<string, unknown> } : {}),
+          ...keyOf(item?.key),
         }))
-        : [{ url: String(args.url ?? '') }];
+        : [{ url: String(args.url ?? ''), ...keyOf(args.key) }];
       return operation(lookup, args, () => lookup.automation.extractItems(collection(lookup, args), items, consumer(lookup, args)).done);
     },
     // The items the collection's runs are reading on their own pages now, by key: { waiting: [...], reading: [...] }.
@@ -188,10 +191,12 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       resolve(ctx).automation.stopCollection(String(args.runId ?? ''));
       return null;
     },
-    // An item of the collection, in the default browser.
+    // An item of the collection, in the default browser: by its address, and its record's key where the address doesn't
+    // make it (an item opened without a link).
     open_in_browser: (args, ctx) => {
       const lookup = resolve(ctx);
-      return operation(lookup, args, () => lookup.openInBrowser(String(args.capabilityId ?? ''), String(args.url ?? '')));
+      const key = typeof args.key === 'string' && args.key ? args.key : undefined;
+      return operation(lookup, args, () => lookup.openInBrowser(String(args.capabilityId ?? ''), String(args.url ?? ''), key));
     },
     /**
      * Calls `handler` with `{ keys }` each time the collection block's output writes records, however the run was

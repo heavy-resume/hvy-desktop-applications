@@ -16,6 +16,46 @@
     }
 
     #[test]
+    fn certificate_summary_reads_who_it_is_for_and_by_when_it_is_valid_and_its_fingerprint() {
+        // A self-signed certificate, made with openssl, which read it as below.
+        let der = base64::engine::general_purpose::STANDARD.decode("MIIBmjCCAUCgAwIBAgIUR/Cn2P2w5gtv+qIWgyU/bdBdNHEwCgYIKoZIzj0EAwIwMzEVMBMGA1UECgwMRXhhbXBsZSBKb2JzMRowGAYDVQQDDBFqb2JzLmV4YW1wbGUudGVzdDAeFw0yNjExMTYxOTQxMjJaFw0yNzExMTYxOTQxMjJaMDMxFTATBgNVBAoMDEV4YW1wbGUgSm9iczEaMBgGA1UEAwwRam9icy5leGFtcGxlLnRlc3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS18Tdu6dRIKiq07EEVuRdq+vJMTfYebEkls+tUfaQYeKJJ3FNmgFxV3rF8o4maJSmACmR5jLLMAMxH1yuEny5aozIwMDAdBgNVHQ4EFgQUqoloF1YzIqydLKOPns/V9j7bm9swDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiBfw8NOQxzICBKcEmVqCKEv4Utupdl6vVEEj05HZTOzcwIhAMZWC3vGOEOEXoCiOm8c/DXBBc1gpEt8U0UZ22pbwScJ").unwrap();
+        assert_eq!(certificate_summary(&der), Some(serde_json::json!({
+            "subject": "jobs.example.test (Example Jobs)",
+            "issuer": "jobs.example.test (Example Jobs)",
+            "validFrom": "2026-11-16T19:41:22Z",
+            "validTo": "2027-11-16T19:41:22Z",
+            "sha256": "8F:83:A7:E8:EA:81:05:C0:D7:4F:A8:C2:A1:AD:86:24:3F:5C:68:8A:43:66:97:9C:D6:1D:EC:E7:75:1E:7F:F2",
+        })));
+        // Something that isn't a certificate is read as none.
+        assert_eq!(certificate_summary(&[0x30, 0x03, 0x02, 0x01, 0x01]), None);
+        assert_eq!(certificate_summary(&[]), None);
+    }
+
+    #[test]
+    fn refused_pages_say_why_only_for_their_certificate_or_secure_connection() {
+        assert_eq!(webkit_refused_reason("NSURLErrorDomain", -1201), Some("its certificate has expired, or isn’t valid yet."));
+        assert!(webkit_refused_reason("NSURLErrorDomain", -1202).is_some_and(|reason| reason.contains("isn’t trusted")));
+        // Not reachable, or not a certificate's doing: not blocked.
+        assert_eq!(webkit_refused_reason("NSURLErrorDomain", -1009), None);
+        assert_eq!(webkit_refused_reason("WebKitErrorDomain", -1201), None);
+        assert_eq!(webview2_refused_reason(2), Some("its certificate has expired."));
+        assert_eq!(webview2_refused_reason(12), None);
+    }
+
+    #[test]
+    fn same_document_url_is_only_a_change_after_the_hash() {
+        let url = |value: &str| value.parse::<tauri::Url>().unwrap();
+        let list = url("https://mail.google.com/mail/u/0/#label/job+spam");
+        // A message opened from the list: Gmail's page stays, only the part after # changes.
+        assert!(same_document_url(&list, &url("https://mail.google.com/mail/u/0/#label/job+spam/FMfcgz")));
+        assert!(same_document_url(&url("https://mail.google.com/mail/u/0/"), &list));
+        // The same address, another page, or another query is not.
+        assert!(!same_document_url(&list, &list));
+        assert!(!same_document_url(&list, &url("https://mail.google.com/mail/u/1/#label/job+spam")));
+        assert!(!same_document_url(&url("https://jobs.test/list?page=1#top"), &url("https://jobs.test/list?page=2#top")));
+    }
+
+    #[test]
     fn integration_navigation_allows_only_real_loopback_http_origins() {
         let local = "http://localhost:5173/".parse::<tauri::Url>().unwrap();
         let loopback = "http://127.0.0.1:5173/".parse::<tauri::Url>().unwrap();

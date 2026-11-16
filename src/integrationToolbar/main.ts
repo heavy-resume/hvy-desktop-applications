@@ -18,4 +18,4 @@ const send = (message: IntegrationToolbarMessage) => {
 
 const toolbar = mountIntegrationToolbar(document.getElementById('integration-toolbar')!, send);
 // The host tells the toolbar what to show by calling these.
-Object.assign(window, { hvySetBrowserState: toolbar.setBrowserState, hvySetInspectionState: toolbar.setInspectionState });
+Object.assign(window, { hvySetBrowserState: toolbar.setBrowserState, hvySetInspectionState: toolbar.setInspectionState, hvySetSiteInfo: toolbar.setSiteInfo });
