@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { BrowserHost, ExtractedRecord, HostResponse, NavigationEvent, PageInspection, PatternMatch } from './host';
+import type { AnchorCheck, BrowserHost, ExtractedRecord, HostResponse, NavigationEvent, PageInspection, PatternMatch } from './host';
 import { expandedPattern, LINK_FIELD_ID, type IntegrationPatternMatcher } from './integrationPatterns';
 import type { SitePatternDefinition } from './sitePatterns';
 import { state } from '../state';
@@ -39,6 +39,7 @@ interface RawInspection {
   ready: boolean;
   matches: Record<string, InspectorRecord[]>;
   frames: Array<{ src: string }>;
+  anchors?: AnchorCheck;
 }
 
 
@@ -117,6 +118,7 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
     },
     navigate: (workerId, url) => call('navigate', { workerId, url }),
     back: (workerId) => call('back', { workerId }),
+    takeOpenedWindow: (workerId) => call('take-opened-window', { workerId }),
 
     async inspect(workerId, request): Promise<PageInspection> {
       // An item's own page has one record, and a list needs at most its limit: found, reading stops, rather than scrolling
@@ -126,7 +128,8 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
         const recordLimit = pattern.role === 'detail' ? 1 : pattern.role === 'listing' ? request.listingLimit : undefined;
         return matcher ? [{ id: pattern.id, matcher: { ...matcher.pattern, ...(recordLimit ? { recordLimit } : {}) } }] : [];
       });
-      const raw = await call<RawInspection>('inspect', { workerId, request: { patterns } });
+      const anchors = request.anchorsOf?.anchors;
+      const raw = await call<RawInspection>('inspect', { workerId, request: { patterns, ...(anchors?.length ? { anchors } : {}) } });
       return {
         url: raw.url,
         ready: raw.ready,
@@ -134,6 +137,7 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
         // Fingerprint signals are not evaluated by this host yet.
         fingerprintMatches: {},
         frames: raw.frames,
+        ...(raw.anchors ? { anchors: raw.anchors } : {}),
       };
     },
 

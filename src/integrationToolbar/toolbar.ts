@@ -125,6 +125,12 @@ export function mountIntegrationToolbar(root: HTMLElement, send: (message: Integ
 
   const status = element('span', 'integration-toolbar-status');
   const inspectionFields = element('div', 'integration-toolbar-fields');
+  // A wheel turned over the pills scrolls them sideways, as they have no scroll bar.
+  inspectionFields.addEventListener('wheel', (event) => {
+    if (inspectionFields.scrollWidth <= inspectionFields.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    event.preventDefault();
+    inspectionFields.scrollLeft += event.deltaY;
+  }, { passive: false });
   const inspectionButtons = element('div', 'integration-toolbar-inspection-buttons');
   const inspection = element('div', 'integration-toolbar-inspection', { hidden: true });
   inspection.append(status, inspectionFields, inspectionButtons);

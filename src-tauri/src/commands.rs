@@ -1725,9 +1725,13 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             let current_url = profile_current_url.lock().map(|current| current.clone()).unwrap_or(None);
             // On the page already, or going to another part of it (only the part after # changes): no page load comes to
             // start picking or the extraction waiting for one, so it starts now.
-            let on_page = current_url.as_ref() == Some(&url);
-            let same_document = current_url.as_ref().is_some_and(|current| same_document_url(current, &url));
-            if !on_page {
+            // A request that asks for the page loaded fresh (`reload`, a site setup's Test) waits for its load either way.
+            let reload = payload.as_ref().and_then(|payload| payload.get("reload")).and_then(serde_json::Value::as_bool).unwrap_or(false);
+            let on_page = !reload && current_url.as_ref() == Some(&url);
+            let same_document = !reload && current_url.as_ref().is_some_and(|current| same_document_url(current, &url));
+            if reload && current_url.as_ref() == Some(&url) {
+                content.reload().map_err(|error| AppError::Message(error.to_string()))?;
+            } else if !on_page {
                 content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             }
             // No load reports where it is now, so it is noted here.

@@ -36,6 +36,14 @@ export interface MockPage {
   shownPane?: string;
   /** Lists whose items a click opens (what opens them has no link): record ref → where clicking in it goes. */
   opens?: Record<string, string>;
+  /** Its `opens` open in a new tab (`window.open`), leaving this page as it is. */
+  opensInNewTab?: boolean;
+  /**
+   * A list shown only once it is searched for (`prepare`, its command): what the command types (`value`, as recorded).
+   * Until then it matches no list. A list's anchors (`{ name, expectedValue }`) hold when what was typed is
+   * their value. Opening the page again, or going Back to it, forgets it, unless the site `remembers` it.
+   */
+  prepare?: { commandId: string; value: string; remembers?: boolean };
 }
 
 export interface MockRouteRequest {
@@ -70,6 +78,10 @@ interface MockWorker {
   restored: boolean;
   visible: boolean;
   pane: string | null;
+  /** What each page with a `prepare` has had typed into it, by address. */
+  typed: Map<string, string>;
+  /** What its page asked to open in a new tab since its last command. */
+  opened: string[];
 }
 
 export class MockHost implements BrowserHost {
@@ -91,7 +103,7 @@ export class MockHost implements BrowserHost {
 
   async createWorker(profileId: string): Promise<string> {
     const workerId = `w${this.nextWorker++}`;
-    this.workers.set(workerId, { profileId, history: [], index: -1, restored: true, visible: false, pane: null });
+    this.workers.set(workerId, { profileId, history: [], index: -1, restored: true, visible: false, pane: null, typed: new Map(), opened: [] });
     return workerId;
   }
 
@@ -120,6 +132,7 @@ export class MockHost implements BrowserHost {
     worker.index = worker.history.length - 1;
     worker.restored = true;
     worker.pane = null;
+    if (!this.page(href)?.prepare?.remembers) worker.typed.delete(href);
     this.log(`${workerId} → ${this.short(href)}`);
     this.notify({ profileId: worker.profileId, window: 'worker', workerId, url: href });
     return { url: href };
@@ -132,8 +145,20 @@ export class MockHost implements BrowserHost {
     worker.pane = null;
     const href = worker.history[worker.index];
     worker.restored = this.page(href)?.restoresOnBack !== false;
+    // Back loads a searched list again: what was typed is gone, as when opened again.
+    if (!this.page(href)?.prepare?.remembers) worker.typed.delete(href);
     this.log(`${workerId} ← back to ${this.short(href)}${worker.restored ? '' : ' (not restored)'}`);
     return { url: href };
+  }
+
+  async takeOpenedWindow(workerId: string): Promise<{ workerId: string; url: string } | null> {
+    const worker = this.worker(workerId);
+    const url = worker.opened.pop();
+    worker.opened = [];
+    if (!url) return null;
+    const opened = await this.createWorker(worker.profileId);
+    this.log(`${workerId} opened ${this.short(url)} in ${opened}`);
+    return { workerId: opened, url: (await this.navigate(opened, url)).url };
   }
 
   async inspect(workerId: string, request: InspectionRequest): Promise<PageInspection> {
@@ -148,7 +173,9 @@ export class MockHost implements BrowserHost {
     }
     const paneRef = worker.pane ?? page?.shownPane;
     const pane = paneRef ? page?.panes?.[paneRef] : undefined;
-    const visible = { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
+    // A list shown only once searched for shows nothing before.
+    const typed = worker.typed.get(url);
+    const visible = page?.prepare && typed === undefined ? {} : { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
     const matches = worker.restored
       ? Object.fromEntries(Object.entries(visible).filter(([patternId]) => request.patterns.some((pattern) => pattern.id === patternId)))
       : {};
@@ -165,28 +192,41 @@ export class MockHost implements BrowserHost {
     const fingerprintMatches = Object.fromEntries(Object.entries(request.fingerprints).flatMap(([patternId, signals]) => (
       signals.length && signals.every((signal) => this.signalPresent(url, page, signal)) ? [[patternId, signals.length]] : []
     )));
+    // A list's anchors hold when what was typed is their value; said as the page's inspector says a ready check failed.
+    const anchors = request.anchorsOf?.anchors as Array<{ name: string; expectedValue: string }> | undefined;
+    const failing = anchors?.find((anchor) => typed !== anchor.expectedValue);
+    const anchorProblem = !failing ? null : typed === undefined ? `The page is missing the ready check: ${failing.name}.` : `The ready check value changed: ${failing.name}.`;
     return {
       url,
       ready: true,
       matches: structuredClone(matches),
       fingerprintMatches,
       frames: structuredClone(page?.frames ?? []),
+      ...(anchors?.length ? { anchors: { ready: !failing, problem: anchorProblem } } : {}),
     };
   }
 
   async runCommand(workerId: string, request: CommandRequest): Promise<CommandResult> {
     const worker = this.worker(workerId);
     const url = worker.history[worker.index];
+    worker.opened = [];
     if (request.recordRef) {
       const opens = this.page(url)?.opens?.[request.recordRef];
       if (opens) {
         this.log(`${workerId} click ${request.commandId} on ${request.recordRef}`);
-        await this.navigate(workerId, new URL(opens, url).href);
+        if (this.page(url)?.opensInNewTab) worker.opened.push(new URL(opens, url).href);
+        else await this.navigate(workerId, new URL(opens, url).href);
         return { status: 'executed' };
       }
       if (!this.page(url)?.panes?.[request.recordRef]) return { status: 'no_match' };
       worker.pane = request.recordRef;
       this.log(`${workerId} click ${request.commandId} on ${request.recordRef}`);
+      return { status: 'executed' };
+    }
+    const prepare = this.page(url)?.prepare;
+    if (prepare && request.commandId === prepare.commandId) {
+      worker.typed.set(url, prepare.value);
+      this.log(`${workerId} ${request.commandId}: typed “${prepare.value}”`);
       return { status: 'executed' };
     }
     const next = this.page(url)?.nextPage;
@@ -298,6 +338,13 @@ export class MockHost implements BrowserHost {
   }
 
   /** The user solves a bot challenge; the clearance is shared by the profile's webviews. */
+  /** A person gets a worker's page where its list is read from by hand (Show, while the run waits for them). */
+  typeOnPage(workerId: string, value: string): void {
+    const worker = this.worker(workerId);
+    worker.typed.set(worker.history[worker.index], value);
+    this.log(`${workerId} typed “${value}” by hand`);
+  }
+
   solveChallenge(profileId: string, origin: string): void {
     this.cookies(profileId, origin)[CLEARANCE_COOKIE] = 'ok';
     this.log(`challenge solved for ${new URL(origin).host} (${profileId})`);

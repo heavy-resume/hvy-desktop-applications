@@ -28,6 +28,17 @@ export interface SitePatternDefinition {
   /** Listing only: page command that moves to the next page. */
   paginationCommandId?: string;
   /**
+   * Listing only: the page command that gets a start page's list where it is read from (a search typed, a box ticked, a
+   * sort chosen), run on a start page whose anchors don't hold yet.
+   */
+  prepareCommandId?: string;
+  /**
+   * Listing only: what shows its list is there, each an element and the value it shows (opaque, evaluated by the host's
+   * inspector, as the matcher is). All holding, the list is read as it is; one that doesn't hold after the prepare
+   * command asks a person.
+   */
+  anchors?: unknown[];
+  /**
    * Listing only: item command that shows the item in a side pane instead
    * of navigating. The link field still provides the item key.
    */

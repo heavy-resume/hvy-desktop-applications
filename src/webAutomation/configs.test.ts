@@ -2,7 +2,7 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
 import { loadPublishedService, publishedServices } from './serviceManifests';
 import { analysisServiceCapability, analysisServiceManifest } from '../test/webAutomation/analysisService';
-import { ATS_ORIGIN, atsDetailPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
+import { ATS_ORIGIN, atsDetailPattern, atsListingPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
 
 const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
   schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION,
@@ -30,6 +30,17 @@ describe('a site setup\'s settings', () => {
     const plain = block({ browse: false, keepUrlFragment: 'yes', rowKey: [] });
     expect(plain.ok && plain.value.collection.sites).toEqual([{ id: 'gmail', name: 'Gmail' }]);
     expect(errorsOf(block({ rowKey: ['sender'] }))).toEqual(['Site setup "Gmail" tells its rows apart by "sender", which is not one of the fields.']);
+  });
+});
+
+describe('getting a list where it is read from', () => {
+  it('keeps a list pattern\'s prepare command and its anchors, and refuses a command it does not have', () => {
+    const acme = `${ATS_ORIGIN}/acme/jobs`;
+    const prepared = { ...atsListingPattern, prepareCommandId: 'search', anchors: [{ name: 'Search field', expectedValue: 'Engineer' }], matcher: { pattern: {}, commands: { search: { id: 'search' }, 'next-page': { id: 'next-page' } } } };
+    const block = (pattern: Record<string, unknown>) => readCollectionBlockConfig({ schemaVersion: 1, ...listingCollection([acme]), startPages: [{ id: 'acme', url: acme }], patterns: [pattern] });
+    const read = block(prepared);
+    expect(read.ok && read.value.collection.patterns[0]).toMatchObject({ prepareCommandId: 'search', anchors: [{ name: 'Search field', expectedValue: 'Engineer' }] });
+    expect(errorsOf(block({ ...prepared, prepareCommandId: 'filter' }))).toEqual([`Pattern "${atsListingPattern.name}" runs command "filter", which it does not have.`]);
   });
 });
 

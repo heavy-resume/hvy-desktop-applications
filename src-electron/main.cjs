@@ -1717,9 +1717,13 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   await loadIntegrationToolbar(browser.toolbarContents);
   browser.window.removeMenu();
   const currentUrl = browser.contents.getURL();
+  // A request that asks for the page loaded fresh (`reload`, a site setup's Test) waits for its load either way.
+  const reload = pendingExtraction?.reload === true;
   // On the page already, or going to another part of it (only the part after # changes): no load comes to start picking
   // or the extraction waiting for one, so it starts now.
-  if (!browser.contents.isLoadingMainFrame() && (currentUrl === url || sameDocumentUrl(currentUrl, url))) {
+  if (reload && currentUrl === url) {
+    browser.contents.reload();
+  } else if (!reload && !browser.contents.isLoadingMainFrame() && (currentUrl === url || sameDocumentUrl(currentUrl, url))) {
     if (currentUrl !== url) await runInIntegrationWorld(browser.contents, `location.assign(${JSON.stringify(url)})`);
     await runInIntegrationWorld(browser.contents, INTEGRATION_INSPECTOR);
     if (browser.actionModePending) {

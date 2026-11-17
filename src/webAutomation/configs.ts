@@ -491,6 +491,8 @@ function readPattern(value: unknown, errors: string[]): SitePatternDefinition | 
     minimumConfidence: number(value.minimumConfidence, 0.8, 0.5, 1),
     ...(linkFieldId ? { linkFieldId } : {}),
     ...(text(value.paginationCommandId) ? { paginationCommandId: text(value.paginationCommandId) } : {}),
+    ...(text(value.prepareCommandId) ? { prepareCommandId: text(value.prepareCommandId) } : {}),
+    ...(Array.isArray(value.anchors) && value.anchors.length ? { anchors: value.anchors } : {}),
     ...(text(value.itemCommandId) ? { itemCommandId: text(value.itemCommandId) } : {}),
     ...(value.matcher !== undefined ? { matcher: value.matcher } : {}),
     ...(text(value.siteId) ? { siteId: text(value.siteId) } : {}),
@@ -569,7 +571,7 @@ function checkPatternReferences(pattern: SitePatternDefinition, fieldIds: Set<st
     errors.push(`Pattern "${pattern.name}" fills "${field.id}", which is not one of the fields.`);
   }
   const commands = isRecord(pattern.matcher) && isRecord(pattern.matcher.commands) ? pattern.matcher.commands : null;
-  for (const commandId of [pattern.paginationCommandId, pattern.itemCommandId]) {
+  for (const commandId of [pattern.paginationCommandId, pattern.prepareCommandId, pattern.itemCommandId]) {
     if (commandId && commands && !(commandId in commands)) errors.push(`Pattern "${pattern.name}" runs command "${commandId}", which it does not have.`);
   }
 }

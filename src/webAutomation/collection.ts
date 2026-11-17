@@ -233,7 +233,7 @@ export interface CollectionRunState {
    * The page waiting for the user. An item's page that doesn't look as its site setup expects names that setup
    * (`siteId`), so it can be added to it as another example.
    */
-  attention: { workerId: string; url: string; reason: string; siteId?: string } | null;
+  attention: { workerId: string; url: string; reason: string; siteId?: string; detail?: string } | null;
   error: string | null;
 }
 
@@ -287,6 +287,8 @@ export const OPENED_BY_CLICK_MS = 3_000;
 const OPEN_BY_CLICK_COMMAND_ID = 'open-item-by-click';
 /** The pause before each item opened while clicking through a list (`CollectionSite.browse`): a second, give or take. */
 export const BROWSE_DELAY_MS = { min: 250, max: 1_750 };
+/** How long a start page's list has, after its prepare command, for its anchors to hold (the page settling). */
+export const LIST_PREPARED_WITHIN_MS = 5_000;
 
 /** A list pattern with a record command that clicks its row's opener (what set up picked in a row to open the item). */
 function withOpenerClick(pattern: SitePatternDefinition): SitePatternDefinition {
@@ -300,6 +302,36 @@ function withOpenerClick(pattern: SitePatternDefinition): SitePatternDefinition 
  * profile, the list page loaded, the row found again by its values, and its opener clicked, as a one-step command in
  * the row. The item is where the page went within `OPENED_BY_CLICK_MS`; null when it went nowhere.
  */
+/**
+ * Gets a list where it is read from, by its pattern (`prepareCommandId`, `anchors`): its anchors all holding, it is
+ * there already; otherwise its steps are taken (typing and choosing what was recorded), and its anchors looked at again
+ * as the page settles (`LIST_PREPARED_WITHIN_MS`). Says whether they hold (null when it has none: nothing says), what
+ * the first that doesn't says, and where the page is. `around` paces the steps and stops waiting, as a run does.
+ */
+export async function getListThere(
+  deps: { host: BrowserHost; clock: Clock },
+  workerId: string,
+  pattern: SitePatternDefinition,
+  around: { step<T>(load: () => Promise<T>): Promise<T>; wait<T>(promise: Promise<T>): Promise<T> } = { step: (load) => load(), wait: (promise) => promise },
+): Promise<{ ready: boolean | null; problem: string | null; url: string }> {
+  const anchors = async () => {
+    const inspection = await around.wait(deps.host.inspect(workerId, { patterns: [], fingerprints: {}, anchorsOf: pattern }));
+    return { url: inspection.url, check: inspection.anchors ?? null };
+  };
+  let now = await anchors();
+  if (now.check?.ready) return { ready: true, problem: null, url: now.url };
+  const commandId = pattern.prepareCommandId;
+  if (commandId) await around.step(() => deps.host.runCommand(workerId, { pattern, commandId }));
+  if (!now.check) return { ready: null, problem: null, url: now.url };
+  const deadline = deps.clock.now() + LIST_PREPARED_WITHIN_MS;
+  now = await anchors();
+  while (!now.check?.ready && deps.clock.now() < deadline) {
+    await around.wait(deps.clock.sleep(250));
+    now = await anchors();
+  }
+  return now.check?.ready ? { ready: true, problem: null, url: now.url } : { ready: false, problem: now.check?.problem ?? 'Its list isn’t there.', url: now.url };
+}
+
 export async function openListedItemByClick(
   deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock },
   profileId: string,
@@ -310,6 +342,9 @@ export async function openListedItemByClick(
   const clicking = withOpenerClick(pattern);
   return deps.scheduler.run({ profileId, kind: 'collection', origin: new URL(listUrl).origin, label: `Open an item on ${listUrl}`, interactive: true }, async (lease) => {
     const listed = await lease.paced(listUrl, () => deps.host.navigate(lease.workerId, listUrl), { delay: false });
+    // The list as runs read it, its steps to get there taken, as the item was picked on it.
+    const there = await getListThere(deps, lease.workerId, pattern);
+    if (there.ready === false) throw new Error(`The list isn’t where its setup reads it, after its steps to get there. ${there.problem}`);
     const inspection = await deps.host.inspect(lease.workerId, { patterns: [pattern], fingerprints: patternFingerprints([pattern]) });
     const row = inspection.matches[pattern.id]?.records.find((record) => JSON.stringify(record.values) === JSON.stringify(values));
     if (!row) throw new Error('That item wasn’t in the list when it was loaded again. Pick it again.');
@@ -317,6 +352,12 @@ export async function openListedItemByClick(
     if (clicked.status !== 'executed') return null;
     const deadline = deps.clock.now() + OPENED_BY_CLICK_MS;
     for (;;) {
+      // Opened in a new tab: where it loaded, that tab then closed.
+      const tab = await deps.host.takeOpenedWindow(lease.workerId);
+      if (tab) {
+        await deps.host.closeWorker(tab.workerId);
+        return { url: tab.url };
+      }
       const at = await deps.host.inspect(lease.workerId, { patterns: [], fingerprints: {} });
       if (at.url !== listed.url) return { url: at.url };
       if (deps.clock.now() >= deadline) return null;
@@ -606,6 +647,31 @@ export class CollectionService {
   }
 
   /** A load in its turn on the site (after the pause between loads there), stopped as `stoppable`; stopped while it waits, it never starts. */
+  /**
+   * Gets a start page's list where it is read from, by its site's list pattern for the page (`prepareCommandId`,
+   * `anchors`): its anchors all holding, it is there already. Otherwise the prepare command runs (typing and choosing
+   * what was recorded), and the anchors are looked at again as the page settles. One that still doesn't
+   * hold asks a person, as a check that you're human does, naming it; once dealt with, they are looked at again. Let go,
+   * the list is read as it is.
+   */
+  private async prepareList(run: ActiveRun, lease: WorkerLease, startPage: StartPage): Promise<void> {
+    const { emit } = this.deps;
+    const pattern = run.definition.patterns.find((candidate) => candidate.role === 'listing' && (candidate.prepareCommandId || candidate.anchors?.length)
+      && candidate.appliesTo.some((rule) => rule.target === 'page' && urlMatchesRule(rule, startPage.url)));
+    if (!pattern) return;
+    // Paced as its other page loads are, and stopped with the run.
+    const around = { step: <T>(load: () => Promise<T>) => this.paced(run, lease, startPage.url, load), wait: <T>(promise: Promise<T>) => this.stoppable(run, promise) };
+    for (;;) {
+      emit('collection', `${startPage.id}: getting its list there`);
+      const there = await getListThere(this.deps, lease.workerId, pattern, around);
+      emit('collection', `${startPage.id}: ${there.ready === false ? there.problem : 'its list is there'}`);
+      // No anchors: nothing says whether it is there, so it is read as the steps left it.
+      if (there.ready !== false) return;
+      // Dealt with, it is looked at again from the start: a page opened again needs the steps again.
+      if (!await this.waitForAttention(run, lease.workerId, there.url, 'list-not-there', pattern.siteId, there.problem ?? undefined)) return;
+    }
+  }
+
   private paced<T>(run: ActiveRun, lease: WorkerLease, url: string, load: () => Promise<T>, delay?: false | { min: number; max: number }): Promise<T> {
     return this.stoppable(run, lease.paced(url, () => {
       this.checkStopped(run);
@@ -650,6 +716,8 @@ export class CollectionService {
     progress.status = 'reading';
     this.assertAllowed(run, startUrl, false);
     await this.paced(run, lease, startUrl, () => host.navigate(lease.workerId, startUrl));
+    emit('collection', `${startPage.id}: opened ${startUrl}`);
+    await this.prepareList(run, lease, startPage);
     // The run takes no more of the start page's list than its limit, known items included.
     const listingLimit = startPage.maxItems ?? run.definition.maxItems;
     const start = await this.resolveExpected(run, lease, await this.inspectAt(run, lease, listingLimit), 'listing');
@@ -695,6 +763,8 @@ export class CollectionService {
     const stopAtKnown = startPage.stopAtKnownPage ?? run.definition.stopAtKnownPage ?? false;
     let inspection = start.inspection;
     let listing: ListingResolution = { pattern: start.pattern, match: start.match };
+    // The start page was read only as far as the limit (`listingLimit`, in `collectStartPage`); later pages in full.
+    let readUpTo: number | null = maxItems;
     for (let page = 1; ; page += 1) {
       run.state.page = page;
       progress.pages = page;
@@ -706,78 +776,88 @@ export class CollectionService {
       let full = false;
       let newLinks = 0;
       let knownOnPage = 0;
-      for (const record of listing.match.records) {
-        this.checkStopped(run);
-        // A row without a link is taken only on a site read by clicking through its list.
-        const row = this.listedRow(run, pattern, record.values, listingUrl, fixed);
-        if (!row || (!row.link && !browsing)) continue;
-        const { link, title, values: listingValues } = row;
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        newLinks += 1;
-        // The first maxItems of the list, known or not: the item past the limit is left for the next run, so it isn't counted.
-        if (progress.found >= maxItems) {
-          emit('collection', `${startPage.id}: reached its limit of ${maxItems} items`);
-          full = true;
-          break;
-        }
-        if (link && pattern.siteId) run.itemSites.set(link, pattern.siteId);
-        // A key from listing values alone lets the consumer skip the page; field keys
-        // that only appear on the detail page are checked by the consumer when it receives the record. A row without a
-        // link is keyed by its row.
-        const knownKey = link ? this.keyFor(run, link, listingValues) : row.id;
-        if (knownKey && run.consumer.isKnown?.(knownKey)) {
+      // Read only as far as the limit, the page may give fewer items than that (rows repeating one before them, or not
+      // taken): it is then read again as much further as that, its rows not seen yet taken.
+      for (;;) {
+        for (const record of listing.match.records) {
+          this.checkStopped(run);
+          // A row without a link is taken only on a site read by clicking through its list.
+          const row = this.listedRow(run, pattern, record.values, listingUrl, fixed);
+          if (!row || (!row.link && !browsing)) continue;
+          const { link, title, values: listingValues } = row;
+          if (seen.has(row.id)) continue;
+          seen.add(row.id);
+          newLinks += 1;
+          // The first maxItems of the list, known or not: the item past the limit is left for the next run, so it isn't counted.
+          if (progress.found >= maxItems) {
+            emit('collection', `${startPage.id}: reached its limit of ${maxItems} items`);
+            full = true;
+            break;
+          }
+          if (link && pattern.siteId) run.itemSites.set(link, pattern.siteId);
+          // A key from listing values alone lets the consumer skip the page; field keys
+          // that only appear on the detail page are checked by the consumer when it receives the record. A row without a
+          // link is keyed by its row.
+          const knownKey = link ? this.keyFor(run, link, listingValues) : row.id;
+          if (knownKey && run.consumer.isKnown?.(knownKey)) {
+            progress.found += 1;
+            run.state.skipped += 1;
+            progress.known += 1;
+            knownOnPage += 1;
+            emit('collection', `skip known ${knownKey}`);
+            continue;
+          }
           progress.found += 1;
-          run.state.skipped += 1;
-          progress.known += 1;
-          knownOnPage += 1;
-          emit('collection', `skip known ${knownKey}`);
-          continue;
-        }
-        progress.found += 1;
-        // Clicked in its turn: its address is where the click goes, so it isn't listed before then.
-        if (!link) {
-          clicking.push(row);
+          // Clicked in its turn: its address is where the click goes, so it isn't listed before then.
+          if (!link) {
+            clicking.push(row);
+            progress.toCollect += 1;
+            continue;
+          }
+          const itemCommandId = pattern.itemCommandId;
+          if (itemCommandId) {
+            // Side-pane board: the item opens beside the listing; there is no navigation to undo. It is read as the list
+            // is, even in a run that reads only lists: only the list opens it.
+            progress.toCollect += 1;
+            progress.current = title;
+            const opened = await this.paced(run, lease, listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: itemCommandId, recordRef: record.ref }));
+            await this.tracked(run, progress, async () => {
+              if (opened.status !== 'executed') this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
+              else await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
+            });
+            continue;
+          }
+          if (!isNavigationAllowed(run.definition, link, true)) {
+            emit('collection', `skip out of scope ${link}`);
+            continue;
+          }
+          // In the document as soon as its list shows it, before its page is read: later in this run, or, in a run that reads
+          // only lists, when asked for. One keyed by what only its page shows is read in this run either way: written now,
+          // it would be another item than its page's.
+          if (knownKey) this.emitRecord(run, link, listingValues, 'listed', pattern.id, undefined);
+          if (knownKey && run.definition.readItemPages === false && !browsing) {
+            progress.listed += 1;
+            run.state.listed += 1;
+            run.state.listedItems.push({ url: link, values: listingValues, ...(pattern.siteId ? { siteId: pattern.siteId } : {}) });
+            continue;
+          }
+          if (knownKey && run.consumer.readsPage && !(await run.consumer.readsPage(knownKey))) {
+            progress.leftUnread += 1;
+            run.state.leftUnread += 1;
+            emit('collection', `leave unread ${knownKey}`);
+            continue;
+          }
+          if (browsing) clicking.push(row);
+          else queue.push({ ...row, link });
           progress.toCollect += 1;
-          continue;
         }
-        const itemCommandId = pattern.itemCommandId;
-        if (itemCommandId) {
-          // Side-pane board: the item opens beside the listing; there is no navigation to undo. It is read as the list
-          // is, even in a run that reads only lists: only the list opens it.
-          progress.toCollect += 1;
-          progress.current = title;
-          const opened = await this.paced(run, lease, listingUrl, () => host.runCommand(lease.workerId, { pattern, commandId: itemCommandId, recordRef: record.ref }));
-          await this.tracked(run, progress, async () => {
-            if (opened.status !== 'executed') this.writeProblem(run, link, listingValues, `The item command returned ${opened.status}.`);
-            else await this.writeDetail(run, lease, link, await this.inspectAt(run, lease), listingValues);
-          });
-          continue;
-        }
-        if (!isNavigationAllowed(run.definition, link, true)) {
-          emit('collection', `skip out of scope ${link}`);
-          continue;
-        }
-        // In the document as soon as its list shows it, before its page is read: later in this run, or, in a run that reads
-        // only lists, when asked for. One keyed by what only its page shows is read in this run either way: written now,
-        // it would be another item than its page's.
-        if (knownKey) this.emitRecord(run, link, listingValues, 'listed', pattern.id, undefined);
-        if (knownKey && run.definition.readItemPages === false && !browsing) {
-          progress.listed += 1;
-          run.state.listed += 1;
-          run.state.listedItems.push({ url: link, values: listingValues, ...(pattern.siteId ? { siteId: pattern.siteId } : {}) });
-          continue;
-        }
-        if (knownKey && run.consumer.readsPage && !(await run.consumer.readsPage(knownKey))) {
-          progress.leftUnread += 1;
-          run.state.leftUnread += 1;
-          emit('collection', `leave unread ${knownKey}`);
-          continue;
-        }
-        if (browsing) clicking.push(row);
-        else queue.push({ ...row, link });
-        progress.toCollect += 1;
+        if (full || readUpTo === null || progress.found >= maxItems || listing.match.records.length < readUpTo) break;
+        readUpTo += maxItems - progress.found;
+        const further = this.matchPattern(await this.inspectAt(run, lease, readUpTo, [pattern]), pattern);
+        if (!further || further.match.records.length <= listing.match.records.length) break;
+        listing = further;
       }
+      readUpTo = null;
       // A page that ends at the limit ends the list too: a list shown only as far as the limit has no item past it.
       if (!full && progress.found >= maxItems) {
         emit('collection', `${startPage.id}: reached its limit of ${maxItems} items`);
@@ -854,27 +934,57 @@ export class CollectionService {
       const clicked = await this.paced(run, lease, item.link ?? listUrl, () => host.runCommand(lease.workerId, { pattern: clicking, commandId: OPEN_BY_CLICK_COMMAND_ID, recordRef: row.ref }), BROWSE_DELAY_MS);
       if (clicked.status !== 'executed') return stop(`Clicking ${item.title} in the list didn’t work (${clicked.status}).`);
       const deadline = this.deps.clock.now() + OPENED_BY_CLICK_MS;
-      // Opened: the page shows another item than before the click, or this one (a pane may show it before any click).
-      let opened = await this.shownItem(run, lease, details);
-      while (opened.values === null || (opened.json === shown.json && !sameValues(opened.values, item.values))) {
-        if (this.deps.clock.now() >= deadline) return stop(`Clicking ${item.title} in the list opened nothing.`);
-        await this.stoppable(run, this.deps.clock.sleep(250));
-        opened = await this.shownItem(run, lease, details);
+      // Where the item is read: a new tab the click opened (its own worker, the list left as it is), or else the list's.
+      let tab: { workerId: string; url: string } | null = null;
+      let reader = lease;
+      let stayed = false;
+      const look = async () => {
+        if (!tab) {
+          const taking = host.takeOpenedWindow(lease.workerId);
+          // Stopped while it loads, the window it opens is closed once it has.
+          tab = await this.stoppable(run, taking).catch((error: unknown) => {
+            void taking.then((opened) => opened && host.closeWorker(opened.workerId), () => undefined);
+            throw error;
+          });
+        }
+        if (tab) reader = { ...lease, workerId: tab.workerId };
+        return this.shownItem(run, reader, details);
+      };
+      // Opened: a new tab showing an item, or the page shows another item than before the click, or this one (a pane may
+      // show it before any click).
+      try {
+        let opened = await look();
+        while (opened.values === null || (!tab && opened.json === shown.json && !sameValues(opened.values, item.values))) {
+          if (this.deps.clock.now() >= deadline) return stop(`Clicking ${item.title} in the list opened nothing.`);
+          await this.stoppable(run, this.deps.clock.sleep(250));
+          opened = await look();
+        }
+        if (!tab) shown = opened;
+        // An item opened without a link is where the click went, keyed by its row.
+        const url = item.link ?? opened.inspection.url;
+        if (!item.link) {
+          run.itemKeys.set(url, item.id);
+          if (pattern.siteId) run.itemSites.set(url, pattern.siteId);
+        }
+        await this.tracked(run, progress, () => this.writeDetail(run, reader, url, opened.inspection, item.values));
+        stayed = reader !== lease || opened.inspection.url === listUrl;
+      } finally {
+        if (reader !== lease) await host.closeWorker(reader.workerId);
       }
-      shown = opened;
-      // An item opened without a link is where the click went, keyed by its row.
-      const url = item.link ?? opened.inspection.url;
-      if (!item.link) {
-        run.itemKeys.set(url, item.id);
-        if (pattern.siteId) run.itemSites.set(url, pattern.siteId);
-      }
-      await this.tracked(run, progress, () => this.writeDetail(run, lease, url, opened.inspection, item.values));
-      // Back to the list: still beside the item (a pane), or Back from the item's page. Read as far as the next item's row.
+      // Back to the list: still there (the item in a new tab, or a pane beside it at the list's address), or Back from
+      // the item's page (the click went elsewhere; the list isn't looked for there, as reading a page without it scrolls
+      // all of it). Read as far as the next item's row.
       const next = items[index + 1];
       const upTo = next ? (positions.get(next.id) ?? 0) + 1 : 1;
-      let list = this.matchPattern(await this.inspectAt(run, lease, upTo, [pattern]), pattern);
+      let list = stayed ? this.matchPattern(await this.inspectAt(run, lease, upTo, [pattern]), pattern) : null;
       if (!list) {
         await this.paced(run, lease, listUrl, () => host.back(lease.workerId), false);
+        // A list reloaded by Back may need its steps to get there again (its search typed, its sort chosen).
+        if (pattern.prepareCommandId || pattern.anchors?.length) {
+          const around = { step: <T>(load: () => Promise<T>) => this.paced(run, lease, listUrl, load), wait: <T>(promise: Promise<T>) => this.stoppable(run, promise) };
+          const there = await getListThere(this.deps, lease.workerId, pattern, around);
+          if (there.ready === false) return stop(`The list wasn’t there after going back from ${item.title}: ${there.problem}`);
+        }
         const back = await this.inspectAt(run, lease, upTo, [pattern]);
         list = this.matchPattern(back, pattern);
         if (!list) return stop(`The list wasn’t there after going back from ${item.title}.`);
@@ -939,7 +1049,7 @@ export class CollectionService {
   }
 
   /** Waits for the user to deal with a page; false when they let it go (`skip`) rather than resumed. */
-  private async waitForAttention(run: ActiveRun, workerId: string, url: string, reason: string, siteId?: string): Promise<boolean> {
+  private async waitForAttention(run: ActiveRun, workerId: string, url: string, reason: string, siteId?: string, detail?: string): Promise<boolean> {
     if (this.deps.unattended) {
       this.deps.emit('collection', `${run.state.runId} let ${url} go: ${reason}, with no one to ask`);
       return false;
@@ -955,7 +1065,7 @@ export class CollectionService {
     try {
       this.checkStopped(run);
       run.state.status = 'needs-attention';
-      run.state.attention = { workerId, url, reason, ...(siteId ? { siteId } : {}) };
+      run.state.attention = { workerId, url, reason, ...(siteId ? { siteId } : {}), ...(detail ? { detail } : {}) };
       this.deps.emit('collection', `${run.state.runId} needs attention: ${reason} at ${url}`);
       await new Promise<void>((resolve) => {
         run.resumeAttention = resolve;

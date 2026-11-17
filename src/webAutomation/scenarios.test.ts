@@ -590,6 +590,99 @@ describe('mock integration: job search flow', () => {
     expect(records.map((record) => [record.key, record.state, record.values.company])).toEqual([['Senior Engineer', 'ok', 'Acme'], ['Platform Engineer', 'ok', 'Acme']]);
   });
 
+  it('14d. getting to the list: a start page whose list shows only once searched for is searched as recorded, and its ready checks say it is there; one that still doesn\'t pass asks you, naming it', async () => {
+    const stark = `${ATS_ORIGIN}/stark/jobs`;
+    // Its setup's steps to get there (the search, typed as recorded) and what shows it is there.
+    const search = { id: 'search', name: 'Get to the list', scope: 'page', prepare: true, steps: [] };
+    const gotTo = (expectedValue: string) => listingCollection([stark], {
+      patterns: [{
+        ...atsListingPattern,
+        prepareCommandId: 'search',
+        anchors: [{ id: 'search-field', name: 'Search', expectedValue }],
+        matcher: { pattern: {}, commands: { search } },
+      }, atsDetailPattern],
+    });
+    await signedInFlow(gotTo('Software engineer'));
+    expect(await flow!.collect(gotTo('Software engineer'))).toMatchObject({ status: 'done', collected: 2, problems: 0 });
+    expect(flow!.print()).toContain('search: typed “Software engineer”');
+
+    // The site changed, so its steps no longer get the list its ready check expects: the run asks, naming it. Got
+    // there by hand, it reads.
+    const changed = gotTo('Senior engineer');
+    const waiting = await flow!.collect(changed);
+    expect(waiting).toMatchObject({
+      status: 'needs-attention',
+      attention: { reason: 'list-not-there', detail: 'The ready check value changed: Search.' },
+    });
+    flow!.typeOnPage(waiting.attention!.workerId, 'Senior engineer');
+    expect(await flow!.resumeAttention(waiting.runId)).toMatchObject({ status: 'done', attention: null });
+
+    // Setup opens an example item from it by a click as a run would: the list got there first, its row then found.
+    const opener = { selected: { shape: 'card' } };
+    const listed = { ...gotTo('Software engineer').patterns[0], matcher: { pattern: { opener }, commands: { search } } };
+    expect(await flow!.openListedItemByClick(stark, listed, { title: 'Software Engineer', link: '/stark/jobs/eng-1?utm_source=board' })).toEqual({ url: `${ATS_ORIGIN}/stark/jobs/eng-1` });
+  });
+
+  it('14e. clicking through a list that must be got to: each item opened on its own page is left by Back at once (its page not searched for the list), and the list, loaded again without its search, is got to again', async () => {
+    const stark = `${ATS_ORIGIN}/stark/jobs`;
+    const search = { id: 'search', name: 'Get to the list', scope: 'page', prepare: true, steps: [] };
+    const opener = { selected: { shape: 'card' } };
+    const { linkFieldId: _linkFieldId, ...unlinked } = atsListingPattern;
+    const rows = {
+      ...unlinked,
+      siteId: 'stark-ats',
+      fields: unlinked.fields.filter((field) => field.kind !== 'link'),
+      prepareCommandId: 'search',
+      anchors: [{ id: 'search-field', name: 'Search', expectedValue: 'Software engineer' }],
+      matcher: { pattern: { opener }, commands: { search } },
+    };
+    const boards = listingCollection([stark], { patterns: [] });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, { id: 'stark-ats', name: 'stark-ats', browse: true, rowKey: ['title'], patterns: [rows, { ...atsDetailPattern, siteId: 'stark-ats' }] });
+    const { items } = await flow!.listSetupExamples(setup, stark, 2);
+    expect(items.map((item) => item.url)).toEqual([`${ATS_ORIGIN}/stark/jobs/eng-1`, `${ATS_ORIGIN}/stark/jobs/eng-2`]);
+    const log = flow!.print();
+    // Typed on opening the list, then again after Back from each item.
+    expect(log.split('search: typed “Software engineer”').length - 1).toBe(3);
+    expect(log).not.toMatch(/read the first \d+ rows of boards\.mock-ats\.test\/stark\/jobs\/eng/);
+    expect(log).not.toContain('wasn’t there after going back');
+  });
+
+  it('14f. clicking through a list whose rows open their item in a new tab: each is read in a window of its own, then closed, the list left as it is', async () => {
+    const piper = `${ATS_ORIGIN}/piper/jobs`;
+    const opener = { selected: { shape: 'card' } };
+    const { linkFieldId: _linkFieldId, ...unlinked } = atsListingPattern;
+    const rows = { ...unlinked, siteId: 'piper-ats', fields: unlinked.fields.filter((field) => field.kind !== 'link'), matcher: { pattern: { opener }, commands: {} } };
+    const boards = listingCollection([piper], { patterns: [] });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, { id: 'piper-ats', name: 'piper-ats', browse: true, rowKey: ['title'], patterns: [rows, { ...atsDetailPattern, siteId: 'piper-ats' }] });
+    expect(await flow!.collect(setup)).toMatchObject({ status: 'done', collected: 2, problems: 0 });
+    expect(flow!.items.get('Staff Engineer')).toMatchObject({ state: 'ok', url: `${ATS_ORIGIN}/piper/jobs/eng-2`, fields: { company: 'Piper' } });
+    const log = flow!.print();
+    expect(log).toMatch(/opened boards\.mock-ats\.test\/piper\/jobs\/eng-1 in w\d+/);
+    expect(log).not.toContain('← back');
+    // Each window a new tab opened in is closed once its item is read.
+    const tabs = [...log.matchAll(/opened \S+ in (w\d+)/g)].map((match) => match[1]);
+    expect(tabs).toHaveLength(2);
+    expect(flow!.host.workerIds().filter((id) => tabs.includes(id))).toEqual([]);
+
+    // Setup opening an example item: where its new tab loaded.
+    expect(await flow!.openListedItemByClick(piper, rows, { title: 'Engineer', link: '/piper/jobs/eng-1?utm_source=board' })).toEqual({ url: `${ATS_ORIGIN}/piper/jobs/eng-1` });
+  });
+
+  it('14g. setup Test on a click-through list with a row listed twice finds as many items as asked, the second row skipped', async () => {
+    const dupli = `${ATS_ORIGIN}/dupli/jobs`;
+    const opener = { selected: { shape: 'card' } };
+    const { linkFieldId: _linkFieldId, ...unlinked } = atsListingPattern;
+    const rows = { ...unlinked, siteId: 'dupli-ats', fields: unlinked.fields.filter((field) => field.kind !== 'link'), matcher: { pattern: { opener }, commands: {} } };
+    const boards = listingCollection([dupli], { patterns: [] });
+    await signedInFlow(boards);
+    const setup = flow!.addSiteSetups(boards, { id: 'dupli-ats', name: 'dupli-ats', browse: true, rowKey: ['title'], patterns: [rows, { ...atsDetailPattern, siteId: 'dupli-ats' }] });
+    const { items, run } = await flow!.listSetupExamples(setup, dupli, 2);
+    expect(run.problemPages).toEqual([]);
+    expect(items.map((item) => item.key)).toEqual(['Engineer', 'Staff Engineer']);
+  });
+
   it('19d. setup opens a row whose opener has no link by clicking it in the row; a click that goes nowhere in 3 seconds opened nothing', async () => {
     const opener = { selected: { shape: 'card' } };
     const withOpener = (pattern: SitePatternDefinition) => ({ ...pattern, matcher: { pattern: { opener }, commands: {} } });

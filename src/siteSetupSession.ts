@@ -5,7 +5,7 @@ import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
 import { setSiteMatchingViewer, setSiteSetupOpener, type SiteMatchingRequest, type SiteSetupRequest, type SiteSetupSettings } from './webAutomation/siteSetupOpener';
-import { listSetupExamples, openListedItem, openListedItemByClick, openProfilePage, readSetupExamples } from './webAutomation/app';
+import { listSetupExamples, openListedItem, openListedItemByClick, openProfilePage, readSetupExamples, subscribeWebAutomation } from './webAutomation/app';
 import type { CollectionDefinition, CollectionRunState, ExtractItem } from './webAutomation/collection';
 import { withSiteSetups } from './webAutomation/siteSetups';
 import { matcherOf, recordValues, type InspectorRecord } from './webAutomation/nativeHost';
@@ -90,8 +90,10 @@ function startSiteSetup(request: SiteSetupRequest): void {
     offerWrongPage: false,
     pending: null,
     error: null,
+    itemProblem: null,
     test: null,
     rowKey: null,
+    prepare: { open: false, test: null },
   };
   showRowKey(active);
   state.selectedIntegrationId = list.id;
@@ -177,7 +179,6 @@ function pickExampleItem(session: NonNullable<typeof active>): void {
   const pattern = list?.actions[0] ? actionPatternPayload(list.actions[0]) : null;
   if (!list || !pattern || !state.siteSetup) return;
   const name = itemName(session.request);
-  state.siteSetup.error = null;
   void handlers.inspectIntegrationPage(list.id, list.pages[0].id, 'parent', {
     existingPattern: pattern,
     prompt: `Click what opens a ${name}`,
@@ -248,7 +249,7 @@ export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown;
   const listing = sessionPatterns(session).find((pattern) => pattern.role === 'listing');
   if (!listing) return;
   const withoutLink = !opener.href;
-  state.siteSetup.error = null;
+  state.siteSetup.itemProblem = null;
   state.siteSetup.pending = `Opening the ${name} as a run does…`;
   rerender({ preserveMountedDocument: true });
   const opening = opener.href
@@ -259,7 +260,7 @@ export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown;
     state.siteSetup.pending = null;
     if (!opened) {
       pickExampleItem(session);
-      state.siteSetup.error = `That didn't open a ${name}. Click what opens one.`;
+      state.siteSetup.itemProblem = `That didn't open a ${name}. Click what opens one.`;
       rerender({ preserveMountedDocument: true });
       return;
     }
@@ -275,7 +276,7 @@ export function itemPicked(record: InspectorRecord, opener: { snapshot: unknown;
   }, (error: unknown) => {
     if (state.siteSetup) {
       state.siteSetup.pending = null;
-      state.siteSetup.error = error instanceof Error ? error.message : String(error);
+      state.siteSetup.itemProblem = error instanceof Error ? error.message : String(error);
     }
     rerender({ preserveMountedDocument: true });
   });
@@ -365,16 +366,24 @@ function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'tes
   };
   if (step === 'test-find') {
     session.testItems = [];
-    setup.test = { pending: `Finding ${TEST_ITEMS} ${name}s on the list…`, items: [], results: null, problem: null, opened: null };
+    const finding = `Finding ${TEST_ITEMS} ${name}s on the list…`;
+    setup.test = { pending: finding, items: [], results: null, problem: null, opened: null };
     rerender({ preserveMountedDocument: true });
-    void listSetupExamples(state.selectedIntegrationProfileId, definition, setup.url, TEST_ITEMS).then(({ items, run }) => {
+    // What the run is doing, as it goes (the events Background activity lists): a stall shows where it is.
+    const stopFollowing = subscribeWebAutomation((event) => {
+      if (!state.siteSetup?.test?.pending || active !== session) return;
+      state.siteSetup.test.pending = `${finding} ${event.message}`;
+      rerender({ preserveMountedDocument: true });
+    });
+    void listSetupExamples(state.selectedIntegrationProfileId, definition, setup.url, TEST_ITEMS).finally(stopFollowing).then(({ items, run }) => {
       if (!state.siteSetup || active !== session) return;
       session.testItems = items.slice(0, TEST_ITEMS);
       state.siteSetup.test = {
         pending: null,
         items: session.testItems.map((item) => ({ url: item.url, title: title(item) })),
         results: null,
-        problem: session.testItems.length ? null : runProblem(run) ?? `The list showed no ${name}s.`,
+        // Fewer than asked for: what stopped it, if anything did.
+        problem: session.testItems.length < TEST_ITEMS ? runProblem(run) ?? (session.testItems.length ? null : `The list showed no ${name}s.`) : null,
         opened: null,
       };
       rerender({ preserveMountedDocument: true });
@@ -421,7 +430,7 @@ export function runSiteSetupStep(step: SiteSetupStep): void {
   }
   if (step === 'open-page') void openProfilePage(state.selectedIntegrationProfileId, state.siteSetup.url);
   if (step === 'rows') buildRecordType(list, `${item} rows`, rowPrompts(itemName(session.request)));
-  if (step === 'pagination') handlers.addCommandForIntegrationPage(list.id, list.pages[0].id, true);
+  if (step === 'pagination') handlers.addCommandForIntegrationPage(list.id, list.pages[0].id, 'pagination');
   if (step === 'item-page') pickExampleItem(session);
   // The item page's examples, in the record type builder: one picked wrong is removed, or its fields picked again.
   const itemPage = sessionIntegration(session.itemId);

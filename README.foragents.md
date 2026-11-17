@@ -34,6 +34,55 @@ every close (`integration-browser-closed`), which fails every request still
 waiting on that profile. Don't add a pending flag that a case in the result
 switch (`mainStartup.ts`) clears; it is left set when the window closes first.
 
+## The integration browser's address and site information
+
+The toolbar's address and lock are a security signal, so only the host sets
+them. A page that moves without loading (a single-page site such as Gmail)
+is followed by Electron's `did-navigate-in-page`, and in Tauri by Galaxy's page
+script reporting `location`; the Tauri host takes a reported address only on
+the origin the page loaded (`show_integration_location`), since no move
+without a load changes it. Site information (the lock, clicked) makes the
+toolbar taller over the page and shows the host's view of the site: its
+certificate comes from WebKit's server trust on macOS
+(`src-tauri/src/site_security.rs`) and from the session's certificate check in
+Electron; WebView2 doesn't give a good connection's certificate, so Windows
+says so.
+
+A page refused for its certificate or secure connection opens Site information
+on it, saying why (`blocked`): Electron's `did-fail-load`, WebView2's
+`NavigationCompleted`, and on macOS WebKit's
+`webView:didFailProvisionalNavigation:withError:`, which wry's navigation
+delegate lacks, so `watch_refused_pages` adds it to `WryNavigationDelegate` at
+runtime and sets the delegate again (WebKit reads a delegate's methods when it
+is set). After a wry upgrade, check that class still lacks the method. The
+WebView2 hook (`watch_refused_pages` for Windows, in `site_security.rs`) can't
+be type-checked from macOS: `cargo check --target x86_64-pc-windows-msvc` fails
+building `aws-lc-sys`, a C dependency. Check it with a build on Windows after
+changing it. WebKit's
+phishing and malware warnings are set on explicitly
+(`keep_fraudulent_website_warnings`); WebView2's SmartScreen is on by default.
+
+## New tabs from web automation's windows
+
+A worker is one window. What a page in it opens in a new tab or window (a row
+that opens its item with `window.open`, a link with `target="_blank"`) opens
+nothing by itself: the host keeps the address (`on_new_window` in
+`src-tauri/src/web_automation.rs`, `setWindowOpenHandler` in
+`src-electron/web-automation-host.cjs`), and `takeOpenedWindow` opens it in a
+worker of its own, of the same profile. Clicking through a list reads the item
+there and closes it, so the list stays as it was (its search, its scroll) with
+no Back. The sign-in window still opens such pages in itself.
+
+## Dialogs
+
+New dialogs use the shared shell, `renderDialog` in `src/ui/dialog.ts`: the
+backdrop, the box, a title with an optional line under it, the body, and the
+buttons in a row at the bottom (closing is one of them; there is no corner
+×). Its header is laid out once (`.dialog-shell-*` in `dialogs.css`), so a
+dialog styles only its own parts under its class. Older dialogs build the same
+markup by hand, each with its own header rule; move one to the shell when you
+change it.
+
 ## Calling into a document's scripts
 
 Every callback a script registers with a Galaxy plugin (queue results and

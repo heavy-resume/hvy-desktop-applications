@@ -31,14 +31,17 @@ function placedJob(slug: string, title: string, location: string, pay: string, l
 }
 
 /** One company's board on a mock ATS: listing pages plus one detail page per job, all with the same markup. */
-export function atsCompany(company: string, displayName: string, pages: MockJob[][], options: { challenge?: boolean; restoresOnBack?: boolean; jobPageWall?: boolean } = {}): Record<string, MockPage> {
+export function atsCompany(company: string, displayName: string, pages: MockJob[][], options: { challenge?: boolean; restoresOnBack?: boolean; jobPageWall?: boolean; prepare?: MockPage['prepare']; opensInNewTab?: boolean } = {}): Record<string, MockPage> {
   const result: Record<string, MockPage> = {};
   pages.forEach((jobs, index) => {
     const path = index === 0 ? `/${company}/jobs` : `/${company}/jobs?page=${index + 1}`;
     result[path] = {
       challenge: index === 0 ? options.challenge : undefined,
+      // Its list shown only once searched for (on its first page: later pages carry the search).
+      ...(index === 0 && options.prepare ? { prepare: options.prepare } : {}),
       restoresOnBack: options.restoresOnBack,
       ...(index < pages.length - 1 ? { nextPage: `/${company}/jobs?page=${index + 2}` } : {}),
+      ...(options.opensInNewTab ? { opensInNewTab: true } : {}),
       opens: Object.fromEntries(jobs.map((item) => [`${company}-${item.slug}`, `/${company}/jobs/${item.slug}`])),
       matches: {
         'ats-listing': {
@@ -110,6 +113,12 @@ export function mockAtsSite(): MockSite {
       ...atsCompany('initech', 'Initech', [[job('eng-1', 'Engineer', 'Java')]], { challenge: true }),
       ...atsCompany('cyberdyne', 'Cyberdyne', [[job('eng-1', 'Engineer', 'C++')]], { challenge: true }),
       ...atsCompany('wonka', 'Wonka', [[job('eng-1', 'Engineer', 'Rust'), job('eng-2', 'Senior Engineer', 'Rust')]], { jobPageWall: true }),
+      // A board that lists jobs only once searched for (its steps type the search recorded).
+      ...atsCompany('stark', 'Stark', [[job('eng-1', 'Software Engineer', 'TypeScript'), job('eng-2', 'Software Engineer II', 'Go')]], { prepare: { commandId: 'search', value: 'Software engineer' } }),
+      // A board whose rows open their job in a new tab.
+      ...atsCompany('piper', 'Piper', [[job('eng-1', 'Engineer', 'Go'), job('eng-2', 'Staff Engineer', 'Go')]], { opensInNewTab: true }),
+      // A board whose rows open their job in a new tab, one of them listed twice (told apart only by what isn't read).
+      ...atsCompany('dupli', 'Dupli', [[job('eng-1', 'Engineer', 'Go'), job('eng-1b', 'Engineer', 'Go'), job('eng-2', 'Staff Engineer', 'Go'), job('eng-3', 'Principal Engineer', 'Go')]], { opensInNewTab: true }),
       ...atsCompany('hooli', 'Hooli', [[job('eng-1', 'Engineer I', 'Python'), job('eng-2', 'Engineer II', 'Python')]], { restoresOnBack: false }),
     },
   };

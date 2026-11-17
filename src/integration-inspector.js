@@ -828,6 +828,15 @@
     return candidates;
   };
 
+  // What a form control is set to, as a person sees it: a field's text, whether a box is checked, a list's choice. Null
+  // for anything else, whose text is what it shows. Ready checks (and a list's anchors) compare it.
+  const controlState = (element) => {
+    if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) return element.checked ? 'Checked' : 'Not checked';
+    if (element instanceof HTMLSelectElement) return element.selectedOptions[0]?.textContent?.trim() ?? '';
+    if (element instanceof HTMLTextAreaElement || (element instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'tel', 'url', 'number'].includes(element.type))) return element.value;
+    return null;
+  };
+
   const snapshot = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
     const rect = element.getBoundingClientRect();
@@ -847,6 +856,7 @@
         directText: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : directText.slice(0, 300),
         accessibleName: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : accessibleName.slice(0, 300),
         descendantText: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 800),
+        ...(inspectionKind !== 'parent' && inspectionKind !== 'scope' && controlState(element) !== null ? { controlState: controlState(element) } : {}),
         ...(inspectionKind === 'scope' ? { scopeLabel: scopeIdentity(element, scopeAnchorElement).label } : {}),
         cssPath: cssPath(element).slice(0, 600),
         attributes: Object.fromEntries(usefulAttributes
@@ -2046,10 +2056,11 @@
       if (typeof check.expectedValue !== 'string' || !check.expectedValue.trim()) {
         return { id: check.id, name: check.name, ready: true };
       }
-      const actual = normalizedReadyValue(extractedValue(match.element));
+      const actual = normalizedReadyValue(controlState(match.element) ?? extractedValue(match.element));
       return {
         id: check.id,
         name: check.name,
+        value: actual,
         ready: actual === normalizedReadyValue(check.expectedValue),
         reason: actual === normalizedReadyValue(check.expectedValue) ? undefined : 'value_changed',
       };
@@ -2365,7 +2376,7 @@
     const commandInputs = Array.isArray(command?.inputs) ? command.inputs : [];
     const commandInputIds = new Set(commandInputs.map((input) => input?.id).filter((id) => typeof id === 'string' && id));
     if (!command || !Array.isArray(steps) || !steps.length || steps.some((step) => !step || !['click', 'double-click', 'right-click', 'type', 'select'].includes(step.gesture)
-      || (step.gesture === 'type' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId)))
+      || (step.gesture === 'type' && typeof step.value !== 'string' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId)))
       || (step.gesture === 'select' && typeof step.value !== 'string' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId))))) return { status: 'no_match', reason: 'command_invalid', stepIndex: 0, stepsExecuted: 0 };
     const { minimumTargetConfidence } = patternThresholds(payload.pattern);
     let record = null;
@@ -2388,7 +2399,8 @@
     };
     for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
       const step = steps[stepIndex];
-      const textInput = step.gesture === 'type' ? payload.inputs?.[step.inputId] : undefined;
+      // What a step types: its parameter's value, or what was typed recording it (a site setup's steps to its list).
+      const textInput = step.gesture === 'type' ? (step.inputId ? payload.inputs?.[step.inputId] : step.value) : undefined;
       const selectionInput = step.gesture === 'select' ? (step.inputId ? payload.inputs?.[step.inputId] : step.value) : undefined;
       if (step.gesture === 'type' && typeof textInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
       if (step.gesture === 'select' && typeof selectionInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
@@ -2474,8 +2486,18 @@
   };
 
   let extractionRun = 0;
+  /**
+   * A site setup's list, got where runs read it (`prepareList`: its "Get to the list" command, and its ready checks):
+   * its steps taken unless its ready checks pass already, as a run does.
+   */
+  const getListThere = async (prepareList) => {
+    const checks = prepareList.checks || { elements: [] };
+    if (checks.elements?.length && pageReadiness(checks).ready) return;
+    await executeCommand({ command: prepareList.command, readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] } });
+    await waitForInteractionSettled();
+  };
   // How long reading a page scrolls it at most.
-  const EXTRACTION_SCROLL_BUDGET_MS = 30_000;
+  const EXTRACTION_SCROLL_BUDGET_MS = 8_000;
 
   const extractAcrossPage = async (pattern = {}, runId = extractionRun, checkPage = () => ({ ready: true })) => {
     let pageFailure = null;
@@ -2785,6 +2807,12 @@
       }
     },
     start(kind = 'target', options = {}) {
+      // A site setup's list, got where runs read it before picking on it (`prepareList`); then picking starts as asked.
+      if (options.prepareList) {
+        const { prepareList, ...picking } = options;
+        void getListThere(prepareList).then(() => window.__hvyGalaxyInspector.start(kind, picking));
+        return;
+      }
       inspectionKind = options.scopeSelection ? 'scope' : kind === 'parent' ? 'parent' : 'target';
       inspectionContext = options.context && typeof options.context === 'object' ? options.context : null;
       scopeElement = options.selectionScope
@@ -3139,6 +3167,9 @@
         // It may first ask which kind of pick it is (a list's next page: its Next link, or its page numbers), from the
         // asker's choices; the recording says which was chosen.
         const pickOptions = options.commandRecorder.pick || null;
+        // What is typed and chosen is kept as recorded, and nothing is asked each run: a site setup's steps to its list.
+        const keepValues = options.commandRecorder.keepValues === true;
+        let currentTypedValue = '';
         let singlePick = pickOptions && !pickOptions.choices ? pickOptions : null;
         const renderPickChoices = () => {
           clearRecorderInput();
@@ -3200,7 +3231,8 @@
           steps.push({
             gesture: currentGesture,
             target: currentTarget,
-            ...(currentGesture === 'type' ? { inputId: `input-${++parameterStepCount}` } : {}),
+            // Typed: kept as typed where the recording keeps its values (`keepValues`); else a parameter, asked each run.
+            ...(currentGesture === 'type' ? (keepValues ? { value: currentTypedValue } : { inputId: `input-${++parameterStepCount}` }) : {}),
             ...(currentGesture === 'select' && currentSelection?.askEachRun ? {
               inputId: `input-${++parameterStepCount}`,
               options: currentSelection.options,
@@ -3225,11 +3257,13 @@
           clearRecorderInput();
           setRecorderPicking(false);
           controls.replaceChildren();
-          statusText.textContent = `Step ${steps.length + 1}: enter a temporary value to verify text entry.`;
+          statusText.textContent = keepValues
+            ? `Step ${steps.length + 1}: enter what to type.`
+            : `Step ${steps.length + 1}: enter a temporary value to verify text entry.`;
           const input = document.createElement('textarea');
           input.rows = 3;
           input.dataset.commandRecorderInput = 'true';
-          input.placeholder = 'Temporary sample value';
+          input.placeholder = keepValues ? 'What to type' : 'Temporary sample value';
           input.style.cssText = 'width:100%;resize:vertical;padding:8px;border:1px solid #747c88;border-radius:7px;background:#111318;color:#fff;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
           const run = recorderButton('Confirm typing', true);
           run.addEventListener('click', () => {
@@ -3241,6 +3275,7 @@
               statusText.textContent = 'This target no longer accepts text. Select it again.';
               return;
             }
+            currentTypedValue = input.value;
             recordConfirmedStep();
           });
           status.insertBefore(input, controls);
@@ -3318,10 +3353,11 @@
           };
           const fixed = recorderButton('Use this value', true);
           fixed.addEventListener('click', () => { void finish(false); });
-          const parameter = recorderButton('Ask each run');
-          parameter.addEventListener('click', () => { void finish(true); });
+          // A recording that keeps its values asks nothing each run.
+          const parameter = keepValues ? null : recorderButton('Ask each run');
+          parameter?.addEventListener('click', () => { void finish(true); });
           status.insertBefore(input, controls);
-          controls.append(fixed, parameter);
+          controls.append(fixed, ...(parameter ? [parameter] : []));
           showCancel();
           input.focus();
         };
@@ -3347,7 +3383,7 @@
           statusText.textContent = currentGesture === 'type' || currentGesture === 'select'
             ? `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence.`
             : `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence. Choose whether to perform it or finish recording without changing the page.`;
-          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : currentGesture === 'select' ? 'Choose value' : `Perform ${currentGesture}`);
+          const confirm = recorderButton(currentGesture === 'type' ? 'Enter value' : currentGesture === 'select' ? 'Choose value' : `Perform ${currentGesture}`);
           confirm.addEventListener('click', () => {
             if (currentGesture === 'type') {
               renderSampleInput();
@@ -3697,9 +3733,21 @@
       publish({ kind: 'integration-command-result', requestId: payload.requestId, commandId: payload.command?.id, ...result });
       return result;
     },
-    validateReadyChecksAndPublish(checks = {}, context = {}) {
+    async validateReadyChecksAndPublish(checks = {}, context = {}) {
       window.__hvyGalaxyInspector.stop();
-      const readiness = pageReadiness(checks);
+      // A site setup's list: its steps to get there taken first (`context.prepareCommand`), then the checks, given the
+      // page a few seconds to settle, as a run does.
+      let readiness = pageReadiness(checks);
+      if (context.prepareCommand) {
+        const ran = await executeCommand({ command: context.prepareCommand, readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] } });
+        const deadline = Date.now() + 5000;
+        readiness = pageReadiness(checks);
+        while (!readiness.ready && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          readiness = pageReadiness(checks);
+        }
+        if (ran?.status !== 'executed') readiness = { ...readiness, ready: false, steps: ran };
+      }
       const layer = document.createElement('div');
       layer.id = 'hvy-galaxy-ready-check-matches';
       layer.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none';
@@ -3717,18 +3765,25 @@
         caption.style.cssText = `display:inline-block;padding:3px 6px;background:${color};color:#fff`;
         box.append(caption);
         layer.append(box);
-        overlays.push({ element: match.element, box });
+        overlays.push({ check, element: match.element, box });
       });
       document.documentElement.append(layer);
       let updateFrame = 0;
       const updateOverlays = () => {
         updateFrame = 0;
-        overlays.forEach(({ element, box }) => {
-          if (!element.isConnected) {
-            box.style.display = 'none';
-            return;
+        overlays.forEach((overlay) => {
+          const { box } = overlay;
+          // A page that draws its parts again (a sticky header as it scrolls, a list loading more) replaces the element:
+          // it is found again by its snapshot, as the check found it.
+          if (!overlay.element.isConnected) {
+            const again = resolveInteractionTarget(document, overlay.check.snapshot, 0.8, 'click');
+            if (again.status !== 'matched') {
+              box.style.display = 'none';
+              return;
+            }
+            overlay.element = again.element;
           }
-          const rect = element.getBoundingClientRect();
+          const rect = overlay.element.getBoundingClientRect();
           box.style.display = rect.width && rect.height ? 'block' : 'none';
           Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
         });
@@ -3739,9 +3794,15 @@
       updateOverlays();
       document.addEventListener('scroll', scheduleOverlayUpdate, true);
       window.addEventListener('resize', scheduleOverlayUpdate);
+      // And as the page changes without scrolling (its parts drawn again).
+      const pageChanges = new MutationObserver((changes) => {
+        if (changes.some((change) => !layer.contains(change.target))) scheduleOverlayUpdate();
+      });
+      pageChanges.observe(document.documentElement, { childList: true, subtree: true });
       matchOverlayCleanup = () => {
         document.removeEventListener('scroll', scheduleOverlayUpdate, true);
         window.removeEventListener('resize', scheduleOverlayUpdate);
+        pageChanges.disconnect();
         if (updateFrame) cancelAnimationFrame(updateFrame);
       };
       const result = {
@@ -3750,6 +3811,24 @@
         page: { origin: location.origin, pathname: location.pathname },
         ...readiness,
       };
+      // Said on the toolbar where asked (`context.toolbar`, a site setup's Test), with Done to clear the boxes: the test
+      // is over, its result in view as the page is looked at.
+      if (context.toolbar) {
+        const checked = readiness.elements.length;
+        const passing = readiness.elements.filter((element) => element.ready).length;
+        const status = readiness.steps
+          ? `Test failed: step ${(readiness.steps.stepIndex ?? 0) + 1} didn’t run.`
+          : readiness.ready
+            ? `Test passed: ${passing} of ${checked} ready ${checked === 1 ? 'check passes' : 'checks pass'}.`
+            : `Test failed: ${readiness.message}`;
+        publishToolbarState({ active: true, status, buttons: [{ id: 'end-test', label: 'Done', primary: true, disabled: false }] });
+        toolbarControl = (id) => {
+          if (id !== 'end-test') return;
+          toolbarControl = null;
+          removeUi();
+          publishToolbarState({});
+        };
+      }
       publish(result);
       return result;
     },
@@ -3761,6 +3840,9 @@
     async extractAndPublish(pattern = {}, context = {}) {
       const runId = ++extractionRun;
       stopLiveExampleWatch();
+      // A site setup's list is read where runs read it (`prepareList`).
+      if (context.prepareList) await getListThere(context.prepareList);
+      if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
       const checks = context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] };
       const readiness = await waitForPageReadiness(checks);
       if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
@@ -3816,6 +3898,12 @@
       return { matches: selected.length, records: selected };
     },
     matchAndHighlight(pattern = {}) {
+      // On a site setup's list, its matches are highlighted where runs read it (`prepareList`).
+      if (pattern.prepareList) {
+        const { prepareList, ...matching } = pattern;
+        void getListThere(prepareList).then(() => window.__hvyGalaxyInspector.matchAndHighlight(matching));
+        return;
+      }
       window.__hvyGalaxyInspector.stop();
       const layer = document.createElement('div');
       layer.id = 'hvy-galaxy-pattern-matches';

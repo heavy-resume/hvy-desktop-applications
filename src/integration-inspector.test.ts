@@ -64,6 +64,7 @@ interface InspectorApi {
   fetchStructuredSource(source: { kind: 'rss' | 'atom' | 'json-feed' | 'json-api'; url: string }): Promise<{ value: unknown }>;
   stop(): void;
   start(kind: 'parent' | 'target', options?: {
+    prepareList?: unknown;
     primary?: boolean;
     parentCssPath?: string;
     parentSnapshot?: InspectorSnapshot;
@@ -107,7 +108,7 @@ interface InspectorApi {
   extractAndPublish(pattern: Parameters<InspectorApi['extractPattern']>[0], context?: Record<string, unknown>): Promise<{ status?: string; matches: number; records: unknown[] }>;
   cancelExtraction(): void;
   pageReadiness(checks: { urlMode: 'strict-url' | 'strict-domain' | 'domain-regex'; urlValue: string; elements: Array<{ id: string; name: string; snapshot: InspectorSnapshot; expectedValue?: string }> }): { ready: boolean; urlReady: boolean; elements: Array<{ ready: boolean; reason?: string }>; message: string };
-  validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown> };
+  validateReadyChecksAndPublish(checks: Parameters<InspectorApi['pageReadiness']>[0], context?: Record<string, unknown>): Promise<ReturnType<InspectorApi['pageReadiness']> & { kind: 'integration-ready-check-validation'; context: Record<string, unknown>; steps?: { status: string } }>;
   selectBestRecords(records: ReturnType<InspectorApi['extractPattern']>['records']): ReturnType<InspectorApi['extractPattern']>;
   executeCommand(payload: { requestId?: string; watchRecord?: boolean; recordIdentity?: string; readyChecks?: Parameters<InspectorApi['pageReadiness']>[0]; pattern: Parameters<InspectorApi['extractPattern']>[0]; pageNumber?: number; command: { id: string; scope: 'page' | 'record'; pagination?: 'next' | 'page-number'; inputs?: Array<{ id: string; name: string; required: boolean; options?: Array<{ value: string; label: string }>; allowCustom?: boolean }>; steps: Array<{ gesture: 'click' | 'double-click' | 'right-click' | 'type' | 'select'; target: InspectorSnapshot; inputId?: string; value?: string; valueLabel?: string }> }; inputs?: Record<string, string>; recordParent?: string }): Promise<{ status: string; reason?: string; inputId?: string; record?: string; target?: string; score?: number; stepIndex?: number; stepsExecuted?: number }>;
 }
@@ -304,6 +305,33 @@ describe('integration structural inspector', () => {
     expect(result.wrongUrl.urlReady).toBe(false);
   });
 
+  it('checks a form control by what it is set to: a field by its text, a box by whether it is checked, a list by its choice', async () => {
+    const result = await page.evaluate(() => {
+      document.body.insertAdjacentHTML('afterbegin', `<form class="filters">
+        <input class="query" type="search" aria-label="Search" value="Software engineer">
+        <label><input class="seattle" type="checkbox" checked> Seattle</label>
+        <select class="sort" aria-label="Sort by"><option>Relevance</option><option selected>New</option></select>
+      </form>`);
+      const query = document.querySelector<HTMLInputElement>('.query')!;
+      const seattle = document.querySelector<HTMLInputElement>('.seattle')!;
+      const sort = document.querySelector<HTMLSelectElement>('.sort')!;
+      const picked = [query, seattle, sort].map((element) => window.__hvyGalaxyInspector.snapshotElement(element, null, 'target'));
+      const checks = {
+        urlMode: 'strict-domain' as const,
+        urlValue: location.hostname,
+        elements: picked.map((snapshot, index) => ({ id: `check-${index}`, name: `Check ${index + 1}`, snapshot, expectedValue: (snapshot.selected as { controlState?: string }).controlState })),
+      };
+      const there = window.__hvyGalaxyInspector.pageReadiness(checks);
+      seattle.checked = false;
+      const unchecked = window.__hvyGalaxyInspector.pageReadiness(checks);
+      return { states: picked.map((snapshot) => (snapshot.selected as { controlState?: string }).controlState), there: there.ready, unchecked: unchecked.message };
+    });
+    // What each is set to, as picked: the ready check's value.
+    expect(result.states).toEqual(['Software engineer', 'Checked', 'New']);
+    expect(result.there).toBe(true);
+    expect(result.unchecked).toBe('The ready check value changed: Check 2.');
+  });
+
   it('publishes self-contained ready-check validation results for the UI', async () => {
     await page.close();
     page = await browser.newPage();
@@ -312,7 +340,7 @@ describe('integration structural inspector', () => {
       window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__readyCheckResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const landmark = document.createElement('strong');
       landmark.textContent = 'Signed in';
       document.body.prepend(landmark);
@@ -321,7 +349,7 @@ describe('integration structural inspector', () => {
         urlValue: location.href,
         elements: [{ id: 'account', name: 'Account marker', snapshot: window.__hvyGalaxyInspector.snapshotElement(landmark, null, 'target'), expectedValue: 'Signed in' }],
       };
-      const returned = window.__hvyGalaxyInspector.validateReadyChecksAndPublish(checks, { mode: 'ready-check-validation' });
+      const returned = await window.__hvyGalaxyInspector.validateReadyChecksAndPublish(checks, { mode: 'ready-check-validation' });
       return { returned, published: window.__readyCheckResult };
     });
 
@@ -332,6 +360,101 @@ describe('integration structural inspector', () => {
       elements: [{ id: 'account', name: 'Account marker', ready: true }],
     });
     expect(result.published).toEqual(result.returned);
+  });
+
+  it('takes a site setup\'s steps to its list, typing what was recorded, before checking that it is there', async () => {
+    await page.evaluate(() => {
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__readyCheckResult = value; } };
+    });
+    const result = await page.evaluate(async () => {
+      document.body.insertAdjacentHTML('afterbegin', '<form class="search"><input class="query" type="search" aria-label="Search"></form>');
+      const query = document.querySelector<HTMLInputElement>('.query')!;
+      const field = window.__hvyGalaxyInspector.snapshotElement(query, null, 'target');
+      const prepareCommand = { id: 'get-there', name: 'Get to the list', scope: 'page', prepare: true, steps: [{ gesture: 'type', target: field, value: 'Software engineer' }] };
+      const checks = { urlMode: 'strict-domain' as const, urlValue: location.hostname, elements: [{ id: 'search', name: 'Search', snapshot: field, expectedValue: 'Software engineer' }] };
+      const before = window.__hvyGalaxyInspector.pageReadiness(checks);
+      const after = await window.__hvyGalaxyInspector.validateReadyChecksAndPublish(checks, { mode: 'ready-check-validation', prepareCommand });
+      return { before: before.ready, after, typed: query.value };
+    });
+    expect(result.before).toBe(false);
+    expect(result.typed).toBe('Software engineer');
+    expect(result.after).toMatchObject({ ready: true, elements: [{ id: 'search', ready: true, value: 'Software engineer' }] });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('gets a site setup\'s list there before picking on it, unless its ready checks pass already', async () => {
+    const typed = await page.evaluate(async () => {
+      document.body.insertAdjacentHTML('afterbegin', '<form class="search"><input class="query" type="search" aria-label="Search"></form>');
+      const query = document.querySelector<HTMLInputElement>('.query')!;
+      const field = window.__hvyGalaxyInspector.snapshotElement(query, null, 'target');
+      const prepareList = {
+        command: { id: 'get-there', name: 'Get to the list', scope: 'page', prepare: true, steps: [{ gesture: 'type', target: field, value: 'Software engineer' }] },
+        checks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [{ id: 'search', name: 'Search', snapshot: field, expectedValue: 'Software engineer' }] },
+      };
+      window.__hvyGalaxyInspector.start('target', { prepareList });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const first = query.value;
+      // Already there: picking starts without taking the steps again.
+      window.__hvyGalaxyInspector.stop();
+      query.value = 'Software engineer';
+      query.addEventListener('input', () => { query.dataset.typedAgain = 'true'; });
+      window.__hvyGalaxyInspector.start('target', { prepareList });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { first, typedAgain: query.dataset.typedAgain === 'true', picking: Boolean(document.getElementById('hvy-galaxy-inspector-status')) };
+    });
+    expect(typed).toEqual({ first: 'Software engineer', typedAgain: false, picking: true });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('gets a site setup\'s list there before reading it (Preview) or highlighting its matches', async () => {
+    const result = await page.evaluate(async () => {
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: () => undefined };
+      document.body.insertAdjacentHTML('afterbegin', '<form class="search"><input class="query" type="search" aria-label="Search"></form>');
+      const query = document.querySelector<HTMLInputElement>('.query')!;
+      const field = window.__hvyGalaxyInspector.snapshotElement(query, null, 'target');
+      const checks = { urlMode: 'strict-domain' as const, urlValue: location.hostname, elements: [{ id: 'search', name: 'Search', snapshot: field, expectedValue: 'Software engineer' }] };
+      const prepareList = { command: { id: 'get-there', name: 'Get to the list', scope: 'page', prepare: true, steps: [{ gesture: 'type', target: field, value: 'Software engineer' }] }, checks };
+      // Preview: the page's ready checks (the list's) pass once its steps are taken.
+      const read = await window.__hvyGalaxyInspector.extractAndPublish({ parents: [], targets: [] }, { mode: 'builder', readyChecks: checks, prepareList });
+      const previewed = query.value;
+      query.value = '';
+      window.__hvyGalaxyInspector.matchAndHighlight({ parents: [], targets: [], prepareList } as Parameters<InspectorApi['matchAndHighlight']>[0]);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return { status: read.status ?? 'read', previewed, highlighted: query.value };
+    });
+    expect(result).toEqual({ status: 'read', previewed: 'Software engineer', highlighted: 'Software engineer' });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('keeps a test\'s boxes on the page as it draws its parts again, and says the result on the toolbar until Done', async () => {
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: () => undefined, toolbarState: (value) => { window.__toolbarState = value; } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const box = () => page.evaluate(() => document.querySelector<HTMLElement>('#hvy-galaxy-ready-check-matches [data-ready-check-state]')?.style.display ?? 'gone');
+    await page.evaluate(async () => {
+      document.body.insertAdjacentHTML('afterbegin', '<header class="sticky"><input class="query" type="search" aria-label="Search" value="Software engineer"></header>');
+      const field = window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.query')!, null, 'target');
+      await window.__hvyGalaxyInspector.validateReadyChecksAndPublish({ urlMode: 'strict-domain', urlValue: location.hostname, elements: [{ id: 'search', name: 'Search', snapshot: field, expectedValue: 'Software engineer' }] }, { mode: 'ready-check-validation', toolbar: true });
+    });
+    expect(await box()).toBe('block');
+    expect(await page.evaluate(() => window.__toolbarState)).toEqual({ active: true, status: 'Test passed: 1 of 1 ready check passes.', buttons: [{ id: 'end-test', label: 'Done', primary: true, disabled: false }] });
+    // The page draws its header again: the box follows the new field.
+    await page.evaluate(() => {
+      const header = document.querySelector('.sticky')!;
+      header.replaceWith(header.cloneNode(true));
+    });
+    await page.waitForFunction(() => {
+      const shown = document.querySelector<HTMLElement>('#hvy-galaxy-ready-check-matches [data-ready-check-state]');
+      const field = document.querySelector('.query')!.getBoundingClientRect();
+      return shown?.style.display === 'block' && shown.style.top === `${field.top}px`;
+    });
+    // Done: the boxes go, and the toolbar is the browser's again.
+    await page.evaluate(() => window.__hvyGalaxyInspector.control('end-test'));
+    expect(await box()).toBe('gone');
+    expect(await page.evaluate(() => window.__toolbarState)).toEqual({});
+    expect(pageErrors).toEqual([]);
   });
 
   it('boxes matching ready-check landmarks green and changed values red', async () => {
@@ -348,7 +471,7 @@ describe('integration structural inspector', () => {
       const changed = document.createElement('time');
       changed.textContent = 'August';
       document.body.prepend(passing, changed);
-      window.__hvyGalaxyInspector.validateReadyChecksAndPublish({
+      void window.__hvyGalaxyInspector.validateReadyChecksAndPublish({
         urlMode: 'strict-url',
         urlValue: location.href,
         elements: [
@@ -2832,7 +2955,7 @@ describe('integration structural inspector', () => {
     await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Enter text' }).click();
     await clickPointerAt(page, '.entry-control');
     await page.locator('#hvy-galaxy-inspector-picker button').first().click();
-    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Continue to sample' }).click();
+    await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Enter value' }).click();
     await page.locator('[data-command-recorder-input]').fill('Temporary verification value');
     await page.locator('#hvy-galaxy-inspector-status button', { hasText: 'Confirm typing' }).click();
     await expect.poll(() => page.locator('.entry-control').inputValue()).toBe('Temporary verification value');

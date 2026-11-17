@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createCustomPageIntegration } from '../integrationRegistry';
 import { state } from '../state';
-import { renderIntegrationsDialog } from './render-integrations';
+import { renderIntegrationsDialog, renderSiteSetupPrepareDialog } from './render-integrations';
 
 /** A page of the setup with its record type picked: its fields, by id, from `examples` picks. */
 function picked(name: string, fields: string[], examples = 1) {
@@ -21,11 +21,16 @@ describe('Set up this site', () => {
       collectionName: 'Careers pages', documentName: 'Search.hvy', itemName: 'job', siteName: 'boards.example.test', url: 'https://boards.example.test/jobs',
       listIntegrationId: list.id, itemIntegrationId: item.id,
       fields: [{ id: 'title', label: 'Title' }, { id: 'description', label: 'Description' }],
-      prompts: null, offerWrongPage: false, pending: null, error: null,
-      test: null, rowKey: null,
+      prompts: null, offerWrongPage: false, pending: null, error: null, itemProblem: null,
+      test: null, rowKey: null, prepare: { open: false, test: null },
     };
     const before = renderIntegrationsDialog(state);
     expect(before).not.toContain('site-setup-row-key');
+    // Getting to the list comes second, before the rows, with nothing recorded yet.
+    expect(before).toMatch(/<h3 class="site-setup-step-title">Get to the list <small class="site-setup-step-optional">Optional<\/small><\/h3>/);
+    expect(before.indexOf('Get to the list')).toBeLessThan(before.indexOf('Pick an example job row'));
+    expect(before).toMatch(/data-action="open-site-setup-prepare" >Set up</);
+    expect(before).not.toContain('site-setup-prepare-dialog');
     expect(before).toContain('<h3 class="site-setup-step-title">Test</h3>');
     expect(before).toMatch(/data-step="test-find" >Find jobs</);
     expect(before).toMatch(/data-step="test-read" disabled>Read them</);
@@ -67,13 +72,46 @@ describe('Set up this site', () => {
       collectionName: 'Mail', documentName: 'Search.hvy', itemName: 'job', siteName: 'mail.google.com', url: 'https://mail.google.com/mail/u/0/#label/job+spam',
       listIntegrationId: list.id, itemIntegrationId: item.id,
       fields: [{ id: 'title', label: 'Title' }, { id: 'company', label: 'Company' }, { id: 'description', label: 'Description' }],
-      prompts: null, offerWrongPage: false, pending: null, error: null, test: null,
+      prompts: null, offerWrongPage: false, pending: null, error: null, itemProblem: null, test: null,
       rowKey: { choices: [{ id: 'title', label: 'Title' }, { id: 'company', label: 'Company' }], chosen: ['title'] },
+      prepare: { open: false, test: null },
     };
     const html = renderIntegrationsDialog(state);
     expect(html).toContain('Jobs here open by clicking: runs click each one.');
     expect(html).toContain('<legend>Tell jobs apart by</legend>');
     expect(html).toContain('<label class="checkbox-row"><input class="hvy-galaxy-input" type="checkbox" data-action="site-setup-row-key" data-field="title" checked><span>Title</span></label>');
     expect(html).toContain('<label class="checkbox-row"><input class="hvy-galaxy-input" type="checkbox" data-action="site-setup-row-key" data-field="company" ><span>Company</span></label>');
+  });
+
+  it('shows Get to the list in a window: its steps as recorded, its ready checks, and how Test went for each', () => {
+    const list = picked('Job list', ['title']);
+    list.pages[0].commands = [{ id: 'get-there', name: 'Get to the list', scope: 'page', prepare: true, steps: [
+      { gesture: 'type', target: { selected: { tag: 'input', accessibleName: 'Search' } }, value: 'Software engineer' },
+      { gesture: 'click', target: { selected: { tag: 'input', accessibleName: 'Seattle' } } },
+    ] }];
+    list.pages[0].readyChecks = { urlMode: 'strict-domain', urlValue: 'boards.example.test', elements: [
+      { id: 'search', name: 'Search', snapshot: {}, expectedValue: 'Software engineer' },
+      { id: 'seattle', name: 'Seattle', snapshot: {}, expectedValue: 'Checked' },
+    ] };
+    state.integrationRegistry = { ...state.integrationRegistry, integrations: [list] as never };
+    state.integrationsDialogOpen = true;
+    state.siteSetup = {
+      collectionName: 'Careers pages', documentName: 'Search.hvy', itemName: 'job', siteName: 'boards.example.test', url: 'https://boards.example.test/jobs',
+      listIntegrationId: list.id, itemIntegrationId: null, fields: [{ id: 'title', label: 'Title' }],
+      prompts: null, offerWrongPage: false, pending: null, error: null, itemProblem: null, test: null, rowKey: null,
+      prepare: { open: true, test: { pending: null, problem: null, result: { ready: false, message: 'The ready check value changed: Seattle.', elements: [
+        { id: 'search', name: 'Search', ready: true, value: 'Software engineer' },
+        { id: 'seattle', name: 'Seattle', ready: false, reason: 'value_changed', value: 'Not checked' },
+      ] } } },
+    };
+    const html = renderIntegrationsDialog(state) + renderSiteSetupPrepareDialog(state);
+    // In the panel: one button, and what is set up.
+    expect(html).toMatch(/data-action="open-site-setup-prepare" >Edit</);
+    expect(html).toContain('2 steps · 2 ready checks');
+    // In the window: the steps as recorded, each check with how Test went.
+    expect(html).toContain('Type “Software engineer” into');
+    expect(html).toContain('<strong>Search</strong> “Software engineer”</span><span class="site-setup-prepare-pass">Passed</span>');
+    expect(html).toContain('<strong>Seattle</strong> “Checked”</span><span class="site-setup-test-problem">Found “Not checked”</span>');
+    expect(html).toContain('The ready check value changed: Seattle.');
   });
 });

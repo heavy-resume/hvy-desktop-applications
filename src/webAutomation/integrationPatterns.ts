@@ -69,7 +69,10 @@ function sitePattern(integration: IntegrationDefinition, page: IntegrationPageDe
   const fields: SitePatternField[] = action.pattern.fields.map((field) => ({ id: field.label, kind: 'text' }));
   const pageCommands = (page.commands ?? []).filter((command) => command.scope === 'page');
   // The site setup's next page command, or (set up in the full manager) a page command named Next.
-  const next = pageCommands.find((command) => command.pagination) ?? pageCommands.find((command) => /^next\b/i.test(command.name.trim()));
+  const next = pageCommands.find((command) => command.pagination) ?? pageCommands.find((command) => !command.prepare && /^next\b/i.test(command.name.trim()));
+  // A list's way to get there before it is read, and its anchors: the page's ready checks' elements.
+  const prepare = pageCommands.find((command) => command.prepare);
+  const anchors = page.readyChecks?.elements ?? [];
   const commands = Object.fromEntries([...pageCommands, ...(action.commands ?? [])].map((command) => [command.id, command]));
   return {
     id: `integration:${integration.id}:${action.id}`,
@@ -80,6 +83,8 @@ function sitePattern(integration: IntegrationDefinition, page: IntegrationPageDe
     minimumConfidence: pattern.minimumConfidence,
     ...(listing ? { linkFieldId: LINK_FIELD_ID } : {}),
     ...(listing && next ? { paginationCommandId: next.id } : {}),
+    ...(listing && prepare ? { prepareCommandId: prepare.id } : {}),
+    ...(listing && anchors.length ? { anchors } : {}),
     matcher: { pattern: storedPattern(pattern), commands } satisfies IntegrationPatternMatcher,
     version: action.version,
   };

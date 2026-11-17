@@ -406,6 +406,12 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       return automation.openAttentionPage(runId);
     },
 
+    /** User action: gets a waiting page's list where it is read from by hand, in the shown worker window. */
+    typeOnPage(workerId: string, value: string): void {
+      timeline.push(`${stamp()} [user] types “${value}” on the page`);
+      host.typeOnPage(workerId, value);
+    },
+
     /** User action: solves the bot challenge in the shown window. */
     solveChallenge(origin: string): void {
       timeline.push(`${stamp()} [user] solves the challenge`);

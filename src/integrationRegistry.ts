@@ -122,6 +122,11 @@ export interface IntegrationCommandDefinition {
    * ('page-number': the step is one page number, and a run clicks the number of the page after the one it is on).
    */
   pagination?: 'next' | 'page-number';
+  /**
+   * A list page's way to get its list where it is read from, from a site setup (a search typed, a box ticked, a sort
+   * chosen): run on a start page whose anchors (the page's ready checks) don't hold yet.
+   */
+  prepare?: true;
 }
 
 export interface IntegrationCommandInputDefinition {

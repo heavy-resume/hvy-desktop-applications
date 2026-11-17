@@ -81,6 +81,12 @@ export interface UiHandlers {
   closeIntegrations(): void;
   /** A step of setting up a site for a document's collection, or Done (see siteSetupSession.ts). */
   siteSetupStep(step: string): void;
+  /** Site setup, Get to the list: its window opened or closed. */
+  openSiteSetupPrepare(open: boolean): void;
+  /** Get to the list window: Record steps, Add ready check, or Test. */
+  siteSetupPrepareStep(step: 'record' | 'add-check' | 'test'): void;
+  removeSiteSetupPrepareStep(index: number): void;
+  removeSiteSetupReadyCheck(checkId: string): void;
   /** Site setup, Tell items apart by: a field ticked or unticked. */
   siteSetupRowKey(fieldId: string): void;
   stopIntegrationActionPreview(): void;
@@ -139,7 +145,8 @@ export interface UiHandlers {
   runIntegrationAction(integrationId: string, actionId: string): void;
   closeIntegrationActionResult(): void;
   addCommandForIntegrationAction(integrationId: string, actionId: string): void;
-  addCommandForIntegrationPage(integrationId: string, pageId: string, pagination?: boolean): void;
+  /** A page command, recorded: a site setup's list's way to its next page (`pagination`) or to where it is read (`prepare`). */
+  addCommandForIntegrationPage(integrationId: string, pageId: string, purpose?: 'pagination' | 'prepare'): void;
   cancelIntegrationCommandBuilder(): void;
   saveIntegrationCommand(name: string, inputNames: Record<string, string>, kind?: { pagination?: 'next' | 'page-number' }): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;

@@ -1388,3 +1388,24 @@
 .background-activity-event-message {
   overflow-wrap: anywhere;
 }
+
+/* The shared dialog shell (src/ui/dialog.ts): a title, an optional line under it, the body, then the buttons. */
+.dialog-shell-header {
+  display: grid;
+  gap: 4px;
+}
+
+.dialog-shell-title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.dialog-shell-note {
+  margin: 0;
+}
+
+.dialog-shell-body {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}

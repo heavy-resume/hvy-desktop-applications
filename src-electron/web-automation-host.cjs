@@ -47,7 +47,9 @@ function createWebAutomationHost(deps) {
     await deps.profileCookies.save(entry.session, profileId, domains);
   }
 
-  async function createWindow(profileId, show) {
+  // `opened` keeps what a worker's page asks to open in a new tab or window; without it (the sign-in window), that opens
+  // in the window itself.
+  async function createWindow(profileId, show, opened) {
     const { session: browserSession, ready } = profileSession(profileId);
     await ready;
     const window = new BrowserWindow({
@@ -73,7 +75,15 @@ function createWebAutomationHost(deps) {
     contents.on('will-navigate', (event, url) => {
       if (url.startsWith('hvy-integration://')) event.preventDefault();
     });
-    contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // What a page opens in a new tab or window (a list whose rows open their item with window.open, a link with
+    // target="_blank"): a worker's is kept for `take-opened-window`, its page left as it is.
+    contents.setWindowOpenHandler(({ url }) => {
+      if (/^https?:/i.test(url)) {
+        if (opened) opened.push(url);
+        else void contents.loadURL(url).catch(() => undefined);
+      }
+      return { action: 'deny' };
+    });
     return window;
   }
 
@@ -124,14 +134,38 @@ function createWebAutomationHost(deps) {
     return { url: window.webContents.getURL() };
   }
 
+  // What the worker's page last asked to open in a new tab, opened in a worker of its own and loaded there.
+  async function takeOpenedWindow(workerId) {
+    const entry = worker(workerId);
+    const url = entry.opened.pop();
+    entry.opened.length = 0;
+    if (!url) return null;
+    const openedId = await createWorker(entry.profileId);
+    try {
+      return { workerId: openedId, url: (await navigate(openedId, url)).url };
+    } catch (error) {
+      // Not loaded, it is nobody's to close.
+      await command('close-worker', { workerId: openedId });
+      throw error;
+    }
+  }
+
+  async function createWorker(profileId) {
+    const workerId = `worker-${nextWorker++}`;
+    const opened = [];
+    workers.set(workerId, { window: await createWindow(profileId, false, opened), profileId, opened });
+    return workerId;
+  }
+
   async function inspect(workerId, request) {
     return pageCall(worker(workerId).window.webContents, 'inspect', request);
   }
 
   // A page command (such as Next) or an item command; waits for the page it opens, if any.
   async function runCommand(workerId, payload) {
-    const { window } = worker(workerId);
+    const { window, opened } = worker(workerId);
     const contents = window.webContents;
+    opened.length = 0;
     let navigated = null;
     const started = (details) => {
       if (details.isMainFrame && !details.isSameDocument && !details.url.startsWith('hvy-integration://')) navigated = waitForLoad(contents);
@@ -198,11 +232,7 @@ function createWebAutomationHost(deps) {
 
   async function command(name, args) {
     switch (name) {
-      case 'create-worker': {
-        const workerId = `worker-${nextWorker++}`;
-        workers.set(workerId, { window: await createWindow(args.profileId, false), profileId: args.profileId });
-        return workerId;
-      }
+      case 'create-worker': return createWorker(args.profileId);
       case 'close-worker': {
         const entry = workers.get(args.workerId);
         workers.delete(args.workerId);
@@ -214,6 +244,7 @@ function createWebAutomationHost(deps) {
       case 'hide-worker': worker(args.workerId).window.hide(); return null;
       case 'navigate': return navigate(args.workerId, args.url);
       case 'back': return back(args.workerId);
+      case 'take-opened-window': return takeOpenedWindow(args.workerId);
       case 'inspect': return inspect(args.workerId, args.request);
       case 'run-command': return runCommand(args.workerId, args.payload);
       case 'request': return request(args.workerId, args.request);

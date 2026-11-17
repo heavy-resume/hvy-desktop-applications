@@ -111,7 +111,9 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
-.integration-toolbar-fields { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; }
+/* Scrolls sideways when the fields don't fit, with no scroll bar taking the pills' room (a wheel scrolls it too). */
+.integration-toolbar-fields { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.integration-toolbar-fields::-webkit-scrollbar { display: none; }
 .integration-toolbar-fields[hidden] { display: none; }
 .integration-toolbar-field {
   padding: 3px 9px;

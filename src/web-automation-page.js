@@ -19,11 +19,16 @@
         const extraction = await inspector.extractAcrossPage(pattern.matcher);
         matches[pattern.id] = extraction.records || [];
       }
+      // A list's anchors, where asked: checked as a page's ready checks are, on its site (any of its addresses).
+      const anchors = Array.isArray(request.anchors)
+        ? inspector.pageReadiness({ urlMode: 'strict-domain', urlValue: location.hostname, elements: request.anchors })
+        : null;
       return {
         url: location.href,
         ready: document.readyState !== 'loading',
         matches,
         frames: [...document.querySelectorAll('iframe[src]')].map((frame) => ({ src: frame.src })),
+        ...(anchors ? { anchors: { ready: anchors.ready, problem: anchors.ready ? null : anchors.message } } : {}),
       };
     },
 

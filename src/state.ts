@@ -258,6 +258,8 @@ export interface AppState {
     /** Work in progress, such as finding an item on the list. */
     pending: string | null;
     error: string | null;
+    /** Why picking an example item didn't open it: said in its step, apart from the setup's own problems (`error`). */
+    itemProblem: string | null;
     /**
      * Test: the items found on the list (by title), then what reading their pages gave each, field by field; or why
      * nothing was found or read. Cleared when the setup changes.
@@ -277,6 +279,18 @@ export interface AppState {
      * another (`chosen`). Null otherwise.
      */
     rowKey: { choices: Array<{ id: string; label: string }>; chosen: string[] } | null;
+    /**
+     * Get to the list, its window open (`open`): its steps (the list page's prepare command) and ready checks (the list
+     * page's), and Test: the list loaded fresh, the steps taken, then each check, with what it found.
+     */
+    prepare: {
+      open: boolean;
+      test: {
+        pending: string | null;
+        result: { ready: boolean; message: string; elements: Array<{ id: string; name: string; ready: boolean; reason?: string; value?: string }>; steps?: { status?: string; reason?: string; stepIndex?: number } } | null;
+        problem: string | null;
+      } | null;
+    };
   } | null;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
@@ -287,6 +301,8 @@ export interface AppState {
   integrationCommandDraftSteps: IntegrationInteractionStepDefinition[];
   /** A site setup's pagination being recorded: its kind chosen in the browser, then one click pick, saved as picked. */
   integrationCommandDraftPagination: boolean;
+  /** The command being recorded gets a site setup's list where it is read from (`IntegrationCommandDefinition.prepare`). */
+  integrationCommandDraftPrepare: boolean;
   integrationCommandRunRequest: { integrationId: string; actionId?: string; pageId?: string; commandId: string; recordParent?: string } | null;
   integrationCommandDeleteDialogOpen: boolean;
   integrationCommandDeleteIntegrationId: string | null;
@@ -651,6 +667,7 @@ export const state: AppState = {
   integrationCommandDraftScope: 'record',
   integrationCommandDraftSteps: [],
   integrationCommandDraftPagination: false,
+  integrationCommandDraftPrepare: false,
   integrationCommandRunRequest: null,
   integrationCommandDeleteDialogOpen: false,
   integrationCommandDeleteIntegrationId: null,

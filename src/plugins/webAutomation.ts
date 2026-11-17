@@ -1051,6 +1051,7 @@ const ATTENTION_REASONS: Record<string, string> = {
   challenge: 'The site wants you to prove you’re human.',
   'sign-in-wall': 'The site wants you to sign in.',
   'page-not-ready': 'A page didn’t finish loading.',
+  'list-not-there': 'The list isn’t where its setup reads it from, after its steps to get there.',
 };
 
 const RUN_STATUS: Record<string, string> = {
@@ -2011,7 +2012,7 @@ const collectionView: HvyPluginFactory = (ctx) => {
       root.append(needsYouNotice(
         lookup,
         `${run.runId}\0${run.attention.workerId}\0${url}`,
-        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'} (${new URL(url).host}) Open it, deal with it there, and press Retry.${addExample.length ? ' If nothing looks wrong, you can try adding it as an example.' : ''}`),
+        paragraph(`${ATTENTION_REASONS[run.attention.reason] ?? 'This page needs you.'}${run.attention.detail ? ` ${run.attention.detail}` : ''} (${new URL(url).host}) Open it, deal with it there, and press Retry.${addExample.length ? ' If nothing looks wrong, you can try adding it as an example.' : ''}`),
         actions(open, show, retry, skip, ...addExample, stop),
       ));
     }

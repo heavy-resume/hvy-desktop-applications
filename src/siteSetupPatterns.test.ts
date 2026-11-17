@@ -44,6 +44,21 @@ describe('setting up a site into a collection', () => {
     expect(source.integration).not.toHaveProperty('siteSetup');
   });
 
+  it('takes the list\'s steps to get there and its ready checks as its prepare command and anchors, not as its Next', () => {
+    const list = setupPage('https://boards.test/acme/jobs', 1, ['title'], ['Search for engineers']);
+    list.pages[0].commands![0].prepare = true;
+    const anchor = { id: 'anchor-1', name: 'Page landmark 1', snapshot: { selected: { shape: 'search-field' } }, expectedValue: 'Software engineer' };
+    list.pages[0].readyChecks = { urlMode: 'strict-url', urlValue: 'https://boards.test/acme/jobs', elements: [anchor] };
+    const job = setupPage('https://boards.test/acme/jobs/1', 1, ['title']);
+    const [listing, detail] = patternsFromSetup('acme', [list, job], list.id);
+    expect(listing).toMatchObject({ prepareCommandId: 'command-0', anchors: [anchor] });
+    expect(listing.paginationCommandId).toBeUndefined();
+    expect((listing.matcher as { commands: Record<string, unknown> }).commands['command-0']).toMatchObject({ name: 'Search for engineers', prepare: true });
+    // Only a list is got to before it is read.
+    expect(detail.prepareCommandId).toBeUndefined();
+    expect(detail.anchors).toBeUndefined();
+  });
+
   it('passes what opens a row\'s item (its opener) to the list\'s matcher', () => {
     const list = setupPage('https://boards.test/acme/jobs', 1, ['company', 'title']);
     list.actions[0].pattern!.opener = { selected: { shape: 'title-link' } };

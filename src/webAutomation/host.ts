@@ -14,6 +14,13 @@ export interface BrowserHost {
 
   navigate(workerId: string, url: string): Promise<PageLocation>;
   back(workerId: string): Promise<PageLocation>;
+  /**
+   * What the worker's page last asked to open in a new tab or window since its last command (a row that opens its item
+   * with `window.open`, a link with `target="_blank"`): such a request opens nothing by itself, so the worker's page
+   * stays as it was. Taken, it opens in a worker of its own, of the same profile, and loads there; null when there is
+   * none. The caller closes that worker.
+   */
+  takeOpenedWindow(workerId: string): Promise<{ workerId: string; url: string } | null>;
   inspect(workerId: string, request: InspectionRequest): Promise<PageInspection>;
   runCommand(workerId: string, request: CommandRequest): Promise<CommandResult>;
   /** Same-origin, credentialed request made from inside the page the worker is on. */
@@ -46,6 +53,14 @@ export interface InspectionRequest {
    * more. Unset, every row on the page is read.
    */
   listingLimit?: number;
+  /** A list pattern whose anchors are checked too (`PageInspection.anchors`). */
+  anchorsOf?: SitePatternDefinition;
+}
+
+/** A list pattern's anchors on the page: whether they all hold, and if not, the first that doesn't, said for a person. */
+export interface AnchorCheck {
+  ready: boolean;
+  problem: string | null;
 }
 
 export interface ExtractedRecord {
@@ -68,6 +83,8 @@ export interface PageInspection {
   /** Number of matched signals per requested fingerprint; absent when it did not match. */
   fingerprintMatches: Record<string, number>;
   frames: Array<{ src: string }>;
+  /** Asked for (`anchorsOf`) and the pattern has anchors: how they stand. */
+  anchors?: AnchorCheck;
 }
 
 export interface CommandRequest {

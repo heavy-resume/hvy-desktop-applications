@@ -340,6 +340,11 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'add-command-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.addCommandForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'site-setup-step' && target.dataset.step) handlers.siteSetupStep(target.dataset.step);
     if (action === 'site-setup-row-key' && target.dataset.field) handlers.siteSetupRowKey(target.dataset.field);
+    if (action === 'open-site-setup-prepare') handlers.openSiteSetupPrepare(true);
+    if (action === 'close-site-setup-prepare') handlers.openSiteSetupPrepare(false);
+    if (action === 'site-setup-prepare-step' && (target.dataset.step === 'record' || target.dataset.step === 'add-check' || target.dataset.step === 'test')) handlers.siteSetupPrepareStep(target.dataset.step);
+    if (action === 'remove-site-setup-prepare-step') handlers.removeSiteSetupPrepareStep(Number(target.dataset.stepIndex));
+    if (action === 'remove-site-setup-ready-check' && target.dataset.checkId) handlers.removeSiteSetupReadyCheck(target.dataset.checkId);
     if (action === 'open-site-setup-test-value') handlers.openSiteSetupTestValue({ result: Number(target.dataset.result), field: Number(target.dataset.field) });
     if (action === 'close-site-setup-test-value') handlers.openSiteSetupTestValue(null);
     if (action === 'show-site-setup-test-matching') handlers.showSiteSetupTestMatching(Number(target.dataset.result));

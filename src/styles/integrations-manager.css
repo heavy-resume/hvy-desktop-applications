@@ -984,3 +984,74 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Get to the list: a site setup's steps to its list, and its ready checks (on the shared dialog shell). */
+.site-setup-prepare-dialog {
+  width: min(600px, 100%);
+}
+
+.site-setup-prepare-section {
+  display: grid;
+  gap: 8px;
+}
+
+.site-setup-prepare-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.site-setup-prepare-number {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--hvy-border, rgba(127, 127, 127, 0.35));
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.site-setup-prepare-title {
+  flex: 1;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.site-setup-prepare-rows {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-setup-prepare-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--hvy-border, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+}
+
+.site-setup-prepare-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-setup-prepare-empty {
+  margin: 0;
+  opacity: 0.75;
+}
+
+.site-setup-prepare-pass {
+  margin: 0;
+  color: var(--hvy-success, #27865f);
+  font-weight: 600;
+}
+
+.site-setup-prepare-status {
+  margin: 0;
+}

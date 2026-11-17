@@ -2,6 +2,7 @@ import { selectedInspectionContent } from '../integrationRegistry';
 import { siteSetupFields, type AppState } from '../state';
 import { isRecord } from './render-ai-mcp';
 import { escapeAttr, escapeHtml } from './shared';
+import { renderDialog } from './dialog';
 import { approvalMatchesDescriptor, webMcpCapabilityId, webMcpToolsForContext } from '../integrationWebMcp';
 import { analyzeWebMcpStructuredData, type WebMcpRecordSetCandidate } from '../integrationWebMcpStructuredData';
 
@@ -72,7 +73,7 @@ function shortAddress(url: string): string {
 }
 
 /**
- * Setting up a site for a document's collection: three steps in place of the
+ * Setting up a site for a document’s collection: a few steps in place of the
  * full manager. Each step uses the existing record type builder or command
  * recorder; Done saves the setup into the document, and closing saves nothing.
  */
@@ -82,7 +83,10 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
   const list = find(setup.listIntegrationId);
   const listPage = list?.pages[0] ?? null;
   const rows = list?.actions[0]?.pattern ? list.actions[0] : null;
-  const next = listPage?.commands?.find((command) => command.pagination) ?? listPage?.commands?.find((command) => command.scope === 'page') ?? null;
+  const next = listPage?.commands?.find((command) => command.pagination) ?? listPage?.commands?.find((command) => command.scope === 'page' && !command.prepare) ?? null;
+  // The steps that get the list where it is read from, and its anchors (the list page's ready checks).
+  const prepare = listPage?.commands?.find((command) => command.prepare) ?? null;
+  const anchors = listPage?.readyChecks?.elements ?? [];
   const itemIntegration = find(setup.itemIntegrationId);
   const posting = itemIntegration?.actions[0]?.pattern ? itemIntegration.actions[0] : null;
   const fieldLabels = (action: NonNullable<typeof rows>) => action.pattern!.fields
@@ -106,13 +110,23 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
     'If the site asks you to sign in, prove you’re human, or accept cookies, open the page and do that first. It opens in the browser profile chosen below, as you would see it.',
     '',
     button('Open the page', 'open-page'));
-  const rowsStep = step(2, `Pick an example ${item} row`, Boolean(rows), false,
+  // Before the rows: the list as runs read it (a search typed, a box ticked, a sort chosen), and what shows it is there,
+  // set up in a window of its own.
+  const prepareStatus = [
+    prepare ? `${prepare.steps.length} ${prepare.steps.length === 1 ? 'step' : 'steps'}` : '',
+    anchors.length ? `${anchors.length} ${anchors.length === 1 ? 'ready check' : 'ready checks'}` : '',
+  ].filter(Boolean).join(' · ');
+  const prepareStep = step(2, 'Get to the list', Boolean(prepare || anchors.length), true,
+    'If the list needs a search typed, a box ticked, or a sort chosen first, record those steps and add ready checks that show the list is there.',
+    escapeHtml(prepareStatus),
+    `<button type="button" class="hvy-galaxy-button" data-action="open-site-setup-prepare" ${setup.pending ? 'disabled' : ''}>${prepare || anchors.length ? 'Edit' : 'Set up'}</button>`);
+  const rowsStep = step(3, `Pick an example ${item} row`, Boolean(rows), false,
     `On the list page, pick the box around one ${escapeHtml(item)}, with everything you want from it inside, then assign what it shows to fields. <strong>Highlight matches</strong> checks it finds the other rows. The link to each ${escapeHtml(item)} comes from the title.`,
     rows ? `Reads: ${escapeHtml(fieldLabels(rows))} · ${rows.pattern!.parents.length} ${rows.pattern!.parents.length === 1 ? 'example' : 'examples'}` : '',
     rows ? button('Edit examples', 'rows') : button('Pick an example', 'rows', true));
   // Configured in the browser: which way the list goes to its next page (a Next link or button, or its page numbers,
   // whose arrow often goes to the next group of numbers, not the next page), then one click on it.
-  const nextStep = step(3, 'Pagination', Boolean(next), true,
+  const nextStep = step(4, 'Pagination', Boolean(next), true,
     'If the list has more pages, configure how it goes to the next one. Skip this when everything fits on one page.',
     next ? `Next page: ${next.pagination === 'page-number' ? 'page numbers' : next.pagination === 'next' ? 'the Next link or button' : escapeHtml(next.name)}` : '',
     `${button('Configure', 'pagination', false, !rows)}${next && listPage && list
@@ -132,9 +146,9 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         </fieldset>
       </div>`
     : '';
-  const itemStep = step(4, `Pick an example ${item}`, Boolean(posting), false,
+  const itemStep = step(5, `Pick an example ${item}`, Boolean(posting), false,
     `Pick one of the ${escapeHtml(item)}s in the list. Galaxy opens it as a run does, then you pick what to read from it, such as its description and title. Pick another to add an example of a ${escapeHtml(item)} page laid out differently.`,
-    `${posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : ''}${rowKey}`,
+    `${posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : ''}${setup.itemProblem ? `<span class="site-setup-test-problem" role="alert">${escapeHtml(setup.itemProblem)}</span>` : ''}${rowKey}`,
     `${posting ? button('Edit examples', 'item-examples') : ''}${button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows)}`);
   // Two of the list's items found, then read, as a run would with this setup: what each would hold, field by field.
   const test = setup.test;
@@ -153,7 +167,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
       ? `<ul class="site-setup-test-results">${test.items.map((found) => `<li class="site-setup-test-result"><strong class="site-setup-test-title">${escapeHtml(found.title)}</strong></li>`).join('')}</ul>`
       : '';
   const tested = Boolean(test?.results?.length && test.results.every((result) => !result.problem));
-  const testStep = step(5, 'Test', tested, false,
+  const testStep = step(6, 'Test', tested, false,
     `Find 2 ${escapeHtml(item)}s on the list, then read their pages as a run does, to check each field gets what you expect.`,
     `${test?.pending ? `<span class="site-setup-test-pending" role="status">${escapeHtml(test.pending)}</span>` : ''}${test?.problem ? `<span class="site-setup-test-problem">${escapeHtml(test.problem)}</span>` : ''}${testResults}`,
     `${button(`Find ${item}s`, 'test-find', false, !rows || !posting || Boolean(test?.pending))}${button('Read them', 'test-read', Boolean(test?.items.length && !test.results), !test?.items.length || Boolean(test?.pending))}`);
@@ -177,7 +191,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
         </div>
         ${setup.pending ? `<p class="site-setup-pending" role="status">${escapeHtml(setup.pending)}</p>` : ''}
         ${setup.error ? `<p class="integration-fetch-error" role="alert">${escapeHtml(setup.error)}</p>` : ''}
-        <ol class="site-setup-steps">${openStep}${rowsStep}${nextStep}${itemStep}${testStep}</ol>
+        <ol class="site-setup-steps">${openStep}${prepareStep}${rowsStep}${nextStep}${itemStep}${testStep}</ol>
         <div class="dialog-actions site-setup-footer"><label class="integration-profile-select site-setup-profile"><span>Browser profile</span><select class="hvy-galaxy-select" data-action="select-integration-profile" aria-label="Browser profile">${profiles.map((profile) => `<option value="${escapeAttr(profile.id)}" ${profile.id === state.selectedIntegrationProfileId ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select></label><button type="button" class="hvy-galaxy-button" data-action="close-integrations">Cancel</button>${button('Done', 'done', Boolean(rows && posting), !rows)}</div>
       </section>
     </div>${valueDialog}`;
@@ -400,6 +414,74 @@ export function renderIntegrationActionBuilderDialog(state: AppState): string {
     ? `<div class="integration-scope-configuration"><div class="integration-scope-configuration-copy"><strong>${escapeHtml(configuredScopeText)}</strong><small class="integration-scope-configuration-note">Only matching records inside this vector-matched section are included.</small></div><div class="integration-scope-configuration-actions"><button type="button" class="hvy-galaxy-button" data-action="limit-integration-action-to-section">Change</button><button type="button" class="hvy-galaxy-button" data-action="remove-integration-action-scope">Remove</button></div></div>`
     : '<div class="integration-scope-configuration"><div class="integration-scope-configuration-copy"><strong>Anywhere on the page</strong><small class="integration-scope-configuration-note">Optionally limit matching records to a vector-matched page section.</small></div><button type="button" class="hvy-galaxy-button" data-action="limit-integration-action-to-section">Choose section</button></div>');
   return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-record-table-dialog" role="dialog" aria-modal="true" aria-label="${state.integrationActionDraftActionId ? 'Edit' : 'Build'} record type" aria-busy="${state.integrationActionPreviewPending}"><div class="modal-header"><div><p class="eyebrow">${state.integrationActionDraftActionId ? 'Edit' : 'Build'} record type</p><h2>Define fields and examples</h2><p class="dialog-note">${state.integrationActionPreviewPending ? 'Previewing matches against the integration page in the background…' : state.integrationActionEditPageLoading ? 'Preparing the integration page for editing…' : 'Fields are columns. Saved examples are immutable rows of structural evidence.'}</p>${state.integrationActionFetchError ? `<p class="integration-fetch-error" role="alert"><strong>Preview failed</strong> <span>${escapeHtml(state.integrationActionFetchError)}</span></p>` : ''}</div><button type="button" class="hvy-galaxy-button icon-button" data-action="close-integration-action-builder" aria-label="Close" ${state.integrationActionPreviewPending ? 'disabled' : ''}>×</button></div><div class="integration-action-builder-content"><section class="integration-pattern-section integration-record-type-details"><label><span>Name</span><input class="hvy-galaxy-input" data-field="integration-record-type-name" autocomplete="off" value="${escapeAttr(state.integrationActionDraftName)}"></label><label><span>Description <small>Optional</small></span><input class="hvy-galaxy-input" data-field="integration-record-type-description" value="${escapeAttr(state.integrationActionDraftDescription)}"></label></section><section class="integration-pattern-section integration-confidence-first"><label class="integration-confidence-control"><span><strong>Minimum match confidence</strong><output>${Math.round(state.integrationActionMinimumConfidence * 100)}%</output></span><input type="range" min="50" max="95" step="1" value="${Math.round(state.integrationActionMinimumConfidence * 100)}" data-field="integration-action-confidence"><small>Lower values accept more structural variation.</small></label></section><section class="integration-pattern-section"><div class="integration-section-heading"><div><h3>Page section <small>Optional</small></h3><p>Restrict matching records to one structurally identified area of the page.</p></div></div>${scopeSection}</section><section class="integration-pattern-section"><div class="integration-section-heading"><div><h3>Examples</h3><p>Values are truncated in the table. Saved record types retain structural signatures rather than private page text.</p></div><button type="button" class="hvy-galaxy-button" data-action="add-another-integration-action-example" data-parent-index="0" ${parents.length && !state.integrationActionEditPageLoading && !state.integrationActionPreviewPending ? '' : 'disabled'}>+ Add fields</button></div><div class="integration-example-table-wrap"><table class="integration-example-table"><thead><tr><th>Example</th>${fieldHeaders}</tr></thead><tbody>${exampleRows}<tr class="integration-add-example-row"><th><button type="button" class="hvy-galaxy-button" data-action="add-integration-action-anchor" ${state.integrationActionEditPageLoading || state.integrationActionPreviewPending ? 'disabled' : ''}>＋</button></th><td colspan="${Math.max(1, targets.length)}">Add example</td></tr></tbody></table></div></section><section class="integration-pattern-section integration-required-fields"><div><h3>Required fields</h3><p>Illuminate fields that must exist for a record to match.</p></div><div>${requirements || '<span class="integration-empty-value">Add fields to configure requirements.</span>'}</div></section></div><div class="dialog-actions">${state.integrationActionPreviewPending ? '<span class="integration-background-operation"><span class="integration-selection-pulse" aria-hidden="true"></span>Scanning page…</span>' : ''}<button type="button" class="hvy-galaxy-button" data-action="test-integration-action-pattern" ${labelsComplete && parents.length && !state.integrationActionEditPageLoading && !state.integrationActionPreviewPending ? '' : 'disabled'}>Highlight matches</button>${state.integrationActionPreviewPending ? '<button type="button" class="hvy-galaxy-button" data-action="stop-integration-action-preview">Stop</button>' : `<button type="button" class="hvy-galaxy-button" data-action="preview-integration-action" ${labelsComplete && parents.length && !state.integrationActionEditPageLoading ? '' : 'disabled'}>Preview</button>`}<button type="button" class="hvy-galaxy-button primary-button" data-action="save-integration-action-draft" ${canSave && !state.integrationActionPreviewPending ? '' : 'disabled'}>Save</button></div></section></div>`;
+}
+
+/** A recorded step, as a person reads it: what it does, to what, with what it types or chooses. */
+function recordedStepText(step: { gesture: string; target: unknown; value?: string; valueLabel?: string; inputId?: string }): string {
+  const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
+  if (step.gesture === 'type') return step.inputId ? `Enter a parameter into ${target}` : `Type “${escapeHtml(step.value ?? '')}” into ${target}`;
+  if (step.gesture === 'select') return `${step.inputId ? 'Choose a parameter' : `Choose ${escapeHtml(step.valueLabel ?? step.value ?? 'an option')}`} in ${target}`;
+  return `${integrationCommandGestureLabel(step.gesture as Parameters<typeof integrationCommandGestureLabel>[0])} ${target}`;
+}
+
+/**
+ * Get to the list, a site setup's: the steps that get its list where runs read it, recorded in the browser, and the
+ * ready checks that show it is there, picked in it; Test loads the list fresh, takes the steps, and checks each. Hidden
+ * while recording or picking in the browser.
+ */
+export function renderSiteSetupPrepareDialog(state: AppState): string {
+  const setup = state.siteSetup;
+  if (!setup?.prepare.open || !state.integrationsDialogOpen || state.integrationCommandBuilderOpen || state.integrationReadyCheckSelectionPending) return '';
+  const page = state.integrationRegistry.integrations.find((integration) => integration.id === setup.listIntegrationId)?.pages[0];
+  const prepare = page?.commands?.find((command) => command.prepare) ?? null;
+  const checks = page?.readyChecks?.elements ?? [];
+  const test = setup.prepare.test;
+  const busy = Boolean(test?.pending);
+  const tested = (id: string) => test?.result?.elements.find((element) => element.id === id);
+  // A numbered part of the window, as the setup's own steps are: what it is, its button, and its rows (or what to do).
+  const section = (number: number, title: string, action: string, content: string) => `
+    <section class="site-setup-prepare-section">
+      <div class="site-setup-prepare-heading">
+        <span class="site-setup-prepare-number" aria-hidden="true">${number}</span>
+        <h3 class="site-setup-prepare-title">${escapeHtml(title)}</h3>
+        ${action}
+      </div>
+      ${content}
+    </section>`;
+  const actionButton = (label: string, step: string, disabled = false) =>
+    `<button type="button" class="hvy-galaxy-button" data-action="site-setup-prepare-step" data-step="${step}" ${disabled || busy ? 'disabled' : ''}>${escapeHtml(label)}</button>`;
+  const steps = prepare?.steps.length
+    ? `<ol class="site-setup-prepare-rows">${prepare.steps.map((recorded, index) => `
+        <li class="site-setup-prepare-row"><span class="site-setup-prepare-text">${recordedStepText(recorded)}</span><button type="button" class="hvy-galaxy-button icon-button" data-action="remove-site-setup-prepare-step" data-step-index="${index}" aria-label="Remove step ${index + 1}">×</button></li>`).join('')}</ol>`
+    : '<p class="site-setup-prepare-empty">Record what you do to get the list there: type a search, tick a box, choose a sort.</p>';
+  const checkRows = checks.length
+    ? `<ul class="site-setup-prepare-rows">${checks.map((check) => {
+      const result = tested(check.id);
+      const outcome = !result ? '' : result.ready
+        ? '<span class="site-setup-prepare-pass">Passed</span>'
+        : `<span class="site-setup-test-problem">${result.reason === 'element_not_found' ? 'Not found' : `Found “${escapeHtml(result.value ?? '')}”`}</span>`;
+      return `<li class="site-setup-prepare-row"><span class="site-setup-prepare-text"><strong>${escapeHtml(check.name)}</strong>${check.expectedValue ? ` “${escapeHtml(check.expectedValue)}”` : ''}</span>${outcome}<button type="button" class="hvy-galaxy-button icon-button" data-action="remove-site-setup-ready-check" data-check-id="${escapeAttr(check.id)}" aria-label="Remove ${escapeAttr(check.name)}">×</button></li>`;
+    }).join('')}</ul>`
+    : '<p class="site-setup-prepare-empty">Pick what shows the list is there, such as the search field or the box you ticked.</p>';
+  const stepsProblem = test?.result?.steps && test.result.steps.status !== 'executed'
+    ? `Step ${(test.result.steps.stepIndex ?? 0) + 1} didn’t run: ${String(test.result.steps.reason ?? 'its target wasn’t found').replaceAll('_', ' ')}.`
+    : '';
+  // How Test went, or what it needs: above the buttons it sits beside.
+  const testStatus = test?.pending
+    ? `<p class="site-setup-prepare-status site-setup-test-pending" role="status">${escapeHtml(test.pending)}</p>`
+    : test?.problem
+      ? `<p class="site-setup-prepare-status site-setup-test-problem">${escapeHtml(test.problem)}</p>`
+      : test?.result
+        ? `<p class="site-setup-prepare-status ${test.result.ready ? 'site-setup-prepare-pass' : 'site-setup-test-problem'}">${test.result.ready ? 'Test passed: the list is there.' : escapeHtml(stepsProblem || test.result.message || 'A ready check didn’t pass.')}</p>`
+        : checks.length ? '' : '<p class="site-setup-prepare-empty">Add a ready check to test.</p>';
+  return renderDialog({
+    className: 'site-setup-prepare-dialog',
+    title: 'Get to the list',
+    note: 'What gets a fresh load of the list ready to read.',
+    stacked: true,
+    body: `${section(1, 'Steps', actionButton(prepare ? 'Record again' : 'Record steps', 'record'), steps)}${section(2, 'Ready checks', actionButton('Add ready check', 'add-check'), checkRows)}${testStatus}`,
+    actions: `${actionButton('Test', 'test', !checks.length)}<button type="button" class="hvy-galaxy-button primary-button" data-action="close-site-setup-prepare">Done</button>`,
+  });
 }
 
 export function renderIntegrationCommandBuilderDialog(state: AppState): string {

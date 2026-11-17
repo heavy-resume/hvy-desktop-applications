@@ -171,6 +171,7 @@ export async function boot(): Promise<void> {
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftSteps = [];
         state.integrationCommandDraftPagination = false;
+        state.integrationCommandDraftPrepare = false;
         state.status = 'Command recording cancelled';
         rerender({ preserveMountedDocument: true });
         return;
@@ -181,6 +182,11 @@ export async function boot(): Promise<void> {
         state.integrationCommandDraftSteps = Array.isArray(recording.steps) ? recording.steps : [];
         // A site setup's pagination is one click, of the kind chosen in the browser, with a known name: nothing to
         // name or review, so it is saved as picked.
+        // A site setup's steps to its list: saved as recorded, back in their window, with nothing to name.
+        if (state.integrationCommandDraftPrepare) {
+          handlers.saveIntegrationCommand('Get to the list', {});
+          return;
+        }
         if (state.integrationCommandDraftPagination && (recording.pagination === 'next' || recording.pagination === 'page-number')) {
           handlers.saveIntegrationCommand(PAGINATION_COMMAND_NAMES[recording.pagination], {}, { pagination: recording.pagination });
           return;
