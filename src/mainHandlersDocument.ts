@@ -1,3 +1,5 @@
+import { withoutScheduledDocument } from './webAutomation/scheduleSettings';
+import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { reloadExternalFileChange, dismissExternalFileChange } from './mainDocumentFileMonitor';
 import { setPluginAcceptances } from './pluginManager';
 import { refreshBackgroundActivity } from './backgroundActivity';
@@ -431,6 +433,8 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
         deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
       }
       await clearHomepageDocumentPath(path);
+      // An archived document's jobs stop: it isn't one the user works with now. Unarchived, they are turned on again.
+      updateScheduledDocuments((documents) => withoutScheduledDocument(documents, path));
       await clearRecoveryDraftsForDocument(path, currentName);
       upsertWorkspace(await loadWorkspace(workspace.path));
       if (state.selectedFilePath === path) state.selectedFilePath = null;
@@ -513,6 +517,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       removeOpenDocumentFile(path);
       workspaceFilterDocumentCache.delete(path);
       deleteBackupTracking(backupDocumentKey(path, name));
+      updateScheduledDocuments((documents) => withoutScheduledDocument(documents, path));
       if (state.selectedFilePath === path) state.selectedFilePath = null;
       if (state.document?.source.path === path) {
         state.document = null;

@@ -1,10 +1,13 @@
+import { withJobOn, withoutUnused } from './webAutomation/scheduleSettings';
+import { scheduledJobKey } from './ui/render-scheduled-jobs';
+import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { fetchIntegrationRecords } from './integrationRecords';
 import { installAiChatClient } from './aiClient';
 import { beginDocumentKeyMigration, commitDocumentKeyMigration, finalizeDocumentKeyMigration, installMcpClient, installPluginPackage, loadWorkspace as loadWorkspaceBackend, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, rollbackDocumentKeyMigration, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget, type Workspace } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
 import { findFileInWorkspaces, siteSetupFields, state } from './state';
-import { applyAppColorTheme, handlers, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
+import { applyAppColorTheme, handlers, documentSessions, selectDocumentTab, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
 import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, openSetupTestValue, runSiteSetupStep, showSetupTestMatching, toggleSiteSetupRowKey, type SiteSetupStep } from './siteSetupSession';
@@ -2468,7 +2471,9 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Homepage disabled';
   }),
   saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {
-    state.appSettings = await saveAppSettings(settings);
+    // Scheduled jobs aren't edited here, and change while the dialog is open (a job turned on in its document, a job's
+    // turn recorded): the dialog's copy from when it opened would undo that, so the current ones are kept.
+    state.appSettings = await saveAppSettings({ ...settings, scheduledDocuments: state.appSettings.scheduledDocuments });
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     installAiChatClient(state.aiSettings, state.appSettings);
     state.appSettingsDialogOpen = false;
@@ -2511,6 +2516,37 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.scriptingReviewDialogOpen = true;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
+  },
+  openScheduledJobs: () => {
+    state.scheduledJobsDialogOpen = true;
+    state.scheduledJobsDraft = {};
+    rerender({ preserveMountedDocument: true });
+  },
+  closeScheduledJobs: () => {
+    state.scheduledJobsDialogOpen = false;
+    state.scheduledJobsDraft = {};
+    rerender({ preserveMountedDocument: true });
+  },
+  setScheduledJobOn: (path, jobId, on) => {
+    state.scheduledJobsDraft = { ...state.scheduledJobsDraft, [scheduledJobKey(path, jobId)]: on };
+  },
+  // Applied to the settings as they are now (a job's turn may have been recorded meanwhile); jobs all off drop out.
+  saveScheduledJobs: () => {
+    const changes = Object.entries(state.scheduledJobsDraft);
+    updateScheduledDocuments((documents) => withoutUnused(changes.reduce((current, [key, on]) => {
+      const [path, jobId] = key.split('\u0000');
+      return current[path] ? { ...current, [path]: withJobOn(current[path], jobId, on) } : current;
+    }, documents)));
+    state.scheduledJobsDialogOpen = false;
+    state.scheduledJobsDraft = {};
+    rerender({ preserveMountedDocument: true });
+  },
+  // A job's document, from Scheduled jobs: opened, the dialog closed (its unsaved changes dropped, as with Cancel).
+  openScheduledDocument: (path) => {
+    state.scheduledJobsDialogOpen = false;
+    state.scheduledJobsDraft = {};
+    const open = [...documentSessions.values()].find((session) => session.source.path === path);
+    void selectDocumentTab(open?.versionId ?? path);
   },
   closeScriptingReview: () => {
     state.scriptingReviewDialogOpen = false;

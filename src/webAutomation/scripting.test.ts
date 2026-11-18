@@ -25,6 +25,7 @@ async function setup() {
     database: async (use) => use(db),
     databaseChanged: () => undefined,
     openInBrowser: async () => undefined,
+    documentPath: () => '',
   });
   return { flow, boards, resolve, ctx: { rawDocument: {}, session: getDocumentScriptingSession(document) } };
 }

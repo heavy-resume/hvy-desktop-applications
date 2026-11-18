@@ -1,4 +1,4 @@
-import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
+import { QUEUE_PLUGIN_ID, SCHEDULE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 
 /**
  * Where a web automation block keeps its settings. A block's directive line holds its pluginConfig as one line of JSON,
@@ -7,7 +7,7 @@ import { QUEUE_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './
  * them in the block's text (plugin.txt), as indented JSON, a value a line; their pluginConfig stays empty. Other web
  * plugins (a profile context's one name) keep theirs in pluginConfig.
  */
-export const SETTINGS_IN_TEXT: ReadonlySet<string> = new Set([WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID, QUEUE_PLUGIN_ID]);
+export const SETTINGS_IN_TEXT: ReadonlySet<string> = new Set([WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID, QUEUE_PLUGIN_ID, SCHEDULE_PLUGIN_ID]);
 
 interface SettingsBlock {
   text?: string;

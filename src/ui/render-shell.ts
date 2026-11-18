@@ -11,8 +11,8 @@ export function renderDocumentTabs(state: AppState): string {
     <nav class="document-tabs" aria-label="Open documents">
       <button type="button" class="hvy-galaxy-button icon-button document-tab-new" data-action="create-file" title="New HVY document" aria-label="New HVY document">+</button>
       ${state.documentTabs.map((tab) => `
-        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}${needsYou.has(tab.sourcePath) ? ' needs-you' : ''}">
-          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">
+        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}${needsYou.has(tab.sourcePath) ? ' needs-you' : ''}${scheduledJobClass(state, tab.sourcePath)}">
+          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(scheduledJobTitle(state, tab.sourcePath) ?? tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">
             <span class="document-tab-dirty" aria-hidden="true"></span>
             <span class="document-tab-name">${escapeHtml(tab.name)}</span>
             ${needsYou.has(tab.sourcePath) ? '<span class="document-tab-needs-you" title="Background work in this document needs you" aria-label="needs you">!</span>' : ''}
@@ -22,6 +22,17 @@ export function renderDocumentTabs(state: AppState): string {
       `).join('')}
       ${renderRecentTabs(state)}
     </nav>`;
+}
+
+/** A tab a scheduled job is running in: busy until its document is idle, or marked with the job's problem. */
+function scheduledJobClass(state: AppState, path: string): string {
+  const run = state.scheduledJobRuns[path];
+  return run ? (run.problem ? ' scheduled-job-problem' : ' scheduled-job-busy') : '';
+}
+
+function scheduledJobTitle(state: AppState, path: string): string | null {
+  const run = state.scheduledJobRuns[path];
+  return run ? `${run.job}: ${run.problem ?? 'running'} · ${path}` : null;
 }
 
 const RECENT_TAB_LIMIT = 10;

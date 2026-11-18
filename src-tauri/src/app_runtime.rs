@@ -332,6 +332,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
+        .item(&MenuItemBuilder::new("Scheduled Jobs...").id("scheduled-jobs").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
         .item(&app_shortcut_menu_item(app, "Undo", "undo", "CmdOrCtrl+Z")?)

@@ -1,3 +1,4 @@
+import { DEFAULT_SCHEDULED_JOBS_AT_ONCE, normalizeScheduledDocuments, normalizeScheduledJobsAtOnce, type ScheduledDocuments } from './webAutomation/scheduleSettings';
 import { documentFileChanges } from './documentFileChanges';
 import { invoke } from '@tauri-apps/api/core';
 import { deferEncryptedWorkspace, resolveEncryptedWorkspace } from './encryptedFolders';
@@ -542,6 +543,10 @@ export interface AppSettings {
   webServiceApprovals: CapabilityAuthorizations;
   /** How many pages web collection reads at once: on one site, and in all. */
   webCollectionLimits: CollectionWorkerLimits;
+  /** Documents with scheduled jobs, by path: which jobs the user turned on, and when each last started. */
+  scheduledDocuments: ScheduledDocuments;
+  /** How many scheduled jobs' work may go on at once: the next job waits until fewer are busy. */
+  scheduledJobsAtOnce: number;
 }
 
 export interface InstalledPluginPackageFile {
@@ -677,6 +682,8 @@ export function loadAppSettings(): Promise<AppSettings> {
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
     // Stored as given (Tauri keeps it as plain JSON, null until first saved): validated here.
     webCollectionLimits: normalizeCollectionWorkerLimits(settings.webCollectionLimits),
+    scheduledDocuments: normalizeScheduledDocuments(settings.scheduledDocuments),
+    scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(settings.scheduledJobsAtOnce),
   }));
 }
 
@@ -686,6 +693,8 @@ export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
     ...saved,
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(saved.integrationWebMcpApprovals),
     webCollectionLimits: normalizeCollectionWorkerLimits(saved.webCollectionLimits),
+    scheduledDocuments: normalizeScheduledDocuments(saved.scheduledDocuments),
+    scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(saved.scheduledJobsAtOnce),
   }));
 }
 
@@ -886,6 +895,8 @@ export function defaultAppSettings(): AppSettings {
     integrationWebMcpApprovals: {},
     webServiceApprovals: {},
     webCollectionLimits: DEFAULT_COLLECTION_WORKER_LIMITS,
+    scheduledDocuments: {},
+    scheduledJobsAtOnce: DEFAULT_SCHEDULED_JOBS_AT_ONCE,
   };
 }
 

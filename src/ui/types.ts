@@ -254,6 +254,11 @@ export interface UiHandlers {
   keepEditingAppSettings(): void;
   openScriptingReview(): void;
   closeScriptingReview(): void;
+  openScheduledJobs(): void;
+  closeScheduledJobs(): void;
+  setScheduledJobOn(path: string, jobId: string, on: boolean): void;
+  saveScheduledJobs(): void;
+  openScheduledDocument(path: string): void;
   setWholeFilePowerScriptingAllowed(path: string, allowed: boolean): void;
   revokePowerScriptAcceptance(path: string, fingerprint: string): void;
   openAiSettings(): void;

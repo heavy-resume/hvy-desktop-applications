@@ -310,3 +310,124 @@
 .hvy-web-problem-action {
   justify-self: start;
 }
+
+/* A schedule block's jobs: each its checkbox and name, then how often it runs, on one line; its status under them. */
+.hvy-web-schedule {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.hvy-web-schedule-jobs {
+  display: grid;
+}
+
+.hvy-web-schedule-job {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.15rem;
+  padding: 0.4rem 0;
+}
+
+/* Jobs apart by a line, not each in a box of its own. */
+.hvy-web-schedule-job + .hvy-web-schedule-job {
+  border-top: 1px solid var(--hvy-border, #c9c3b8);
+}
+
+/* The checkbox before its name, with room between them. */
+.hvy-web-schedule-job .checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* "Scheduled jobs", then what is in effect: the job that runs next, its last turn and its next. */
+.hvy-web-schedule-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 1rem;
+}
+
+.hvy-web-schedule-status {
+  margin: 0;
+}
+
+/* A paused job's reason, after its controls. */
+.hvy-web-schedule-turn {
+  margin: 0;
+}
+
+/* Run now, at the end of its job's line. */
+.hvy-web-schedule-run {
+  margin-left: auto;
+}
+
+/* "every [6] [hours] (default …)" and "Wait until idle [5] min": short controls on one line. */
+.hvy-web-schedule-frequency {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+/* Narrower and shorter than Galaxy's inputs, which fill their row (base.css): as specific as that rule, and more. A
+   number with no spinner: typing and the arrow keys still change it. */
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-every:not([type="checkbox"]) {
+  width: 3.5rem;
+  padding-block: 0.2rem;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-every::-webkit-inner-spin-button,
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-every::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.hvy-web-schedule-frequency .hvy-galaxy-select {
+  width: auto;
+  padding-block: 0.2rem;
+}
+
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-time:not([type="checkbox"]) {
+  width: auto;
+  padding-block: 0.2rem;
+}
+
+/* The days a time of day runs on: each a checkbox before its name, close together. */
+.hvy-web-schedule-days {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+}
+
+.hvy-web-schedule-days .checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* The document's wait (for all its jobs) at the start of the line Cancel and Apply end. */
+.hvy-web-schedule-idle {
+  margin-right: auto;
+}
+
+.hvy-web-schedule-actions {
+  align-items: center;
+}
+
+/* "Not applied yet", just before Cancel and Apply. */
+.hvy-web-schedule-pending {
+  margin: 0;
+}
+
+/* A page's checks in its dialog (and the defaults): "Check" beside the control a scheduled job uses. */
+.hvy-web-check-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}

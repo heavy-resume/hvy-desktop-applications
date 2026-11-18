@@ -1,3 +1,4 @@
+import type { ScheduleTiming } from './configs';
 import type { Clock } from './clock';
 import { errorMessage, WebAutomationError } from './errors';
 import type { AutomationEmit } from './events';
@@ -67,14 +68,17 @@ export interface StartPage {
   /** What the page is called where it is listed; without one, its address. */
   name?: string;
   values?: Record<string, string>;
-  /** False when collecting everything skips this start page; it can still be collected on its own. */
-  included?: false;
+  /**
+   * Disabled (its Scheduling): fetching everything skips it (Fetch due's default, scheduled jobs, scripts, AI tools);
+   * it can still be fetched by name, or chosen in the block's pages table.
+   */
+  disabled?: true;
   /** This page's own limits; without them, the collection's (its default limits). */
   maxPages?: number;
   maxItems?: number;
   stopAtKnownPage?: boolean;
-  /** How many days apart it is checked; without it, the collection's (`cadence.ts`). */
-  checkEveryDays?: number;
+  /** When it is checked (every so long, or at a time of day), as a scheduled job's timing; without it, the collection's (`cadence.ts`). */
+  checkTiming?: ScheduleTiming;
   /** When a run last read it without a problem (ISO time); never, until one has. */
   checkedAt?: string;
 }
@@ -144,8 +148,8 @@ export interface CollectionDefinition {
    * the rest are older. Off unless set.
    */
   stopAtKnownPage?: boolean;
-  /** How many days apart each start page is checked, for one that doesn't set its own (`cadence.ts`). */
-  checkEveryDays: number;
+  /** When each start page is checked, for one that doesn't set its own (`cadence.ts`): every 7 days unless set. */
+  checkTiming: ScheduleTiming;
   /** How many due start pages "Fetch due" reads at most, the most overdue first. */
   duePagesPerRun: number;
   /**
@@ -432,6 +436,8 @@ interface ActiveRun {
   /** An `extract` run's items not opened yet, and those whose page is open and being read: each item's key by its URL. */
   waiting: Map<string, string>;
   reading: Map<string, string>;
+  /** No one is there to deal with a page that needs them (a scheduled job's run): it is let go, as setup's Test lets it. */
+  unattended: boolean;
 }
 
 /** The items a collection's runs are reading on their own pages (`extract`), by key: still to open, and open now. */
@@ -477,8 +483,8 @@ export class CollectionService {
     return [...this.runs.values()].map((run) => structuredClone(run.state));
   }
 
-  start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages): { runId: string; done: Promise<CollectionRunState> } {
-    const run = this.createRun(definition, profileId, consumer);
+  start(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, startPages = definition.startPages, options: { unattended?: boolean } = {}): { runId: string; done: Promise<CollectionRunState> } {
+    const run = this.createRun(definition, profileId, consumer, options.unattended === true);
     for (const startPage of startPages) {
       run.state.startPages[startPage.id] = { status: 'waiting', pages: 0, found: 0, known: 0, toCollect: 0, listed: 0, leftUnread: 0, read: 0, collected: 0, problems: 0, current: null };
     }
@@ -494,8 +500,8 @@ export class CollectionService {
    * pages were not read, or could not be (Retry). Items on one site are read in turn, as a run reads them; one item
    * alone goes first, as asked for.
    */
-  extract(definition: CollectionDefinition, profileId: string, items: ExtractItem[], consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
-    const run = this.createRun(definition, profileId, consumer);
+  extract(definition: CollectionDefinition, profileId: string, items: ExtractItem[], consumer: RecordConsumer, options: { unattended?: boolean } = {}): { runId: string; done: Promise<CollectionRunState> } {
+    const run = this.createRun(definition, profileId, consumer, options.unattended === true);
     const sites = new Map<string, ExtractItem[]>();
     for (const item of items) {
       const origin = new URL(item.url).origin;
@@ -603,7 +609,7 @@ export class CollectionService {
     run.resumeAttention?.();
   }
 
-  private createRun(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer): ActiveRun {
+  private createRun(definition: CollectionDefinition, profileId: string, consumer: RecordConsumer, unattended: boolean): ActiveRun {
     const runId = `run-${this.nextRunId++}`;
     const run: ActiveRun = {
       definition,
@@ -617,6 +623,7 @@ export class CollectionService {
       itemKeys: new Map(),
       waiting: new Map(),
       reading: new Map(),
+      unattended,
       state: { runId, capabilityId: definition.capabilityId, profileId, status: 'running', page: 0, collected: 0, skipped: 0, listed: 0, leftUnread: 0, problems: 0, startPageProblems: {}, problemPages: [], listedItems: [], startPages: {}, attention: null, error: null },
     };
     this.runs.set(runId, run);
@@ -1058,7 +1065,7 @@ export class CollectionService {
 
   /** Waits for the user to deal with a page; false when they let it go (`skip`) rather than resumed. */
   private async waitForAttention(run: ActiveRun, workerId: string, url: string, reason: string, siteId?: string, detail?: string): Promise<boolean> {
-    if (this.deps.unattended) {
+    if (this.deps.unattended || run.unattended) {
       this.deps.emit('collection', `${run.state.runId} let ${url} go: ${reason}, with no one to ask`);
       return false;
     }

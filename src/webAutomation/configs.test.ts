@@ -13,24 +13,26 @@ const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
 
 const errorsOf = (result: { ok: boolean; errors?: string[] }) => (result.ok ? [] : result.errors ?? []);
 
-describe('a start page left out of collecting all', () => {
-  it('keeps the flag through the configuration reader, and only when it is false', () => {
+describe('a start page disabled', () => {
+  it('keeps the flag through the configuration reader, and only when it is true', () => {
     const block = (startPages: unknown[]) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages });
-    const read = block([{ id: 'a', url: 'https://jobs.test/a', included: false }, { id: 'b', url: 'https://jobs.test/b', included: true }]);
-    expect(read.ok && read.value.collection.startPages).toEqual([{ id: 'a', url: 'https://jobs.test/a', included: false }, { id: 'b', url: 'https://jobs.test/b' }]);
+    const read = block([{ id: 'a', url: 'https://jobs.test/a', disabled: true }, { id: 'b', url: 'https://jobs.test/b', disabled: false }]);
+    expect(read.ok && read.value.collection.startPages).toEqual([{ id: 'a', url: 'https://jobs.test/a', disabled: true }, { id: 'b', url: 'https://jobs.test/b' }]);
   });
 });
 
 describe('how often start pages are checked', () => {
   it('keeps the cadence and when a page was checked, defaulting to weekly and ten due pages a run, and drops a time that is not one', () => {
     const read = readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages: [
-      { id: 'a', url: 'https://jobs.test/a', checkEveryDays: 3, checkedAt: '2026-11-10T08:00:00.000Z' },
-      { id: 'b', url: 'https://jobs.test/b', checkedAt: 'yesterday' },
+      { id: 'a', url: 'https://jobs.test/a', checkTiming: { every: 3 * 1440 }, checkedAt: '2026-11-10T08:00:00.000Z' },
+      { id: 'b', url: 'https://jobs.test/b', checkTiming: { at: '2:00', days: [1] }, checkedAt: 'yesterday' },
+      { id: 'c', url: 'https://jobs.test/c', checkTiming: { every: 'often' } },
     ] });
-    expect(read.ok && read.value.collection).toMatchObject({ checkEveryDays: 7, duePagesPerRun: 10 });
+    expect(read.ok && read.value.collection).toMatchObject({ checkTiming: { every: 7 * 1440 }, duePagesPerRun: 10 });
     expect(read.ok && read.value.collection.startPages).toEqual([
-      { id: 'a', url: 'https://jobs.test/a', checkEveryDays: 3, checkedAt: '2026-11-10T08:00:00.000Z' },
-      { id: 'b', url: 'https://jobs.test/b' },
+      { id: 'a', url: 'https://jobs.test/a', checkTiming: { every: 3 * 1440 }, checkedAt: '2026-11-10T08:00:00.000Z' },
+      { id: 'b', url: 'https://jobs.test/b', checkTiming: { at: '02:00', days: [1] } },
+      { id: 'c', url: 'https://jobs.test/c' },
     ]);
   });
 });

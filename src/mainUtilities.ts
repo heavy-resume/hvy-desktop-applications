@@ -1,3 +1,4 @@
+import { normalizeScheduledDocuments, normalizeScheduledJobsAtOnce } from './webAutomation/scheduleSettings';
 import { chooseWorkspaceFolder, normalizeHomepageSetting, saveAppSettings, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
 import { getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, saveColorThemeSettings } from './colorTheme';
 import { filePathBelongsToWorkspace, findFileInWorkspaces, state } from './state';
@@ -474,6 +475,8 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
     webServiceApprovals: normalizeCapabilityAuthorizations(settings.webServiceApprovals),
     webCollectionLimits: normalizeCollectionWorkerLimits(settings.webCollectionLimits),
+    scheduledDocuments: normalizeScheduledDocuments(settings.scheduledDocuments),
+    scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(settings.scheduledJobsAtOnce),
   };
 }
 

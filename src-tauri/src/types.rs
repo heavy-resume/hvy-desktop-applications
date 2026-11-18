@@ -613,6 +613,12 @@ struct AppSettings {
     // How many pages web collection reads at once; validated by the renderer's normalizeCollectionWorkerLimits.
     #[serde(default)]
     web_collection_limits: serde_json::Value,
+    // Documents with scheduled jobs, by path; validated by the renderer's normalizeScheduledDocuments.
+    #[serde(default)]
+    scheduled_documents: serde_json::Value,
+    // How many scheduled jobs' work may go on at once; validated by the renderer's normalizeScheduledJobsAtOnce.
+    #[serde(default)]
+    scheduled_jobs_at_once: serde_json::Value,
 }
 
 impl Default for AppSettings {
@@ -632,6 +638,8 @@ impl Default for AppSettings {
             integration_web_mcp_approvals: std::collections::BTreeMap::new(),
             web_service_approvals: std::collections::BTreeMap::new(),
             web_collection_limits: serde_json::Value::Null,
+            scheduled_documents: serde_json::Value::Null,
+            scheduled_jobs_at_once: serde_json::Value::Null,
         }
     }
 }

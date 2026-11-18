@@ -543,6 +543,27 @@
   grid-template-columns: 10px minmax(0, 1fr) auto;
 }
 
+/* A tab a scheduled job is running in (scheduledJobs.ts): a line pulsing along its bottom until its document is idle. */
+.document-tab.scheduled-job-busy {
+  box-shadow: inset 0 -2px 0 var(--hvy-accent, #2f6968);
+  animation: scheduled-job-busy 1.6s ease-in-out infinite;
+}
+
+/* A scheduled job's problem (it failed to save, or never finished): a still line in the warning color. */
+.document-tab.scheduled-job-problem {
+  box-shadow: inset 0 -2px 0 var(--hvy-warning, #d47a00);
+}
+
+@keyframes scheduled-job-busy {
+  50% { box-shadow: inset 0 -2px 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-tab.scheduled-job-busy {
+    animation: none;
+  }
+}
+
 /* The toolbar's Background activity indicator (render-background-activity.ts): before the save state, while work runs. */
 .background-activity-indicator {
   display: inline-flex;

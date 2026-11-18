@@ -8,7 +8,9 @@ import type { CollectionDefinition, CollectionField, CollectionProblem, Collecti
 import type { AuthorizationReview } from '../webAutomation/authorization';
 import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
 import { cadenceText, duePages } from '../webAutomation/cadence';
-import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
+import { runScheduledJobNow, scheduledDocuments, updateScheduledDocuments } from '../webAutomation/scheduleStore';
+import { jobTiming, scheduledFor, scheduleStatusText, timingText, withChangesApplied, withJobOn, withJobTiming, withScheduleChange, type ScheduledDocument } from '../webAutomation/scheduleSettings';
+import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readScheduleBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SCHEDULE_MIN_MINUTES, type ScheduleTiming, SCHEDULE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
 import { createWebAutomationPlugins, profileNameIn, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
 import { copyIcon } from '../ui/render-shell';
@@ -1094,7 +1096,7 @@ function readsWith(collection: CollectionDefinition, url: string): string | null
   return recognized ? (recognized.site ? setupName(recognized.site) : recognized.pattern.name) : null;
 }
 
-type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage' | 'readItemPages' | 'checkEveryDays' | 'duePagesPerRun'>>;
+type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage' | 'readItemPages' | 'checkTiming' | 'duePagesPerRun'>>;
 
 /** Why the block would refuse a change, checked over the whole configuration as the loader and lint do. */
 function checkCollection(ctx: HvyPluginContext, patch: CollectionPatch): string[] {
@@ -1530,7 +1532,7 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   limitsLegend.textContent = 'Limits';
   const limits = limitFields(collection, startPage, false);
   limitsBox.append(limitsLegend, paragraph('Leave blank to use the default limits.', 'hvy-web-page-hint'), ...limits.elements);
-  body.append(limitsBox);
+  body.append(limitsBox, limits.scheduling);
   const removePage = button('Remove page');
   removePage.addEventListener('click', () => {
     // The page's site setup goes with it when it reads no other page here.
@@ -1551,7 +1553,7 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   row.append(removePage, cancel, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, checkEveryDays: _checkEveryDays, name: _name, ...rest } = startPage;
+    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, checkTiming: _checkTiming, disabled: _disabled, name: _name, ...rest } = startPage;
     const next: StartPage = { ...rest, ...(name.value.trim() ? { name: name.value.trim() } : {}), url: address.value.trim(), values: values.read(), ...limits.read() };
     if (!Object.keys(next.values!).length) delete next.values;
     const now = currentCollection(ctx, collection);
@@ -1686,16 +1688,17 @@ function latestPageProgress(runs: CollectionRunState[]): Record<string, { progre
   return latest;
 }
 
-type Limit = 'maxPages' | 'maxItems' | 'checkEveryDays' | 'duePagesPerRun';
-type Limits = Partial<Record<Limit, number>> & { stopAtKnownPage?: boolean };
+type Limit = 'maxPages' | 'maxItems' | 'duePagesPerRun';
+type Limits = Partial<Record<Limit, number>> & { stopAtKnownPage?: boolean; disabled?: true; checkTiming?: ScheduleTiming };
 
 /**
  * How far a run goes at a page: list pages read, items taken from its list (known ones included), and whether a list page of items already in the list ends it.
- * How often it is checked (`cadence.ts`), and, for the defaults, how many due pages "Fetch due" reads.
+ * Apart from those (`scheduling`): how often it is checked, for Fetch due and scheduled jobs (`cadence.ts`), and, for
+ * the defaults, how many due pages a Fetch due reads.
  * For the default limits the numbers are required; for a page, a blank field (or "Default") uses the default, which
  * it shows.
  */
-function limitFields(collection: CollectionDefinition, current: Limits, defaults: boolean): { elements: HTMLElement[]; read(): Limits } {
+function limitFields(collection: CollectionDefinition, current: Limits, defaults: boolean): { elements: HTMLElement[]; scheduling: HTMLFieldSetElement; read(): Limits } {
   const input = (limit: Limit) => {
     const field = textInput(limit, current[limit] === undefined ? '' : String(current[limit]));
     field.type = 'number';
@@ -1708,19 +1711,51 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
   };
   const pages = input('maxPages');
   const itemCount = input('maxItems');
-  const every = input('checkEveryDays');
   const perRun = input('duePagesPerRun');
   const capitalized = `${items(collection).charAt(0).toUpperCase()}${items(collection).slice(1)}`;
   const stopText = `Stop at a list page of ${items(collection)} already in the list`;
   const stopHint = 'For lists with the newest first: the pages after it are older.';
-  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', itemCount], ['checkEveryDays', every], ...(defaults ? [['duePagesPerRun', perRun]] as const : [])] as const)
+  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', itemCount], ...(defaults ? [['duePagesPerRun', perRun]] as const : [])] as const)
     .flatMap(([limit, field]) => (field.value.trim() ? [[limit, Number(field.value)]] : [])));
   const elements = [
     labelled('Pages to read', pages, 'The page itself, then each Next.'),
     labelled(`${capitalized} to read`, itemCount, `The first this many on the list, ${items(collection)} already in it included.`),
-    labelled('Check every (days)', every, 'Due again this long after a run last read it.'),
-    ...(defaults ? [labelled('Due pages per run', perRun, 'Fetch due reads at most this many, the most overdue first.')] : []),
   ];
+  // How often a page is checked: only Fetch due and scheduled jobs go by it (Fetch reads every page ticked).
+  const scheduling = document.createElement('fieldset');
+  scheduling.className = 'hvy-web-page-values';
+  const schedulingLegend = document.createElement('legend');
+  schedulingLegend.textContent = 'Scheduling';
+  // A page disabled: fetching everything skips it (scheduled jobs, scripts, AI tools); it can still be chosen in the table.
+  let disabled = current.disabled === true;
+  const disable = checkboxRow('Disable', disabled, (checked) => {
+    disabled = checked;
+  });
+  // When a page is checked, with the control a scheduled job uses: every so long, or at a time of day; a page may keep
+  // the default. Drawn again as it changes (every and at show different fields).
+  let check: ScheduleTiming | undefined = defaults ? collection.checkTiming : current.checkTiming;
+  const checkRow = document.createElement('div');
+  checkRow.className = 'hvy-web-check-timing';
+  const drawCheck = () => checkRow.replaceChildren(timingInput('Check', check, (timing) => {
+    check = timing ?? (defaults ? collection.checkTiming : undefined);
+    drawCheck();
+  }, defaults ? {} : { fallback: collection.checkTiming }));
+  drawCheck();
+  const checkLabel = document.createElement('span');
+  checkLabel.textContent = 'Check';
+  const checkField = document.createElement('div');
+  checkField.className = 'hvy-web-check-field';
+  checkField.append(checkLabel, checkRow);
+  scheduling.append(
+    schedulingLegend,
+    paragraph('For Fetch due and scheduled jobs: a page is due again once its time comes after it was last checked.', 'hvy-web-page-hint'),
+    checkField,
+    ...(defaults
+      ? [labelled('Due pages per run', perRun, 'Fetch due reads at most this many, the most overdue first.')]
+      : [disable, paragraph('Scheduled jobs, scripts, and AI tools skip it. Choosing it in the table still fetches it.', 'hvy-web-page-hint')]),
+  );
+  const ownDisabled = (): { disabled?: true } => (!defaults && disabled ? { disabled: true } : {});
+  const checked = (): { checkTiming?: ScheduleTiming } => (check ? { checkTiming: check } : {});
   if (defaults) {
     const stop = document.createElement('input');
     stop.type = 'checkbox';
@@ -1732,7 +1767,7 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
     const stopName = document.createElement('span');
     stopName.textContent = stopText;
     stopLabel.append(stop, stopName);
-    return { elements: [...elements, stopLabel, paragraph(stopHint, 'hvy-web-page-hint')], read: () => ({ ...numbers(), stopAtKnownPage: stop.checked }) };
+    return { elements: [...elements, stopLabel, paragraph(stopHint, 'hvy-web-page-hint')], scheduling, read: () => ({ ...numbers(), stopAtKnownPage: stop.checked, ...checked() }) };
   }
   // A page follows the default, or sets its own either way.
   const choice = document.createElement('select');
@@ -1751,7 +1786,8 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
   choiceLabel.append(choiceName, choice, paragraph(stopHint, 'hvy-web-page-hint'));
   return {
     elements: [...elements, choiceLabel],
-    read: () => ({ ...numbers(), ...(choice.value ? { stopAtKnownPage: choice.value === 'true' } : {}) }),
+    scheduling,
+    read: () => ({ ...numbers(), ...(choice.value ? { stopAtKnownPage: choice.value === 'true' } : {}), ...ownDisabled(), ...checked() }),
   };
 }
 
@@ -1761,16 +1797,15 @@ function ownLimitsText(collection: CollectionDefinition, page: StartPage): strin
     ...(page.maxPages !== undefined ? [`${page.maxPages} ${page.maxPages === 1 ? 'page' : 'pages'}`] : []),
     ...(page.maxItems !== undefined ? [`${page.maxItems} ${items(collection)}`] : []),
     ...(page.stopAtKnownPage !== undefined ? [page.stopAtKnownPage ? 'stops at a page already in the list' : 'keeps going past pages already in the list'] : []),
-    ...(page.checkEveryDays !== undefined ? [`checked every ${page.checkEveryDays} ${page.checkEveryDays === 1 ? 'day' : 'days'}`] : []),
   ];
   return parts.length ? `Limits: ${parts.join(', ')}` : null;
 }
 
-/** "Default limits…": how far a run goes at each page that doesn't set its own, saved into the block. */
+/** "Defaults…": how far a run goes, and how often a page is checked, for each page that doesn't set its own; saved into the block. */
 function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDefinition): void {
-  const { form, body, errors, row, close } = openModal('Default limits', 'hvy-web-limits-dialog');
+  const { form, body, errors, row, close } = openModal('Defaults', 'hvy-web-limits-dialog');
   const limits = limitFields(collection, collection, true);
-  body.append(paragraph('For each page that doesn’t set its own.', 'hvy-web-page-hint'), ...limits.elements);
+  body.append(paragraph('For each page that doesn’t set its own.', 'hvy-web-page-hint'), ...limits.elements, limits.scheduling);
   const cancel = button('Cancel');
   cancel.addEventListener('click', close);
   const save = button('Confirm', true);
@@ -1785,24 +1820,20 @@ function openDefaultLimitsDialog(ctx: HvyPluginContext, collection: CollectionDe
   limits.elements[0].querySelector('input')?.focus();
 }
 
-/** A page's included flag, as collecting everything reads it: false is saved, true is the default (left out). */
-function withIncluded(page: StartPage, included: boolean): StartPage {
-  const { included: _included, ...rest } = page;
-  return included ? rest : { ...rest, included: false as const };
-}
-
 /**
- * Where a run looks: the block's start pages, as a table. Each row is ticked while collecting everything includes it,
- * with what reads it, how its last run went (or that it has none), opening it, and editing it. Above it: collecting the
- * pages ticked, adding a page or a pasted site setup, the default limits (on the right), and whether a run reads each
+ * Where a run looks: the block's start pages, as a table. Each row has a tick choosing it for Fetch and Fetch due (not
+ * saved; every page not disabled until some are chosen), what reads it, how its last run went (or that it has none), opening it, and editing it. Above it: collecting the
+ * pages ticked, adding a page or a pasted site setup, the defaults (on the right), and whether a run reads each
  * item's own page. `collectPages` is null without an output to collect into, and `openPage` until the block has a
  * browser profile. Stop is always there, beside Fetch, and enabled while a run is going (`stop` stops them), so a run
  * starting or ending never moves what is below the block.
  */
-function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPages: ((pages: StartPage[]) => void) | null, openPage: ((page: StartPage) => void) | null, stop: (() => void) | null): HTMLElement {
+function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, runs: CollectionRunState[], collectPages: ((pages: StartPage[]) => void) | null, openPage: ((page: StartPage) => void) | null, stop: (() => void) | null, selection: { chosen: Set<string> | null; choose(next: Set<string>): void }): HTMLElement {
   const progressByPage = latestPageProgress(runs);
   const busy = runs.some((run) => run.status === 'running' || run.status === 'needs-attention');
-  const included = collection.startPages.filter((page) => page.included !== false);
+  // The pages ticked: chosen in the table (not saved), or every page not disabled until some are.
+  const isChosen = (page: StartPage) => (selection.chosen ? selection.chosen.has(page.id) : !page.disabled);
+  const included = collection.startPages.filter(isChosen);
   const section = document.createElement('section');
   section.className = 'hvy-web-pages';
   section.setAttribute('aria-label', 'Pages to look at');
@@ -1812,13 +1843,13 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
 
   // The bar: what acts on the pages ticked, and on the block, then the default limits on the right.
   const collect = button(`Fetch ${items(collection)}${included.length ? ` (${included.length})` : ''}`, true);
-  collect.title = 'Fetches from the pages ticked: what collecting everything (a script, AI tools) fetches from.';
+  collect.title = 'Fetches from the pages ticked.';
   collect.disabled = !collectPages || busy || !included.some((page) => readsWith(collection, page.url));
   collect.addEventListener('click', () => collectPages?.(included.filter((page) => readsWith(collection, page.url))));
   // The pages ticked that are due, the most overdue first, as many as a run takes (`cadence.ts`).
   const due = duePages(collection, included.filter((page) => readsWith(collection, page.url)), Date.now());
   const fetchDue = button(`Fetch due${due.length ? ` (${due.length})` : ''}`);
-  fetchDue.title = `Fetches from the pages ticked that are due: each is checked every ${collection.checkEveryDays} ${collection.checkEveryDays === 1 ? 'day' : 'days'} unless it sets its own, at most ${collection.duePagesPerRun} a run.`;
+  fetchDue.title = `Fetches from the pages ticked that are due: each is checked ${timingText(collection.checkTiming)} unless it sets its own, at most ${collection.duePagesPerRun} a run.`;
   fetchDue.disabled = !collectPages || busy || !due.length;
   fetchDue.addEventListener('click', () => collectPages?.(due));
   const stopRuns = button('Stop');
@@ -1830,8 +1861,8 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   const paste = button('Add from clipboard');
   paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
   // How far a run goes at each page that doesn't set its own limits.
-  const limits = button('Default limits…');
-  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}, checked every ${collection.checkEveryDays} ${collection.checkEveryDays === 1 ? 'day' : 'days'}, ${collection.duePagesPerRun} due pages a run.`;
+  const limits = button('Defaults…');
+  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}, checked ${timingText(collection.checkTiming)}, ${collection.duePagesPerRun} due pages a run.`;
   limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
   const bar = document.createElement('div');
   bar.className = 'hvy-web-pages-bar';
@@ -1881,9 +1912,9 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
     box.addEventListener('change', () => onChange(box.checked));
     return box;
   };
-  // Every page ticked, or none; part ticked shows as such.
-  const all = tick(included.length === collection.startPages.length, 'Include every page when collecting', (on) => {
-    saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((page) => withIncluded(page, on)) });
+  // Every page ticked, or none; part ticked shows as such. Choosing, not a setting: nothing is saved.
+  const all = tick(included.length === collection.startPages.length, 'Choose every page', (on) => {
+    selection.choose(new Set(on ? collection.startPages.map((page) => page.id) : []));
   });
   all.indeterminate = included.length > 0 && included.length < collection.startPages.length;
   const heading = row(cell('hvy-web-pages-tick', all), cell('hvy-web-pages-head', 'Page'), cell('hvy-web-pages-head', 'Last run'), cell('hvy-web-pages-head', ''));
@@ -1894,15 +1925,18 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
     const reads = readsWith(collection, page.url);
     const name = pageName(collection, page);
     const latest = progressByPage[page.id];
-    const include = tick(page.included !== false, `Include ${name} when collecting`, (on) => {
-      saveCollection(ctx, { startPages: currentCollection(ctx, collection).startPages.map((candidate) => (candidate.id === page.id ? withIncluded(candidate, on) : candidate)) });
+    const include = tick(isChosen(page), `Choose ${name}`, (on) => {
+      const next = new Set(collection.startPages.filter(isChosen).map((candidate) => candidate.id));
+      if (on) next.add(page.id);
+      else next.delete(page.id);
+      selection.choose(next);
     });
     const about = [
       paragraph(name, 'hvy-web-automation-entry hvy-web-page-name'),
       ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-page-hint')] : []),
       paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-page-hint'),
       ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-page-hint')] : []),
-      paragraph(cadenceText(collection, page, Date.now()), 'hvy-web-page-hint'),
+      paragraph(page.disabled ? 'Disabled: fetching everything skips it' : cadenceText(collection, page, Date.now()), 'hvy-web-page-hint'),
     ];
     const lastRun = latest?.problem
       ? paragraph(`Couldn’t read this page. ${latest.problem}`, 'hvy-web-error')
@@ -1937,6 +1971,9 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
 const collectionView: HvyPluginFactory = (ctx) => {
   // Why collecting one start page could not start, shown until the next try.
   let problem = '';
+  // The pages chosen in the table, by id: what Fetch and Fetch due act on. Not saved; until chosen, every page not
+  // disabled (null).
+  let chosen: Set<string> | null = null;
   return reader(ctx, (root, lookup, sync) => {
     const result = readCollectionBlockConfig(blockSettings(ctx.block));
     if (!result.ok) {
@@ -1966,7 +2003,7 @@ const collectionView: HvyPluginFactory = (ctx) => {
     const stop = running.length ? () => {
       for (const candidate of running) lookup.automation.stopCollection(candidate.runId);
     } : null;
-    root.append(heading(collection.name), ...profileLine(ctx, lookup, profile), pagesSection(ctx, collection, runs, collectPages, openPage, stop));
+    root.append(heading(collection.name), ...profileLine(ctx, lookup, profile), pagesSection(ctx, collection, runs, collectPages, openPage, stop, { chosen, choose: (next) => { chosen = next; sync(); } }));
     if (problem) root.append(paragraph(problem, 'hvy-web-error'));
     if (!run) return;
     // Which run this is: of one page, by its name; of several, how many; or items read on their own pages.
@@ -2130,6 +2167,209 @@ const queueView: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup, sync) =>
   root.append(list);
 });
 
+/** Minutes as the largest whole unit: 360 is 6 hours, 90 is 90 minutes. */
+function frequencyParts(minutes: number): [number, 'minutes' | 'hours' | 'days'] {
+  if (minutes % 1440 === 0) return [minutes / 1440, 'days'];
+  if (minutes % 60 === 0) return [minutes / 60, 'hours'];
+  return [minutes, 'minutes'];
+}
+
+const FREQUENCY_UNITS = { minutes: 1, hours: 60, days: 1440 } as const;
+
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+/** The days in that order, as Date numbers them (0 is Sunday). */
+const WEEKDAY_NUMBERS = [1, 2, 3, 4, 5, 6, 0];
+
+/**
+ * When a job runs: "every [6] [hours]", or "at [2:00 AM]" on the days ticked (none ticked: every day). Told the timing
+ * whenever it changes; an interval is never under the minimum.
+ */
+export function timingInput(name: string, timing: ScheduleTiming | undefined, onChange: (timing: ScheduleTiming | undefined) => void, options: { fallback?: ScheduleTiming } = {}): HTMLElement {
+  const row = document.createElement('span');
+  row.className = 'hvy-web-schedule-frequency';
+  const mode = document.createElement('select');
+  mode.className = 'hvy-galaxy-select';
+  mode.setAttribute('aria-label', `${name}: every or at`);
+  // With a fallback (a page's checks), "default" sets nothing of its own, and says what the default is.
+  const current = !timing ? 'default' : 'every' in timing ? 'every' : 'at';
+  for (const [value, text] of [...(options.fallback ? [['default', 'default']] : []), ['every', 'every'], ['at', 'at']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    option.selected = value === current;
+    mode.append(option);
+  }
+  // Switched, it starts from a common choice of the other kind: every 6 hours, or daily at 2:00 AM.
+  mode.addEventListener('change', () => onChange(mode.value === 'default' ? undefined : mode.value === 'every' ? { every: 360 } : { at: '02:00', days: [] }));
+  row.append(mode);
+  if (!timing) {
+    const fallback = document.createElement('span');
+    fallback.className = 'hvy-web-page-hint';
+    fallback.textContent = options.fallback ? `(${timingText(options.fallback)})` : '';
+    row.append(fallback);
+    return row;
+  }
+  if ('every' in timing) {
+    const [count, unit] = frequencyParts(timing.every);
+    const value = textInput(`${name}-every`, String(count));
+    value.type = 'number';
+    value.min = '1';
+    value.className = 'hvy-galaxy-input hvy-web-schedule-every';
+    value.setAttribute('aria-label', `${name}: how often`);
+    const units = document.createElement('select');
+    units.className = 'hvy-galaxy-select';
+    units.setAttribute('aria-label', `${name}: unit`);
+    for (const option of Object.keys(FREQUENCY_UNITS)) {
+      const element = document.createElement('option');
+      element.value = option;
+      element.textContent = option;
+      element.selected = option === unit;
+      units.append(element);
+    }
+    const changed = () => {
+      const next = Number(value.value);
+      if (Number.isFinite(next) && next > 0) onChange({ every: Math.max(SCHEDULE_MIN_MINUTES, next * FREQUENCY_UNITS[units.value as keyof typeof FREQUENCY_UNITS]) });
+    };
+    value.addEventListener('change', changed);
+    units.addEventListener('change', changed);
+    row.append(value, units);
+    return row;
+  }
+  const at = textInput(`${name}-at`, timing.at);
+  at.type = 'time';
+  at.className = 'hvy-galaxy-input hvy-web-schedule-time';
+  at.setAttribute('aria-label', `${name}: time of day`);
+  const days = new Set(timing.days);
+  const changed = () => {
+    if (at.value) onChange({ at: at.value, days: [...days] });
+  };
+  at.addEventListener('change', changed);
+  row.append(at);
+  // Each day's checkbox before its name; none ticked runs it every day.
+  const picker = document.createElement('span');
+  picker.className = 'hvy-web-schedule-days';
+  picker.title = 'None ticked: every day.';
+  WEEKDAY_LABELS.forEach((label, index) => {
+    const day = WEEKDAY_NUMBERS[index];
+    picker.append(checkboxRow(label, days.has(day), (checked) => {
+      if (checked) days.add(day);
+      else days.delete(day);
+      changed();
+    }));
+  });
+  row.append(picker);
+  return row;
+}
+
+/**
+ * A schedule block (docs/job-search/12-scheduled-jobs.md): its jobs, each turned on or off with how often it runs, and
+ * how long Galaxy waits after the user stops using it. Changes are held here until Apply, and Cancel drops them; until
+ * then each job's status says what is in effect. What the user chooses is Galaxy's, by the file's path (app settings),
+ * not the document's: a document saved nowhere yet has nowhere to keep it.
+ */
+const scheduleView: HvyPluginFactory = (ctx) => {
+  // What the user changed here and hasn't applied: their choices and the wait, edited. Null with nothing changed.
+  let draft: Pick<ScheduledDocument, 'choices' | 'idleMinutes'> | null = null;
+  return reader(ctx, (root, lookup, sync) => {
+    const result = readScheduleBlockConfig(blockSettings(ctx.block));
+    if (!result.ok) {
+      root.append(paragraph(result.errors.join(' '), 'hvy-web-error'));
+      return;
+    }
+    root.classList.add('hvy-web-schedule');
+    const header = document.createElement('div');
+    header.className = 'hvy-web-schedule-header';
+    header.append(heading('Scheduled jobs'));
+    root.append(header);
+    const path = lookup.documentPath();
+    if (!path) {
+      root.append(paragraph('Save this document to turn its jobs on.', 'hvy-web-page-hint'));
+      return;
+    }
+    // What is in effect (or every job off: a document is kept in app settings only once its jobs are set up), and what
+    // the controls show: that, with the changes not applied yet.
+    const name = path.split(/[\\/]/).pop() || path;
+    const saved = scheduledFor(scheduledDocuments(), path, name, result.value);
+    const shown: ScheduledDocument = draft ? { ...saved, ...draft } : saved;
+    // What is in effect, in the header: the job that runs next, its last turn and its next.
+    const status = scheduleStatusText(saved, Date.now());
+    if (status) header.append(paragraph(status, 'hvy-web-page-hint hvy-web-schedule-status'));
+    const edit = (next: (document: ScheduledDocument) => ScheduledDocument) => {
+      const changed = next(shown);
+      const unchanged = JSON.stringify(changed.choices) === JSON.stringify(saved.choices) && changed.idleMinutes === saved.idleMinutes;
+      draft = unchanged ? null : { choices: changed.choices, idleMinutes: changed.idleMinutes };
+      sync();
+    };
+    const list = document.createElement('div');
+    list.setAttribute('role', 'list');
+    list.className = 'hvy-web-schedule-jobs';
+    for (const job of result.value.jobs) {
+      const item = document.createElement('div');
+      item.setAttribute('role', 'listitem');
+      item.className = 'hvy-web-schedule-job';
+      const on = checkboxRow(job.name, shown.choices[job.id]?.on === true, (checked) => edit((document) => withJobOn(document, job.id, checked)));
+      const frequency = timingInput(job.name, jobTiming(shown, job.id), (timing) => timing && edit((document) => withJobTiming(document, job.id, timing)));
+      // Run now: triggered at once, without waiting for idle, as if its button were pressed.
+      const run = button('Run now');
+      run.classList.add('hvy-web-schedule-run');
+      run.setAttribute('aria-label', `Run ${job.name} now`);
+      run.addEventListener('click', () => {
+        run.disabled = true;
+        void runScheduledJobNow(path, job.id).finally(sync);
+      });
+      const paused = result.value.paused[job.id] ?? result.value.paused['*'];
+      item.append(
+        on,
+        frequency,
+        run,
+        ...(paused ? [paragraph(`Paused: ${paused}`, 'hvy-web-error hvy-web-schedule-turn')] : []),
+      );
+      list.append(item);
+    }
+    root.append(list);
+    const idle = textInput('schedule-idle', String(shown.idleMinutes));
+    idle.type = 'number';
+    idle.min = '1';
+    idle.className = 'hvy-galaxy-input hvy-web-schedule-every';
+    idle.title = 'A job starts only once you haven’t typed, clicked, or scrolled in Galaxy for this long.';
+    idle.addEventListener('change', () => {
+      const minutes = Math.round(Number(idle.value));
+      if (Number.isFinite(minutes) && minutes >= 1) edit((document) => ({ ...document, idleMinutes: minutes }));
+    });
+    const before = document.createElement('span');
+    before.textContent = 'Wait until idle';
+    const after = document.createElement('span');
+    after.textContent = 'min';
+    const wait = document.createElement('label');
+    wait.className = 'hvy-web-schedule-frequency hvy-web-schedule-idle';
+    wait.append(before, idle, after);
+    if (result.value.heavy) root.append(paragraph('Heavy: its jobs wait for the computer to be less busy.', 'hvy-web-page-hint'));
+    // Apply keeps the changes (onto what is in effect now: a job's turn may have been recorded meanwhile); Cancel drops them.
+    const cancel = button('Cancel');
+    cancel.disabled = !draft;
+    cancel.addEventListener('click', () => {
+      draft = null;
+      sync();
+    });
+    const apply = button('Apply', true);
+    apply.disabled = !draft;
+    apply.addEventListener('click', () => {
+      const applied = draft;
+      if (!applied) return;
+      // Each job turned on, or whose frequency changed, counts its schedule from now: it runs a frequency later.
+      updateScheduledDocuments((documents) => withScheduleChange(documents, path, name, result.value, (document) => withChangesApplied(document, applied, Date.now())));
+      draft = null;
+      sync();
+    });
+    // The document's wait (for all its jobs) on the same line as Cancel and Apply.
+    const footer = actions(cancel, apply);
+    footer.classList.add('hvy-web-schedule-actions');
+    if (draft) footer.prepend(paragraph('Not applied yet', 'hvy-web-page-hint hvy-web-schedule-pending'));
+    footer.prepend(wait);
+    root.append(footer);
+  });
+};
+
 /** Where an entry in the queue reader's list is. */
 const QUEUE_ENTRY_STATUS: Record<QueueEntry['status'], string> = {
   running: 'Running…',
@@ -2145,12 +2385,15 @@ const QUEUE_ENTRY_STATUS: Record<QueueEntry['status'], string> = {
 const collectionReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(collectionSettingsEditor(ctx), collectionView(ctx)) : collectionView(ctx));
 const queueReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(queueEditor(ctx), queueView(ctx)) : queueView(ctx));
 const profileContextReader: HvyPluginFactory = (ctx) => (ctx.mode === 'editor' ? stacked(profileContextEditor(ctx), profileContextView(ctx)) : profileContextView(ctx));
+// Its jobs and scripts are edited in plugin.txt; the reader is the same in the editor.
+const scheduleReader: HvyPluginFactory = scheduleView;
 
 const plugins = createWebAutomationPlugins({
   webApi: webApiReader,
   collection: collectionReader,
   queue: queueReader,
   profileContext: profileContextReader,
+  schedule: scheduleReader,
 });
 // By id, so adding a plugin never shifts which one an export is (each is registered by its export's name).
 const pluginById = (id: string): HvyPlugin => plugins.find((plugin) => plugin.id === id)!;
@@ -2159,3 +2402,4 @@ export const webCollectionPlugin = pluginById(WEB_COLLECTION_PLUGIN_ID);
 export const queuePlugin = pluginById(QUEUE_PLUGIN_ID);
 export const profileContextPlugin = pluginById(WEB_PROFILE_CONTEXT_PLUGIN_ID);
 export const similarityPlugin = pluginById(SIMILARITY_PLUGIN_ID);
+export const schedulePlugin = pluginById(SCHEDULE_PLUGIN_ID);

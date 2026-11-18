@@ -77,6 +77,8 @@ export interface WebAutomationDocumentDeps {
   linkOwner(url: string): string | null;
   /** A run read these start pages of the collection without a problem, at `at` (ISO): when each was last checked. */
   startPagesChecked(capabilityId: string, startPageIds: string[], at: string): void;
+  /** No one is there for the document's runs now (a scheduled job runs it): a page that needs someone is let go. */
+  unattended?(): boolean;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -207,6 +209,13 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   const queues = new Map<string, DurableQueue>();
   // Every call into the document's scripts (the callbacks they register), paced to stay within heavy-file-format's limits.
   const scriptCalls = new ScriptCalls(deps.clock);
+  // What the document's scripts started that hasn't reported back, and when anything last happened in it: a scheduled
+  // job's document is idle once neither has changed for a while (docs/job-search/12-scheduled-jobs.md).
+  let outstanding = 0;
+  let lastActivityAt = deps.clock.now();
+  const active = () => {
+    lastActivityAt = deps.clock.now();
+  };
   // Script callbacks for sign-in changes, by capability and key. They do not survive the document closing.
   const sessionWatchers = new Map<string, () => void>();
   // Each script handler's handover of the account's current state, by capability and key: run again once the document
@@ -372,6 +381,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
 
     // A collection block's output wrote records (documentAutomation's sink).
     recordsWritten(capabilityId: string, keys: string[]): void {
+      active();
       for (const [watcherKey, handler] of recordWatchers) if (watcherKey.startsWith(`${capabilityId}\0`)) handler({ keys, reading: null });
     },
 
@@ -410,12 +420,12 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
       // Collecting everything skips the start pages left out of it; naming a start page collects it either way.
-      const chosen = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages.filter((page) => page.included !== false);
+      const chosen = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages.filter((page) => !page.disabled);
       const startPages = options.due ? duePages(definition, chosen, deps.clock.now()) : chosen;
       if (onlyStartUrls?.some((url) => !definition.startPages.some((page) => page.url === url))) {
         throw new WebAutomationError('invalid_request', "Only the block's own start pages can be collected.");
       }
-      const run = collections.start(definition, profileId, consumer, startPages);
+      const run = collections.start(definition, profileId, consumer, startPages, { unattended: deps.unattended?.() === true });
       // Each page read without a problem was checked now, however the run ended (stopped, its other pages failing).
       void run.done.then((state) => {
         const checked = Object.entries(state.startPages).filter(([id, progress]) => progress.status === 'done' && !state.startPageProblems[id]).map(([id]) => id);
@@ -429,7 +439,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     extractItems(definition: CollectionDefinition, items: ExtractItem[], consumer: RecordConsumer): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
-      return collections.extract(definition, profileId, items, consumer);
+      return collections.extract(definition, profileId, items, consumer, { unattended: deps.unattended?.() === true });
     },
 
     // UI: a link clicked in the document. One to a site a web plugin instance here uses (a report, a job posting) opens in
@@ -571,7 +581,25 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
      * heavy-file-format's limits allow (ScriptCalls). Resolves whether it ran: false if the document closed first.
      */
     callScript(run: () => void): Promise<boolean> {
-      return scriptCalls.call(run);
+      active();
+      return scriptCalls.call(run).finally(active);
+    },
+
+    /** Work a script of the document started through a plugin (a fetch, a page read, a call): counted until it ends. */
+    async tracked<T>(work: () => Promise<T>): Promise<T> {
+      outstanding += 1;
+      active();
+      try {
+        return await work();
+      } finally {
+        outstanding -= 1;
+        active();
+      }
+    },
+
+    /** Scheduled jobs: what is still to come in the document (work and calls waiting), and when anything last happened. */
+    activity(): { outstanding: number; lastActivityAt: number } {
+      return { outstanding: outstanding + scriptCalls.pending(), lastActivityAt };
     },
 
     /** Calls into the document's scripts waiting their turn. */

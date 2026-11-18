@@ -11,7 +11,7 @@ function moveKey<T>(record: Record<string, T>, previousPath: string, nextPath: s
  * settings Galaxy keeps per file follow it. A copy keeps none of them, so trust never comes with a copied file.
  */
 export function relocatedDocumentSettings(settings: AppSettings, previousPath: string, nextPath: string): AppSettings {
-  const keyed = [settings.powerScriptAcceptances, settings.powerScriptAcceptanceScripts, settings.pluginAcceptances, settings.webCapabilityProfileBindings, settings.webCapabilityAuthorizations, settings.webServiceApprovals];
+  const keyed = [settings.powerScriptAcceptances, settings.powerScriptAcceptanceScripts, settings.pluginAcceptances, settings.webCapabilityProfileBindings, settings.webCapabilityAuthorizations, settings.webServiceApprovals, settings.scheduledDocuments];
   const hasSettings = (settings.homepage.kind === 'file' && settings.homepage.path === previousPath)
     || settings.powerScriptingAllowedFiles.includes(previousPath)
     || keyed.some((record) => previousPath in record);
@@ -26,5 +26,6 @@ export function relocatedDocumentSettings(settings: AppSettings, previousPath: s
     webCapabilityProfileBindings: moveKey(settings.webCapabilityProfileBindings, previousPath, nextPath),
     webCapabilityAuthorizations: moveKey(settings.webCapabilityAuthorizations, previousPath, nextPath),
     webServiceApprovals: moveKey(settings.webServiceApprovals, previousPath, nextPath),
+    scheduledDocuments: moveKey(settings.scheduledDocuments, previousPath, nextPath),
   };
 }

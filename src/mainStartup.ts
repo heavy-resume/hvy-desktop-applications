@@ -1,3 +1,4 @@
+import { startScheduledJobs } from './scheduledJobs';
 import { startTrace } from './traceLog';
 import { installAiChatClient } from './aiClient';
 import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationBrowserEvent, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
@@ -434,6 +435,7 @@ export async function boot(): Promise<void> {
       if (event === 'debug-log') handlers.openDebugLog();
       if (event === 'app-settings') handlers.openAppSettings();
       if (event === 'review-scripting') handlers.openScriptingReview();
+      if (event === 'scheduled-jobs') handlers.openScheduledJobs();
       if (event === 'manage-plugins') handlers.openPluginManager();
       if (event === 'plugin-builder') void openPluginBuilderWindow(
         state.workspaces.map((workspace) => workspace.path),
@@ -483,6 +485,8 @@ export async function boot(): Promise<void> {
     syncFileMenuState({ force: true });
     await openRecoveryDialogOnBoot();
     startBackupTimer();
+    // Documents' scheduled jobs, while Galaxy is open (scheduledJobs.ts).
+    startScheduledJobs();
     setupRecoveryLifecycle();
     if (!state.document) {
       await restoreStartupDocument();

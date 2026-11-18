@@ -289,7 +289,7 @@ export function listingCollection(startUrls: string[], overrides: Partial<Collec
     patterns: [atsListingPattern, atsDetailPattern],
     maxPages: 5,
     maxItems: 50,
-    checkEveryDays: 7,
+    checkTiming: { every: 7 * 1440 },
     duePagesPerRun: 10,
     followLinksToOtherSites: false,
     ...overrides,

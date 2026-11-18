@@ -15,6 +15,7 @@ export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
 export const QUEUE_PLUGIN_ID = 'galaxy.queue';
 /** Ranks a document's rows by similarity (similarity.ts). Scripting only: it has no block. */
 export const SIMILARITY_PLUGIN_ID = 'galaxy.similarity';
+export const SCHEDULE_PLUGIN_ID = 'galaxy.schedule';
 /** Sets the browser profile for the web plugins in its section or container (profileContexts.ts). */
 export const WEB_PROFILE_CONTEXT_PLUGIN_ID = 'galaxy.web-profile-context';
 /** The version a document's plugin authorization is recorded against; a new version asks again. */
@@ -22,7 +23,9 @@ export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
 export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
 
 /** The most a collection reads from one start page: list pages, and items listed. */
-export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500, checkEveryDays: 365, duePagesPerRun: 100 } as const;
+export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500, duePagesPerRun: 100 } as const;
+/** How often a start page is checked unless set: every 7 days. */
+export const DEFAULT_CHECK_TIMING: ScheduleTiming = { every: 7 * 1440 };
 
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
@@ -147,6 +150,63 @@ export interface QueueBlockConfig {
   config: QueueConfig;
   /** The queue as of the document's last save, or null when it has never held entries. */
   state: QueueState | null;
+}
+
+/** The shortest a scheduled job may be set to run every, by its document or by the user. */
+export const SCHEDULE_MIN_MINUTES = 5;
+/** And the longest: a year. */
+export const SCHEDULE_MAX_MINUTES = 525_600;
+
+/**
+ * When a job runs: every so many minutes after its last turn, or at a time of day (local, "HH:MM") on some days of the
+ * week (0 is Sunday; none means every day), its next time after its last turn.
+ */
+export type ScheduleTiming = { every: number } | { at: string; days: number[] };
+
+/** The days of the week as a block names them (`"days": ["mon", "wed"]`), Sunday first, as Date numbers them. */
+export const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+
+/** A job a document's schedule block declares: a script of its own, run on a timer once the user turns it on. */
+export interface ScheduleJob {
+  id: string;
+  name: string;
+  /** The block's script it runs, by name (`ScheduleBlockConfig.scripts`). */
+  script: string;
+  /** When it runs by default (`everyMinutes`, or `at` with `days`); the user may change it. */
+  timing: ScheduleTiming;
+}
+
+/**
+ * A timing as Galaxy keeps it (a collection's checks, the user's choices for a job): `{ every: minutes }` (at least the
+ * minimum), or `{ at: "HH:MM", days: [0–6] }`; null when it is neither.
+ */
+export function readTiming(value: unknown): ScheduleTiming | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.every === 'number' && Number.isFinite(value.every)) return { every: Math.min(SCHEDULE_MAX_MINUTES, Math.max(SCHEDULE_MIN_MINUTES, Math.round(value.every))) };
+  const at = timeOfDay(value.at);
+  if (!at) return null;
+  const days = Array.isArray(value.days) ? value.days.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6) : [];
+  return { at, days: [...new Set(days)].sort() };
+}
+
+/** A time of day as "HH:MM", 24-hour; null when it isn't one. */
+export function timeOfDay(value: unknown): string | null {
+  const match = typeof value === 'string' ? /^(\d{1,2}):(\d{2})$/.exec(value.trim()) : null;
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+  return `${match[1].padStart(2, '0')}:${match[2]}`;
+}
+
+/** A `galaxy.schedule` block (docs/job-search/12-scheduled-jobs.md). */
+export interface ScheduleBlockConfig {
+  jobs: ScheduleJob[];
+  /** The block's own scripts by name, as a form block keeps its own; its jobs name them. */
+  scripts: Record<string, string>;
+  /** The Python libraries its scripts may import, as a form's `scriptLibraries`. */
+  scriptLibraries: string[];
+  /** Its jobs wait for the computer to be under the busy threshold. */
+  heavy: boolean;
+  /** The pauses its scripts made, by job id (`*` for every job), with each one's reason. */
+  paused: Record<string, string>;
 }
 
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -540,11 +600,13 @@ function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[])
       errors.push(`Start page "${text(page.url)}" fills "${field}", which is not one of the fields.`);
     }
     // Its own limits, where it has them; the collection's are its defaults.
-    const limits = Object.fromEntries((['maxPages', 'maxItems', 'checkEveryDays'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
+    const limits = Object.fromEntries((['maxPages', 'maxItems'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
+    // Its own timing for checks, when it has one; the collection's is its default.
+    const checkTiming = readTiming(page.checkTiming);
     const name = text(page.name).trim();
     // When a run last read it: kept only as a time.
     const checkedAt = typeof page.checkedAt === 'string' && !Number.isNaN(Date.parse(page.checkedAt)) ? page.checkedAt : null;
-    return id && url ? [{ id, url: url.href, ...(name ? { name } : {}), ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}), ...(checkedAt ? { checkedAt } : {}) }] : [];
+    return id && url ? [{ id, url: url.href, ...(name ? { name } : {}), ...(Object.keys(values).length ? { values } : {}), ...(page.disabled === true ? { disabled: true as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}), ...(checkTiming ? { checkTiming } : {}), ...(checkedAt ? { checkedAt } : {}) }] : [];
   });
   const ids = pages.map((page) => page.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);
@@ -628,7 +690,7 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
         maxPages: number(value.maxPages, 5, 1, LIMIT_BOUNDS.maxPages),
         maxItems: number(value.maxItems, 50, 1, LIMIT_BOUNDS.maxItems),
         ...(value.stopAtKnownPage === true ? { stopAtKnownPage: true } : {}),
-        checkEveryDays: number(value.checkEveryDays, 7, 1, LIMIT_BOUNDS.checkEveryDays),
+        checkTiming: readTiming(value.checkTiming) ?? DEFAULT_CHECK_TIMING,
         duePagesPerRun: number(value.duePagesPerRun, 10, 1, LIMIT_BOUNDS.duePagesPerRun),
         ...(value.readItemPages === false ? { readItemPages: false as const } : {}),
         followLinksToOtherSites: value.followLinksToOtherSites === true,
@@ -687,6 +749,53 @@ export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockCon
         },
       },
       state: readQueueState(value.state),
+    },
+  };
+}
+
+export function readScheduleBlockConfig(value: unknown): ConfigResult<ScheduleBlockConfig> {
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported schedule block configuration.'] };
+  const errors: string[] = [];
+  const scripts = Object.fromEntries(Object.entries(isRecord(value.scripts) ? value.scripts : {})
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[0].trim()))
+    .map(([name, source]) => [name.trim(), source]));
+  const jobs = (Array.isArray(value.jobs) ? value.jobs : []).flatMap((job): ScheduleJob[] => {
+    const id = isRecord(job) ? text(job.id) : '';
+    if (!isRecord(job) || !id) {
+      errors.push('A scheduled job needs an id.');
+      return [];
+    }
+    const script = text(job.script);
+    if (!(script in scripts)) errors.push(`Job "${id}" runs "${script}", which is not one of the block's scripts.`);
+    // Every so many minutes, or at a time of day on some days.
+    if (job.at !== undefined) {
+      const at = timeOfDay(job.at);
+      const names = Array.isArray(job.days) ? job.days.map((day) => text(day).toLowerCase()) : [];
+      const unknown = names.filter((day) => !(WEEKDAYS as readonly string[]).includes(day));
+      if (!at) errors.push(`Job "${id}" runs at "${text(job.at)}", which is not a time of day ("HH:MM").`);
+      if (unknown.length) errors.push(`Job "${id}" runs on "${unknown.join('", "')}", which ${unknown.length === 1 ? 'is not a day' : 'are not days'} ("mon" to "sun").`);
+      return [{ id, name: text(job.name) || id, script, timing: { at: at ?? '00:00', days: [...new Set(names.map((day) => (WEEKDAYS as readonly string[]).indexOf(day)))].filter((day) => day >= 0).sort() } }];
+    }
+    const every = job.everyMinutes;
+    if (typeof every !== 'number' || !Number.isInteger(every) || every < SCHEDULE_MIN_MINUTES || every > SCHEDULE_MAX_MINUTES) {
+      errors.push(`Job "${id}" must run every ${SCHEDULE_MIN_MINUTES} minutes or more (a whole number of minutes), or at a time of day ("at": "HH:MM").`);
+    }
+    return [{ id, name: text(job.name) || id, script, timing: { every: Number(every) } }];
+  });
+  const ids = jobs.map((job) => job.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Job id "${id}" is used twice.`);
+  if (errors.length) return { ok: false, errors };
+  const state = isRecord(value.state) ? value.state : {};
+  const paused = Object.fromEntries(Object.entries(isRecord(state.paused) ? state.paused : {})
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && (entry[0] === '*' || ids.includes(entry[0]))));
+  return {
+    ok: true,
+    value: {
+      jobs,
+      scripts,
+      scriptLibraries: Array.isArray(value.scriptLibraries) ? strings(value.scriptLibraries) : [],
+      heavy: value.heavy === true,
+      paused,
     },
   };
 }

@@ -234,10 +234,10 @@ describe('mock integration: job search flow', () => {
     expect(await flow!.skipAttention(paused.runId)).toMatchObject({ status: 'done', problems: 2, attention: null });
   });
 
-  it('5b. start pages: one left out of collecting all is skipped, and still collects on its own', async () => {
+  it('5b. start pages: one disabled is skipped by collecting everything, and still collects on its own', async () => {
     const globex = `${ATS_ORIGIN}/globex/jobs`;
     const base = listingCollection([ACME, globex]);
-    const boards = { ...base, startPages: base.startPages.map((page) => (page.url === globex ? { ...page, included: false as const } : page)) };
+    const boards = { ...base, startPages: base.startPages.map((page) => (page.url === globex ? { ...page, disabled: true as const } : page)) };
     await signedInFlow(boards);
     const all = await flow!.collect(boards);
     expect(Object.keys(all.startPages)).toEqual(['start-1']);
@@ -699,6 +699,23 @@ describe('mock integration: job search flow', () => {
       [`${UNKNOWN_ORIGIN}/openings/7`, null],
     ]);
     expect(changed).toBeGreaterThan(0);
+  });
+
+  it('51. a scheduled job\'s document: the runs it starts let a page that needs someone go, and what its scripts started is counted until it ends', async () => {
+    const challenged = listingCollection([`${ATS_ORIGIN}/initech/jobs`, ACME]);
+    await signedInFlow(challenged);
+    flow!.setUnattended(true);
+    const before = flow!.automation.activity();
+    const run = flow!.automation.tracked(() => flow!.collect(challenged));
+    expect(flow!.automation.activity().outstanding).toBe(before.outstanding + 1);
+    // Initech asks for a check that you're human: no one is there, so it is let go, and the run goes on.
+    expect(await run).toMatchObject({ status: 'done', attention: null });
+    expect(flow!.print()).toMatch(/let \S+initech\S* go: challenge, with no one to ask/);
+    expect(flow!.automation.activity()).toMatchObject({ outstanding: before.outstanding });
+    expect(flow!.automation.activity().lastActivityAt).toBeGreaterThanOrEqual(before.lastActivityAt);
+    // The user took the tab over: a run asks them again.
+    flow!.setUnattended(false);
+    expect(await flow!.collect(challenged)).toMatchObject({ status: 'needs-attention', attention: { reason: 'challenge' } });
   });
 
   it('19d. setup opens a row whose opener has no link by clicking it in the row; a click that goes nowhere in 3 seconds opened nothing', async () => {

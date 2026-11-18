@@ -7,11 +7,14 @@ import {
   QUEUE_PLUGIN_ID,
   readCollectionBlockConfig,
   readQueueBlockConfig,
+  readScheduleBlockConfig,
   readWebApiBlockConfig,
+  SCHEDULE_PLUGIN_ID,
   WEB_API_PLUGIN_ID,
   WEB_COLLECTION_PLUGIN_ID,
   type CollectionBlockConfig,
   type QueueBlockConfig,
+  type ScheduleBlockConfig,
   type WebApiBlockConfig,
 } from './configs';
 
@@ -19,6 +22,8 @@ export interface WebAutomationBlocks {
   webApis: Array<{ blockId: string; block: VisualBlock; config: WebApiBlockConfig }>;
   collections: Array<{ blockId: string; block: VisualBlock; config: CollectionBlockConfig }>;
   queues: Array<{ blockId: string; block: VisualBlock; config: QueueBlockConfig }>;
+  /** A document has one at most: its jobs are known by the file and their ids. */
+  schedules: Array<{ blockId: string; block: VisualBlock; config: ScheduleBlockConfig }>;
   /** Blocks whose configuration could not be read. */
   problems: WebAutomationProblem[];
 }
@@ -31,7 +36,7 @@ export interface WebAutomationProblem {
 
 /** Reads every web automation block in a document through the block configuration readers. */
 export function readWebAutomationBlocks(document: VisualDocument): WebAutomationBlocks {
-  const blocks: WebAutomationBlocks = { webApis: [], collections: [], queues: [], problems: [] };
+  const blocks: WebAutomationBlocks = { webApis: [], collections: [], queues: [], schedules: [], problems: [] };
   visitBlocks(document.sections, (block) => {
     const pluginId = block.schema.plugin;
     const blockId = block.schema.id || '(unnamed plugin)';
@@ -48,6 +53,10 @@ export function readWebAutomationBlocks(document: VisualDocument): WebAutomation
     } else if (pluginId === QUEUE_PLUGIN_ID) {
       const result = readQueueBlockConfig(value);
       if (result.ok) blocks.queues.push({ blockId, block, config: result.value });
+      else report(result.errors);
+    } else if (pluginId === SCHEDULE_PLUGIN_ID) {
+      const result = readScheduleBlockConfig(value);
+      if (result.ok) blocks.schedules.push({ blockId, block, config: result.value });
       else report(result.errors);
     }
   });
@@ -73,6 +82,9 @@ export function findWebAutomationProblems(document: VisualDocument): WebAutomati
   }
   for (const { id, entries } of duplicates(blocks.queues, (entry) => entry.config.queueId)) {
     problems.push({ blocks: entries.map((entry) => entry.block), message: `Queue id "${id}" is used by more than one block.` });
+  }
+  if (blocks.schedules.length > 1) {
+    problems.push({ blocks: blocks.schedules.map((entry) => entry.block), message: 'A document has one schedule block at most: its jobs are known by the file and their ids.' });
   }
 
   for (const { block, config } of blocks.collections) {

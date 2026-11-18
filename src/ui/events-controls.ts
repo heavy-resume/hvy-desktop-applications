@@ -454,6 +454,10 @@ export function bindControlEvents(root: HTMLElement, handlers: UiHandlers, state
           : 'The regular expression is evaluated against the current hostname.';
       return;
     }
+    if (target instanceof HTMLInputElement && target.dataset.action === 'set-scheduled-job-on' && target.dataset.path && target.dataset.job) {
+      handlers.setScheduledJobOn(target.dataset.path, target.dataset.job, target.checked);
+      return;
+    }
     if (target instanceof HTMLInputElement && target.dataset.action === 'set-integration-quick-view-profile' && target.dataset.integrationId && target.dataset.pageId && target.dataset.profileId) {
       handlers.setIntegrationQuickViewProfile(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId, target.checked);
       return;

@@ -9,7 +9,7 @@ import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
-import { setOpenDocumentCheck } from './webAutomation/app';
+import { setAutomationChangeMarker, setOpenDocumentCheck } from './webAutomation/app';
 import { removeRuntimeDocument, runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile, type RuntimeDocument } from './runtimeDocuments';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -90,6 +90,16 @@ type PreparedImportSource = ImportSourceFile & { text: string; sourceDocument?: 
 export const documentSessions = new Map<string, DocumentSession>();
 // A document stays open while it is in the document pane or a background tab; web automation closes only then.
 setOpenDocumentCheck((document) => state.document?.mounted?.document === document || [...documentSessions.values()].some((session) => session.document === document));
+// Its automation wrote into a document in a background tab (a fetch still running after you switched away, a scheduled
+// job): it is unsaved from then, so switching back keeps what was written rather than reading the file again.
+setAutomationChangeMarker((document) => {
+  if (state.document?.mounted?.document === document) return;
+  const session = [...documentSessions.values()].find((candidate) => candidate.document === document);
+  if (!session || session.dirty) return;
+  session.dirty = true;
+  syncDocumentTabs();
+  rerender({ preserveMountedDocument: true });
+});
 export const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 let openedDocumentTabOrder: string[] = [];
 let documentChangeEventCount = 0;

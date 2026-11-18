@@ -409,6 +409,7 @@ function buildMenu() {
         menuItem('Manage Plugins...', 'manage-plugins'),
         { type: 'separator' },
         menuItem('Power Scripting...', 'review-scripting'),
+        menuItem('Scheduled Jobs...', 'scheduled-jobs'),
       ],
     },
     {
@@ -3760,6 +3761,10 @@ function defaultAppSettings() {
     webServiceApprovals: {},
     // Validated by the renderer's normalizeCollectionWorkerLimits.
     webCollectionLimits: { perSite: 2, total: 4 },
+    // Validated by the renderer's normalizeScheduledDocuments.
+    scheduledDocuments: {},
+    // Validated by the renderer's normalizeScheduledJobsAtOnce.
+    scheduledJobsAtOnce: 1,
   };
 }
 

@@ -395,6 +395,8 @@ fn normalize_app_settings(settings: AppSettings) -> AppSettings {
         integration_web_mcp_approvals: settings.integration_web_mcp_approvals,
         web_service_approvals: settings.web_service_approvals,
         web_collection_limits: settings.web_collection_limits,
+        scheduled_documents: settings.scheduled_documents,
+        scheduled_jobs_at_once: settings.scheduled_jobs_at_once,
     }
 }
 

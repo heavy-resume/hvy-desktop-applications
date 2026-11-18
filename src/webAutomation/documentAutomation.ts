@@ -8,7 +8,7 @@ import { getActiveStateRuntime, runWithStateRuntime, type StateRuntime } from '.
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import type { VisualBlock } from '../../../heavy-file-format/src/editor/types';
 import { createCliItemStore } from './cliItemStore';
-import { QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
+import { QUEUE_PLUGIN_ID, SCHEDULE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_PLUGIN_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from './configs';
 import { readWebAutomationBlocks } from './documentBlocks';
 import { settingsText, storedSettings } from './blockSettings';
 import { createWebAutomation, type WebAutomationRuntime } from './entryPoints';
@@ -67,6 +67,7 @@ export interface WebAutomationReaders {
   collection: HvyPluginFactory;
   queue: HvyPluginFactory;
   profileContext: HvyPluginFactory;
+  schedule: HvyPluginFactory;
 }
 
 /**
@@ -87,9 +88,15 @@ export function createWebAutomationPlugins(readers?: WebAutomationReaders): HvyP
     ...(readers ? { create: readers.collection } : {}),
     scripting: { methods: collectionScriptingMethods(resolveDocumentAutomation) },
   };
+  const schedule: HvyPlugin = {
+    ...metadata(SCHEDULE_PLUGIN_ID, 'Schedule'),
+    ...(readers ? { create: readers.schedule } : {}),
+  };
   return [
     createConditionallyAllowedPlugin({ ...metadata(WEB_API_PLUGIN_ID, 'Web API'), load: async () => webApi }),
     createConditionallyAllowedPlugin({ ...metadata(WEB_COLLECTION_PLUGIN_ID, 'Web Collection'), load: async () => collection }),
+    // Runs the document's scripts on a timer once the user turns its jobs on: allowed per file, as the web plugins are.
+    createConditionallyAllowedPlugin({ ...metadata(SCHEDULE_PLUGIN_ID, 'Schedule'), load: async () => schedule }),
     {
       ...metadata(QUEUE_PLUGIN_ID, 'Queue'),
       ...(readers ? { create: readers.queue } : {}),
@@ -159,7 +166,10 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   const blocks = readWebAutomationBlocks(document);
   const plugins = createScriptingPluginsApi(document, { allowAsync: true, requireDocumentPermission: false });
   const isPluginAuthorized = (pluginId: string) => getPluginAuthorizationMode(document, registration(pluginId), stateRuntime) === 'enabled';
+  // While a scheduled job runs the document, no one is there for the runs it starts (`setUnattended`).
+  let unattended = false;
   const automation = createWebAutomation(runtime, {
+    unattended: () => unattended,
     documentPath: options.documentPath,
     isPluginAuthorized,
     webApiOrigin: (capabilityId) => {
@@ -217,6 +227,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   };
   const lookup: DocumentAutomationLookup = {
     automation,
+    documentPath: () => options.documentPath(),
     webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capabilityId)?.config.capability ?? null,
     collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
     database: (use) => useDocumentDatabase(document, openDatabase, use),
@@ -320,6 +331,11 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
     // UI: a web plugin's block, "Allow in this file" (the reference implementation's plugin authorization prompt).
     authorizePlugin(pluginId: string): void {
       setPluginAuthorized(document, registration(pluginId), true, stateRuntime);
+    },
+
+    // Scheduled jobs: a job running the document makes the runs it starts unattended, until the user takes the tab over.
+    setUnattended(on: boolean): void {
+      unattended = on;
     },
 
     // UI: a web plugin's block shows the prompt or its reader.

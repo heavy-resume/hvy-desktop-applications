@@ -1,3 +1,4 @@
+import { renderScheduledJobsDialog } from './render-scheduled-jobs';
 import { type AppState } from '../state';
 import { bindClickEvents } from './events-click';
 import { bindControlEvents } from './events-controls';
@@ -303,6 +304,7 @@ export function renderModals(state: AppState): void {
     ${renderHomepageErrorDialog(state)}
     ${renderHomepagePickerDialog(state)}
     ${renderScriptingReviewDialog(state)}
+    ${renderScheduledJobsDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}

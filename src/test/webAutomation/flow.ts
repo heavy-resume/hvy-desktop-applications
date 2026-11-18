@@ -267,6 +267,10 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     },
 
     // UI: a web plugin's block, "Allow in this file".
+    // Scheduled jobs: a job running the document makes the runs it starts unattended.
+    setUnattended(on: boolean): void {
+      opened.setUnattended(on);
+    },
     authorizePlugin(pluginId: string): void {
       opened.authorizePlugin(pluginId);
     },

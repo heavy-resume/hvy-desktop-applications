@@ -1,3 +1,4 @@
+import { MAX_SCHEDULED_JOBS_AT_ONCE } from '../webAutomation/scheduleSettings';
 import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import { includedDocuments, type WorkspaceTreeNode } from '../backend';
 import { builtInPluginPolicy, getInstalledPlugins, pluginAcceptanceKey } from '../pluginManager';
@@ -28,7 +29,7 @@ export function renderDebugLogDialog(state: AppState): string {
           </div>
         </div>
         <div class="debug-log-settings" data-settings="debug-log">
-          <label class="inline-checkbox">
+          <label class="inline-checkbox app-settings-checkbox">
             <input class="hvy-galaxy-input" name="debugSemanticSearch" type="checkbox" ${state.appSettings.debugSemanticSearch ? 'checked' : ''}>
             <span>Debug semantic search</span>
           </label>
@@ -312,30 +313,6 @@ export function renderAppSettingsDialog(state: AppState): string {
             </span>
           </label>
         </fieldset>`}
-        <fieldset class="ai-action-config">
-          <legend>Built-in plugins</legend>
-          <p class="dialog-note">These plugins are included with HVY Galaxy.</p>
-          <div class="plugin-settings-list">
-            ${builtInPlugins.map((plugin) => {
-        const policy = builtInPluginPolicy(settings, plugin);
-        const requiresPerFileApproval = plugin.authorization === 'required';
-        const currentPath = state.document?.source.path ?? '';
-        return `<label class="plugin-settings-row">
-                <span>
-                  <strong>${escapeHtml(plugin.displayName)}</strong>
-                  <small>Built in · ${escapeHtml(plugin.id)} · ${escapeHtml(plugin.version)}</small>
-                  ${requiresPerFileApproval ? '<small>Requires per-file approval</small>' : ''}
-                </span>
-                <select class="hvy-galaxy-select" name="pluginPolicy:${escapeAttr(plugin.id)}" aria-label="${escapeAttr(`${plugin.displayName} status`)}">
-                  <option value="disabled" ${policy === 'disabled' ? 'selected' : ''}>Disabled</option>
-                  <option value="conditional" ${policy === 'conditional' ? 'selected' : ''}>Per-file approval</option>
-                  <option value="enabled" ${policy === 'enabled' ? 'selected' : ''} ${requiresPerFileApproval ? 'disabled' : ''}>Enabled for all files</option>
-                </select>
-              </label>
-              ${currentPath && policy === 'conditional' ? renderCurrentFileAcceptance(settings, currentPath, pluginAcceptanceKey(plugin)) : ''}`;
-      }).join('')}
-          </div>
-        </fieldset>
         <fieldset class="ai-action-config plugin-install-zone" data-plugin-drop-zone>
           <legend>Custom plugins</legend>
           <div class="plugin-install-controls">
@@ -373,6 +350,7 @@ export function renderAppSettingsDialog(state: AppState): string {
         </fieldset>
         ${renderWebServiceApprovals(state, settings)}
         ${renderWebCollectionLimits(settings)}
+        ${pluginManager ? '' : renderScheduledJobsSettings(settings)}
         ${pluginManager ? '' : `<fieldset class="ai-action-config">
           <legend>Debug log</legend>
           <label class="inline-checkbox app-settings-checkbox">
@@ -390,6 +368,30 @@ export function renderAppSettingsDialog(state: AppState): string {
             >
           </label>
         </fieldset>`}
+        <fieldset class="ai-action-config">
+          <legend>Built-in plugins</legend>
+          <p class="dialog-note">These plugins are included with HVY Galaxy.</p>
+          <div class="plugin-settings-list">
+            ${builtInPlugins.map((plugin) => {
+        const policy = builtInPluginPolicy(settings, plugin);
+        const requiresPerFileApproval = plugin.authorization === 'required';
+        const currentPath = state.document?.source.path ?? '';
+        return `<label class="plugin-settings-row">
+                <span>
+                  <strong>${escapeHtml(plugin.displayName)}</strong>
+                  <small>Built in · ${escapeHtml(plugin.id)} · ${escapeHtml(plugin.version)}</small>
+                  ${requiresPerFileApproval ? '<small>Requires per-file approval</small>' : ''}
+                </span>
+                <select class="hvy-galaxy-select" name="pluginPolicy:${escapeAttr(plugin.id)}" aria-label="${escapeAttr(`${plugin.displayName} status`)}">
+                  <option value="disabled" ${policy === 'disabled' ? 'selected' : ''}>Disabled</option>
+                  <option value="conditional" ${policy === 'conditional' ? 'selected' : ''}>Per-file approval</option>
+                  <option value="enabled" ${policy === 'enabled' ? 'selected' : ''} ${requiresPerFileApproval ? 'disabled' : ''}>Enabled for all files</option>
+                </select>
+              </label>
+              ${currentPath && policy === 'conditional' ? renderCurrentFileAcceptance(settings, currentPath, pluginAcceptanceKey(plugin)) : ''}`;
+      }).join('')}
+          </div>
+        </fieldset>
         </div>
         <div class="dialog-actions app-settings-actions">
           <button class="hvy-galaxy-button" type="button" data-action="cancel-app-settings">Cancel</button>
@@ -529,7 +531,7 @@ function renderWebServiceApprovals(state: AppState, settings: AppState['appSetti
           <legend>Web services for this file</legend>
           <p class="dialog-note">Services this file may act on as you, approved when you signed in. Uncheck one and save to revoke it; the next use asks again.</p>
           ${approvals.map((approval) => `<input type="hidden" name="serviceApprovalListed" value="${escapeAttr(approval.capabilityId)}">
-          <label class="inline-checkbox">
+          <label class="inline-checkbox app-settings-checkbox">
             <input class="hvy-galaxy-input" name="serviceApproved:${escapeAttr(approval.capabilityId)}" type="checkbox" checked>
             <span>${escapeHtml(approval.name ?? approval.capabilityId)} · profile ${escapeHtml(profileName(approval.profileId))} · approved ${escapeHtml(new Date(approval.authorizedAt).toLocaleDateString())}</span>
           </label>`).join('') || '<p class="dialog-note">No web services are approved for this file.</p>'}
@@ -555,12 +557,23 @@ function renderWebCollectionLimits(settings: AppState['appSettings']): string {
         </fieldset>`;
 }
 
-/** "Allow this exact version for the current file", for any plugin under per-file approval. */
+function renderScheduledJobsSettings(settings: AppState['appSettings']): string {
+  return `<fieldset class="ai-action-config">
+          <legend>Scheduled jobs</legend>
+          <p class="dialog-note">Documents' jobs run one after another: the next starts once what the last one started has settled.</p>
+          <label>
+            <span>Jobs at once</span>
+            <input class="hvy-galaxy-input" name="scheduledJobsAtOnce" type="number" min="1" max="${MAX_SCHEDULED_JOBS_AT_ONCE}" step="1" required value="${escapeAttr(String(settings.scheduledJobsAtOnce))}">
+          </label>
+        </fieldset>`;
+}
+
+/** "Allow in <file>": the open file's approval of a plugin under per-file approval (for its version; an update asks again). */
 function renderCurrentFileAcceptance(settings: AppState['appSettings'], currentPath: string, acceptanceKey: string): string {
   const accepted = (settings.pluginAcceptances[currentPath] ?? []).includes(acceptanceKey);
   return `<input type="hidden" name="pluginAcceptanceListed" value="${escapeAttr(acceptanceKey)}">
-            <label class="inline-checkbox">
+            <label class="inline-checkbox app-settings-checkbox">
               <input class="hvy-galaxy-input" name="pluginAccepted:${escapeAttr(acceptanceKey)}" type="checkbox" ${accepted ? 'checked' : ''}>
-              <span>Allow this exact version for the current file</span>
+              <span>Allow in ${escapeHtml(currentPath.split(/[\\/]/).pop() || currentPath)}</span>
             </label>`;
 }

@@ -320,6 +320,12 @@ export interface AppState {
   appSettingsDialogInitialJson: string | null;
   appSettingsDiscardDialogOpen: boolean;
   scriptingReviewDialogOpen: boolean;
+  /** Scheduled jobs (Plugins menu): every scheduled document and its jobs. */
+  scheduledJobsDialogOpen: boolean;
+  /** Scheduled jobs' checkboxes changed and not saved yet: on or off, by `path` NUL `job id`. Applied on Save. */
+  scheduledJobsDraft: Record<string, boolean>;
+  /** Documents a scheduled job is running in, by path: its tab is marked busy (or with its problem). */
+  scheduledJobRuns: Record<string, { job: string; problem?: string }>;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -686,6 +692,9 @@ export const state: AppState = {
   appSettingsDialogInitialJson: null,
   appSettingsDiscardDialogOpen: false,
   scriptingReviewDialogOpen: false,
+  scheduledJobsDialogOpen: false,
+  scheduledJobsDraft: {},
+  scheduledJobRuns: {},
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

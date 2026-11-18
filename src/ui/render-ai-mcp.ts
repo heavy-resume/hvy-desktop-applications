@@ -1,3 +1,4 @@
+import { DEFAULT_SCHEDULED_JOBS_AT_ONCE, normalizeScheduledDocuments, normalizeScheduledJobsAtOnce } from '../webAutomation/scheduleSettings';
 import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../../heavy-file-format/src/search/types';
 import { aiEmbeddingDefaultModel, aiEmbeddingProviderPreset, aiEmbeddingProviderPresets, aiEmbeddingProvidersForMode, aiProviderDefaultModel, aiProviderPreset, aiProviderPresets, type AiEmbeddingProviderMode } from '../aiProviders';
@@ -542,6 +543,7 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
     webCollectionLimits: data.has('webCollectionPerSite')
       ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')), apiCalls: Number(data.get('webApiCalls')) })
       : parsedSettings.webCollectionLimits,
+    scheduledJobsAtOnce: data.has('scheduledJobsAtOnce') ? normalizeScheduledJobsAtOnce(Number(data.get('scheduledJobsAtOnce'))) : parsedSettings.scheduledJobsAtOnce,
   };
 }
 
@@ -579,6 +581,8 @@ export function parseAppSettings(value: string): AppSettings {
       integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(parsed.integrationWebMcpApprovals),
       webServiceApprovals: normalizeCapabilityAuthorizations(parsed.webServiceApprovals),
       webCollectionLimits: normalizeCollectionWorkerLimits(parsed.webCollectionLimits),
+      scheduledDocuments: normalizeScheduledDocuments(parsed.scheduledDocuments),
+      scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(parsed.scheduledJobsAtOnce),
     };
   } catch {
     return {
@@ -596,6 +600,8 @@ export function parseAppSettings(value: string): AppSettings {
       integrationWebMcpApprovals: {},
       webServiceApprovals: {},
       webCollectionLimits: DEFAULT_COLLECTION_WORKER_LIMITS,
+      scheduledDocuments: {},
+      scheduledJobsAtOnce: DEFAULT_SCHEDULED_JOBS_AT_ONCE,
     };
   }
 }

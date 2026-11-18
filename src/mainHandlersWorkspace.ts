@@ -1,3 +1,5 @@
+import { withoutScheduledDocumentsIn } from './webAutomation/scheduleSettings';
+import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { rememberExampleTemplate } from './templateExampleContent';
 import { templateExampleDirectory } from './templateExamples';
 import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openDocumentFile, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
@@ -236,6 +238,8 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         : await deleteWorkspaceFolder({ workspacePath, targetDirectory });
       upsertWorkspace(await loadWorkspace(workspace.path));
       clearWorkspaceFilterDocumentCache(workspace.path);
+      // Its documents' jobs stop with it.
+      updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(file, `${workspacePath}/${targetDirectory}`)));
       await refreshSavedTemplates(workspace.path);
       await refreshRecents();
       state.status = `Deleted ${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'folder'}`;
@@ -336,6 +340,8 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     if (state.selectedFilePath && pathStartsWithWorkspace(state.selectedFilePath, path)) {
       state.selectedFilePath = null;
     }
+    // Its documents' jobs stop with it.
+    updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(file, path)));
     syncMcpWorkspaces();
     state.archivedWorkspaces = await loadArchivedWorkspaces();
     state.workspaceManagerOpen = true;

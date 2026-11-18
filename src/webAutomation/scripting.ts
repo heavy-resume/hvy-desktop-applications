@@ -34,6 +34,8 @@ export interface DocumentAutomationLookup {
    * are): only an item the collection's output holds, so a script opens no other address.
    */
   openInBrowser(capabilityId: string, url: string, key?: string): Promise<void>;
+  /** The document's path, where Galaxy keeps what the user chose for it (its scheduled jobs); empty before it is saved. */
+  documentPath(): string;
 }
 
 export type DocumentAutomationResolver = (ctx: Pick<ScriptingContext, 'rawDocument'>) => DocumentAutomationLookup;
@@ -58,7 +60,9 @@ function callback(lookup: DocumentAutomationLookup, value: unknown): ((result: R
  * the call returns `{ jobId, status: 'queued' }` and reports later. Power
  * scripts may omit the callbacks and await the promise.
  */
-function operation(lookup: DocumentAutomationLookup, args: Record<string, unknown>, run: () => Promise<unknown>): unknown {
+function operation(lookup: DocumentAutomationLookup, args: Record<string, unknown>, work: () => Promise<unknown>): unknown {
+  // Counted as the document's work until it ends: a scheduled job's document is idle only once nothing is left of it.
+  const run = () => lookup.automation.tracked(work);
   const onComplete = callback(lookup, args.on_complete);
   if (!onComplete) return run();
   return queueWebCapabilityScriptOperation(run, { onComplete, onError: callback(lookup, args.on_error) });
@@ -149,10 +153,10 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       const lookup = resolve(ctx);
       const base = collection(lookup, args);
       // Scripts choose among the block's start pages by address; new sites go through the block and its review. Without a
-      // choice, every start page included in collecting runs. `due: true` runs only those of them due, as the block's
+      // choice, every start page not disabled runs. `due: true` runs only those of them due, as the block's
       // Fetch due does.
       const approved = base.startPages.map((page) => page.url);
-      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => page.included !== false).map((page) => page.url);
+      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => !page.disabled).map((page) => page.url);
       const unapproved = startUrls.filter((url) => !approved.includes(url));
       if (unapproved.length) throw new WebAutomationError('invalid_request', `Not an approved start URL: ${unapproved.join(', ')}.`);
       // A script may only lower the limits: the defaults, and each page's own.

@@ -6,6 +6,9 @@ import { state } from '../state';
 import { trace } from '../traceLog';
 import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
+import { readWebAutomationBlocks } from './documentBlocks';
+import { withoutScheduledDocument, withScheduleBlock } from './scheduleSettings';
+import { updateScheduledDocuments } from './scheduleStore';
 import type { CollectionDefinition, CollectionRunState, ExtractItem } from './collection';
 import type { SitePatternDefinition } from './sitePatterns';
 import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
@@ -134,7 +137,18 @@ export function subscribeWebAutomation(listener: (event: AutomationEvent) => voi
   return appRuntime().events.subscribe(listener);
 }
 
-setDocumentAutomationOpener((rawDocument) => {
+/**
+ * A document opened or saved: its schedule block, if it has one, lists it among the scheduled documents (its jobs as the
+ * block declares them, each off until the user turns it on); without one, it is no longer listed.
+ */
+function syncScheduledDocument(document: VisualDocument, path: string): void {
+  if (!path) return;
+  const schedule = readWebAutomationBlocks(document).schedules[0];
+  const name = path.split(/[\\/]/).pop() || path;
+  updateScheduledDocuments((documents) => (schedule ? withScheduleBlock(documents, path, name, schedule.config) : withoutScheduledDocument(documents, path)));
+}
+
+const openDocumentAutomationLookup = (rawDocument: object) => {
   const document = rawDocument as VisualDocument;
   const stateRuntime = getActiveStateRuntime();
   const path = state.document?.source.path ?? '';
@@ -156,24 +170,50 @@ setDocumentAutomationOpener((rawDocument) => {
     // list is not on screen to refresh (another view, or not shown). Redrawing just the list skips the document hooks a
     // full redraw ends with, so they run after it: the document's scripts see the new items, as after any other change.
     onDocumentChange: (current, listPath) => runWithStateRuntime(current, () => {
+      markChanged(document);
       const list = componentListAt(document, listPath);
       if (!list || !getRefreshReaderBlock()(window.document, list.sectionKey, list.blockId)) getRenderApp()();
       else void runPluginDocumentHooks('unknown');
     }),
     // A plugin wrote rows into the document's database (a record sink, a ranking): its table views read it again on a
     // redraw, which ends with the document hooks, so its scripts see the new rows.
-    onDatabaseChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
+    onDatabaseChange: (current) => {
+      markChanged(document);
+      runWithStateRuntime(current, () => getRenderApp()());
+    },
     // A block's settings written outside its reader: the document draws again, and is unsaved.
-    onSettingsChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
+    onSettingsChange: (current) => {
+      markChanged(document);
+      runWithStateRuntime(current, () => getRenderApp()());
+    },
     openInBrowser: openExternalUrl,
   });
   openedByDocument.set(document, opened);
+  syncScheduledDocument(document, path);
   return opened.lookup;
-});
+};
+setDocumentAutomationOpener(openDocumentAutomationLookup);
+
+let markChanged: (document: object) => void = () => undefined;
+
+/**
+ * How the app marks a document its automation wrote into (rows, items, a block's settings): one in a background tab is
+ * unsaved from then, so switching back to it keeps what was written instead of reading the file again.
+ */
+export function setAutomationChangeMarker(marker: (document: object) => void): void {
+  markChanged = marker;
+}
+
+/** Scheduled jobs: a document's automation, opened as its plugins open it, for running a job in it. */
+export function documentAutomationFor(document: object): DocumentAutomation | null {
+  if (!openedByDocument.has(document)) openDocumentAutomationLookup(document);
+  return openedByDocument.get(document) ?? null;
+}
 
 /** Document save: each queue block takes its queue's state, just before the document is serialized. */
 export function saveWebAutomationQueues(document: object): void {
   openedByDocument.get(document)?.saveQueues();
+  syncScheduledDocument(document as VisualDocument, documentPaths.get(document) ?? '');
 }
 
 /**

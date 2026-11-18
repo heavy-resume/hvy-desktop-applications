@@ -467,6 +467,9 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'disable-homepage') handlers.disableHomepage();
     if (action === 'review-scripting') handlers.openScriptingReview();
     if (action === 'close-scripting-review') handlers.closeScriptingReview();
+    if (action === 'close-scheduled-jobs') handlers.closeScheduledJobs();
+    if (action === 'save-scheduled-jobs') handlers.saveScheduledJobs();
+    if (action === 'open-scheduled-document' && target.dataset.path) handlers.openScheduledDocument(target.dataset.path);
     if (action === 'allow-file-power-scripting' && target.dataset.path) {
       handlers.setWholeFilePowerScriptingAllowed(target.dataset.path, true);
     }
