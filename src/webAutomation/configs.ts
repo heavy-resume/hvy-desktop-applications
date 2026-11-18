@@ -22,7 +22,7 @@ export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
 export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
 
 /** The most a collection reads from one start page: list pages, and items listed. */
-export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500 } as const;
+export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500, checkEveryDays: 365, duePagesPerRun: 100 } as const;
 
 export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
@@ -540,9 +540,11 @@ function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[])
       errors.push(`Start page "${text(page.url)}" fills "${field}", which is not one of the fields.`);
     }
     // Its own limits, where it has them; the collection's are its defaults.
-    const limits = Object.fromEntries((['maxPages', 'maxItems'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
+    const limits = Object.fromEntries((['maxPages', 'maxItems', 'checkEveryDays'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
     const name = text(page.name).trim();
-    return id && url ? [{ id, url: url.href, ...(name ? { name } : {}), ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}) }] : [];
+    // When a run last read it: kept only as a time.
+    const checkedAt = typeof page.checkedAt === 'string' && !Number.isNaN(Date.parse(page.checkedAt)) ? page.checkedAt : null;
+    return id && url ? [{ id, url: url.href, ...(name ? { name } : {}), ...(Object.keys(values).length ? { values } : {}), ...(page.included === false ? { included: false as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}), ...(checkedAt ? { checkedAt } : {}) }] : [];
   });
   const ids = pages.map((page) => page.id);
   for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);
@@ -626,6 +628,8 @@ export function readCollectionBlockConfig(value: unknown): ConfigResult<Collecti
         maxPages: number(value.maxPages, 5, 1, LIMIT_BOUNDS.maxPages),
         maxItems: number(value.maxItems, 50, 1, LIMIT_BOUNDS.maxItems),
         ...(value.stopAtKnownPage === true ? { stopAtKnownPage: true } : {}),
+        checkEveryDays: number(value.checkEveryDays, 7, 1, LIMIT_BOUNDS.checkEveryDays),
+        duePagesPerRun: number(value.duePagesPerRun, 10, 1, LIMIT_BOUNDS.duePagesPerRun),
         ...(value.readItemPages === false ? { readItemPages: false as const } : {}),
         followLinksToOtherSites: value.followLinksToOtherSites === true,
         ...(key ? { key } : {}),

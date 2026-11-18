@@ -10,6 +10,7 @@ const { createWebAutomationHost } = require('./web-automation-host.cjs');
 const { runWebMcp } = require('./integration-webmcp.cjs');
 const { promisify } = require('node:util');
 const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
+const { RECENT_LIMIT, pushRecent } = require('./recent-entries.cjs');
 
 for (const stream of [process.stdout, process.stderr]) {
   stream?.on('error', (error) => {
@@ -33,7 +34,6 @@ const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
 const DOCUMENT_ENCRYPTION_PREFIX = Buffer.from('---HVY-ENCRYPTED---\n');
 const MCP_SETTINGS = 'mcp-settings.json';
 const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
-const RECENT_LIMIT = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
 const AI_MIN_CONTEXT_CHARS = 1000;
 const AI_MAX_CONTEXT_CHARS = 750000;
@@ -3700,11 +3700,6 @@ function removeRecentFile(entryPath) {
   if (recent.documentColorUses) delete recent.documentColorUses[normalized];
   writeJson(dataPath(RECENT_STATE), recent);
   refreshMenu();
-}
-
-function pushRecent(entries, entryPath) {
-  const normalized = path.resolve(entryPath);
-  return [normalized, ...entries.filter((entry) => path.resolve(entry) !== normalized)].slice(0, RECENT_LIMIT);
 }
 
 function recentWorkspacePaths(recent) {

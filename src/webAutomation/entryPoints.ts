@@ -1,3 +1,4 @@
+import { duePages } from './cadence';
 import { recordAuthorization, reviewAuthorization, revokeAuthorization, type AuthorizationReview } from './authorization';
 import type { Clock, Random } from './clock';
 import {
@@ -74,6 +75,8 @@ export interface WebAutomationDocumentDeps {
   profileName(capabilityId: string): string | null;
   /** The capability id of the web plugin instance whose site a URL is on (a web API's origins, a collection's start pages), if any. */
   linkOwner(url: string): string | null;
+  /** A run read these start pages of the collection without a problem, at `at` (ISO): when each was last checked. */
+  startPagesChecked(capabilityId: string, startPageIds: string[], at: string): void;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -402,15 +405,23 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     },
 
     // UI: galaxy.web-collection reader, "Collect"; scripting collect({ … }). Records go to the consumer (usually a record sink).
-    startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[]): { runId: string; done: Promise<CollectionRunState> } {
+    // `due`: of those pages, only the ones due (`cadence.ts`), the most overdue first, as many as a run takes.
+    startCollection(definition: CollectionDefinition, consumer: RecordConsumer, onlyStartUrls?: string[], options: { due?: boolean } = {}): { runId: string; done: Promise<CollectionRunState> } {
       const profileId = profileFor(definition.capabilityId, definition.name);
       requirePlugin(WEB_COLLECTION_PLUGIN_ID, 'Web Collection');
       // Collecting everything skips the start pages left out of it; naming a start page collects it either way.
-      const startPages = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages.filter((page) => page.included !== false);
+      const chosen = onlyStartUrls ? definition.startPages.filter((page) => onlyStartUrls.includes(page.url)) : definition.startPages.filter((page) => page.included !== false);
+      const startPages = options.due ? duePages(definition, chosen, deps.clock.now()) : chosen;
       if (onlyStartUrls?.some((url) => !definition.startPages.some((page) => page.url === url))) {
         throw new WebAutomationError('invalid_request', "Only the block's own start pages can be collected.");
       }
-      return collections.start(definition, profileId, consumer, startPages);
+      const run = collections.start(definition, profileId, consumer, startPages);
+      // Each page read without a problem was checked now, however the run ended (stopped, its other pages failing).
+      void run.done.then((state) => {
+        const checked = Object.entries(state.startPages).filter(([id, progress]) => progress.status === 'done' && !state.startPageProblems[id]).map(([id]) => id);
+        if (checked.length) deps.startPagesChecked(definition.capabilityId, checked, new Date(deps.clock.now()).toISOString());
+      });
+      return run;
     },
 
     // UI: galaxy.web-collection reader, a run's pages with problems, Retry; scripting extract({ url }) or extract({ items }):

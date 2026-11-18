@@ -121,7 +121,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     return runtime;
   }
   let stateRuntime = documentState(document);
-  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.() });
+  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.(), onSettingsChange: () => options.document?.changed?.() });
   let automation: WebAutomation = opened.automation;
   loadDocument();
 
@@ -132,7 +132,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       sink = createRecordSink(items, options.sink ?? DEFAULT_RECORD_SINK_CONFIG);
     }
     stateRuntime = documentState(document);
-    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.() });
+    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.(), onSettingsChange: () => options.document?.changed?.() });
     automation = opened.automation;
     loadDocument();
   }

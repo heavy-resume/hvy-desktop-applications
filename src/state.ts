@@ -349,6 +349,7 @@ export interface AppState {
   saveConflictOtherDocumentId: string | null;
   saveConflictContinuation: 'save' | 'saveAndCloseDocument' | 'saveBeforeExportPdf' | 'saveAndCloseApp';
   tabStackOpen: boolean;
+  dismissedRecentTabs: string[];
   tabStackIndex: number;
   appCloseDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
@@ -714,6 +715,7 @@ export const state: AppState = {
   saveConflictOtherDocumentId: null,
   saveConflictContinuation: 'save',
   tabStackOpen: false,
+  dismissedRecentTabs: [],
   tabStackIndex: 0,
   appCloseDialogOpen: false,
   recoveryBackups: [],

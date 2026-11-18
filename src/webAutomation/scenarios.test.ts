@@ -683,6 +683,24 @@ describe('mock integration: job search flow', () => {
     expect(items.map((item) => item.key)).toEqual(['Engineer', 'Staff Engineer']);
   });
 
+  it('50. each page a run read without a problem is marked checked, in the collection block, and the document is unsaved; a page it couldn\'t read is not', async () => {
+    const boards = listingCollection([ACME, `${UNKNOWN_ORIGIN}/openings/7`]);
+    const api = mockAnalysisService();
+    let changed = 0;
+    flow = createMockFlow({ document: { build: () => buildSearchDocument({ webApi: structuredClone(api.capability), queues: mockQueueBlocks(api), collection: structuredClone(boards) }), changed: () => { changed += 1; } } });
+    flow.bindProfiles(boards);
+    flow.approve();
+    await flow.signIn();
+    await flow.completeLogin();
+    await flow.collect(boards);
+    const pages = () => readWebAutomationBlocks(flow!.document).collections[0].config.collection.startPages;
+    expect(pages().map((page) => [page.url, page.checkedAt ?? null])).toEqual([
+      [ACME, new Date(flow.clock.now()).toISOString()],
+      [`${UNKNOWN_ORIGIN}/openings/7`, null],
+    ]);
+    expect(changed).toBeGreaterThan(0);
+  });
+
   it('19d. setup opens a row whose opener has no link by clicking it in the row; a click that goes nowhere in 3 seconds opened nothing', async () => {
     const opener = { selected: { shape: 'card' } };
     const withOpener = (pattern: SitePatternDefinition) => ({ ...pattern, matcher: { pattern: { opener }, commands: {} } });

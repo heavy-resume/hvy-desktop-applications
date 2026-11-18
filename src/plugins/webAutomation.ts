@@ -7,6 +7,7 @@ import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionProblem, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
 import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
+import { cadenceText, duePages } from '../webAutomation/cadence';
 import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
 import { createWebAutomationPlugins, profileNameIn, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
 import { errorMessage } from '../webAutomation/errors';
@@ -1093,7 +1094,7 @@ function readsWith(collection: CollectionDefinition, url: string): string | null
   return recognized ? (recognized.site ? setupName(recognized.site) : recognized.pattern.name) : null;
 }
 
-type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage' | 'readItemPages'>>;
+type CollectionPatch = Partial<Pick<CollectionDefinition, 'startPages' | 'sites' | 'patterns' | 'maxPages' | 'maxItems' | 'stopAtKnownPage' | 'readItemPages' | 'checkEveryDays' | 'duePagesPerRun'>>;
 
 /** Why the block would refuse a change, checked over the whole configuration as the loader and lint do. */
 function checkCollection(ctx: HvyPluginContext, patch: CollectionPatch): string[] {
@@ -1550,7 +1551,7 @@ function openPageDialog(ctx: HvyPluginContext, collection: CollectionDefinition,
   row.append(removePage, cancel, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, name: _name, ...rest } = startPage;
+    const { maxPages: _maxPages, maxItems: _maxItems, stopAtKnownPage: _stopAtKnownPage, checkEveryDays: _checkEveryDays, name: _name, ...rest } = startPage;
     const next: StartPage = { ...rest, ...(name.value.trim() ? { name: name.value.trim() } : {}), url: address.value.trim(), values: values.read(), ...limits.read() };
     if (!Object.keys(next.values!).length) delete next.values;
     const now = currentCollection(ctx, collection);
@@ -1685,11 +1686,12 @@ function latestPageProgress(runs: CollectionRunState[]): Record<string, { progre
   return latest;
 }
 
-type Limit = 'maxPages' | 'maxItems';
+type Limit = 'maxPages' | 'maxItems' | 'checkEveryDays' | 'duePagesPerRun';
 type Limits = Partial<Record<Limit, number>> & { stopAtKnownPage?: boolean };
 
 /**
  * How far a run goes at a page: list pages read, items taken from its list (known ones included), and whether a list page of items already in the list ends it.
+ * How often it is checked (`cadence.ts`), and, for the defaults, how many due pages "Fetch due" reads.
  * For the default limits the numbers are required; for a page, a blank field (or "Default") uses the default, which
  * it shows.
  */
@@ -1706,14 +1708,18 @@ function limitFields(collection: CollectionDefinition, current: Limits, defaults
   };
   const pages = input('maxPages');
   const itemCount = input('maxItems');
+  const every = input('checkEveryDays');
+  const perRun = input('duePagesPerRun');
   const capitalized = `${items(collection).charAt(0).toUpperCase()}${items(collection).slice(1)}`;
   const stopText = `Stop at a list page of ${items(collection)} already in the list`;
   const stopHint = 'For lists with the newest first: the pages after it are older.';
-  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', itemCount]] as const)
+  const numbers = () => Object.fromEntries(([['maxPages', pages], ['maxItems', itemCount], ['checkEveryDays', every], ...(defaults ? [['duePagesPerRun', perRun]] as const : [])] as const)
     .flatMap(([limit, field]) => (field.value.trim() ? [[limit, Number(field.value)]] : [])));
   const elements = [
     labelled('Pages to read', pages, 'The page itself, then each Next.'),
     labelled(`${capitalized} to read`, itemCount, `The first this many on the list, ${items(collection)} already in it included.`),
+    labelled('Check every (days)', every, 'Due again this long after a run last read it.'),
+    ...(defaults ? [labelled('Due pages per run', perRun, 'Fetch due reads at most this many, the most overdue first.')] : []),
   ];
   if (defaults) {
     const stop = document.createElement('input');
@@ -1755,6 +1761,7 @@ function ownLimitsText(collection: CollectionDefinition, page: StartPage): strin
     ...(page.maxPages !== undefined ? [`${page.maxPages} ${page.maxPages === 1 ? 'page' : 'pages'}`] : []),
     ...(page.maxItems !== undefined ? [`${page.maxItems} ${items(collection)}`] : []),
     ...(page.stopAtKnownPage !== undefined ? [page.stopAtKnownPage ? 'stops at a page already in the list' : 'keeps going past pages already in the list'] : []),
+    ...(page.checkEveryDays !== undefined ? [`checked every ${page.checkEveryDays} ${page.checkEveryDays === 1 ? 'day' : 'days'}`] : []),
   ];
   return parts.length ? `Limits: ${parts.join(', ')}` : null;
 }
@@ -1808,6 +1815,12 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   collect.title = 'Fetches from the pages ticked: what collecting everything (a script, AI tools) fetches from.';
   collect.disabled = !collectPages || busy || !included.some((page) => readsWith(collection, page.url));
   collect.addEventListener('click', () => collectPages?.(included.filter((page) => readsWith(collection, page.url))));
+  // The pages ticked that are due, the most overdue first, as many as a run takes (`cadence.ts`).
+  const due = duePages(collection, included.filter((page) => readsWith(collection, page.url)), Date.now());
+  const fetchDue = button(`Fetch due${due.length ? ` (${due.length})` : ''}`);
+  fetchDue.title = `Fetches from the pages ticked that are due: each is checked every ${collection.checkEveryDays} ${collection.checkEveryDays === 1 ? 'day' : 'days'} unless it sets its own, at most ${collection.duePagesPerRun} a run.`;
+  fetchDue.disabled = !collectPages || busy || !due.length;
+  fetchDue.addEventListener('click', () => collectPages?.(due));
   const stopRuns = button('Stop');
   stopRuns.disabled = !stop;
   stopRuns.addEventListener('click', () => stop?.());
@@ -1818,11 +1831,11 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
   paste.addEventListener('click', () => openPasteSetupDialog(ctx, collection));
   // How far a run goes at each page that doesn't set its own limits.
   const limits = button('Default limits…');
-  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}.`;
+  limits.title = `Default limits: ${collection.maxPages} ${collection.maxPages === 1 ? 'page' : 'pages'} and ${collection.maxItems} ${items(collection)} from each page${collection.stopAtKnownPage ? ', stopping at a list page already in the list' : ''}, checked every ${collection.checkEveryDays} ${collection.checkEveryDays === 1 ? 'day' : 'days'}, ${collection.duePagesPerRun} due pages a run.`;
   limits.addEventListener('click', () => openDefaultLimitsDialog(ctx, collection));
   const bar = document.createElement('div');
   bar.className = 'hvy-web-pages-bar';
-  bar.append(actions(collect, stopRuns, add, paste), actions(limits));
+  bar.append(actions(collect, fetchDue, stopRuns, add, paste), actions(limits));
 
   // Whether a run reads each item's page as its list is read, or lists them for their pages to be read when chosen.
   const itemPages = checkboxRow(`Visit and read each ${collection.itemName?.trim() || 'item'}'s page`, collection.readItemPages !== false, (on) => {
@@ -1889,6 +1902,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
       ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-page-hint')] : []),
       paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-page-hint'),
       ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-page-hint')] : []),
+      paragraph(cadenceText(collection, page, Date.now()), 'hvy-web-page-hint'),
     ];
     const lastRun = latest?.problem
       ? paragraph(`Couldn’t read this page. ${latest.problem}`, 'hvy-web-error')

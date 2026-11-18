@@ -149,7 +149,8 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
       const lookup = resolve(ctx);
       const base = collection(lookup, args);
       // Scripts choose among the block's start pages by address; new sites go through the block and its review. Without a
-      // choice, every start page included in collecting runs.
+      // choice, every start page included in collecting runs. `due: true` runs only those of them due, as the block's
+      // Fetch due does.
       const approved = base.startPages.map((page) => page.url);
       const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => page.included !== false).map((page) => page.url);
       const unapproved = startUrls.filter((url) => !approved.includes(url));
@@ -166,7 +167,7 @@ export function collectionScriptingMethods(resolve: DocumentAutomationResolver):
           ...(page.maxItems !== undefined ? { maxItems: lower('maxItems', page.maxItems) } : {}),
         })),
       };
-      return operation(lookup, args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls).done);
+      return operation(lookup, args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls, { due: args.due === true }).done);
     },
     // One item (`url`), or several (`items`, each { url, values, key }: what its list showed, as its record has it, kept;
     // and its record's key, for an item whose address doesn't make it, one opened without a link).

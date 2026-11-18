@@ -289,6 +289,8 @@ export function listingCollection(startUrls: string[], overrides: Partial<Collec
     patterns: [atsListingPattern, atsDetailPattern],
     maxPages: 5,
     maxItems: 50,
+    checkEveryDays: 7,
+    duePagesPerRun: 10,
     followLinksToOtherSites: false,
     ...overrides,
   };

@@ -311,6 +311,7 @@ export interface UiHandlers {
   cancelAppClose(): void;
   selectDocumentTab(path: string): void;
   closeDocumentTab(path: string): void;
+  dismissRecentTab(path: string): void;
   cycleTabStack(direction: 1 | -1): void;
   commitTabStack(): void;
   cancelTabStack(): void;

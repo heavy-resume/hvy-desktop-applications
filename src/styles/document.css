@@ -106,6 +106,49 @@
   color: var(--hvy-text, #17211f);
 }
 
+.document-recent-tabs {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  min-width: 0;
+  height: 34px;
+  overflow: hidden;
+}
+
+.document-recent-tab {
+  display: inline-flex;
+  align-items: center;
+  min-width: 120px;
+  max-width: 180px;
+  height: 34px;
+  margin: 0 2px;
+  border: 1px dashed color-mix(in srgb, var(--hvy-border-translucent, var(--hvy-border, #c2cbc6)) 70%, transparent);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: var(--hvy-text-muted, #66726e);
+  opacity: 0.7;
+  padding: 0 5px 0 0;
+}
+
+.document-recent-tab:hover {
+  opacity: 1;
+}
+
+.document-recent-tab-main {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-style: italic;
+  padding: 0 6px 0 10px;
+}
+
 .tab-stack-popover {
   position: fixed;
   z-index: 90;

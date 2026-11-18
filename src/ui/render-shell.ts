@@ -20,7 +20,31 @@ export function renderDocumentTabs(state: AppState): string {
           <button type="button" class="hvy-galaxy-button document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.versionId)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
         </div>
       `).join('')}
+      ${renderRecentTabs(state)}
     </nav>`;
+}
+
+const RECENT_TAB_LIMIT = 10;
+
+/** Ghost tabs for recently opened files fill the strip's unused space; tabs that do not fit wrap out of view. */
+function renderRecentTabs(state: AppState): string {
+  const open = new Set(state.documentTabs.map((tab) => tab.sourcePath));
+  const dismissed = new Set(state.dismissedRecentTabs);
+  const recent = state.recent.files.filter((path) => !open.has(path) && !dismissed.has(path)).slice(0, RECENT_TAB_LIMIT);
+  if (recent.length === 0) return '';
+  return `
+      <div class="document-recent-tabs" aria-label="Recent documents">
+        ${recent.map((path) => {
+          const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+          return `
+        <div class="document-recent-tab">
+          <button type="button" class="hvy-galaxy-button document-recent-tab-main" data-action="open-recent-tab" data-path="${escapeAttr(path)}" title="${escapeAttr(path)}">
+            <span class="document-tab-name">${escapeHtml(name)}</span>
+          </button>
+          <button type="button" class="hvy-galaxy-button document-tab-close" data-action="dismiss-recent-tab" data-path="${escapeAttr(path)}" title="Remove" aria-label="Remove ${escapeAttr(name)} from recent tabs">&times;</button>
+        </div>`;
+        }).join('')}
+      </div>`;
 }
 
 export function renderTabStackPopover(state: AppState): string {

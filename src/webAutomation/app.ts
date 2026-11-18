@@ -163,6 +163,8 @@ setDocumentAutomationOpener((rawDocument) => {
     // A plugin wrote rows into the document's database (a record sink, a ranking): its table views read it again on a
     // redraw, which ends with the document hooks, so its scripts see the new rows.
     onDatabaseChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
+    // A block's settings written outside its reader: the document draws again, and is unsaved.
+    onSettingsChange: (current) => runWithStateRuntime(current, () => getRenderApp()()),
     openInBrowser: openExternalUrl,
   });
   openedByDocument.set(document, opened);

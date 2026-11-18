@@ -57,6 +57,9 @@
 .hvy-web-pages-table {
   display: grid;
   grid-template-columns: auto minmax(0, 2fr) minmax(0, 1.5fr) auto;
+  /* Many pages scroll inside it, about ten rows showing, rather than pushing the document down. */
+  max-height: 34rem;
+  overflow-y: auto;
   border: 1px solid var(--hvy-border, #c9c3b8);
   border-radius: 0.45rem;
 }
@@ -77,6 +80,16 @@
 }
 
 .hvy-web-pages-heading .hvy-web-pages-cell {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-top: 0;
+  border-bottom: 1px solid var(--hvy-border, #c9c3b8);
+  background: var(--hvy-surface, #fff);
+}
+
+/* Under the pinned headings' line, the first page needs no line of its own. */
+.hvy-web-pages-heading + .hvy-web-pages-row .hvy-web-pages-cell {
   border-top: 0;
 }
 

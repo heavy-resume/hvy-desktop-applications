@@ -73,6 +73,10 @@ export interface StartPage {
   maxPages?: number;
   maxItems?: number;
   stopAtKnownPage?: boolean;
+  /** How many days apart it is checked; without it, the collection's (`cadence.ts`). */
+  checkEveryDays?: number;
+  /** When a run last read it without a problem (ISO time); never, until one has. */
+  checkedAt?: string;
 }
 
 /** The value every collected record has: its page's URL. It is not a configurable field. */
@@ -140,6 +144,10 @@ export interface CollectionDefinition {
    * the rest are older. Off unless set.
    */
   stopAtKnownPage?: boolean;
+  /** How many days apart each start page is checked, for one that doesn't set its own (`cadence.ts`). */
+  checkEveryDays: number;
+  /** How many due start pages "Fetch due" reads at most, the most overdue first. */
+  duePagesPerRun: number;
   /**
    * False when a run reads only the lists: each new item is written as listed (what its list shows), and its own page is
    * read later, when asked for (`extract`). Read in the same run unless set.

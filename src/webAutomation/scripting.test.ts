@@ -95,6 +95,17 @@ describe('scripting methods', () => {
     expect(results.slice(1)).toEqual([{ key: 'eng-2', context: { row: 2 }, status: 'cancelled' }]);
     expect(() => queue.on_result({ queueId: EVALUATE_QUEUE }, ctx)).toThrow(/handler/);
   });
+  it('collects only the pages due when asked, as the block\'s Fetch due does', async () => {
+    const { flow, boards, resolve, ctx } = await setup();
+    const now = new Date(flow.clock.now()).toISOString();
+    const pages = { ...boards, startPages: [{ id: 'fresh', url: `${ATS_ORIGIN}/acme/jobs`, checkedAt: now }, { id: 'never', url: `${ATS_ORIGIN}/globex/jobs` }] };
+    const collection = collectionScriptingMethods((context) => ({ ...resolve(context), collection: () => pages }));
+    const done: Array<Record<string, unknown>> = [];
+    collection.collect({ capabilityId: 'listings', due: true, on_complete: (result: Record<string, unknown>) => done.push(result) }, ctx);
+    await flow.clock.runUntil(() => done.length === 1);
+    expect(Object.keys((done[0].result as { startPages: object }).startPages)).toEqual(['never']);
+  });
+
   it('lets a script lower the limits, a page\'s own included, but not raise them', async () => {
     const { flow, boards, resolve, ctx } = await setup();
     const limited = { ...boards, startPages: [{ id: 'start-1', url: `${ATS_ORIGIN}/acme/jobs`, maxPages: 2, maxItems: 4 }] };

@@ -21,6 +21,20 @@ describe('a start page left out of collecting all', () => {
   });
 });
 
+describe('how often start pages are checked', () => {
+  it('keeps the cadence and when a page was checked, defaulting to weekly and ten due pages a run, and drops a time that is not one', () => {
+    const read = readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages: [
+      { id: 'a', url: 'https://jobs.test/a', checkEveryDays: 3, checkedAt: '2026-11-10T08:00:00.000Z' },
+      { id: 'b', url: 'https://jobs.test/b', checkedAt: 'yesterday' },
+    ] });
+    expect(read.ok && read.value.collection).toMatchObject({ checkEveryDays: 7, duePagesPerRun: 10 });
+    expect(read.ok && read.value.collection.startPages).toEqual([
+      { id: 'a', url: 'https://jobs.test/a', checkEveryDays: 3, checkedAt: '2026-11-10T08:00:00.000Z' },
+      { id: 'b', url: 'https://jobs.test/b' },
+    ]);
+  });
+});
+
 describe('a site setup\'s settings', () => {
   it('keeps clicking through, the fragment, and the row key, and refuses a row key that is not a field', () => {
     const block = (site: Record<string, unknown>) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'mail', fields: [{ id: 'title', label: 'Subject' }], startPages: [], sites: [{ id: 'gmail', name: 'Gmail', ...site }] });

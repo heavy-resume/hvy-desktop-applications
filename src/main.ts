@@ -41,6 +41,7 @@ let workspaceFilterRenderQueued = false;
 const HOT_RELOAD_SESSION_STORAGE_KEY = 'hvy-galaxy:hot-reload-session';
 const DOCUMENT_MODE_STORAGE_KEY = 'hvy-galaxy:document-modes';
 const ZOOM_STORAGE_KEY = 'hvy-galaxy:zoom';
+const DISMISSED_RECENT_TABS_STORAGE_KEY = 'hvy-galaxy:dismissed-recent-tabs';
 const ZOOM_LEVELS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 const CHANGE_PERF_LOG_THRESHOLD_MS = 8;
 const CHANGE_PERF_SAMPLE_INTERVAL = 50;
@@ -274,6 +275,7 @@ export function syncDocumentTabs(): void {
   if (state.tabStackIndex >= state.documentTabs.length) {
     state.tabStackIndex = 0;
   }
+  restoreReopenedRecentTabs();
   writeHotReloadSessionSnapshot();
 }
 export function activateWorkspaceChatDocument(): void {
@@ -970,6 +972,34 @@ export function loadZoomSettings(): void {
     state.appZoom = 1;
     state.documentZoom = 1;
   }
+}
+export function loadDismissedRecentTabs(): void {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DISMISSED_RECENT_TABS_STORAGE_KEY) ?? '[]') as unknown;
+    state.dismissedRecentTabs = Array.isArray(parsed) ? parsed.filter((path): path is string => typeof path === 'string') : [];
+  } catch {
+    state.dismissedRecentTabs = [];
+  }
+}
+function saveDismissedRecentTabs(): void {
+  try {
+    localStorage.setItem(DISMISSED_RECENT_TABS_STORAGE_KEY, JSON.stringify(state.dismissedRecentTabs));
+  } catch {
+    // Dismissed recent tabs are a per-machine convenience.
+  }
+}
+/** Hides a file from the recent tabs strip only; File > Recent Files keeps it. Reopening the file makes it eligible again. */
+export function dismissRecentTab(path: string): void {
+  if (state.dismissedRecentTabs.includes(path)) return;
+  state.dismissedRecentTabs = [...state.dismissedRecentTabs, path];
+  saveDismissedRecentTabs();
+}
+function restoreReopenedRecentTabs(): void {
+  const open = new Set(state.documentTabs.map((tab) => tab.sourcePath));
+  const remaining = state.dismissedRecentTabs.filter((path) => !open.has(path));
+  if (remaining.length === state.dismissedRecentTabs.length) return;
+  state.dismissedRecentTabs = remaining;
+  saveDismissedRecentTabs();
 }
 export function saveZoomSettings(): void {
   localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify({

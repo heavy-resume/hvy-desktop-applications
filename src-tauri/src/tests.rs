@@ -1010,6 +1010,22 @@
     }
 
     #[test]
+    fn recent_entries_list_newest_first() {
+        let dir = tempdir().unwrap();
+        let mut recent = Vec::new();
+
+        for name in ["a.hvy", "b.hvy", "c.hvy", "a.hvy"] {
+            push_recent(&mut recent, &dir.path().join(name));
+        }
+
+        let names: Vec<String> = recent
+            .iter()
+            .map(|entry| Path::new(entry).file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["a.hvy", "c.hvy", "b.hvy"]);
+    }
+
+    #[test]
     fn legacy_workspace_order_initializes_separate_recency() {
         let dir = tempdir().unwrap();
         let first = dir.path().join("first");

@@ -149,6 +149,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   onDocumentChange?(stateRuntime: StateRuntime, listPath: string): void;
   /** The document's database changed outside a script: a record sink wrote rows into one of its tables. */
   onDatabaseChange?(stateRuntime: StateRuntime): void;
+  /** A block's settings changed outside its reader (when a collection's start pages were last checked). */
+  onSettingsChange?(stateRuntime: StateRuntime): void;
   /** The default browser, outside Galaxy (the app's): where an item a script asks to open there is opened. */
   openInBrowser?(url: string): Promise<void>;
 }) {
@@ -178,6 +180,15 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       return webApis.find(({ config }) => config.capability && capabilityOrigin(config.capability) === origin)?.config.capabilityId
         ?? collections.find(({ config }) => config.collection.startPages.some((page) => new URL(page.url).origin === origin))?.config.collection.capabilityId
         ?? null;
+    },
+    // Kept in the collection's block, with each page: it travels with the file, and the document is unsaved until then.
+    startPagesChecked: (capabilityId, startPageIds, at) => {
+      const block = readWebAutomationBlocks(document).collections.find(({ config }) => config.collection.capabilityId === capabilityId)?.block;
+      if (!block) return;
+      const settings = storedSettings(block);
+      const pages = Array.isArray(settings.startPages) ? settings.startPages as Array<Record<string, unknown>> : [];
+      block.text = settingsText({ ...settings, startPages: pages.map((page) => (startPageIds.includes(String(page.id)) ? { ...page, checkedAt: at } : page)) });
+      options.onSettingsChange?.(stateRuntime);
     },
     callPlugin: (pluginId, method, args) => {
       // A queue's target plugin not allowed in this file pauses the queue for review rather than failing entries.

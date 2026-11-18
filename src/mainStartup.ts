@@ -6,7 +6,7 @@ import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nat
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
 import { siteSetupFields, state, workspaceRelativeFilePath } from './state';
-import { handlers, clearArchivedHomepageDocument, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { handlers, clearArchivedHomepageDocument, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, loadDismissedRecentTabs, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
@@ -44,6 +44,7 @@ export async function boot(): Promise<void> {
   setupErrorSurface();
   try {
     loadZoomSettings();
+    loadDismissedRecentTabs();
     state.workspaceExpanded = loadWorkspaceExpansionState();
     state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme(null);

@@ -639,6 +639,11 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       event.stopPropagation();
       handlers.closeDocumentTab(target.dataset.path);
     }
+    if (action === 'open-recent-tab' && target.dataset.path) handlers.openRecentFile(target.dataset.path);
+    if (action === 'dismiss-recent-tab' && target.dataset.path) {
+      event.stopPropagation();
+      handlers.dismissRecentTab(target.dataset.path);
+    }
     if (action === 'select-tab-stack-item' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
     if (action === 'close-document') handlers.closeDocument();
     if (action === 'save-and-close-document') handlers.saveAndCloseDocument();
