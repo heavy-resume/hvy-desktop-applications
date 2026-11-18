@@ -20,3 +20,5 @@ When suggesting UI labels consider whether they are unnecessary or redundant and
 When evaluating new libraries always consider: size, maintenance frequency, security, etc.
 
 Don't run full test suites unless there's a good reason. Tests should be organized by features / code and integration versus unit.
+
+For verbage we use "Save" when saving to disk and "Apply" for applying settings or such.
