@@ -73,6 +73,24 @@ worker of its own, of the same profile. Clicking through a list reads the item
 there and closes it, so the list stays as it was (its search, its scroll) with
 no Back. The sign-in window still opens such pages in itself.
 
+## Scheduled jobs
+
+A `galaxy.schedule` block's jobs run on a timer while Galaxy is open
+(`src/scheduledJobs.ts`, docs/job-search/12-scheduled-jobs.md) as if the user
+pressed their button, once: a job's turn is over when its script has run (it
+has no running state), and a turn skipped or failed waits for the next rather
+than retrying: once the user is idle, the job's document is opened as a
+tab (`selectDocumentTab`), its script runs there (`runUserScript`), and Galaxy
+goes back to the user's tab. Don't add a second way to run or save a document
+for it: a tab a job opened is saved and closed by switching to it, the usual
+Save, and closing it, while the user is idle. What the user chose (each job on,
+how often) is app settings by path (`scheduledDocuments`), not the document.
+While a job runs a document, its automation is unattended (`setUnattended`):
+the runs it starts let a page that needs someone go. A document is idle when
+`automation.activity()` has nothing outstanding (every plugin call through
+`operation()` is `tracked`, and callbacks waiting in `ScriptCalls`) and nothing
+happened for 5 minutes.
+
 ## Dialogs
 
 New dialogs use the shared shell, `renderDialog` in `src/ui/dialog.ts`: the

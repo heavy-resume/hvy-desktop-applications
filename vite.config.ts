@@ -134,6 +134,13 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/webAutomation.ts',
     root: 'app',
   },
+  {
+    id: 'galaxy.schedule',
+    key: 'galaxySchedule',
+    exportName: 'schedulePlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
