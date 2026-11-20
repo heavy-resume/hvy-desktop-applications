@@ -285,6 +285,8 @@ struct DocumentFileMetadata {
     hidden_from_ai: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relocated_archived_files: Vec<WorkspaceFileRelocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

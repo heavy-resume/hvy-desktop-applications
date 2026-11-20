@@ -9,7 +9,7 @@ import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
-import { setAutomationChangeMarker, setOpenDocumentCheck } from './webAutomation/app';
+import { releaseWebAutomation, setAutomationChangeMarker, setOpenDocumentCheck } from './webAutomation/app';
 import { removeRuntimeDocument, runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile, type RuntimeDocument } from './runtimeDocuments';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -88,6 +88,16 @@ export interface HotReloadSessionSnapshot {
 }
 type PreparedImportSource = ImportSourceFile & { text: string; sourceDocument?: VisualDocument };
 export const documentSessions = new Map<string, DocumentSession>();
+/**
+ * Drops an open document's session (its tab closed, the file archived or removed, or the session replaced). Once the app
+ * no longer holds the document, its web automation is released: its queues detach, and Background activity no longer
+ * lists them. A document still held elsewhere (mounted, or another session) keeps its automation.
+ */
+export function deleteDocumentSession(versionId: string): void {
+  const session = documentSessions.get(versionId);
+  documentSessions.delete(versionId);
+  if (session) releaseWebAutomation(session.document);
+}
 // A document stays open while it is in the document pane or a background tab; web automation closes only then.
 setOpenDocumentCheck((document) => state.document?.mounted?.document === document || [...documentSessions.values()].some((session) => session.document === document));
 // Its automation wrote into a document in a background tab (a fetch still running after you switched away, a scheduled
@@ -194,7 +204,7 @@ export function removeOpenDocumentFile(path: string): void {
   if (!document) return;
   for (const session of documentSessions.values()) {
     if (session.documentId !== document.documentId) continue;
-    documentSessions.delete(session.versionId);
+    deleteDocumentSession(session.versionId);
     removeDocumentTabPath(session.versionId);
   }
   if (state.document?.documentId === document.documentId) {
@@ -331,7 +341,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
   preserveCurrentDocumentSession();
   state.externalFileChangePath = null;
   if (options.reloadFromDisk) {
-    documentSessions.delete(versionId);
+    deleteDocumentSession(versionId);
     workspaceFilterDocumentCache.delete(file.path);
   }
   markDocumentTabOpened(versionId);
@@ -559,7 +569,7 @@ export function adoptSavedAsDocument(
 ): void {
   const previousVersionId = state.document?.versionId ?? previousPath;
   if (previousVersionId) {
-    documentSessions.delete(previousVersionId);
+    deleteDocumentSession(previousVersionId);
     removeDocumentTabPath(previousVersionId);
   }
   const source = runtimeDocumentForFile(file, { distinct: true });

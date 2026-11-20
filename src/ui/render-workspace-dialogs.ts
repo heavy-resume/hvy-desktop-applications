@@ -2,7 +2,7 @@ import { markdownToReaderHtml, normalizeMarkdownLists } from '../../../heavy-fil
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../../heavy-file-format/src/search/types';
 import { type AiSettings, type DocumentExtension, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
 import { currentDocumentWorkspacePath } from '../fileActions';
-import { workspaceHasLogicalName } from '../encryptedFolders';
+import { findEncryptedFolder, workspaceHasLogicalName } from '../encryptedFolders';
 import { documentFileName, documentTypeForExtension, savedVersionDocumentName } from '../mainUtilities';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceFilterState } from '../state';
 import { workspaceTemplateVisibility } from '../templates';
@@ -550,7 +550,9 @@ export function saveAsRenamedFileName(
 ): { fileName: string; renamed: string } | null {
   const workspace = workspaces.find((candidate) => candidate.path === workspacePath);
   const fileName = documentFileName(name, documentTypeForExtension(extension));
-  if (!fileName || !workspaceHasLogicalName(workspace, targetDirectory, fileName)) return null;
+  // Outside encrypted folders the backend moves an archived occupant aside, so only live files force a rename.
+  const ignoreArchived = !findEncryptedFolder(workspace, targetDirectory);
+  if (!fileName || !workspaceHasLogicalName(workspace, targetDirectory, fileName, '', { ignoreArchived })) return null;
   const dot = fileName.lastIndexOf('.');
   const stem = fileName.slice(0, dot);
   const fileExtension = fileName.slice(dot);

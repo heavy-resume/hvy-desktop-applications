@@ -2137,7 +2137,7 @@ async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
-    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, path.basename(source));
+    const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, path.basename(source), 'suffix');
     const destination = incoming.destination;
     relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     fs.copyFileSync(source, destination);
@@ -2168,7 +2168,7 @@ function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') 
   for (const file of files || []) {
     if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
-    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, file.name);
+    const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, file.name, 'suffix');
     const destination = incoming.destination;
     relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     writeBytes(destination, file.bytes);
@@ -2401,12 +2401,12 @@ function createDocumentFile(workspacePath, relativePath, template, bytes) {
   if (!destination.startsWith(path.resolve(workspacePath) + path.sep)) {
     throw new Error('Document path must stay inside the workspace.');
   }
-  if (fs.existsSync(destination)) throw new Error('A document already exists at that path.');
   fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const incoming = claimWorkspaceDestination(workspacePath, path.dirname(destination), path.basename(destination), 'error');
   writeBytes(destination, bytes ?? Buffer.from(template));
   touchWorkspaceManifest(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function createEncryptedFolderDocument(request) {
@@ -2672,12 +2672,12 @@ function renameDocumentFile(filePath, name) {
   const stem = normalizedStem(name);
   const destination = path.join(parent, `${stem}${extension}`);
   if (destination === filePath) return readDocumentAt(filePath);
-  if (fs.existsSync(destination)) throw new Error('A document with that name already exists.');
-  fs.renameSync(filePath, destination);
   const workspacePath = workspaceRootForDocument(parent);
+  const incoming = claimWorkspaceDestination(workspacePath, parent, path.basename(destination), 'error');
+  fs.renameSync(filePath, destination);
   if (workspacePath) renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function archiveDocumentFile(filePath) {
@@ -2757,19 +2757,20 @@ function workspaceDocumentFilesInDirectory(workspacePath, directory) {
 function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   const fileName = ensureDocumentFileName(name);
-  const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), fileName);
+  const incoming = claimWorkspaceDestination(workspacePath, workspaceTargetDirectory(workspacePath, targetDirectory), fileName, 'suffix');
+  const destination = incoming.destination;
   writeBytes(destination, bytes);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentMetadataAt(destination);
+  return { ...readDocumentMetadataAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function copyDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be copied.');
   const targetRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
-  const incoming = incomingWorkspaceFile(workspacePath, targetRoot, path.basename(filePath));
+  const incoming = claimWorkspaceDestination(workspacePath, targetRoot, path.basename(filePath), 'suffix');
   const destination = incoming.destination;
   fs.copyFileSync(filePath, destination);
   touchWorkspaceManifest(workspacePath);
@@ -2789,7 +2790,7 @@ function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') 
     addRecentFile(filePath);
     return readDocumentAt(filePath);
   }
-  const incoming = incomingWorkspaceFile(workspacePath, targetRoot, path.basename(filePath));
+  const incoming = claimWorkspaceDestination(workspacePath, targetRoot, path.basename(filePath), 'suffix');
   const destination = incoming.destination;
   fs.renameSync(filePath, destination);
   if (sourceWorkspacePath) {
@@ -2816,13 +2817,14 @@ function convertWorkspaceDocumentKind(filePath, workspacePath, toTemplate) {
   const nextExtension = extension === '.phvy' ? '.phvy' : toTemplate ? '.thvy' : '.hvy';
   const destinationRoot = toTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
   fs.mkdirSync(destinationRoot, { recursive: true });
-  const destination = uniqueCopyPath(destinationRoot, `${path.parse(filePath).name}${nextExtension}`);
+  const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, `${path.parse(filePath).name}${nextExtension}`, 'suffix');
+  const destination = incoming.destination;
   fs.renameSync(filePath, destination);
   renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 async function writeSystemFileClipboard(request) {
@@ -2850,7 +2852,7 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
     if (!documentExtension(source)) continue;
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
     const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
-    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, path.basename(source));
+    const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, path.basename(source), 'suffix');
     const destination = incoming.destination;
     relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     fs.copyFileSync(source, destination);
@@ -3559,14 +3561,15 @@ function uniqueCopyPath(root, fileName) {
   return candidate;
 }
 
-function incomingWorkspaceFile(workspacePath, root, fileName) {
+// liveConflict: 'suffix' gives the incoming file a "name 2" path when a non-archived file holds the name;
+// 'error' rejects it. Archived occupants are always moved aside so the incoming file keeps the name.
+function claimWorkspaceDestination(workspacePath, root, fileName, liveConflict) {
   const destination = path.join(root, fileName);
   if (!fs.existsSync(destination)) return { destination, relocatedArchivedFiles: [] };
-  const manifestPath = workspaceManifestPath(workspacePath);
-  if (!manifestPath) return { destination: uniqueCopyPath(root, fileName), relocatedArchivedFiles: [] };
-  const manifest = readJson(manifestPath, null);
-  const relative = relativeWorkspacePath(workspacePath, destination);
-  if (!manifest?.archivedFiles?.includes(relative)) {
+  const manifestPath = workspacePath ? workspaceManifestPath(workspacePath) : null;
+  const manifest = manifestPath ? readJson(manifestPath, null) : null;
+  if (!manifest?.archivedFiles?.includes(relativeWorkspacePath(workspacePath, destination))) {
+    if (liveConflict === 'error') throw new Error('A document with that name already exists.');
     return { destination: uniqueCopyPath(root, fileName), relocatedArchivedFiles: [] };
   }
   const archivedDestination = uniqueCopyPath(root, fileName);

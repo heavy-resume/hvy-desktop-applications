@@ -9,7 +9,7 @@ import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, encryptMountedDocumentWithKey, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, removeMountedDocumentEncryption, serializeHvy } from './hvy';
 import { findFileInWorkspace, state, type PendingWorkspaceFileOperation } from './state';
-import { mountRoot, pendingMountDocument, documentSessions, adoptSavedAsDocument, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, updateOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, dismissRecentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, relocateRecoveryDraftsForDocument, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, readDocumentColorPreference, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, relocateDocumentSettings, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath, remountKeepingView } from './main';
+import { mountRoot, pendingMountDocument, documentSessions, deleteDocumentSession, adoptSavedAsDocument, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, updateOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, dismissRecentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, relocateRecoveryDraftsForDocument, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, applyArchivedFileRelocations, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, readDocumentColorPreference, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, relocateDocumentSettings, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath, remountKeepingView } from './main';
 import type { UiHandlers } from './ui';
 import { clearDocumentHistory } from './documentHistory';
 import { deleteDocumentEmbeddingSidecar, removeDocumentEmbeddingAttachments } from './embeddingIndex';
@@ -314,7 +314,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       await closeCurrentDocument({ discard: true });
       for (const session of [...documentSessions.values()]) {
         if (session.source.path !== operation.path) continue;
-        documentSessions.delete(session.versionId);
+        deleteDocumentSession(session.versionId);
         removeDocumentTabPath(session.versionId);
         deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
       }
@@ -428,7 +428,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       if (state.document?.source.path === path) await closeCurrentDocument({ discard: true });
       for (const session of [...documentSessions.values()]) {
         if (session.source.path !== path) continue;
-        documentSessions.delete(session.versionId);
+        deleteDocumentSession(session.versionId);
         removeDocumentTabPath(session.versionId);
         deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
       }
@@ -616,6 +616,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
         return;
       }
       const file = await renameDocumentFile({ path, name: trimmed });
+      await applyArchivedFileRelocations(file.relocatedArchivedFiles);
       await relocateDocumentSettings(path, file.path);
       const renamedOpenTemplateMetadata = Boolean(
         currentDocument
@@ -891,6 +892,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       await refreshOpenWorkspaceForFile(file.path);
     } else if (scope === 'workspace' && selectedWorkspacePath && targetDirectory) {
       file = await saveDocumentToWorkspace({ workspacePath: selectedWorkspacePath, name: templateFileName(name, extension), targetDirectory: targetDirectory ?? '', bytes });
+      await applyArchivedFileRelocations(file.relocatedArchivedFiles);
       await refreshOpenWorkspaceForFile(file.path);
     } else {
       file = await saveDocumentTemplate({ scope, workspacePath, name, extension, bytes });

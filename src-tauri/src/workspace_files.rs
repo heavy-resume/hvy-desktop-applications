@@ -883,34 +883,49 @@ fn unique_copy_path(root: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
     path
 }
 
-struct IncomingWorkspaceFile {
+/// What to do when a non-archived file already holds the requested name.
+/// Archived occupants are always moved aside so the incoming file keeps the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveNameConflict {
+    Suffix,
+    Error,
+}
+
+struct ClaimedWorkspaceFile {
     destination: PathBuf,
     relocated_archived_file: Option<WorkspaceFileRelocation>,
 }
 
-fn incoming_workspace_file(
-    workspace_path: &Path,
+fn claim_workspace_destination(
+    workspace_path: Option<&Path>,
     root: &Path,
     file_name: &std::ffi::OsStr,
-) -> AppResult<IncomingWorkspaceFile> {
+    live_conflict: LiveNameConflict,
+) -> AppResult<ClaimedWorkspaceFile> {
     let destination = root.join(file_name);
     if !destination.exists() {
-        return Ok(IncomingWorkspaceFile { destination, relocated_archived_file: None });
+        return Ok(ClaimedWorkspaceFile { destination, relocated_archived_file: None });
     }
-    let Some(manifest_path) = workspace_manifest_path(workspace_path) else {
-        return Ok(IncomingWorkspaceFile {
-            destination: unique_copy_path(root, file_name),
-            relocated_archived_file: None,
-        });
+    let archived_workspace = match workspace_path.and_then(|workspace| workspace_manifest_path(workspace).map(|manifest| (workspace, manifest))) {
+        Some((workspace, manifest_path)) => {
+            let relative = relative_path(workspace, &destination);
+            read_manifest(&manifest_path)?
+                .archived_files
+                .iter()
+                .any(|entry| entry == &relative)
+                .then_some(workspace)
+        }
+        None => None,
     };
-    let manifest = read_manifest(&manifest_path)?;
-    let relative = relative_path(workspace_path, &destination);
-    if !manifest.archived_files.iter().any(|entry| entry == &relative) {
-        return Ok(IncomingWorkspaceFile {
-            destination: unique_copy_path(root, file_name),
-            relocated_archived_file: None,
-        });
-    }
+    let Some(workspace_path) = archived_workspace else {
+        return match live_conflict {
+            LiveNameConflict::Suffix => Ok(ClaimedWorkspaceFile {
+                destination: unique_copy_path(root, file_name),
+                relocated_archived_file: None,
+            }),
+            LiveNameConflict::Error => Err(AppError::Message("A document with that name already exists.".into())),
+        };
+    };
     let archived_destination = unique_copy_path(root, file_name);
     fs::rename(&destination, &archived_destination)?;
     rename_workspace_file_manifest_entries(workspace_path, &destination, &archived_destination)?;
@@ -920,14 +935,14 @@ fn incoming_workspace_file(
         .ok_or_else(|| AppError::Message("Renamed archived document has no file name.".into()))?;
     let extension = document_extension(&archived_destination)
         .ok_or_else(|| AppError::Message("Renamed archived file is not a supported document.".into()))?;
-    Ok(IncomingWorkspaceFile {
-        destination,
+    Ok(ClaimedWorkspaceFile {
         relocated_archived_file: Some(WorkspaceFileRelocation {
-            previous_path: path_to_string(&root.join(file_name)),
+            previous_path: path_to_string(&destination),
             path: path_to_string(&archived_destination),
             name: archived_name.to_string(),
             extension,
         }),
+        destination,
     })
 }
 
@@ -960,6 +975,7 @@ fn read_document_metadata_at(path: &Path) -> AppResult<DocumentFileMetadata> {
         locked,
         hidden_from_ai,
         recovery_state: None,
+        relocated_archived_files: Vec::new(),
     })
 }
 

@@ -50,6 +50,8 @@ export interface MockRouteRequest {
   method: string;
   path: string;
   params: Record<string, string>;
+  /** The URL's query, by name ("?range=5d" → { range: '5d' }). Routes match the path alone. */
+  query: Record<string, string>;
   headers: Record<string, string>;
   body: unknown;
   cookies: Record<string, string>;
@@ -253,6 +255,7 @@ export class MockHost implements BrowserHost {
       method: request.method,
       path: target.pathname,
       params: route.params,
+      query: Object.fromEntries(target.searchParams),
       headers: request.headers,
       body: request.body ? JSON.parse(request.body) : null,
       cookies: { ...jar },

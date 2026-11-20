@@ -908,17 +908,18 @@
     }
 
     #[test]
-    fn incoming_workspace_file_keeps_name_and_renames_archived_collision() {
+    fn claim_workspace_destination_keeps_name_and_renames_archived_collision() {
         let dir = tempdir().unwrap();
         initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
         let archived = dir.path().join("draft.hvy");
         fs::write(&archived, "archived").unwrap();
         update_archived_document_file(dir.path(), &archived, true).unwrap();
 
-        let incoming = incoming_workspace_file(
-            dir.path(),
+        let incoming = claim_workspace_destination(
+            Some(dir.path()),
             dir.path(),
             std::ffi::OsStr::new("draft.hvy"),
+            LiveNameConflict::Error,
         )
         .unwrap();
         let destination = incoming.destination;
@@ -937,6 +938,32 @@
                 extension: ".hvy".into(),
             })
         );
+    }
+
+    #[test]
+    fn claim_workspace_destination_live_collision_follows_policy() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        fs::write(dir.path().join("draft.hvy"), "live").unwrap();
+
+        let suffixed = claim_workspace_destination(
+            Some(dir.path()),
+            dir.path(),
+            std::ffi::OsStr::new("draft.hvy"),
+            LiveNameConflict::Suffix,
+        )
+        .unwrap();
+        assert_eq!(suffixed.destination, dir.path().join("draft 2.hvy"));
+        assert_eq!(suffixed.relocated_archived_file, None);
+
+        let rejected = claim_workspace_destination(
+            Some(dir.path()),
+            dir.path(),
+            std::ffi::OsStr::new("draft.hvy"),
+            LiveNameConflict::Error,
+        );
+        assert!(rejected.is_err());
+        assert_eq!(fs::read_to_string(dir.path().join("draft.hvy")).unwrap(), "live");
     }
 
     #[test]

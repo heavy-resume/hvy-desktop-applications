@@ -189,6 +189,16 @@ describe('save as destination', () => {
     expect(renderSaveAsDialog({ ...state, saveAsSuggestedName: 'Notes' } as AppState))
       .toContain('<span class="save-as-rename-popover" role="status" >Notes.hvy already exists here. It will be saved as Notes 2.hvy.</span>');
   });
+
+  it('does not warn when only an archived file holds the name', () => {
+    const workspaces = [{
+      path: '/workspace',
+      manifest: { name: 'Plans' },
+      files: [{ kind: 'file', name: 'Notes.hvy', path: '/workspace/Notes.hvy', relativePath: 'Notes.hvy', archived: true }],
+    }] as unknown as AppState['workspaces'];
+
+    expect(saveAsRenamedFileName(workspaces, '/workspace', '', 'Notes', '.hvy')).toBeNull();
+  });
 });
 
 describe('encrypted folder rename dialog', () => {

@@ -7,7 +7,7 @@ import { state } from './state';
 import { availableRecoveryBackups, recoveryDraftIdentity, recoverySaveConflictKind, type SaveConflictKind } from './recoveryDocuments';
 import { documentNameFromFirstTextLine, pdfFileName, savedVersionDocumentName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
-import { activateWorkspaceChatDocument, adoptSavedAsDocument, captureMountScrollRatio, documentSessions, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, mountRoot, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, restoreMountScrollRatio, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { activateWorkspaceChatDocument, adoptSavedAsDocument, captureMountScrollRatio, documentSessions, deleteDocumentSession, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, mountRoot, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, restoreMountScrollRatio, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
 import { clearWebRecordResults } from './webRecordResults';
 import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
 import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
@@ -103,12 +103,12 @@ export async function saveCurrentDocument(options: { conflictConfirmed?: boolean
       await deleteSidecarIfSavedDocumentContainsMatchingIndex(openDocument.source.path, new Uint8Array(bytes), state.aiSettings);
     }
     for (const paired of pairedSessions) {
-      documentSessions.delete(paired.versionId);
+      deleteDocumentSession(paired.versionId);
       removeDocumentTabPath(paired.versionId);
     }
     if (openDocument.virtual === 'recoveryDraft') {
       const recoveryVersionId = openDocument.versionId;
-      documentSessions.delete(recoveryVersionId);
+      deleteDocumentSession(recoveryVersionId);
       removeDocumentTabPath(openDocument.source.workingVersionId);
       removeDocumentTabPath(recoveryVersionId);
       openDocument.versionId = openDocument.source.workingVersionId;
@@ -198,7 +198,7 @@ export async function openSavedVersionPreview(versionId: string): Promise<void> 
       });
     }
     if (replacedVersionId && replacedVersionId !== state.document?.versionId) {
-      documentSessions.delete(replacedVersionId);
+      deleteDocumentSession(replacedVersionId);
       removeDocumentTabPath(replacedVersionId);
       renderAllAroundDocument();
     }
@@ -397,7 +397,7 @@ export async function closeDocumentTab(path: string): Promise<void> {
     return;
   }
   if (session) clearWebRecordResults(session.document);
-  documentSessions.delete(path);
+  deleteDocumentSession(path);
   removeDocumentTabPath(path);
   state.status = 'Closed tab';
   rerender({ preserveMountedDocument: true });
@@ -455,7 +455,7 @@ export async function saveAndCloseDocument(): Promise<void> {
     await saveDocumentFile({ path: session.source.path, bytes });
     recordSuccessfulDocumentSave(session.source.path, session.source.name, session.document);
     clearWebRecordResults(session.document);
-    documentSessions.delete(session.versionId);
+    deleteDocumentSession(session.versionId);
     removeDocumentTabPath(session.versionId);
     workspaceFilterDocumentCache.delete(session.source.path);
     deleteBackupTracking(backupDocumentKey(session.source.path, session.source.name));
@@ -493,7 +493,7 @@ export async function closeDocumentWithoutSaving(): Promise<void> {
     deleteBackupTracking(backupDocumentKey(identity.path, identity.name));
   }
   if (session) clearWebRecordResults(session.document);
-  documentSessions.delete(targetPath);
+  deleteDocumentSession(targetPath);
   removeDocumentTabPath(targetPath);
   state.closeDocumentDialogOpen = false;
   state.closeDocumentTargetPath = null;
@@ -515,7 +515,7 @@ export async function closeActiveDocumentAfterUnsavedChoice(): Promise<void> {
   measureDebug('close', 'closeActiveDocumentAfterUnsavedChoice:cleanupThemeReapply', { path }, resetMountLifecycleState);
   const recordResultsDocument = openDocument.mounted?.document ?? documentSessions.get(openDocument.versionId)?.document;
   if (recordResultsDocument) clearWebRecordResults(recordResultsDocument);
-  documentSessions.delete(openDocument.versionId);
+  deleteDocumentSession(openDocument.versionId);
   workspaceFilterDocumentCache.delete(path);
   removeDocumentTabPath(openDocument.versionId);
   deleteBackupTracking(backupDocumentKey(recoveryIdentity.path, recoveryIdentity.name));
@@ -554,7 +554,7 @@ export async function closeCurrentDocument(options: { discard?: boolean } = {}):
   const recordResultsDocument = openDocument.mounted?.document ?? documentSessions.get(openDocument.versionId)?.document;
   if (recordResultsDocument) clearWebRecordResults(recordResultsDocument);
   if (path) {
-    documentSessions.delete(openDocument.versionId);
+    deleteDocumentSession(openDocument.versionId);
     workspaceFilterDocumentCache.delete(path);
   }
   removeDocumentTabPath(openDocument.versionId);
@@ -1046,7 +1046,7 @@ export async function discardRecoveryStateForBackup(backup: DocumentBackup): Pro
   const key = backupDocumentKey(backup.documentPath, backup.name);
   deleteBackupTracking(key);
   if (backup.documentPath) {
-    documentSessions.delete(backup.documentPath);
+    deleteDocumentSession(backup.documentPath);
     workspaceFilterDocumentCache.delete(backup.documentPath);
   }
   if (!state.document || state.document.source.path !== backup.documentPath || state.document.source.name !== backup.name) {

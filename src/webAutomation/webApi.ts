@@ -36,6 +36,11 @@ export interface WebApiCapability {
   endpoints: ApiEndpointDefinition[];
   /** Origins a served document may be read from (for example, a storage bucket), besides the page's own. */
   readOrigins?: string[];
+  /**
+   * Other origins the block's endpoints are called on (an endpoint's `origin`), in the profile, as the page's are: with
+   * the profile's cookies, unlike reads. For a service spread over sites, such as one whose cookie comes from another.
+   */
+  callOrigins?: string[];
   /** What to do about particular responses, the first that matches: see ResponseRule. */
   responses?: ResponseRule[];
   /**
@@ -125,10 +130,16 @@ export function webApiAuthorizationParts(capability: WebApiCapability): Record<s
     page: { pageUrl: capability.pageUrl, apiPageUrl: capability.apiPageUrl ?? null },
     session: capability.session ?? null,
     endpoints: capability.endpoints
-      .map((endpoint) => ({ id: endpoint.id, method: endpoint.method, path: endpoint.path, inputSchema: endpoint.inputSchema, idempotency: endpoint.idempotency ?? null, servesDocument: endpoint.servesDocument ?? null }))
+      .map((endpoint) => ({ id: endpoint.id, method: endpoint.method, ...(endpoint.origin ? { origin: endpoint.origin } : {}), path: endpoint.path, inputSchema: endpoint.inputSchema, idempotency: endpoint.idempotency ?? null, servesDocument: endpoint.servesDocument ?? null }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     reads: [...(capability.readOrigins ?? [])].sort(),
+    ...calledOrigins(capability),
   };
+}
+
+/** The call origins, for approval: only when there are any, so a block without them is approved as it was. */
+function calledOrigins(capability: WebApiCapability): { calls?: string[] } {
+  return capability.callOrigins?.length ? { calls: [...capability.callOrigins].sort() } : {};
 }
 
 export function capabilityOrigin(capability: WebApiCapability): string {
@@ -141,8 +152,13 @@ export function findEndpoint(capability: WebApiCapability, endpointId: string): 
   return endpoint;
 }
 
+/**
+ * The statuses that mean the user is signed out: only a service with a sign-in has one. Without it a 401 is an ordinary
+ * error, such as a token the service wants refreshed (Yahoo's crumb), not a sign-in to wait on.
+ */
 export function signedOutStatuses(capability: WebApiCapability): number[] {
-  return capability.session?.probe.signedOutStatuses ?? DEFAULT_SIGNED_OUT_STATUSES;
+  if (!capability.session) return [];
+  return capability.session.probe.signedOutStatuses ?? DEFAULT_SIGNED_OUT_STATUSES;
 }
 
 /** Runs one endpoint request in the profile's API worker. Does not check authorization. */
@@ -153,7 +169,8 @@ export class ApiTransport {
   constructor(private readonly deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock; emit: AutomationEmit }) {}
 
   call(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>, options: CallOptions = {}): Promise<HostResponse> {
-    const pageUrl = capability.apiPageUrl ?? capability.pageUrl;
+    // An endpoint on one of the block's call origins is called from that origin's root page, as the rest from the API page.
+    const pageUrl = endpoint.origin ? `${endpoint.origin}/` : capability.apiPageUrl ?? capability.pageUrl;
     const request = resolveEndpointRequest(pageUrl, endpoint, input, options);
     const origin = new URL(pageUrl).origin;
     // The call itself, so the same call made twice is told from two calls of one endpoint.

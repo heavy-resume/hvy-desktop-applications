@@ -3,7 +3,9 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  /* Tabs, toolbar, the plugin approval bar (when shown), the error slot, then the document stage, which takes the rest
+     (pinned to the last row below, so a missing bar leaves an empty row rather than shifting the stage up a row). */
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   background: var(--hvy-bg, #fbfaf7);
 }
 
@@ -440,6 +442,7 @@
 }
 
 .document-stage {
+  grid-row: 5;
   position: relative;
   height: 100%;
   min-height: 0;

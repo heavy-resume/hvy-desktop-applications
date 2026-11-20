@@ -237,6 +237,7 @@ function openApprovalDialog(lookup: DocumentAutomationLookup, capability: WebApi
     ['What it can do', capability.published
       ? capability.published.permissions.map((permission) => `${permission.description}${permission.changesData ? ' (can change your data there)' : ''}`).join('; ')
       : capability.endpoints.map((endpoint) => endpoint.name).join(', ')],
+    ...(capability.callOrigins?.length ? [['Also calls', capability.callOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
     ...(capability.readOrigins?.length ? [['Also reads from', capability.readOrigins.map((origin) => new URL(origin).host).join(', ')] as [string, string]] : []),
   ];
   for (const [term, description] of rows) {
@@ -305,7 +306,16 @@ const profileContextView: HvyPluginFactory = (ctx) => reader(ctx, (root, lookup)
 
 const ENDPOINT_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 /** An endpoint's fields the dialog edits on their own; the rest (idempotency, a served document, an error pointer) are JSON. */
-const ENDPOINT_FIELDS = ['id', 'name', 'description', 'method', 'path', 'inputSchema', 'timeoutMs'];
+const ENDPOINT_FIELDS = ['id', 'name', 'description', 'method', 'origin', 'path', 'inputSchema', 'timeoutMs'];
+
+/** A site's host, for choosing it ("fc.yahoo.com"), or '' for an address that doesn't read. */
+function siteHost(address: string): string {
+  try {
+    return new URL(address).host;
+  } catch {
+    return '';
+  }
+}
 
 function textArea(name: string, value: string, rows: number): HTMLTextAreaElement {
   const area = document.createElement('textarea');
@@ -546,6 +556,10 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
     pageUrl.addEventListener('change', () => commit((draft) => {
       draft.pageUrl = pageUrl.value.trim();
     }));
+    const callOrigins = textArea('callOrigins', (Array.isArray(config.callOrigins) ? config.callOrigins.map(String) : []).join('\n'), 2);
+    callOrigins.addEventListener('change', () => commit((draft) => {
+      draft.callOrigins = lines(callOrigins.value).length ? lines(callOrigins.value) : undefined;
+    }));
     const readOrigins = textArea('readOrigins', (Array.isArray(config.readOrigins) ? config.readOrigins.map(String) : []).join('\n'), 2);
     readOrigins.addEventListener('change', () => commit((draft) => {
       draft.readOrigins = lines(readOrigins.value).length ? lines(readOrigins.value) : undefined;
@@ -635,6 +649,7 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
       fieldset('Service',
         labelled('Name', name),
         labelled('Page address', pageUrl, 'The service’s page that calls are made from.'),
+        labelled('Other sites it calls', callOrigins, 'One per line. An endpoint on one of these is called from that site, in your browser profile, with your sign-in there: such as a site that hands out the cookie the service wants.'),
         labelled('Other sites it reads from', readOrigins, 'One per line. Galaxy reads what the service points it to on these sites, without your sign-in and keeping nothing: such as a document the service stores elsewhere.')),
       fieldset('Endpoints', ...(endpoints.length ? [list] : [paragraph('No endpoints yet.', 'hvy-web-page-hint')]), actions(add)),
       fieldset('Sign-in', ...signIn),
@@ -650,6 +665,9 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
       const method = select('method', ENDPOINT_METHODS.map((value): [string, string] => [value, value]), String(endpoint?.method ?? 'GET'));
       const path = field('path', endpoint?.path);
       path.placeholder = '/api/items/{id}';
+      // Which site the endpoint is on: the page's, or one of the other sites it calls (shown only when there are any).
+      const sites = Array.isArray(config.callOrigins) ? config.callOrigins.map(String) : [];
+      const site = select('origin', [['', siteHost(String(config.pageUrl ?? '')) || 'Page'], ...sites.map((origin): [string, string] => [origin, siteHost(origin) || origin])], String(endpoint?.origin ?? ''));
       const timeout = secondsInput('timeout', endpoint?.timeoutMs, 60);
       timeout.min = '1';
       timeout.placeholder = '15 (default)';
@@ -662,7 +680,8 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
         labelled('Name', endpointName),
         labelled('Description', description),
         labelled('Method', method, 'Anything but GET can change data on the site as the user.'),
-        labelled('Path', path, 'On the page’s site. {name} takes the input of that name.'),
+        ...(sites.length ? [labelled('Site', site)] : []),
+        labelled('Path', path, sites.length ? 'On the site chosen. {name} takes the input of that name.' : 'On the page’s site. {name} takes the input of that name.'),
         labelled('Timeout (seconds)', timeout),
         labelled('Inputs (JSON Schema)', inputs, 'Its properties are the only inputs the endpoint accepts.'),
         labelled('More (JSON)', more, 'Idempotency, a served document, or an error message pointer.'),
@@ -686,6 +705,7 @@ function webApiEditor(ctx: HvyPluginContext): HvyPluginInstance {
           name: endpointName.value.trim(),
           description: description.value.trim(),
           method: method.value,
+          ...(site.value ? { origin: site.value } : {}),
           path: path.value.trim(),
           inputSchema: schema.value,
           ...(timeout.value.trim() ? { timeoutMs: Number(timeout.value) * 1000 } : {}),

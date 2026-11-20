@@ -304,6 +304,8 @@ function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition |
     idempotency = fromInputs.length ? { header, fromInputs } : { header };
   }
   const servesDocument = readServedDocument(value.servesDocument, label, properties, errors);
+  const origin = text(value.origin) ? trustworthyUrl(value.origin) : null;
+  if (text(value.origin) && !origin) errors.push(`Endpoint "${label}" origin must use HTTPS (or HTTP on a loopback host).`);
   for (const [name, schema] of Object.entries(isRecord(inputSchema.properties) ? inputSchema.properties : {})) {
     if (!isRecord(schema)) continue;
     for (const link of ['x-hvy-document-id', 'x-hvy-document-revision']) {
@@ -320,6 +322,7 @@ function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition |
     inputSchema,
     ...(idempotency ? { idempotency } : {}),
     ...(servesDocument ? { servesDocument } : {}),
+    ...(origin ? { origin: origin.origin } : {}),
     ...(text(value.errorMessagePointer) ? { errorMessagePointer: text(value.errorMessagePointer) } : {}),
     ...(value.timeoutMs !== undefined ? { timeoutMs: number(value.timeoutMs, 15_000, 1_000, MAX_ENDPOINT_TIMEOUT_MS) } : {}),
   };
@@ -494,6 +497,14 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
     if (!parsed) errors.push(`Read origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
     return parsed ? [parsed.origin] : [];
   });
+  const callOrigins = strings(value.callOrigins).flatMap((origin) => {
+    const parsed = trustworthyUrl(origin);
+    if (!parsed) errors.push(`Call origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
+    return parsed ? [parsed.origin] : [];
+  });
+  for (const endpoint of endpoints) {
+    if (endpoint.origin && !callOrigins.includes(endpoint.origin)) errors.push(`Endpoint "${endpoint.id}" is on ${endpoint.origin}, which isn't one of the block's call origins.`);
+  }
   const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
   if (exposed.some((id) => !ids.includes(id))) errors.push('MCP exposes an endpoint that is not defined.');
   const responses = readResponseRules(value.responses, errors);
@@ -510,6 +521,7 @@ export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockC
         ...(session ? { session } : {}),
         endpoints,
         ...(readOrigins.length ? { readOrigins: [...new Set(readOrigins)] } : {}),
+        ...(callOrigins.length ? { callOrigins: [...new Set(callOrigins)] } : {}),
         ...(responses.length ? { responses } : {}),
       },
       mcp: { endpointIds: exposed },
@@ -848,6 +860,7 @@ export function switchToPublishedService(config: Record<string, unknown>, origin
     session: undefined,
     endpoints: undefined,
     readOrigins: undefined,
+    callOrigins: undefined,
     responses: undefined,
     service: origin,
     permissions,

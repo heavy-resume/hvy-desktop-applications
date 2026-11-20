@@ -141,6 +141,13 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/webAutomation.ts',
     root: 'app',
   },
+  {
+    id: 'galaxy.file-picker',
+    key: 'galaxyFilePicker',
+    exportName: 'filePickerPlugin',
+    modulePath: 'src/plugins/filePicker.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {

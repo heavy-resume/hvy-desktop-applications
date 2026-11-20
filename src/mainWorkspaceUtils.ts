@@ -8,7 +8,7 @@ import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, ser
 import { getTemplateById, isBlankBundledTemplate, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
 import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, relocateDocumentSettings } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
-import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, documentSessions, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
+import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, deleteDocumentSession, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
 import { logDebugEvent } from './debugLog';
 import { recoveryDraftIdentity } from './recoveryDocuments';
@@ -79,6 +79,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
     targetDirectory,
     bytes,
   });
+  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
   adoptSavedAsDocument(file, mounted, document, previousMode, previousPath, previousUseDocumentColors);
   recordSuccessfulDocumentSave(file.path, file.name, document);
   state.selectedFilePath = file.path;
@@ -104,7 +105,8 @@ export async function saveImportedDocumentToWorkspace(
     targetDirectory,
     bytes,
   });
-  documentSessions.delete(file.path);
+  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
+  deleteDocumentSession(file.path);
   upsertWorkspace(await loadWorkspace(workspacePath));
   await openDocument({ ...file, bytes }, { deferMount: true, created: true });
   await refreshRecents();
@@ -297,6 +299,7 @@ export async function convertOpenWorkspaceFileKind(path: string, workspacePath: 
       name: nextName,
       bytes: sourceFile.bytes,
     });
+    await applyArchivedFileRelocations(created.relocatedArchivedFiles);
     const parts = sourceNode.relativePath.replaceAll('\\', '/').split('/');
     const physicalName = parts.pop() ?? '';
     const sourceDirectory = parts.join('/');
@@ -321,6 +324,7 @@ export async function convertOpenWorkspaceFileKind(path: string, workspacePath: 
     return;
   }
   const file = await convertWorkspaceDocumentKind({ path, workspacePath, toTemplate });
+  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
   await relocateDocumentSettings(path, file.path);
   state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
   await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);

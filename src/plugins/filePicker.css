@@ -1,0 +1,38 @@
+.hvy-file-picker {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.hvy-file-picker-input {
+  display: none;
+}
+
+.hvy-file-picker-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--hvy-text-muted, #5f6a66);
+}
+
+.hvy-file-picker-error {
+  color: var(--hvy-danger, #b3261e);
+}
+
+.hvy-file-picker-settings {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.hvy-file-picker-field {
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.hvy-file-picker-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}

@@ -2603,7 +2603,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
         let is_template = installs_workspace_templates && template_extension(&source).is_some();
-        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, file_name, LiveNameConflict::Suffix)?;
         let destination = incoming.destination;
         relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
@@ -2675,7 +2675,7 @@ fn add_dropped_files_to_workspace(
             ));
         }
         let is_template = installs_workspace_templates && template_extension(Path::new(&file.name)).is_some();
-        let incoming = incoming_workspace_file(&workspace_path, &destination_root, std::ffi::OsStr::new(&file.name))?;
+        let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, std::ffi::OsStr::new(&file.name), LiveNameConflict::Suffix)?;
         let destination = incoming.destination;
         relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::write(&destination, file.bytes)?;
@@ -3146,17 +3146,19 @@ fn create_document_file(
     if relative.is_absolute() || relative.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
         return Err(AppError::Message("Document path must stay inside the workspace.".into()));
     }
-    let path = workspace_path.join(relative);
-    if path.exists() {
-        return Err(AppError::Message("A document already exists at that path.".into()));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let requested = workspace_path.join(relative);
+    let (Some(parent), Some(file_name)) = (requested.parent(), requested.file_name()) else {
+        return Err(AppError::Message("Document path must name a file.".into()));
+    };
+    fs::create_dir_all(parent)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), parent, file_name, LiveNameConflict::Error)?;
+    let path = incoming.destination;
     write_file_atomically(&path, bytes.as_deref().unwrap_or_else(|| template.as_bytes()))?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_file(&app, &path)?;
-    Ok(read_document_at(&path)?)
+    let mut file = read_document_at(&path)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3259,19 +3261,21 @@ fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult
         .parent()
         .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
     let name = normalized_rename_stem(&name)?;
-    let destination = parent.join(format!("{name}{extension}"));
-    if destination == path {
+    let file_name = format!("{name}{extension}");
+    if parent.join(&file_name) == path {
         return Ok(read_document_at(&path)?);
     }
-    if destination.exists() {
-        return Err(AppError::Message("A document with that name already exists.".into()));
-    }
+    let workspace_path = workspace_root_for_document(parent);
+    let incoming = claim_workspace_destination(workspace_path.as_deref(), parent, std::ffi::OsStr::new(&file_name), LiveNameConflict::Error)?;
+    let destination = incoming.destination;
     fs::rename(&path, &destination)?;
-    if let Some(workspace_path) = workspace_root_for_document(parent) {
-        rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
+    if let Some(workspace_path) = &workspace_path {
+        rename_workspace_file_manifest_entries(workspace_path, &path, &destination)?;
     }
     add_recent_file(&app, &destination)?;
-    Ok(read_document_at(&destination)?)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3458,12 +3462,16 @@ fn save_document_to_workspace_bytes(
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let file_name = document_file_name(&name)?;
-    let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, std::ffi::OsStr::new(&file_name));
+    let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), &target_root, std::ffi::OsStr::new(&file_name), LiveNameConflict::Suffix)?;
+    let destination = incoming.destination;
     write_file_atomically(&destination, bytes)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(app, &workspace_path)?;
     add_recent_file(app, &destination)?;
-    read_document_metadata_at(&destination)
+    let mut file = read_document_metadata_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3480,7 +3488,7 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
     let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
-    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), &target_root, file_name, LiveNameConflict::Suffix)?;
     let destination = incoming.destination;
     fs::copy(&path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
@@ -3515,7 +3523,7 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), &target_root, file_name, LiveNameConflict::Suffix)?;
     let destination = incoming.destination;
     fs::rename(&path, &destination)?;
     if let Some(source_workspace) = source_workspace {
@@ -3576,13 +3584,16 @@ fn convert_workspace_document_kind(
         .and_then(|name| name.to_str())
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
     let file_name = format!("{stem}{next_extension}");
-    let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file_name));
+    let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, std::ffi::OsStr::new(&file_name), LiveNameConflict::Suffix)?;
+    let destination = incoming.destination;
     fs::rename(&path, &destination)?;
     rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;
-    read_document_at(&destination)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3642,7 +3653,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
             .file_name()
             .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
         let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
-        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, file_name, LiveNameConflict::Suffix)?;
         let destination = incoming.destination;
         relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;

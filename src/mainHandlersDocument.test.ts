@@ -657,4 +657,34 @@ describe('document handlers', () => {
       mainMocks.updateOpenDocumentFile.mock.invocationCallOrder[0],
     );
   });
+
+  it('moves an archived file aside before adopting the renamed path', async () => {
+    state.document = testOpenDocument({ dirty: false });
+    const relocation = {
+      previousPath: '/workspace/Renamed.hvy',
+      path: '/workspace/Renamed 2.hvy',
+      name: 'Renamed 2.hvy',
+      extension: '.hvy' as const,
+    };
+    backendMocks.renameDocumentFile.mockResolvedValueOnce({
+      path: '/workspace/Renamed.hvy',
+      name: 'Renamed.hvy',
+      extension: '.hvy',
+      bytes: [],
+      relocatedArchivedFiles: [relocation],
+    });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.renameFile?.('/workspace/example.hvy', 'example.hvy');
+    handlers.submitRenameFile?.('Renamed');
+
+    await vi.waitFor(() => expect(mainMocks.updateOpenDocumentFile).toHaveBeenCalledWith(
+      '/workspace/example.hvy',
+      expect.objectContaining({ path: '/workspace/Renamed.hvy' }),
+    ));
+    expect(mainMocks.applyArchivedFileRelocations).toHaveBeenCalledWith([relocation]);
+    expect(mainMocks.applyArchivedFileRelocations.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mainMocks.updateOpenDocumentFile.mock.invocationCallOrder.at(-1)!,
+    );
+  });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
 import { loadPublishedService, publishedServices } from './serviceManifests';
+import { webApiAuthorizationParts } from './webApi';
 import { analysisServiceCapability, analysisServiceManifest } from '../test/webAutomation/analysisService';
 import { ATS_ORIGIN, atsDetailPattern, atsListingPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
 
@@ -104,6 +105,27 @@ describe('block configuration readers', () => {
       'Response rule 1\'s body condition "/n" must be a string, number, boolean, or null.',
       'Response rule 1\'s message must be a JSON pointer, starting with "/".',
     ]);
+  });
+
+  it('keeps call origins and the endpoints on them, and asks for approval again only when there are some', () => {
+    const endpoints = [...structuredClone(analysisServiceCapability.endpoints), { id: 'cookie', name: 'Cookie', method: 'GET', origin: 'https://cookies.example.test/', path: '/', inputSchema: { type: 'object', properties: {} } }];
+    const read = readWebApiBlockConfig(rawWebApi({ callOrigins: ['https://cookies.example.test/'], endpoints }));
+    if (!read.ok || !read.value.capability) throw new Error(read.ok ? 'No capability.' : read.errors.join(' '));
+    const capability = read.value.capability;
+    expect(capability.callOrigins).toEqual(['https://cookies.example.test']);
+    expect(capability.endpoints.find((endpoint) => endpoint.id === 'cookie')?.origin).toBe('https://cookies.example.test');
+    // A block without call origins is approved as before; one with them names them, and its endpoints' sites.
+    expect(webApiAuthorizationParts(analysisServiceCapability)).not.toHaveProperty('calls');
+    const parts = webApiAuthorizationParts(capability);
+    expect(parts.calls).toEqual(['https://cookies.example.test']);
+    expect((parts.endpoints as Array<{ id: string; origin?: string }>).find((endpoint) => endpoint.id === 'cookie')?.origin).toBe('https://cookies.example.test');
+  });
+
+  it('refuses an endpoint on a site that isn\'t one of the call origins, and a call origin that isn\'t HTTPS', () => {
+    const endpoints = [...structuredClone(analysisServiceCapability.endpoints), { id: 'cookie', name: 'Cookie', method: 'GET', origin: 'https://elsewhere.example.test', path: '/', inputSchema: { type: 'object', properties: {} } }];
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints })))).toEqual(['Endpoint "cookie" is on https://elsewhere.example.test, which isn\'t one of the block\'s call origins.']);
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ callOrigins: ['http://cookies.example.test'] }))))
+      .toEqual(['Call origin "http://cookies.example.test" must use HTTPS (or HTTP on a loopback host).']);
   });
 
   it('rejects web API snapshots that could reach other origins or are incomplete', () => {

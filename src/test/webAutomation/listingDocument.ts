@@ -1,4 +1,5 @@
 import { executeHvyCliCommandSync, writeHvyVirtualFileSync } from '../../../../heavy-file-format/src/cli-core';
+import { parseFormSpec, serializeFormConfig, serializeFormSpec } from '../../../../heavy-file-format/src/plugins/form-spec/form-spec';
 import { deserializeDocument } from '../../../../heavy-file-format/src/serialization';
 import type { VisualDocument } from '../../../../heavy-file-format/src/types';
 import type { CliItemStoreConfig } from '../../webAutomation/cliItemStore';
@@ -40,6 +41,63 @@ export function insertPluginBlock(document: VisualDocument, sectionPath: string,
   } else {
     writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.json`, JSON.stringify({ id, plugin: pluginId, pluginConfig }));
   }
+}
+
+/** Inserts a form through the CLI: its fields (YAML), its scripts by name, and the script its submit runs, with the libraries they import. */
+export function insertForm(document: VisualDocument, sectionPath: string, id: string, form: {
+  fieldsYaml?: string;
+  submitLabel: string;
+  scripts: Record<string, string>;
+  initialScript?: string;
+  submitScript?: string;
+  submitDisabledReason?: string;
+  /** Disabled with no reason shown; a reason disables it too. */
+  submitDisabled?: boolean;
+  showSubmit?: boolean;
+  formCss?: string;
+  actionsCss?: string;
+  submitCss?: string;
+  /** The Python libraries its scripts import (`datetime`, `zoneinfo`, …). */
+  scriptLibraries?: string[];
+}): void {
+  run(document, `hvy insert -1 plugin form ${sectionPath} ${id}`);
+  const spec = {
+    ...parseFormSpec(form.fieldsYaml ?? '').spec,
+    formCss: form.formCss ?? '',
+    actionsCss: form.actionsCss ?? '',
+    submitCss: form.submitCss ?? '',
+    scripts: form.scripts,
+    submitLabel: form.submitLabel,
+    initialScript: form.initialScript ?? '',
+    submitScript: form.submitScript ?? '',
+    showSubmit: form.showSubmit ?? true,
+    submitDisabled: form.submitDisabled ?? Boolean(form.submitDisabledReason),
+    submitDisabledReason: form.submitDisabledReason ?? '',
+    ...(form.scriptLibraries ? { scriptLibraries: form.scriptLibraries as never } : {}),
+  };
+  writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.txt`, serializeFormSpec(spec));
+  const block = JSON.parse(executeHvyCliCommandSync(document, `cat ${sectionPath}/${id}/plugin.json`).output) as { pluginConfig?: Record<string, unknown> };
+  writeHvyVirtualFileSync(document, `${sectionPath}/${id}/plugin.json`, JSON.stringify({ ...block, pluginConfig: { ...block.pluginConfig, ...serializeFormConfig(spec) } }));
+}
+
+/**
+ * A template's parts named for each instance: their ids made `{% TOKEN %}-ID`, so inserting one with a value for the
+ * token (`hvy insert ... --using-template '{"card":"job-12"}'`) names them for it. Set on the definition itself, as the
+ * CLI keeps a template token out of an id.
+ */
+export function nameTemplateParts(document: VisualDocument, name: string, token: string, parts: string[]): void {
+  const definition = (document.meta.component_defs as Array<Record<string, unknown>>).find((candidate) => candidate.name === name)!;
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    const object = value as Record<string, unknown>;
+    if (typeof object.id === 'string' && 'component' in object && parts.includes(object.id)) object.id = `{% ${token} %}-${object.id}`;
+    Object.values(object).forEach(visit);
+  };
+  visit(definition.schema ?? definition.template);
 }
 
 /** Declares plugins in the document header with the scripting permission, so the document's scripts may call them. */

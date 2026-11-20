@@ -91,6 +91,23 @@ the runs it starts let a page that needs someone go. A document is idle when
 `operation()` is `tracked`, and callbacks waiting in `ScriptCalls`) and nothing
 happened for 5 minutes.
 
+## File picker
+
+A `galaxy.file-picker` block (`src/plugins/filePicker.ts`) is a button that
+lets the user choose a file from their computer. The file is read as UTF-8 text
+and handed to the handler the document's load script registered:
+`doc.plugins.call("galaxy.file-picker", "on_file", {"pickerId", "handler"})`.
+The handler gets `{name, size, mediaType, text}`.
+
+- The handler is a script callback, so its database writes are kept, unlike
+  those of a load run set off by another script's edit.
+- A document only ever sees a file the user picked, so the plugin needs no
+  per-file approval.
+- The button uses the webview's own file input, so Electron and Tauri share
+  it.
+- Scripts count steps, so parse a large file in SQL (its lines handed to
+  SQLite as a JSON array), not with a Python loop.
+
 ## Dialogs
 
 New dialogs use the shared shell, `renderDialog` in `src/ui/dialog.ts`: the

@@ -10,8 +10,13 @@ export interface ApiEndpointDefinition {
   name: string;
   description: string;
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  /** Same-origin path template, e.g. /api/v1/reports/{id}. */
+  /** Same-origin path template, e.g. /api/v1/reports/{id}: on the block's page origin, or on `origin`. */
   path: string;
+  /**
+   * One of the block's call origins (`callOrigins`), when the endpoint is on that site rather than the page's: the
+   * worker loads that origin's root page, in the profile, and calls from there.
+   */
+  origin?: string;
   /** JSON Schema object; its properties are the only accepted inputs. */
   inputSchema: Record<string, unknown>;
   /** The header carrying a stable key: the caller's (a queue entry's), or derived from `fromInputs`. */

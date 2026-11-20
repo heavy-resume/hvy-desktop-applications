@@ -28,6 +28,7 @@ declare module 'virtual:hvy-built-in-plugins' {
     galaxyWebProfileContext?: HvyPlugin;
     galaxySimilarity?: HvyPlugin;
     galaxySchedule?: HvyPlugin;
+    galaxyFilePicker?: HvyPlugin;
   }>;
   export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }
