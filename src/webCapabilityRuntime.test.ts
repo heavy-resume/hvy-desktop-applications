@@ -20,6 +20,7 @@ import {
   handleWebCapabilityIntegrationResult,
 } from './webCapabilityRuntime';
 import { browserClosed } from './browserRequests';
+import type { FileKey } from './runtimeDocuments';
 
 const config = {
   schemaVersion: 1,
@@ -53,7 +54,7 @@ const profile = {
 } as IntegrationProfileDefinition;
 
 function executionContext(foreground: boolean) {
-  return { documentPath: '/document.hvy', profile, authorizations: {}, foreground };
+  return { documentPath: 'document' as FileKey, profile, authorizations: {}, foreground };
 }
 
 afterEach(() => {

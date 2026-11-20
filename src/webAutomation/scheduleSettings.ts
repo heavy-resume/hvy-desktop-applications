@@ -36,8 +36,8 @@ export interface ScheduledJobResult {
   message?: string;
 }
 
-/** Scheduled documents by file path. */
-export type ScheduledDocuments = Record<string, ScheduledDocument>;
+/** Scheduled documents by file: its reference in memory, its path where saved (app settings). */
+export type ScheduledDocuments<K extends string> = Record<K, ScheduledDocument>;
 
 /** How many scheduled jobs' work may go on at once (Settings, "Jobs at once"): by default one after another. */
 export const DEFAULT_SCHEDULED_JOBS_AT_ONCE = 1;
@@ -60,7 +60,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Scheduled documents as saved, dropping what is malformed, and documents no longer in use, rather than failing. */
-export function normalizeScheduledDocuments(value: unknown): ScheduledDocuments {
+export function normalizeScheduledDocuments(value: unknown): ScheduledDocuments<string> {
   if (!isRecord(value)) return {};
   return withoutUnused(Object.fromEntries(Object.entries(value).flatMap(([path, raw]): Array<[string, ScheduledDocument]> => {
     if (!path.trim() || !isRecord(raw)) return [];
@@ -114,14 +114,14 @@ export function inUse(document: ScheduledDocument): boolean {
 }
 
 /** A document's entry, kept while in use and dropped otherwise; the same settings when nothing changed. */
-function stored(documents: ScheduledDocuments, path: string, next: ScheduledDocument): ScheduledDocuments {
+function stored<K extends string>(documents: ScheduledDocuments<K>, path: NoInfer<K>, next: ScheduledDocument): ScheduledDocuments<K> {
   if (!inUse(next)) return withoutScheduledDocument(documents, path);
   const previous = documents[path];
   return previous && JSON.stringify(previous) === JSON.stringify(next) ? documents : { ...documents, [path]: next };
 }
 
 /** What the user chose for a document's jobs, as its block declares them: its entry, or every job off when it has none. */
-export function scheduledFor(documents: ScheduledDocuments, path: string, name: string, schedule: ScheduleBlockConfig): ScheduledDocument {
+export function scheduledFor<K extends string>(documents: ScheduledDocuments<K>, path: NoInfer<K>, name: string, schedule: ScheduleBlockConfig): ScheduledDocument {
   return synced(documents[path], name, schedule);
 }
 
@@ -129,31 +129,38 @@ export function scheduledFor(documents: ScheduledDocuments, path: string, name: 
  * A document with a schedule block, opened or saved: its entry, if the user set its jobs up, follows its block (its jobs
  * as declared now; the user's choices kept for those it still has). One the user never set up stays unlisted.
  */
-export function withScheduleBlock(documents: ScheduledDocuments, path: string, name: string, schedule: ScheduleBlockConfig): ScheduledDocuments {
+export function withScheduleBlock<K extends string>(documents: ScheduledDocuments<K>, path: NoInfer<K>, name: string, schedule: ScheduleBlockConfig): ScheduledDocuments<K> {
   return documents[path] ? stored(documents, path, synced(documents[path], name, schedule)) : documents;
 }
 
 /** The user changed a document's jobs (in its block): kept while in use, dropped once nothing of it is theirs. */
-export function withScheduleChange(documents: ScheduledDocuments, path: string, name: string, schedule: ScheduleBlockConfig, change: (document: ScheduledDocument) => ScheduledDocument): ScheduledDocuments {
+export function withScheduleChange<K extends string>(documents: ScheduledDocuments<K>, path: NoInfer<K>, name: string, schedule: ScheduleBlockConfig, change: (document: ScheduledDocument) => ScheduledDocument): ScheduledDocuments<K> {
   return stored(documents, path, change(scheduledFor(documents, path, name, schedule)));
 }
 
 /** Entries the user no longer uses (every job turned off, in Scheduled jobs) dropped. */
-export function withoutUnused(documents: ScheduledDocuments): ScheduledDocuments {
-  return Object.fromEntries(Object.entries(documents).filter(([, document]) => inUse(document)));
+function entriesOf<K extends string>(documents: ScheduledDocuments<K>): Array<[K, ScheduledDocument]> {
+  return Object.entries(documents) as Array<[K, ScheduledDocument]>;
+}
+
+function fromEntries<K extends string>(entries: Array<[K, ScheduledDocument]>): ScheduledDocuments<K> {
+  return Object.fromEntries(entries) as ScheduledDocuments<K>;
+}
+
+export function withoutUnused<K extends string>(documents: ScheduledDocuments<K>): ScheduledDocuments<K> {
+  return fromEntries(entriesOf(documents).filter(([, document]) => inUse(document)));
 }
 
 /** A document no longer scheduled: it has no schedule block, or it was archived or deleted. */
-export function withoutScheduledDocument(documents: ScheduledDocuments, path: string): ScheduledDocuments {
+export function withoutScheduledDocument<K extends string>(documents: ScheduledDocuments<K>, path: NoInfer<K>): ScheduledDocuments<K> {
   if (!(path in documents)) return documents;
-  const { [path]: _removed, ...rest } = documents;
-  return rest;
+  return fromEntries(entriesOf(documents).filter(([file]) => file !== path));
 }
 
 /** Documents no longer scheduled because what holds them went away: a workspace archived, a folder deleted. */
-export function withoutScheduledDocumentsIn(documents: ScheduledDocuments, holds: (path: string) => boolean): ScheduledDocuments {
-  const kept = Object.entries(documents).filter(([path]) => !holds(path));
-  return kept.length === Object.keys(documents).length ? documents : Object.fromEntries(kept);
+export function withoutScheduledDocumentsIn<K extends string>(documents: ScheduledDocuments<K>, holds: (file: K) => boolean): ScheduledDocuments<K> {
+  const kept = entriesOf(documents).filter(([file]) => !holds(file));
+  return kept.length === Object.keys(documents).length ? documents : fromEntries(kept);
 }
 
 /** When a job runs: the user's choice, or its block's default. */
@@ -192,8 +199,8 @@ export function nextTimeOfDay(after: number, at: string, days: number[]): number
 }
 
 /** A job due now: its document's path, its id, and how long past due it is (ms; a job never run is the most overdue). */
-export interface DueJob {
-  path: string;
+export interface DueJob<K extends string> {
+  file: K;
   jobId: string;
   overdueMs: number;
 }
@@ -202,13 +209,13 @@ export interface DueJob {
  * The jobs due at `now`, the most overdue first: each one turned on, its next turn come (a frequency after its last, or
  * its next time of day after it). A time of day missed (Galaxy closed) is due once, until it runs.
  */
-export function dueJobs(documents: ScheduledDocuments, now: number): DueJob[] {
-  return Object.entries(documents)
-    .flatMap(([path, document]) => document.jobs
+export function dueJobs<K extends string>(documents: ScheduledDocuments<K>, now: number): DueJob<K>[] {
+  return entriesOf(documents)
+    .flatMap(([file, document]) => document.jobs
       .filter((job) => document.choices[job.id]?.on === true)
       .map((job) => {
         const next = nextTurnAt(document, job.id);
-        return { path, jobId: job.id, overdueMs: next === null ? Number.POSITIVE_INFINITY : now - next };
+        return { file, jobId: job.id, overdueMs: next === null ? Number.POSITIVE_INFINITY : now - next };
       }))
     .filter((job) => job.overdueMs >= 0)
     .sort((left, right) => right.overdueMs - left.overdueMs);

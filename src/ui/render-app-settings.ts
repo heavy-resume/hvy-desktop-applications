@@ -1,6 +1,8 @@
 import { MAX_SCHEDULED_JOBS_AT_ONCE } from '../webAutomation/scheduleSettings';
 import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import { includedDocuments, type WorkspaceTreeNode } from '../backend';
+import { pathForFileKey, runtimeDocumentById, type FileKey } from '../runtimeDocuments';
+import { appSettingsForStorage } from '../appSettingsFiles';
 import { builtInPluginPolicy, getInstalledPlugins, pluginAcceptanceKey } from '../pluginManager';
 import { findFileInWorkspaces, workspaceRelativeFilePath, type AppState } from '../state';
 import { findWorkspaceFileNode } from './events-workspace';
@@ -159,24 +161,26 @@ export function formatDebugLogTime(value: string): string {
 
 export function renderScriptingReviewDialog(state: AppState): string {
   if (!state.scriptingReviewDialogOpen) return '';
-  const currentPath = state.document && !state.document.isNew ? state.document.source.path : null;
-  const paths = [...new Set([
-    ...(currentPath ? [currentPath] : []),
+  // Approvals are kept by file reference: each file listed where it is now.
+  const currentFile = state.document && !state.document.isNew ? state.document.source.documentId : null;
+  const keys = [...new Set([
+    ...(currentFile ? [currentFile] : []),
     ...state.appSettings.powerScriptingAllowedFiles,
-    ...Object.keys(state.appSettings.powerScriptAcceptances),
+    ...Object.keys(state.appSettings.powerScriptAcceptances) as FileKey[],
   ])].sort((left, right) => {
-    if (left === currentPath) return -1;
-    if (right === currentPath) return 1;
-    return left.localeCompare(right);
+    if (left === currentFile) return -1;
+    if (right === currentFile) return 1;
+    return pathForFileKey(left).localeCompare(pathForFileKey(right));
   });
-  const files = paths.map((path) => {
-    const wholeFileAllowed = state.appSettings.powerScriptingAllowedFiles.includes(path);
-    const fingerprints = state.appSettings.powerScriptAcceptances[path] ?? [];
+  const files = keys.map((file) => {
+    const path = pathForFileKey(file);
+    const wholeFileAllowed = state.appSettings.powerScriptingAllowedFiles.includes(file);
+    const fingerprints = state.appSettings.powerScriptAcceptances[file] ?? [];
     return `
       <section class="scripting-review-file">
         <div class="scripting-review-file-heading">
           <div>
-            <strong>${escapeHtml(path.split(/[\\/]/).pop() || path)}${path === currentPath ? ' (current file)' : ''}</strong>
+            <strong>${escapeHtml(path.split(/[\\/]/).pop() || path)}${file === currentFile ? ' (current file)' : ''}</strong>
             <div class="scripting-review-path">${escapeHtml(path)}</div>
           </div>
           <button class="hvy-galaxy-button"
@@ -189,7 +193,7 @@ export function renderScriptingReviewDialog(state: AppState): string {
         ${fingerprints.length > 0 ? `
           <div class="scripting-review-fingerprints">
             ${fingerprints.map((fingerprint) => {
-      const scripts = state.appSettings.powerScriptAcceptanceScripts[path]?.[fingerprint] ?? [];
+      const scripts = state.appSettings.powerScriptAcceptanceScripts[file]?.[fingerprint] ?? [];
       return `
               <div class="scripting-review-acceptance">
                 <div class="scripting-review-script-list">
@@ -240,7 +244,7 @@ export function renderAppSettingsDialog(state: AppState): string {
   const homepageSelection = settings.homepage.kind === 'included'
     ? `included:${settings.homepage.id}`
     : settings.homepage.kind;
-  const homepagePath = settings.homepage.kind === 'file' ? settings.homepage.path : '';
+  const homepagePath = settings.homepage.kind === 'file' ? pathForFileKey(settings.homepage.file) : '';
   const homepageFile = homepagePath ? findFileInWorkspaces(state.workspaces, homepagePath) : null;
   const homepagePathAvailable = !homepagePath || Boolean(homepageFile && !homepageFile.archived);
   const homepageDisplayPath = homepagePath
@@ -261,7 +265,7 @@ export function renderAppSettingsDialog(state: AppState): string {
         <p class="dialog-note">${pluginManager
       ? 'Configure downloaded plugin access.'
       : 'Configure application defaults used when a document does not set its own value.'}</p>
-        <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(settings))}</textarea>
+        <textarea class="hvy-galaxy-textarea" name="settingsJson" hidden>${escapeHtml(JSON.stringify(appSettingsForStorage(settings)))}</textarea>
         ${pluginManager ? '' : `<fieldset class="ai-action-config homepage-settings">
           <legend>Homepage</legend>
           <p class="dialog-note">Shown when no launch file or previous document is restored.</p>
@@ -329,7 +333,7 @@ export function renderAppSettingsDialog(state: AppState): string {
         }
         const policy = settings.pluginPolicies[record.key] ?? 'disabled';
         const requiresPerFileApproval = record.manifest.authorization === 'required';
-        const currentPath = state.document?.source.path ?? '';
+        const currentFile = state.document?.source.path ? state.document.source.documentId : null;
         return `<label class="plugin-settings-row">
               <span>
                 <strong>${escapeHtml(record.manifest.displayName)}</strong>
@@ -344,7 +348,7 @@ export function renderAppSettingsDialog(state: AppState): string {
                 <option value="enabled" ${policy === 'enabled' ? 'selected' : ''} ${requiresPerFileApproval ? 'disabled' : ''}>Enabled for all files</option>
               </select>
             </label>
-            ${currentPath ? renderCurrentFileAcceptance(settings, currentPath, record.key) : ''}`;
+            ${currentFile ? renderCurrentFileAcceptance(settings, currentFile, record.key) : ''}`;
       }).join('') || '<p class="dialog-note">No custom plugins installed.</p>'}
           </div>
         </fieldset>
@@ -375,7 +379,7 @@ export function renderAppSettingsDialog(state: AppState): string {
             ${builtInPlugins.map((plugin) => {
         const policy = builtInPluginPolicy(settings, plugin);
         const requiresPerFileApproval = plugin.authorization === 'required';
-        const currentPath = state.document?.source.path ?? '';
+        const currentFile = state.document?.source.path ? state.document.source.documentId : null;
         return `<label class="plugin-settings-row">
                 <span>
                   <strong>${escapeHtml(plugin.displayName)}</strong>
@@ -388,7 +392,7 @@ export function renderAppSettingsDialog(state: AppState): string {
                   <option value="enabled" ${policy === 'enabled' ? 'selected' : ''} ${requiresPerFileApproval ? 'disabled' : ''}>Enabled for all files</option>
                 </select>
               </label>
-              ${currentPath && policy === 'conditional' ? renderCurrentFileAcceptance(settings, currentPath, pluginAcceptanceKey(plugin)) : ''}`;
+              ${currentFile && policy === 'conditional' ? renderCurrentFileAcceptance(settings, currentFile, pluginAcceptanceKey(plugin)) : ''}`;
       }).join('')}
           </div>
         </fieldset>
@@ -437,9 +441,9 @@ export function renderHomepageErrorDialog(state: AppState): string {
 export function renderHomepagePickerDialog(state: AppState): string {
   if (!state.homepagePickerMode) return '';
   const selectedPath = state.homepagePickerMode === 'settings' && state.appSettingsDraft?.homepage.kind === 'file'
-    ? state.appSettingsDraft.homepage.path
+    ? pathForFileKey(state.appSettingsDraft.homepage.file)
     : state.appSettings.homepage.kind === 'file'
-      ? state.appSettings.homepage.path
+      ? pathForFileKey(state.appSettings.homepage.file)
       : '';
   const entries = state.workspaceEntries.map((entry) => {
     const workspace = state.workspaces.find((candidate) => candidate.path === entry.path);
@@ -523,9 +527,8 @@ export function workspaceNodeContainsHomepageFile(node: WorkspaceTreeNode): bool
  * only through the block's Sign in prompt.
  */
 function renderWebServiceApprovals(state: AppState, settings: AppState['appSettings']): string {
-  const currentPath = state.document?.source.path ?? '';
-  if (!currentPath) return '';
-  const approvals = Object.values(settings.webServiceApprovals[currentPath] ?? {});
+  if (!state.document?.source.path) return '';
+  const approvals = Object.values(settings.webServiceApprovals[state.document.source.documentId] ?? {});
   const profileName = (profileId: string) => state.integrationRegistry.profiles.find((profile) => profile.id === profileId)?.name ?? profileId;
   return `<fieldset class="ai-action-config">
           <legend>Web services for this file</legend>
@@ -569,11 +572,11 @@ function renderScheduledJobsSettings(settings: AppState['appSettings']): string 
 }
 
 /** "Allow in <file>": the open file's approval of a plugin under per-file approval (for its version; an update asks again). */
-function renderCurrentFileAcceptance(settings: AppState['appSettings'], currentPath: string, acceptanceKey: string): string {
-  const accepted = (settings.pluginAcceptances[currentPath] ?? []).includes(acceptanceKey);
+function renderCurrentFileAcceptance(settings: AppState['appSettings'], currentFile: FileKey, acceptanceKey: string): string {
+  const accepted = (settings.pluginAcceptances[currentFile] ?? []).includes(acceptanceKey);
   return `<input type="hidden" name="pluginAcceptanceListed" value="${escapeAttr(acceptanceKey)}">
             <label class="inline-checkbox app-settings-checkbox">
               <input class="hvy-galaxy-input" name="pluginAccepted:${escapeAttr(acceptanceKey)}" type="checkbox" ${accepted ? 'checked' : ''}>
-              <span>Allow in ${escapeHtml(currentPath.split(/[\\/]/).pop() || currentPath)}</span>
+              <span>Allow in ${escapeHtml(runtimeDocumentById(currentFile)?.name ?? '')}</span>
             </label>`;
 }

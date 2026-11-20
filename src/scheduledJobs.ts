@@ -1,7 +1,6 @@
 import type { VisualDocument } from '../../heavy-file-format/src/types';
 import { closeCurrentDocument, documentSessions, rerender, saveCurrentDocument, selectDocumentTab } from './main';
-import type { DocumentExtension } from './backend';
-import { runtimeDocumentAtPath, runtimeDocumentForFile, type RuntimeDocument } from './runtimeDocuments';
+import { runtimeDocumentById, type FileKey, type RuntimeDocument } from './runtimeDocuments';
 import { state } from './state';
 import { documentAutomationFor } from './webAutomation/app';
 import { SCHEDULE_PLUGIN_ID } from './webAutomation/configs';
@@ -57,21 +56,16 @@ function userIdleFor(ms: number): boolean {
 
 /**
  * A scheduled document's reference: the runner holds this, not its path, so a file renamed or moved while its job runs
- * is still the one it watches, saves, and records against. Schedules are kept by path in app settings (the load/save
- * layer); one whose workspace isn't loaded gets its reference here.
+ * is still the one it opens, watches, saves, and records against. Schedules are kept by it (app settings).
  */
-function scheduledFile(path: string): RuntimeDocument {
-  return runtimeDocumentAtPath(path) ?? runtimeDocumentForFile({
-    path,
-    name: scheduledDocuments()[path]?.name ?? path,
-    extension: path.slice(path.lastIndexOf('.')) as DocumentExtension,
-  });
+function scheduledFile(key: FileKey): RuntimeDocument {
+  return runtimeDocumentById(key)!;
 }
 
-/** A file's job ended its turn: recorded against the schedule at the file's path now. */
+/** A file's job ended its turn. */
 function record(file: RuntimeDocument, jobId: string, result: ScheduledJobResult): void {
-  const path = file.path;
-  updateScheduledDocuments((documents) => (documents[path] ? { ...documents, [path]: withJobResult(documents[path], jobId, result) } : documents));
+  const key = file.documentId;
+  updateScheduledDocuments((documents) => (documents[key] ? { ...documents, [key]: withJobResult(documents[key], jobId, result) } : documents));
 }
 
 /**
@@ -85,8 +79,8 @@ async function tick(): Promise<void> {
   const now = Date.now();
   const [next] = dueJobs(scheduledDocuments(), now);
   if (!next) return;
-  const scheduled = scheduledDocuments()[next.path];
-  const file = scheduledFile(next.path);
+  const scheduled = scheduledDocuments()[next.file];
+  const file = scheduledFile(next.file);
   const key = `${file.documentId}\u0000${next.jobId}`;
   if (!userIdleFor(scheduled.idleMinutes * 60_000)) {
     const since = waitingSince.get(key) ?? now;
@@ -112,9 +106,9 @@ async function tick(): Promise<void> {
  * Run now (a schedule block): the job triggered at once, whether or not the user is idle, as if its button were
  * pressed; only after any tab switching Galaxy is doing for another job. It is the job's turn: its next counts from it.
  */
-async function runNow(path: string, jobId: string): Promise<void> {
+async function runNow(key: FileKey, jobId: string): Promise<void> {
   while (running) await running;
-  running = runJob(scheduledFile(path), jobId).finally(() => {
+  running = runJob(scheduledFile(key), jobId).finally(() => {
     running = null;
   });
   await running;
@@ -245,7 +239,7 @@ async function watchUntilIdle(
     }
     // Saved and closed as the user would, with Save and Close, only while they aren't using Galaxy, and not while Galaxy
     // is switching tabs for another job.
-    const scheduled = scheduledDocuments()[file.path];
+    const scheduled = scheduledDocuments()[file.documentId];
     if (running || !userIdleFor((scheduled?.idleMinutes ?? 5) * 60_000)) continue;
     running = saveAndClose(file, versionId, end).finally(() => {
       running = null;

@@ -17,7 +17,7 @@ import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { handleIntegrationWebMcpResult } from './integrationWebMcpRuntime';
 import { browserClosed, browserResultRequestId } from './browserRequests';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
-import { runtimeDocumentForFile } from './runtimeDocuments';
+import { pathForFileKey, runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
 import { loadWorkspaceExpansionState, loadWorkspaceFolderExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
@@ -741,7 +741,7 @@ export async function openHomepage(options: { force?: boolean } = {}): Promise<v
         includedDocumentId: homepage.id,
       });
     } else {
-      const file = await readDocumentFile(homepage.path);
+      const file = await readDocumentFile(pathForFileKey(homepage.file));
       if (!await documentFileCanOpenWithoutPrompt(file)) {
         state.homepageError = null;
         state.status = 'Encrypted homepage is locked; open it to unlock.';
@@ -752,7 +752,7 @@ export async function openHomepage(options: { force?: boolean } = {}): Promise<v
     state.homepageError = null;
   } catch {
     const target = homepage.kind === 'file'
-      ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), homepage.path)
+      ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), pathForFileKey(homepage.file))
       : includedDocuments.find((document) => document.id === homepage.id)?.name ?? homepage.id;
     const detail = homepage.kind === 'file'
       ? 'This document is not currently available in its workspace.'

@@ -6,7 +6,7 @@ import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncrypt
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { getTemplateById, isBlankBundledTemplate, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, relocateDocumentSettings } from './mainUtilities';
+import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, saveSettingsForMovedFile } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
 import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, deleteDocumentSession, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
@@ -373,14 +373,15 @@ export interface FileRelocation extends WorkspaceFileRelocation {
 }
 
 /**
- * The one place an in-app move of a file is applied to everything that holds its path: rename, move, convert, a folder
- * renamed around it, or an archived file renamed aside. Callers say what moved; they don't update stores themselves.
+ * The one place an in-app move of a file is applied: rename, move, convert, a folder renamed around it, or an archived
+ * file renamed aside. Its reference takes the new path, which is all that what holds the file in memory needs; what is
+ * saved by path (app settings, version history, recovery drafts) is saved again with it. Callers say what moved.
  */
 export async function relocateFiles(relocations: FileRelocation[] = []): Promise<void> {
   for (const relocation of relocations) {
     updateOpenDocumentFile(relocation.previousPath, relocation);
     if (state.selectedFilePath === relocation.previousPath) state.selectedFilePath = relocation.path;
-    await relocateDocumentSettings(relocation.previousPath, relocation.path);
+    await saveSettingsForMovedFile(relocation.path);
     await relocateDocumentHistory(relocation.previousPath, relocation.path, relocation.name);
     await relocateRecoveryDraftsForDocument(
       relocation.previousPath,

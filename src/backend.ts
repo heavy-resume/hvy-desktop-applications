@@ -7,6 +7,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
 import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
 import type { CapabilityAuthorizations } from './webAutomation/authorization';
+import type { FileKey } from './runtimeDocuments';
+import { appSettingsForStorage, appSettingsFromStorage } from './appSettingsFiles';
 import { DEFAULT_COLLECTION_WORKER_LIMITS, normalizeCollectionWorkerLimits, type CollectionWorkerLimits } from './webAutomation/settings';
 import { normalizeIntegrationWebMcpApprovals, type IntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
@@ -509,6 +511,12 @@ export interface ImageAttachmentMaxDimensions {
 
 export type HomepageSetting =
   | { kind: 'included'; id: string }
+  | { kind: 'file'; file: FileKey }
+  | { kind: 'none' };
+
+/** The homepage as saved: a file by its path. */
+export type StoredHomepageSetting =
+  | { kind: 'included'; id: string }
   | { kind: 'file'; path: string }
   | { kind: 'none' };
 
@@ -522,11 +530,11 @@ export const includedDocuments: IncludedDocument[] = [
   { id: 'hvy-guide', name: 'HVY Guide' },
 ];
 
-export function normalizeHomepageSetting(value: unknown): HomepageSetting {
+export function normalizeHomepageSetting(value: unknown): StoredHomepageSetting {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { kind: 'included', id: 'hvy-galaxy-guide' };
   }
-  const setting = value as Partial<HomepageSetting>;
+  const setting = value as Partial<StoredHomepageSetting & { id: string; path: string }>;
   if (setting.kind === 'included' && typeof setting.id === 'string' && includedDocuments.some((document) => document.id === setting.id)) {
     return { kind: 'included', id: setting.id };
   }
@@ -537,28 +545,35 @@ export function normalizeHomepageSetting(value: unknown): HomepageSetting {
   return { kind: 'included', id: 'hvy-galaxy-guide' };
 }
 
-export interface AppSettings {
-  homepage: HomepageSetting;
+/**
+ * App settings, with the settings Galaxy keeps per file keyed by `K`: the file's reference (`FileKey`) in memory
+ * (`AppSettings`), its path where saved (`StoredAppSettings`). appSettingsFiles.ts converts between the two.
+ */
+interface AppSettingsFields<K extends string, Homepage> {
+  homepage: Homepage;
   imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
-  powerScriptingAllowedFiles: string[];
-  powerScriptAcceptances: Record<string, string[]>;
-  powerScriptAcceptanceScripts: Record<string, Record<string, Array<{ id: string; hash: string }>>>;
+  powerScriptingAllowedFiles: K[];
+  powerScriptAcceptances: Record<K, string[]>;
+  powerScriptAcceptanceScripts: Record<K, Record<string, Array<{ id: string; hash: string }>>>;
   debugSemanticSearch: boolean;
   debugLogMaxBytes: number;
   pluginPolicies: Record<string, 'disabled' | 'enabled' | 'conditional'>;
-  pluginAcceptances: Record<string, string[]>;
-  webCapabilityProfileBindings: WebCapabilityProfileBindings;
-  webCapabilityAuthorizations: WebCapabilityAuthorizations;
+  pluginAcceptances: Record<K, string[]>;
+  webCapabilityProfileBindings: WebCapabilityProfileBindings<K>;
+  webCapabilityAuthorizations: WebCapabilityAuthorizations<K>;
   integrationWebMcpApprovals: IntegrationWebMcpApprovals;
-  /** Web API service approvals by document path (galaxy.web-api, approved at sign-in). */
-  webServiceApprovals: CapabilityAuthorizations;
+  /** Web API service approvals by file (galaxy.web-api, approved at sign-in). */
+  webServiceApprovals: CapabilityAuthorizations<K>;
   /** How many pages web collection reads at once: on one site, and in all. */
   webCollectionLimits: CollectionWorkerLimits;
-  /** Documents with scheduled jobs, by path: which jobs the user turned on, and when each last started. */
-  scheduledDocuments: ScheduledDocuments;
+  /** Documents with scheduled jobs: which jobs the user turned on, and when each last started. */
+  scheduledDocuments: ScheduledDocuments<K>;
   /** How many scheduled jobs' work may go on at once: the next job waits until fewer are busy. */
   scheduledJobsAtOnce: number;
 }
+
+export type AppSettings = AppSettingsFields<FileKey, HomepageSetting>;
+export type StoredAppSettings = AppSettingsFields<string, StoredHomepageSetting>;
 
 export interface InstalledPluginPackageFile {
   name: string;
@@ -688,25 +703,25 @@ export function loadAppSettings(): Promise<AppSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultAppSettings());
   }
-  return invokeDesktop<AppSettings>('load_app_settings').then((settings) => ({
+  return invokeDesktop<StoredAppSettings>('load_app_settings').then(storedAppSettingsLoaded);
+}
+
+// Saved settings as they come back from the desktop app, validated, and held by each file's reference.
+function storedAppSettingsLoaded(settings: StoredAppSettings): AppSettings {
+  return appSettingsFromStorage({
     ...settings,
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
     // Stored as given (Tauri keeps it as plain JSON, null until first saved): validated here.
     webCollectionLimits: normalizeCollectionWorkerLimits(settings.webCollectionLimits),
     scheduledDocuments: normalizeScheduledDocuments(settings.scheduledDocuments),
     scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(settings.scheduledJobsAtOnce),
-  }));
+  });
 }
 
 export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
-  const normalized = { ...settings, integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals) };
-  return invokeDesktop<AppSettings>('save_app_settings', { settings: normalized }).then((saved) => ({
-    ...saved,
-    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(saved.integrationWebMcpApprovals),
-    webCollectionLimits: normalizeCollectionWorkerLimits(saved.webCollectionLimits),
-    scheduledDocuments: normalizeScheduledDocuments(saved.scheduledDocuments),
-    scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(saved.scheduledJobsAtOnce),
-  }));
+  const stored = appSettingsForStorage(settings);
+  const normalized = { ...stored, integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(stored.integrationWebMcpApprovals) };
+  return invokeDesktop<StoredAppSettings>('save_app_settings', { settings: normalized }).then(storedAppSettingsLoaded);
 }
 
 export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFile[]> {

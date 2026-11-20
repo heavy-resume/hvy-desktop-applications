@@ -12,8 +12,8 @@ import { buildSearchDocument } from '../test/webAutomation/listingDocument';
 import { mockWebSites } from '../test/webAutomation/sites';
 import { capabilityOrigin } from './webApi';
 import { MockHost } from '../test/webAutomation/mockHost';
-import { relocatedDocumentSettings } from '../documentSettingsRelocation';
-import { backgroundWorkRunning, relocateWebAutomationDocument, releaseWebAutomation, saveWebAutomationQueues, setOpenDocumentCheck, setWebAutomationHost } from './app';
+import { runtimeDocumentForFile, updateRuntimeDocumentFile } from '../runtimeDocuments';
+import { backgroundWorkRunning, releaseWebAutomation, saveWebAutomationQueues, setOpenDocumentCheck, setWebAutomationHost } from './app';
 import { resolveDocumentAutomation } from './documentAutomation';
 
 vi.mock('../backend', async (importOriginal) => ({
@@ -22,6 +22,11 @@ vi.mock('../backend', async (importOriginal) => ({
 }));
 
 const DOCUMENT_PATH = '/workspace/Jobs.hvy';
+// The open document's file reference, which its automation is keyed by.
+const openFile = () => {
+  const source = runtimeDocumentForFile({ path: DOCUMENT_PATH, name: 'Jobs.hvy', extension: '.hvy' });
+  return { documentId: source.documentId, source } as unknown as AppState['document'];
+};
 const api = mockAnalysisService();
 
 /** A document as the app mounts it: its own state runtime, with both web plugins allowed in the file. */
@@ -37,7 +42,7 @@ function mountedDocument(text?: string) {
 
 describe('web automation in the app', () => {
   state.appSettings = defaultAppSettings();
-  state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
+  state.document = openFile();
   setWebAutomationHost(new MockHost([]));
   // One browser profile on this machine: the document names none, and uses it without asking.
   state.integrationRegistry = { ...defaultIntegrationRegistry(), profiles: [{ id: 'service', name: 'Service', providerId: 'google', browserStoreId: 'service' }] };
@@ -47,7 +52,7 @@ describe('web automation in the app', () => {
     expect(automation.profileOf(api.capability.capabilityId)).toEqual({ id: 'service', name: 'Service' });
     automation.authorizeWebApi(api.capability);
 
-    expect(state.appSettings.webServiceApprovals[DOCUMENT_PATH]?.[api.capability.capabilityId]).toMatchObject({ profileId: 'service', name: api.capability.name });
+    expect(state.appSettings.webServiceApprovals[state.document!.source.documentId]?.[api.capability.capabilityId]).toMatchObject({ profileId: 'service', name: api.capability.name });
   });
 
   it('writes queues into their blocks on save, and keeps them in memory after the document closes', async () => {
@@ -91,7 +96,7 @@ describe('web automation in the app', () => {
   it('follows a renamed document: its approval and queues stay with it (its profile is in the document)', async () => {
     const renamed = '/workspace/Renamed Jobs.hvy';
     state.appSettings = defaultAppSettings();
-    state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
+    state.document = openFile();
     const mounted = mountedDocument();
     const { automation } = mounted.open();
     automation.authorizeWebApi(api.capability);
@@ -102,10 +107,8 @@ describe('web automation in the app', () => {
     const saved = serializeDocument(mounted.document);
     const { idempotencyKey } = automation.listQueue(EVALUATE_QUEUE)[0];
 
-    // The rename, as Galaxy's rename handler applies it.
-    state.appSettings = relocatedDocumentSettings(state.appSettings, DOCUMENT_PATH, renamed);
-    relocateWebAutomationDocument(DOCUMENT_PATH, renamed);
-    state.document = { source: { path: renamed } } as AppState['document'];
+    // The rename, as Galaxy applies it: the file's reference moves, and nothing keyed by it changes.
+    updateRuntimeDocumentFile(state.document!.source, { path: renamed, name: 'Renamed Jobs.hvy', extension: '.hvy' });
 
     expect(automation.reviewWebApi(api.capability)).toMatchObject({ reason: 'authorized' });
     await expect(automation.probeSession(api.capability)).resolves.toMatchObject({ profileId: 'service' });
@@ -118,7 +121,7 @@ describe('web automation in the app', () => {
   });
   it('switching tabs away and back calls nothing again: the file\'s script handlers already heard it is signed in', async () => {
     state.appSettings = defaultAppSettings();
-    state.document = { source: { path: DOCUMENT_PATH } } as AppState['document'];
+    state.document = openFile();
     const host = new MockHost(mockWebSites(api));
     setWebAutomationHost(host);
     host.completeLogin('service', capabilityOrigin(api.capability));

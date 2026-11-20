@@ -10,12 +10,14 @@ import {
   type WebRecordsCapabilityConfig,
 } from './webCapabilities';
 import { enqueueWebCapabilityForProfile } from './webCapabilityQueue';
+import type { FileKey } from './runtimeDocuments';
 import { answerBrowserRequest, failBrowserRequest, waitForBrowserAnswer } from './browserRequests';
 
 export interface WebCapabilityExecutionContext {
-  documentPath: string;
+  /** The document's file reference. */
+  documentPath: FileKey;
   profile: IntegrationProfileDefinition;
-  authorizations: WebCapabilityAuthorizations;
+  authorizations: WebCapabilityAuthorizations<FileKey>;
   foreground?: boolean;
   readyChecks?: IntegrationPageReadyChecks;
   signal?: AbortSignal;

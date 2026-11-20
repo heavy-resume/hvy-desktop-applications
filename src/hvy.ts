@@ -1,4 +1,5 @@
 import { openAttachmentFile, openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
+import { NO_FILE } from './runtimeDocuments';
 import { createDesktopEmbeddingProvider, desktopTextProcessingSettings } from './aiClient';
 import { bindCarouselInteractions } from '../../heavy-file-format/src/editor/components/carousel/carousel';
 import { prepareComponentDefinitionForDocumentPasteWithResult } from '../../heavy-file-format/src/editor-clipboard';
@@ -296,7 +297,8 @@ export async function mountHvyDocument(
     return mountRawHvyDocument(root, document, options);
   }
   const embedMode = mode === 'advanced' ? 'editor' : mode;
-  const documentPath = state.document?.source.path ?? '';
+  // Plugin approvals are kept by the file's reference.
+  const documentPath = state.document?.source.documentId ?? NO_FILE;
   const downloadedPlugins = await enabledDownloadedPlugins(state.appSettings, documentPath);
   // The web automation plugins need a browser host; without one, documents do not get them.
   const availableBuiltInPlugins = builtInPlugins.filter((plugin) => hasWebAutomationHost() || !WEB_AUTOMATION_PLUGIN_IDS.has(plugin.id));

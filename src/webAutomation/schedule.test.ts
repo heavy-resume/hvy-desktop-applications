@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { readScheduleBlockConfig, type ScheduleBlockConfig } from './configs';
+import type { ScheduledDocuments } from './scheduleSettings';
+
+// Scheduled documents by path, as these tests key them (Galaxy keys them by file reference).
+const none: ScheduledDocuments<string> = {};
 import { clockText, dueJobs, jobTurnText, withoutScheduledDocumentsIn, scheduleStatusText, withChangesApplied, jobTiming, nextTimeOfDay, normalizeScheduledDocuments, scheduledFor, timingText, withJobTiming, withJobOn, withJobResult, withoutUnused, withScheduleBlock, withScheduleChange } from './scheduleSettings';
 
 const block = (overrides: Record<string, unknown> = {}) => readScheduleBlockConfig({
@@ -42,19 +46,19 @@ describe('a schedule block', () => {
 describe('what the user chose for scheduled documents', () => {
   it('keeps a document only once its jobs are set up, follows its block from then, and drops it once nothing is the user\'s', () => {
     // Opened with a schedule block, never set up: not listed.
-    expect(withScheduleBlock({}, '/work/jobs.hvy', 'jobs.hvy', config())).toEqual({});
-    expect(scheduledFor({}, '/work/jobs.hvy', 'jobs.hvy', config())).toEqual({
+    expect(withScheduleBlock(none, '/work/jobs.hvy', 'jobs.hvy', config())).toEqual({});
+    expect(scheduledFor(none, '/work/jobs.hvy', 'jobs.hvy', config())).toEqual({
       name: 'jobs.hvy', idleMinutes: 5,
       jobs: [{ id: 'fetch-due', name: 'Fetch due pages', timing: { every: 360 } }],
       choices: {}, scheduledFrom: {}, lastResults: {},
     });
     // Turned on in its block: kept.
-    const on = withScheduleChange({}, '/work/jobs.hvy', 'jobs.hvy', config(), (document) => withJobOn(document, 'fetch-due', true));
+    const on = withScheduleChange(none, '/work/jobs.hvy', 'jobs.hvy', config(), (document) => withJobOn(document, 'fetch-due', true));
     expect(on['/work/jobs.hvy'].choices).toEqual({ 'fetch-due': { on: true } });
     // Opened again unchanged: the same settings, so nothing is saved.
     expect(withScheduleBlock(on, '/work/jobs.hvy', 'jobs.hvy', config())).toBe(on);
     // A frequency of their own, set before turning it on, is kept too.
-    const every = withScheduleChange({}, '/work/jobs.hvy', 'jobs.hvy', config(), (document) => withJobTiming(document, 'fetch-due', { every: 60 }));
+    const every = withScheduleChange(none, '/work/jobs.hvy', 'jobs.hvy', config(), (document) => withJobTiming(document, 'fetch-due', { every: 60 }));
     expect(every['/work/jobs.hvy'].choices).toEqual({ 'fetch-due': { on: false, timing: { every: 60 } } });
     // The job removed from the block: nothing of it is the user's any more, so the document drops out.
     expect(withScheduleBlock(on, '/work/jobs.hvy', 'jobs.hvy', config({ jobs: [{ id: 'other', script: 'fetch_due', everyMinutes: 60 }] }))).toEqual({});
@@ -64,7 +68,7 @@ describe('what the user chose for scheduled documents', () => {
   });
 
   it('runs a job as often as the user set, never under 5 minutes, and its default again when set back to it', () => {
-    const scheduled = scheduledFor({}, '/work/jobs.hvy', 'jobs.hvy', config());
+    const scheduled = scheduledFor(none, '/work/jobs.hvy', 'jobs.hvy', config());
     expect(jobTiming(scheduled, 'fetch-due')).toEqual({ every: 360 });
     expect(jobTiming(withJobTiming(scheduled, 'fetch-due', { every: 1 }), 'fetch-due')).toEqual({ every: 5 });
     expect(withJobTiming(withJobTiming(scheduled, 'fetch-due', { every: 60 }), 'fetch-due', { every: 360 }).choices['fetch-due']).toEqual({ on: false });
@@ -82,7 +86,7 @@ describe('what the user chose for scheduled documents', () => {
 
   it('runs the jobs due, those never run first and then the most overdue, each only when on', () => {
     const MINUTE = 60_000;
-    const scheduled = (path: string, everyMinutes: number) => scheduledFor({}, path, path, config({ jobs: [{ id: 'job', script: 'fetch_due', everyMinutes }] }));
+    const scheduled = (path: string, everyMinutes: number) => scheduledFor(none, path, path, config({ jobs: [{ id: 'job', script: 'fetch_due', everyMinutes }] }));
     const on = (document: ReturnType<typeof scheduled>) => withJobOn(document, 'job', true);
     const now = 1_000 * MINUTE;
     const documents = {
@@ -92,7 +96,7 @@ describe('what the user chose for scheduled documents', () => {
       '/recent.hvy': { ...on(scheduled('/recent.hvy', 60)), scheduledFrom: { job: now - 10 * MINUTE } },
       '/off.hvy': scheduled('/off.hvy', 60),
     };
-    expect(dueJobs(documents, now).map((job) => job.path)).toEqual(['/never.hvy', '/later.hvy', '/late.hvy']);
+    expect(dueJobs(documents, now).map((job) => job.file)).toEqual(['/never.hvy', '/later.hvy', '/late.hvy']);
     // A skipped turn counts as its turn: the next is a whole frequency later.
     const skipped = withJobResult(documents['/never.hvy'], 'job', { at: now, outcome: 'skipped', message: 'You were using Galaxy.' });
     expect(dueJobs({ '/never.hvy': skipped }, now + 30 * MINUTE)).toEqual([]);
@@ -101,7 +105,7 @@ describe('what the user chose for scheduled documents', () => {
   it('says a job\'s last turn and, while it is on, its next', () => {
     const MINUTE = 60_000;
     const now = 10_000 * MINUTE;
-    const scheduled = scheduledFor({}, '/jobs.hvy', 'jobs.hvy', config());
+    const scheduled = scheduledFor(none, '/jobs.hvy', 'jobs.hvy', config());
     // Off: its checkbox says so; with no turn yet, nothing else to say.
     expect(jobTurnText(scheduled, 'fetch-due', now)).toBe('');
     const on = withJobOn(scheduled, 'fetch-due', true);
@@ -115,7 +119,7 @@ describe('what the user chose for scheduled documents', () => {
   it('applies a job turned on, or its frequency changed, from now: its next turn a frequency later, not at once', () => {
     const MINUTE = 60_000;
     const now = 10_000 * MINUTE;
-    const off = scheduledFor({}, '/jobs.hvy', 'jobs.hvy', config());
+    const off = scheduledFor(none, '/jobs.hvy', 'jobs.hvy', config());
     const on = withChangesApplied(off, { choices: { 'fetch-due': { on: true } }, idleMinutes: 5 }, now);
     expect(dueJobs({ '/jobs.hvy': on }, now)).toEqual([]);
     expect(jobTurnText(on, 'fetch-due', now)).toBe(`Not triggered yet · next at ${clockText(now + 360 * MINUTE, now)}`);
@@ -131,7 +135,7 @@ describe('what the user chose for scheduled documents', () => {
     const MINUTE = 60_000;
     const now = 10_000 * MINUTE;
     const two = config({ jobs: [{ id: 'fetch-due', name: 'Fetch due pages', script: 'fetch_due', everyMinutes: 360 }, { id: 'tidy', name: 'Tidy', script: 'fetch_due', everyMinutes: 60 }] });
-    const document = scheduledFor({}, '/jobs.hvy', 'jobs.hvy', two);
+    const document = scheduledFor(none, '/jobs.hvy', 'jobs.hvy', two);
     expect(scheduleStatusText(document, now)).toBe('');
     const one = withChangesApplied(document, { choices: { 'fetch-due': { on: true } }, idleMinutes: 5 }, now);
     expect(scheduleStatusText(one, now)).toBe(`Not triggered yet · next at ${clockText(now + 360 * MINUTE, now)}`);
@@ -150,7 +154,7 @@ describe('what the user chose for scheduled documents', () => {
   });
 
   it('drops the documents a workspace archived or a folder deleted held, and keeps the rest as they are', () => {
-    const on = (path: string) => withScheduleChange({}, path, path, config(), (document) => withJobOn(document, 'fetch-due', true))[path];
+    const on = (path: string) => withScheduleChange(none, path, path, config(), (document) => withJobOn(document, 'fetch-due', true))[path];
     const documents = { '/work/a.hvy': on('/work/a.hvy'), '/work/old/b.hvy': on('/work/old/b.hvy'), '/other/c.hvy': on('/other/c.hvy') };
     expect(Object.keys(withoutScheduledDocumentsIn(documents, (path) => path.startsWith('/work/old/')))).toEqual(['/work/a.hvy', '/other/c.hvy']);
     expect(withoutScheduledDocumentsIn(documents, () => false)).toBe(documents);
@@ -162,7 +166,7 @@ describe('what the user chose for scheduled documents', () => {
     expect(nextTimeOfDay(at(18, 15, 37), '02:00', [])).toBe(at(19, 2));
     expect(nextTimeOfDay(at(18, 15, 37), '02:00', [1, 5])).toBe(at(20, 2));
     expect(nextTimeOfDay(at(19, 2), '02:00', [])).toBe(at(20, 2));
-    const nightly = withChangesApplied(scheduledFor({}, '/jobs.hvy', 'jobs.hvy', config()), { choices: { 'fetch-due': { on: true, timing: { at: '02:00', days: [] } } }, idleMinutes: 5 }, at(18, 15, 37));
+    const nightly = withChangesApplied(scheduledFor(none, '/jobs.hvy', 'jobs.hvy', config()), { choices: { 'fetch-due': { on: true, timing: { at: '02:00', days: [] } } }, idleMinutes: 5 }, at(18, 15, 37));
     expect(dueJobs({ '/jobs.hvy': nightly }, at(19, 1, 59))).toEqual([]);
     expect(dueJobs({ '/jobs.hvy': nightly }, at(19, 2)).map((job) => job.jobId)).toEqual(['fetch-due']);
     // Galaxy closed at 2:00 AM: due once, when it can (9:00 AM); then tomorrow at 2:00 AM, not again today.

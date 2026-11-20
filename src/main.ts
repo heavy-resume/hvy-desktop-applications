@@ -29,7 +29,7 @@ export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWork
 export { backupDocumentKey, cancelSaveConflict, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, commitTabStack, confirmSaveConflict, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, relocateRecoveryDraftsForDocument, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { recoveryDocumentId } from './recoveryDocuments';
 export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, relocateFiles, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, workspaceDisplayNameFromPath, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, isBlankCreationTemplate, upsertWorkspace, sortWorkspaces, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed, type WorkspaceOrderSort } from './mainWorkspaceUtils';
-export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder, relocateDocumentSettings, clearHomepageDocumentPath, clearArchivedHomepageDocument } from './mainUtilities';
+export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder, saveSettingsForMovedFile, clearHomepageDocumentPath, clearArchivedHomepageDocument } from './mainUtilities';
 import { render, renderAllAroundDocument as renderUiAroundDocument, renderModals, type UiHandlers } from './ui';
 export let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
@@ -653,7 +653,9 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
   });
   mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
   const storedChatState = documentSessions.get(currentDocument.versionId)?.chatState ?? null;
-  const powerScripts = state.appSettings.powerScriptingAllowedFiles.includes(currentDocument.source.path)
+  // Power script approvals are kept by the file's reference.
+  const file = currentDocument.source.documentId;
+  const powerScripts = state.appSettings.powerScriptingAllowedFiles.includes(file)
     ? 'enabled'
     : 'prompt';
   const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
@@ -666,22 +668,22 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(state.appSettings.imageAttachmentMaxDimensions),
     powerScripts,
     getPowerScriptAcceptance: ({ fingerprint }) =>
-      (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint),
+      (state.appSettings.powerScriptAcceptances[file] ?? []).includes(fingerprint),
     // Scripts that ran before the plugin was allowed run again, now with it; the reader keeps their place.
     onPluginAllowed: () => void remountKeepingView(),
     onPowerScriptAcceptanceChanged: ({ document: acceptedDocument, fingerprint, accepted }) => {
-      if (!accepted || (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint)) return;
-      const acceptedFingerprints = [...(state.appSettings.powerScriptAcceptances[path] ?? []), fingerprint];
+      if (!accepted || (state.appSettings.powerScriptAcceptances[file] ?? []).includes(fingerprint)) return;
+      const acceptedFingerprints = [...(state.appSettings.powerScriptAcceptances[file] ?? []), fingerprint];
       const settings = {
         ...state.appSettings,
         powerScriptAcceptances: {
           ...state.appSettings.powerScriptAcceptances,
-          [path]: acceptedFingerprints,
+          [file]: acceptedFingerprints,
         },
         powerScriptAcceptanceScripts: {
           ...state.appSettings.powerScriptAcceptanceScripts,
-          [path]: {
-            ...(state.appSettings.powerScriptAcceptanceScripts[path] ?? {}),
+          [file]: {
+            ...(state.appSettings.powerScriptAcceptanceScripts[file] ?? {}),
             [fingerprint]: powerScriptDescriptors(acceptedDocument),
           },
         },
@@ -698,12 +700,12 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
             ...state.appSettings,
             powerScriptAcceptances: {
               ...state.appSettings.powerScriptAcceptances,
-              [path]: (state.appSettings.powerScriptAcceptances[path] ?? [])
+              [file]: (state.appSettings.powerScriptAcceptances[file] ?? [])
                 .filter((candidate) => candidate !== fingerprint),
             },
             powerScriptAcceptanceScripts: {
               ...state.appSettings.powerScriptAcceptanceScripts,
-              [path]: Object.fromEntries(Object.entries(state.appSettings.powerScriptAcceptanceScripts[path] ?? {})
+              [file]: Object.fromEntries(Object.entries(state.appSettings.powerScriptAcceptanceScripts[file] ?? {})
                 .filter(([candidate]) => candidate !== fingerprint)),
             },
           };

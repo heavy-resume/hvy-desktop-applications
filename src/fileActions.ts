@@ -49,7 +49,7 @@ export function isHomepageOpen(state: AppState): boolean {
   const document = state.document;
   if (!document) return false;
   if (homepage.kind === 'included') return document.includedDocumentId === homepage.id;
-  if (homepage.kind === 'file') return !document.virtual && document.source.path === homepage.path;
+  if (homepage.kind === 'file') return !document.virtual && document.source.documentId === homepage.file;
   return false;
 }
 

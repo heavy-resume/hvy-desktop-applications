@@ -63,7 +63,10 @@ export interface WebAutomationRuntimeDeps {
 
 /** Document-level dependencies. */
 export interface WebAutomationDocumentDeps {
-  /** The document's current path: it changes when the document is renamed or moved. */
+  /**
+   * The document's key: what its queues, what its handlers heard, and its service approvals are kept by. Galaxy gives its
+   * file reference (webAutomation/app.ts), which a rename or move leaves as it is; empty for a document not saved yet.
+   */
   documentPath(): string;
   /** How queues call their target plugin. */
   callPlugin: PluginCall;
@@ -119,19 +122,6 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     transport,
     sessions,
     webApi,
-
-    // A document moved (renamed, moved between workspaces, or archived): its queues still in memory follow it, so the
-    // next open reattaches them.
-    relocateDocument(previousPath: string, nextPath: string): void {
-      const prefix = `${previousPath}\u0000`;
-      for (const map of [documentQueues, heardSessions] as Array<Map<string, unknown>>) {
-        for (const [key, value] of [...map]) {
-          if (!key.startsWith(prefix)) continue;
-          map.delete(key);
-          map.set(`${nextPath}\u0000${key.slice(prefix.length)}`, value);
-        }
-      }
-    },
 
     // Document close: its tab closed, so opening it again is a fresh start, and its handlers hear the account again.
     forgetDocument(documentPath: string): void {

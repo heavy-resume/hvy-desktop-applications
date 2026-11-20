@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import type { DocumentKeyMetadata } from './backend';
 
 vi.hoisted(() => {
@@ -102,7 +103,7 @@ const mainMocks = vi.hoisted(() => ({
     if (state.document) state.document.dirty = dirty;
   }),
   runBusy: vi.fn(async (_label: string, task: () => Promise<void>) => task()),
-  relocateDocumentSettings: vi.fn(),
+  saveSettingsForMovedFile: vi.fn(),
   updateOpenDocumentFile: vi.fn((previousPath: string, file: { path: string; name: string; extension: '.hvy' }) => {
     if (state.document?.source.path !== previousPath) return;
     state.document.source.path = file.path;
@@ -160,7 +161,7 @@ function testOpenDocument(overrides: Partial<NonNullable<typeof state.document>>
     documentId: 'document:example',
     versionId: 'version:example',
     source: {
-      documentId: 'document:example',
+      documentId: 'document:example' as FileKey,
       workingVersionId: 'version:example',
       path: '/workspace/example.hvy',
       name: 'example.hvy',

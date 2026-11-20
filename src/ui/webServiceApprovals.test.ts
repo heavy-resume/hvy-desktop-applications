@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { defaultAppSettings } from '../backend';
+import { appSettingsForStorage } from '../appSettingsFiles';
 import { readAppSettingsForm } from './render-ai-mcp';
+
+// The form carries settings as saved (each file by its path); what it reads is held by file reference, saved by path again.
+const savedForm = (data: FormData) => appSettingsForStorage(readAppSettingsForm(data, '/jobs.hvy'));
 
 const approval = (capabilityId: string, name: string) => ({ capabilityId, name, profileId: 'service', partHashes: { endpoints: 'h' }, authorizedAt: 5 });
 
@@ -19,8 +23,7 @@ describe('web services for this file (app settings)', () => {
     data.append('serviceApprovalListed', 'other');
     data.set('serviceApproved:other', 'on');
 
-    const saved = readAppSettingsForm(data, '/jobs.hvy');
-    expect(saved.webServiceApprovals).toEqual({
+    expect(savedForm(data).webServiceApprovals).toEqual({
       '/jobs.hvy': { other: approval('other', 'Other') },
       '/elsewhere.hvy': { 'job-fit': approval('job-fit', 'Heavy Resume') },
     });
@@ -32,7 +35,7 @@ describe('web services for this file (app settings)', () => {
     data.set('settingsJson', JSON.stringify(settings));
     data.append('serviceApprovalListed', 'job-fit');
 
-    expect(readAppSettingsForm(data, '/jobs.hvy').webServiceApprovals).toEqual({});
+    expect(savedForm(data).webServiceApprovals).toEqual({});
   });
 });
 
@@ -48,6 +51,6 @@ describe('per-file plugin acceptances (app settings)', () => {
     data.append('pluginAcceptanceListed', shownCleared);
     data.set(`pluginAccepted:${shownKept}`, 'on');
 
-    expect(readAppSettingsForm(data, '/jobs.hvy').pluginAcceptances).toEqual({ '/jobs.hvy': [notShown, shownKept] });
+    expect(savedForm(data).pluginAcceptances).toEqual({ '/jobs.hvy': [notShown, shownKept] });
   });
 });

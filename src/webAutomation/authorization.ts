@@ -12,8 +12,8 @@ export interface CapabilityAuthorization {
   authorizedAt: number;
 }
 
-/** documentPath → capabilityId → authorization. Stored in local app settings, never in the document. */
-export type CapabilityAuthorizations = Record<string, Record<string, CapabilityAuthorization>>;
+/** File → capabilityId → authorization: by the file's reference in memory, its path where saved in local app settings, never in the document. */
+export type CapabilityAuthorizations<K extends string> = Record<K, Record<string, CapabilityAuthorization>>;
 
 export type AuthorizationReviewReason = 'authorized' | 'first-use' | 'profile-changed' | 'capability-changed';
 
@@ -31,9 +31,9 @@ export function hashAuthorizationParts(parts: Record<string, unknown>): Record<s
   return Object.fromEntries(Object.entries(parts).map(([category, value]) => [category, hashPart(value)]));
 }
 
-export function reviewAuthorization(
-  authorizations: CapabilityAuthorizations,
-  documentPath: string,
+export function reviewAuthorization<K extends string>(
+  authorizations: CapabilityAuthorizations<K>,
+  documentPath: NoInfer<K>,
   capabilityId: string,
   parts: Record<string, unknown>,
   profileId: string,
@@ -48,15 +48,15 @@ export function reviewAuthorization(
   return { capabilityId, reason: 'authorized', changedCategories: [] };
 }
 
-export function recordAuthorization(
-  authorizations: CapabilityAuthorizations,
-  documentPath: string,
+export function recordAuthorization<K extends string>(
+  authorizations: CapabilityAuthorizations<K>,
+  documentPath: NoInfer<K>,
   capabilityId: string,
   parts: Record<string, unknown>,
   profileId: string,
   now: number,
   name?: string,
-): CapabilityAuthorizations {
+): CapabilityAuthorizations<K> {
   return {
     ...authorizations,
     [documentPath]: {
@@ -67,7 +67,7 @@ export function recordAuthorization(
 }
 
 /** Withdraws a service approval; the next use asks again. */
-export function revokeAuthorization(authorizations: CapabilityAuthorizations, documentPath: string, capabilityId: string): CapabilityAuthorizations {
+export function revokeAuthorization<K extends string>(authorizations: CapabilityAuthorizations<K>, documentPath: NoInfer<K>, capabilityId: string): CapabilityAuthorizations<K> {
   const { [capabilityId]: _revoked, ...remaining } = authorizations[documentPath] ?? {};
   const next = { ...authorizations };
   if (Object.keys(remaining).length) next[documentPath] = remaining;

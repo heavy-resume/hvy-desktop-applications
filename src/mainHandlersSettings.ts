@@ -1,4 +1,5 @@
 import { withJobOn, withoutUnused } from './webAutomation/scheduleSettings';
+import { fileKeyForPath, type FileKey } from './runtimeDocuments';
 import { scheduledJobKey } from './ui/render-scheduled-jobs';
 import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { fetchIntegrationRecords } from './integrationRecords';
@@ -2424,7 +2425,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const homepage = document.includedDocumentId
       ? { kind: 'included' as const, id: document.includedDocumentId }
       : document.source.path && !document.isNew && !document.virtual && workspaceFile && !workspaceFile.archived
-        ? { kind: 'file' as const, path: document.source.path }
+        ? { kind: 'file' as const, file: document.source.documentId }
         : null;
     if (!homepage) return;
     state.appSettingsDraft = { ...settings, homepage };
@@ -2445,7 +2446,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (state.homepagePickerMode === 'settings') {
       state.appSettingsDraft = {
         ...(state.appSettingsDraft ?? state.appSettings),
-        homepage: { kind: 'file', path },
+        homepage: { kind: 'file', file: fileKeyForPath(path) },
       };
       state.homepagePickerMode = null;
       state.status = 'Selected homepage document';
@@ -2454,7 +2455,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }
     if (state.homepagePickerMode !== 'recovery') return;
     void runBusy('Opening homepage...', async () => {
-      state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'file', path } });
+      state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'file', file: fileKeyForPath(path) } });
       state.homepagePickerMode = null;
       state.homepageError = null;
       await openHomepage();
@@ -2528,14 +2529,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   setScheduledJobOn: (path, jobId, on) => {
-    state.scheduledJobsDraft = { ...state.scheduledJobsDraft, [scheduledJobKey(path, jobId)]: on };
+    state.scheduledJobsDraft = { ...state.scheduledJobsDraft, [scheduledJobKey(fileKeyForPath(path), jobId)]: on };
   },
   // Applied to the settings as they are now (a job's turn may have been recorded meanwhile); jobs all off drop out.
   saveScheduledJobs: () => {
     const changes = Object.entries(state.scheduledJobsDraft);
     updateScheduledDocuments((documents) => withoutUnused(changes.reduce((current, [key, on]) => {
-      const [path, jobId] = key.split('\u0000');
-      return current[path] ? { ...current, [path]: withJobOn(current[path], jobId, on) } : current;
+      const [file, jobId] = key.split('\u0000') as [FileKey, string];
+      return current[file] ? { ...current, [file]: withJobOn(current[file], jobId, on) } : current;
     }, documents)));
     state.scheduledJobsDialogOpen = false;
     state.scheduledJobsDraft = {};
@@ -2554,9 +2555,10 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   setWholeFilePowerScriptingAllowed: (path, allowed) => void runBusy('Updating power scripting approvals...', async () => {
+    const file = fileKeyForPath(path);
     const allowedFiles = new Set(state.appSettings.powerScriptingAllowedFiles);
-    if (allowed) allowedFiles.add(path);
-    else allowedFiles.delete(path);
+    if (allowed) allowedFiles.add(file);
+    else allowedFiles.delete(file);
     state.appSettings = await saveAppSettings({
       ...state.appSettings,
       powerScriptingAllowedFiles: [...allowedFiles],
@@ -2565,18 +2567,19 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   }),
   revokePowerScriptAcceptance: (path, fingerprint) => void runBusy('Revoking power script approval...', async () => {
-    const fingerprints = (state.appSettings.powerScriptAcceptances[path] ?? [])
+    const file = fileKeyForPath(path);
+    const fingerprints = (state.appSettings.powerScriptAcceptances[file] ?? [])
       .filter((candidate) => candidate !== fingerprint);
     const powerScriptAcceptances = { ...state.appSettings.powerScriptAcceptances };
-    if (fingerprints.length > 0) powerScriptAcceptances[path] = fingerprints;
-    else delete powerScriptAcceptances[path];
+    if (fingerprints.length > 0) powerScriptAcceptances[file] = fingerprints;
+    else delete powerScriptAcceptances[file];
     const fileAcceptanceScripts = Object.fromEntries(
-      Object.entries(state.appSettings.powerScriptAcceptanceScripts[path] ?? {})
+      Object.entries(state.appSettings.powerScriptAcceptanceScripts[file] ?? {})
         .filter(([candidate]) => candidate !== fingerprint),
     );
     const powerScriptAcceptanceScripts = { ...state.appSettings.powerScriptAcceptanceScripts };
-    if (Object.keys(fileAcceptanceScripts).length > 0) powerScriptAcceptanceScripts[path] = fileAcceptanceScripts;
-    else delete powerScriptAcceptanceScripts[path];
+    if (Object.keys(fileAcceptanceScripts).length > 0) powerScriptAcceptanceScripts[file] = fileAcceptanceScripts;
+    else delete powerScriptAcceptanceScripts[file];
     state.appSettings = await saveAppSettings({
       ...state.appSettings,
       powerScriptAcceptances,

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { createConditionallyAllowedPlugin } from '../../heavy-file-format/src/plugins/authorization/conditional-plugin';
 import { blockedPlugins, builtInPluginPolicy, enabledBuiltInPlugins, pluginAcceptanceKey, pluginPolicyKey } from './pluginManager';
+import type { FileKey } from './runtimeDocuments';
+
+// Plugin approvals are kept by file reference.
+const doc = 'doc' as FileKey;
+const other = 'other' as FileKey;
 
 describe('downloaded plugin identity keys', () => {
   test('policy and per-file acceptance use the same exact identity and version', () => {
@@ -30,12 +35,12 @@ describe('built-in plugin policies', () => {
 
   test('mounts a built-in under per-file approval as a conditional registration until the file accepts it', async () => {
     const settings = { pluginPolicies: { [safe.id]: 'conditional' as const }, pluginAcceptances: {} };
-    const [unaccepted] = await enabledBuiltInPlugins(settings, [safe], '/doc.hvy');
+    const [unaccepted] = await enabledBuiltInPlugins(settings, [safe], doc);
     expect(unaccepted).toMatchObject({ id: safe.id, authorization: 'required' });
     expect(unaccepted).not.toBe(safe);
 
-    const accepted = { ...settings, pluginAcceptances: { '/doc.hvy': [pluginAcceptanceKey(safe)] } };
-    expect(await enabledBuiltInPlugins(accepted, [safe], '/doc.hvy')).toEqual([safe]);
+    const accepted = { ...settings, pluginAcceptances: { [doc]: [pluginAcceptanceKey(safe)] } };
+    expect(await enabledBuiltInPlugins(accepted, [safe], doc)).toEqual([safe]);
     expect(await enabledBuiltInPlugins({ pluginPolicies: { [safe.id]: 'disabled' }, pluginAcceptances: {} }, [safe, conditional])).toEqual([conditional]);
     expect(await enabledBuiltInPlugins({ pluginPolicies: {}, pluginAcceptances: {} }, [safe, conditional])).toEqual([safe, conditional]);
   });
@@ -43,9 +48,9 @@ describe('built-in plugin policies', () => {
   test('passes a plugin that requires authorization as its implementation once the file accepts it, so scripts can use it at once', async () => {
     const implementation = { id: 'galaxy.web-api', version: '0.1.0', hvyApiVersion: '0.1', displayName: 'Web API', scripting: { methods: {} } };
     const registration = createConditionallyAllowedPlugin({ ...implementation, load: async () => implementation });
-    const settings = { pluginPolicies: {}, pluginAcceptances: { '/doc.hvy': [pluginAcceptanceKey(registration)] } };
-    expect(await enabledBuiltInPlugins(settings, [registration], '/doc.hvy')).toEqual([implementation]);
-    expect(await enabledBuiltInPlugins(settings, [registration], '/other.hvy')).toEqual([registration]);
+    const settings = { pluginPolicies: {}, pluginAcceptances: { [doc]: [pluginAcceptanceKey(registration)] } };
+    expect(await enabledBuiltInPlugins(settings, [registration], doc)).toEqual([implementation]);
+    expect(await enabledBuiltInPlugins(settings, [registration], other)).toEqual([registration]);
   });
 });
 

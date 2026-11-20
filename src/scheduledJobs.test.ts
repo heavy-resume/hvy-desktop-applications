@@ -46,13 +46,13 @@ describe('scheduled jobs', () => {
 
   it('saves and closes the tab it opened even when its file was renamed while the job ran', async () => {
     const file = runtimeDocumentForFile({ path: '/workspace/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' });
-    state.appSettings = { ...state.appSettings, scheduledDocuments: { '/workspace/jobs.hvy': { name: 'jobs.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
+    state.appSettings = { ...state.appSettings, scheduledDocuments: { [file.documentId]: { name: 'jobs.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
     // Opening the job's document makes it the open document, as the app does.
     mainMocks.selectDocumentTab.mockImplementation(async () => {
       state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {} } } as never;
     });
 
-    await runScheduledJobNow('/workspace/jobs.hvy', 'fetch');
+    await runScheduledJobNow(file.documentId, 'fetch');
     expect(state.scheduledJobRuns[file.documentId]).toEqual({ job: 'Fetch' });
 
     updateRuntimeDocumentFile(file, { path: '/workspace/notes/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' });

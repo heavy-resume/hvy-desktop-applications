@@ -1,4 +1,5 @@
 import { loadInstalledPluginPackages, type AppSettings, type InstalledPluginPackageFile } from './backend';
+import { NO_FILE, type FileKey } from './runtimeDocuments';
 import { loadHvyPluginZip, readHvyPluginZipManifest, type LoadedHvyPluginPackage } from '../../heavy-file-format/src/plugin-package-zip';
 import type { HvyPluginPackageManifest } from '../../heavy-file-format/src/plugin-package';
 import { createConditionallyAllowedPlugin, loadConditionallyAllowedPlugin } from '../../heavy-file-format/src/plugins/authorization/conditional-plugin';
@@ -65,7 +66,7 @@ async function loadPackage(record: InstalledPluginRecord): Promise<LoadedHvyPlug
   return pending;
 }
 
-export async function enabledDownloadedPlugins(settings: AppSettings, documentPath = ''): Promise<HvyPlugin[]> {
+export async function enabledDownloadedPlugins(settings: AppSettings, documentPath: FileKey = NO_FILE): Promise<HvyPlugin[]> {
   const plugins: HvyPlugin[] = [];
   for (const record of installedPlugins) {
     if (!record.manifest) continue;
@@ -110,7 +111,7 @@ export function builtInPluginPolicy(settings: Pick<AppSettings, 'pluginPolicies'
  * Built-in plugins for a document under their policies, as enabledDownloadedPlugins applies them to custom plugins:
  * a plugin the file has accepted is passed as its implementation, so the document's scripts can use it from the start.
  */
-export async function enabledBuiltInPlugins(settings: Pick<AppSettings, 'pluginPolicies' | 'pluginAcceptances'>, plugins: HvyPlugin[], documentPath = ''): Promise<HvyPlugin[]> {
+export async function enabledBuiltInPlugins(settings: Pick<AppSettings, 'pluginPolicies' | 'pluginAcceptances'>, plugins: HvyPlugin[], documentPath: FileKey = NO_FILE): Promise<HvyPlugin[]> {
   const accepted = (plugin: HvyPlugin) => (settings.pluginAcceptances[documentPath] ?? []).includes(pluginAcceptanceKey(plugin));
   const enabled: HvyPlugin[] = [];
   for (const plugin of plugins) {
@@ -165,7 +166,7 @@ export function blockedPlugins(plugins: HvyPlugin[], blockPluginIds: string[]): 
 }
 
 /** A file's plugin approvals after allowing or disallowing some plugins in it (keys from pluginAcceptanceKey). */
-export function setPluginAcceptances(acceptances: AppSettings['pluginAcceptances'], documentPath: string, keys: string[], accepted: boolean): AppSettings['pluginAcceptances'] {
+export function setPluginAcceptances(acceptances: AppSettings['pluginAcceptances'], documentPath: FileKey, keys: string[], accepted: boolean): AppSettings['pluginAcceptances'] {
   const current = acceptances[documentPath] ?? [];
   const next = accepted ? [...new Set([...current, ...keys])] : current.filter((candidate) => !keys.includes(candidate));
   return { ...acceptances, [documentPath]: next };

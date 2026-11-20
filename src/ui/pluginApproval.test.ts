@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FileKey } from '../runtimeDocuments';
 import { pluginAcceptanceKey, setPluginAcceptances } from '../pluginManager';
 import { state as appState, type AppState } from '../state';
 import { renderPluginApprovalBar, renderPluginApprovalDialog } from './render-plugin-approval';
@@ -32,7 +33,9 @@ describe('plugin approval for the open file', () => {
 
   it('saves several approvals for one file at once, and keeps other files', () => {
     const keys = blocked.map((plugin) => pluginAcceptanceKey(plugin));
-    expect(setPluginAcceptances({ '/jobs.hvy': ['existing'], '/other.hvy': ['x'] }, '/jobs.hvy', keys, true)).toEqual({ '/jobs.hvy': ['existing', ...keys], '/other.hvy': ['x'] });
-    expect(setPluginAcceptances({ '/jobs.hvy': ['existing', ...keys] }, '/jobs.hvy', [keys[0]], false)).toEqual({ '/jobs.hvy': ['existing', keys[1]] });
+    const jobs = 'jobs' as FileKey;
+    const other = 'other' as FileKey;
+    expect(setPluginAcceptances({ [jobs]: ['existing'], [other]: ['x'] }, jobs, keys, true)).toEqual({ [jobs]: ['existing', ...keys], [other]: ['x'] });
+    expect(setPluginAcceptances({ [jobs]: ['existing', ...keys] }, jobs, [keys[0]], false)).toEqual({ [jobs]: ['existing', keys[1]] });
   });
 });

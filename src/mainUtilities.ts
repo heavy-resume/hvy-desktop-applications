@@ -1,5 +1,5 @@
 import { normalizeScheduledDocuments, normalizeScheduledJobsAtOnce } from './webAutomation/scheduleSettings';
-import { chooseWorkspaceFolder, normalizeHomepageSetting, saveAppSettings, type AppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
+import { chooseWorkspaceFolder, normalizeHomepageSetting, saveAppSettings, type AppSettings, type StoredAppSettings, type DocumentCreationType, type DocumentFile, type McpSettings } from './backend';
 import { getMatchedPaletteId, getMatchedSavedThemeId, getPaletteById, saveColorThemeSettings } from './colorTheme';
 import { filePathBelongsToWorkspace, findFileInWorkspaces, state } from './state';
 import type { HvyMode, VisualDocument } from './hvy';
@@ -7,8 +7,8 @@ import { applyAppColorTheme, loadWorkspace, mountRoot, rerender } from './main';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from './webCapabilities';
 import { normalizeIntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizeCapabilityAuthorizations, normalizeCollectionWorkerLimits } from './webAutomation/settings';
-import { relocatedDocumentSettings } from './documentSettingsRelocation';
-import { relocateWebAutomationDocument } from './webAutomation/app';
+import { appSettingsForStorage, appSettingsReferenceFile } from './appSettingsFiles';
+import { pathForFileKey, runtimeDocumentAtPath } from './runtimeDocuments';
 import { isDefaultUntitledSectionTitle, visitBlocksInList } from '../../heavy-file-format/src/section-ops';
 import { markdownToPlainText } from '../../heavy-file-format/src/markdown-plain-text';
 
@@ -459,7 +459,9 @@ function normalizeEmbeddingBatchSize(value: unknown): number {
   return Math.min(256, Math.max(1, Math.floor(parsed)));
 }
 
-export function canonicalAppSettings(settings: AppSettings): AppSettings {
+// Settings as saved, normalized: compared as JSON to tell whether the settings dialog changed anything.
+export function canonicalAppSettings(memorySettings: AppSettings): StoredAppSettings {
+  const settings = appSettingsForStorage(memorySettings);
   return {
     homepage: normalizeHomepageSetting(settings.homepage),
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(settings.imageAttachmentMaxDimensions),
@@ -481,15 +483,19 @@ export function canonicalAppSettings(settings: AppSettings): AppSettings {
 }
 
 /** A document moved (renamed, moved between workspaces, or archived): the settings kept for its path follow it. */
-export async function relocateDocumentSettings(previousPath: string, nextPath: string): Promise<void> {
-  relocateWebAutomationDocument(previousPath, nextPath);
-  const relocated = relocatedDocumentSettings(state.appSettings, previousPath, nextPath);
-  if (relocated === state.appSettings) return;
-  state.appSettings = await saveAppSettings(relocated);
+/**
+ * A file moved (renamed, moved, or archived aside): the settings kept for it are held by its reference, so they follow
+ * it as they are. Saved again, they are written with its new path.
+ */
+export async function saveSettingsForMovedFile(path: string): Promise<void> {
+  const file = runtimeDocumentAtPath(path);
+  if (!file || !appSettingsReferenceFile(state.appSettings, file.documentId)) return;
+  state.appSettings = await saveAppSettings(state.appSettings);
 }
 
 export async function clearHomepageDocumentPath(path: string): Promise<void> {
-  if (state.appSettings.homepage.kind !== 'file' || state.appSettings.homepage.path !== path) return;
+  const homepage = state.appSettings.homepage;
+  if (homepage.kind !== 'file' || homepage.file !== runtimeDocumentAtPath(path)?.documentId) return;
   state.appSettings = await saveAppSettings({
     ...state.appSettings,
     homepage: { kind: 'none' },
@@ -499,12 +505,13 @@ export async function clearHomepageDocumentPath(path: string): Promise<void> {
 export async function clearArchivedHomepageDocument(): Promise<void> {
   const homepage = state.appSettings.homepage;
   if (homepage.kind !== 'file') return;
-  if (!state.workspaceEntries.some((entry) => filePathBelongsToWorkspace(homepage.path, entry.path))) {
-    await clearHomepageDocumentPath(homepage.path);
+  const homepagePath = pathForFileKey(homepage.file);
+  if (!state.workspaceEntries.some((entry) => filePathBelongsToWorkspace(homepagePath, entry.path))) {
+    await clearHomepageDocumentPath(homepagePath);
     return;
   }
-  const file = findFileInWorkspaces(state.workspaces, homepage.path);
-  if (file?.archived) await clearHomepageDocumentPath(homepage.path);
+  const file = findFileInWorkspaces(state.workspaces, homepagePath);
+  if (file?.archived) await clearHomepageDocumentPath(homepagePath);
 }
 
 export function normalizePowerScriptAcceptanceScripts(

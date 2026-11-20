@@ -9,6 +9,7 @@ import type { AuthorizationReview } from '../webAutomation/authorization';
 import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
 import { cadenceText, duePages } from '../webAutomation/cadence';
 import { runScheduledJobNow, scheduledDocuments, updateScheduledDocuments } from '../webAutomation/scheduleStore';
+import { runtimeDocumentById, type FileKey } from '../runtimeDocuments';
 import { jobTiming, scheduledFor, scheduleStatusText, timingText, withChangesApplied, withJobOn, withJobTiming, withScheduleChange, type ScheduledDocument } from '../webAutomation/scheduleSettings';
 import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readScheduleBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SCHEDULE_MIN_MINUTES, type ScheduleTiming, SCHEDULE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
 import { createWebAutomationPlugins, profileNameIn, resolveDocumentAutomation } from '../webAutomation/documentAutomation';
@@ -2301,14 +2302,15 @@ const scheduleView: HvyPluginFactory = (ctx) => {
     header.className = 'hvy-web-schedule-header';
     header.append(heading('Scheduled jobs'));
     root.append(header);
-    const path = lookup.documentPath();
+    // Galaxy keys a document's automation by its file reference (webAutomation/app.ts), which its schedule is kept by.
+    const path = lookup.documentPath() as FileKey;
     if (!path) {
       root.append(paragraph('Save this document to turn its jobs on.', 'hvy-web-page-hint'));
       return;
     }
     // What is in effect (or every job off: a document is kept in app settings only once its jobs are set up), and what
     // the controls show: that, with the changes not applied yet.
-    const name = path.split(/[\\/]/).pop() || path;
+    const name = runtimeDocumentById(path)?.name ?? '';
     const saved = scheduledFor(scheduledDocuments(), path, name, result.value);
     const shown: ScheduledDocument = draft ? { ...saved, ...draft } : saved;
     // What is in effect, in the header: the job that runs next, its last turn and its next.

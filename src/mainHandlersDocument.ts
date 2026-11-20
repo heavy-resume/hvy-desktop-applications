@@ -9,7 +9,7 @@ import { measureDebugAsync } from './debugLog';
 import { currentDocumentWorkspacePath, isWorkspaceTemplatePath } from './fileActions';
 import { applyMountedRecoveryState, encryptMountedDocumentWithKey, getMountedRecoveryState, getPhvyCompatibilityErrors, openMountedDocumentMeta, removeMountedDocumentEncryption, serializeHvy } from './hvy';
 import { findFileInWorkspace, state, type PendingWorkspaceFileOperation } from './state';
-import { runtimeDocumentAtPath } from './runtimeDocuments';
+import { fileKeyForPath, runtimeDocumentAtPath } from './runtimeDocuments';
 import { mountRoot, pendingMountDocument, documentSessions, deleteDocumentSession, adoptSavedAsDocument, applyAppColorTheme, refreshRecents, refreshArchivedWorkspaces, applyWorkspaceFilterToCurrentDocument, workspaceFileAiAccess, ensureWorkspaceFileAiAccess, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, removeDocumentTabPath, removeOpenDocumentFile, openDocument, updateCurrentDocumentSession, mountCurrentDocument, ensureCurrentDocumentMounted, captureMountScrollRatio, restoreMountScrollRatio, setDocumentDirty, updateModeMetaChrome, saveCurrentDocument, openSaveAsDialog, saveCurrentDocumentAsAnywhere, openVersionHistory, openSavedVersionPreview, exportCurrentDocumentPdf, saveBeforeExportPdf, selectDocumentTab, cycleTabStack, commitTabStack, closeDocumentTab, dismissRecentTab, saveAndCloseDocument, closeDocumentWithoutSaving, closeCurrentDocument, saveAndCloseApp, closeAppWithoutSaving, confirmSaveConflict, cancelSaveConflict, backupDocumentKey, clearRecoveryDraftsForDocument, deleteBackupTracking, discardRecoveryStateForBackup, recoveryDocumentId, createBlankDocument, refreshOpenWorkspaceForFile, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, relocateFiles, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, refreshSavedTemplates, upsertWorkspace, rerender, setAppZoom, setDocumentZoom, nextZoomLevel, runBusy, documentTitle, syncRenamedTemplateMetadata, templateFileName, revealStatusLabel, readDocumentColorPreference, writeDocumentModePreference, writeHotReloadSessionSnapshot, requestWorkspaceInitialization, setPendingMountState, clearHomepageDocumentPath, workspaceFilterDocumentCache, preserveCurrentDocumentSession, fileNameFromPath, remountKeepingView } from './main';
 import type { UiHandlers } from './ui';
 import { clearDocumentHistory } from './documentHistory';
@@ -181,7 +181,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
   // Saves every checked approval at once, then reopens the document once so its scripts run with the plugins.
   allowPlugins: (acceptanceKeys) => {
     state.pluginApprovalDialogOpen = false;
-    const documentPath = state.document?.source.path ?? '';
+    const documentPath = state.document?.source.documentId;
     if (!documentPath || acceptanceKeys.length === 0) {
       rerender({ preserveMountedDocument: true });
       return;
@@ -435,7 +435,7 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
       }
       await clearHomepageDocumentPath(path);
       // An archived document's jobs stop: it isn't one the user works with now. Unarchived, they are turned on again.
-      updateScheduledDocuments((documents) => withoutScheduledDocument(documents, path));
+      updateScheduledDocuments((documents) => withoutScheduledDocument(documents, fileKeyForPath(path)));
       await clearRecoveryDraftsForDocument(path, currentName);
       upsertWorkspace(await loadWorkspace(workspace.path));
       if (state.selectedFilePath === path) state.selectedFilePath = null;
@@ -515,10 +515,11 @@ export function createDocumentHandlers(newDocumentInWorkspace: UiHandlers['newDo
         upsertWorkspace(await loadWorkspace(workspace.path));
         await refreshSavedTemplates(workspace.path);
       }
+      const deletedFile = fileKeyForPath(path);
+      updateScheduledDocuments((documents) => withoutScheduledDocument(documents, deletedFile));
       removeOpenDocumentFile(path);
       workspaceFilterDocumentCache.delete(path);
       deleteBackupTracking(backupDocumentKey(path, name));
-      updateScheduledDocuments((documents) => withoutScheduledDocument(documents, path));
       if (state.selectedFilePath === path) state.selectedFilePath = null;
       if (state.document?.source.path === path) {
         state.document = null;

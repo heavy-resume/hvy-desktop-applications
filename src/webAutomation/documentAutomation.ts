@@ -145,7 +145,10 @@ function registration(pluginId: string): HvyPlugin {
  */
 // UI: document opened in the document pane.
 export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
-  /** The document's current path: it changes when the document is renamed or moved. */
+  /**
+   * The document's key: what its queues, what its handlers heard, and its service approvals are kept by. Galaxy gives its
+   * file reference (webAutomation/app.ts), which a rename or move leaves as it is; empty for a document not saved yet.
+   */
   documentPath(): string;
   document: VisualDocument;
   stateRuntime: StateRuntime;

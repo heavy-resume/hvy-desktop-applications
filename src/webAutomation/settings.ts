@@ -8,7 +8,8 @@ export interface AccountSummary {
 
 /** Local app settings used by web automation. Never written into a document. */
 export interface AutomationSettings {
-  authorizations: CapabilityAuthorizations;
+  /** By the document's key (Galaxy's file reference, documentAutomation's `documentPath`). */
+  authorizations: CapabilityAuthorizations<string>;
   /** `${origin}\0${profileId}` → account summary. */
   accounts: Record<string, AccountSummary>;
 }
@@ -41,7 +42,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Loads service approvals (also Galaxy's `appSettings.webServiceApprovals`), dropping malformed entries. */
-export function normalizeCapabilityAuthorizations(value: unknown): CapabilityAuthorizations {
+export function normalizeCapabilityAuthorizations(value: unknown): CapabilityAuthorizations<string> {
   return Object.fromEntries(Object.entries(isRecord(value) ? value : {}).flatMap(([documentPath, byCapability]) => {
     const entries = Object.entries(isRecord(byCapability) ? byCapability : {}).flatMap(([capabilityId, raw]) => {
       if (!isRecord(raw) || typeof raw.profileId !== 'string' || !isRecord(raw.partHashes) || typeof raw.authorizedAt !== 'number') return [];

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import type { DocumentBackup, Workspace } from './backend';
 import { availableRecoveryBackups, documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentId, recoveryDocumentTabName, recoveryDraftIdentity, recoverySaveConflictKind } from './recoveryDocuments';
 
@@ -12,7 +13,7 @@ describe('recovery document identity', () => {
   it('backs up an edited history snapshot as an untitled copy', () => {
     expect(recoveryDraftIdentity({
       source: {
-        documentId: 'history-document',
+        documentId: 'history-document' as FileKey,
         workingVersionId: 'history-version',
         path: 'version-history:%2Ftmp%2Fwork%2FNotes.hvy:saved-version',
         name: 'Notes.hvy — saved version',

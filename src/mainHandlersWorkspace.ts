@@ -1,4 +1,5 @@
 import { withoutScheduledDocumentsIn } from './webAutomation/scheduleSettings';
+import { pathForFileKey } from './runtimeDocuments';
 import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { rememberExampleTemplate } from './templateExampleContent';
 import { templateExampleDirectory } from './templateExamples';
@@ -242,7 +243,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       upsertWorkspace(await loadWorkspace(workspace.path));
       clearWorkspaceFilterDocumentCache(workspace.path);
       // Its documents' jobs stop with it.
-      updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(file, `${workspacePath}/${targetDirectory}`)));
+      updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(pathForFileKey(file), `${workspacePath}/${targetDirectory}`)));
       await refreshSavedTemplates(workspace.path);
       await refreshRecents();
       state.status = `Deleted ${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'folder'}`;
@@ -345,7 +346,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       state.selectedFilePath = null;
     }
     // Its documents' jobs stop with it.
-    updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(file, path)));
+    updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(pathForFileKey(file), path)));
     syncMcpWorkspaces();
     state.archivedWorkspaces = await loadArchivedWorkspaces();
     state.workspaceManagerOpen = true;

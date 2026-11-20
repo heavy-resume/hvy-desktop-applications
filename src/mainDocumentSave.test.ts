@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import type { SavedVersion } from './revisionModel';
 
 vi.hoisted(() => {
@@ -104,7 +105,7 @@ describe('saveCurrentDocument', () => {
       documentId: 'history-document',
       versionId: 'history-version',
       source: {
-        documentId: 'history-document',
+        documentId: 'history-document' as FileKey,
         workingVersionId: 'history-version',
         path: 'version-history:%2Fworkspace%2FExample.hvy:saved-version',
         name: 'Example.hvy — saved version',
@@ -137,7 +138,7 @@ describe('saveCurrentDocument', () => {
       documentId: 'document:example',
       versionId: 'version:example',
       source: {
-        documentId: 'document:example',
+        documentId: 'document:example' as FileKey,
         workingVersionId: 'version:example',
         path: '/workspace/Example.hvy',
         name: 'Example.hvy',
@@ -167,7 +168,7 @@ describe('saveCurrentDocument', () => {
       documentId: 'document:example',
       versionId: 'version:example',
       source: {
-        documentId: 'document:example',
+        documentId: 'document:example' as FileKey,
         workingVersionId: 'version:example',
         path: '/workspace/Example.hvy',
         name: 'Example.hvy',
@@ -195,7 +196,7 @@ describe('saveCurrentDocument', () => {
 
   it('rebuilds the tab strip after promoting a recovery draft to the working version', async () => {
     const source = {
-      documentId: 'document:example',
+      documentId: 'document:example' as FileKey,
       workingVersionId: 'version:working',
       path: '/workspace/Example.md',
       name: 'Example.md',
@@ -367,7 +368,7 @@ describe('openSavedVersionPreview', () => {
       documentId: 'document:example',
       versionId: 'working-version',
       source: {
-        documentId: 'document:example',
+        documentId: 'document:example' as FileKey,
         workingVersionId: 'working-version',
         path: '/workspace/Example.hvy',
         name: 'Example.hvy',

@@ -9,6 +9,7 @@ import {
   setWebCapabilityProfileBinding,
   webCapabilityHash,
 } from './webCapabilities';
+import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
 import type { IntegrationActionDefinition, IntegrationCommandDefinition, IntegrationPageDefinition } from './integrationRegistry';
 
 const snapshot = {
@@ -143,8 +144,8 @@ describe('web capabilities', () => {
 
   it('binds profiles locally and authorizes an exact capability/profile pair', () => {
     const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
-    const bindings = setWebCapabilityProfileBinding({}, '/docs/inbox.hvy', 'inbox', 'work');
-    const authorizations = authorizeWebCapabilityRecord({}, '/docs/inbox.hvy', config, 'work');
+    const bindings = setWebCapabilityProfileBinding({} as WebCapabilityProfileBindings<string>, '/docs/inbox.hvy', 'inbox', 'work');
+    const authorizations = authorizeWebCapabilityRecord({} as WebCapabilityAuthorizations<string>, '/docs/inbox.hvy', config, 'work');
 
     expect(bindings['/docs/inbox.hvy']).toEqual({ inbox: 'work' });
     expect(isWebCapabilityAuthorized(authorizations, '/docs/inbox.hvy', config, 'work')).toBe(true);
@@ -153,7 +154,7 @@ describe('web capabilities', () => {
 
   it('explains which capability categories changed', () => {
     const config = createWebRecordsCapabilityConfig('mail', page, action, 'inbox');
-    const authorizations = authorizeWebCapabilityRecord({}, '/docs/inbox.hvy', config, 'work');
+    const authorizations = authorizeWebCapabilityRecord({} as WebCapabilityAuthorizations<string>, '/docs/inbox.hvy', config, 'work');
     const changed = {
       ...config,
       page: { ...config.page, allowedOrigins: [...config.page.allowedOrigins, 'https://auth.example.com'] },

@@ -16,6 +16,7 @@ const backendMocks = vi.hoisted(() => ({
   moveDocumentToWorkspace: vi.fn(),
   readDocumentFile: vi.fn(),
   reauthorizeWorkspace: vi.fn(),
+  saveAppSettings: vi.fn(async (settings: unknown) => settings),
   saveDocumentToWorkspace: vi.fn(),
   updateMcpWorkspaces: vi.fn(() => Promise.resolve()),
 }));
@@ -29,6 +30,7 @@ vi.mock('./backend', async (importOriginal) => ({
   moveDocumentToWorkspace: backendMocks.moveDocumentToWorkspace,
   readDocumentFile: backendMocks.readDocumentFile,
   reauthorizeWorkspace: backendMocks.reauthorizeWorkspace,
+  saveAppSettings: backendMocks.saveAppSettings,
   saveDocumentToWorkspace: backendMocks.saveDocumentToWorkspace,
   updateMcpWorkspaces: backendMocks.updateMcpWorkspaces,
 }));
@@ -66,7 +68,9 @@ vi.mock('./ui/core', () => ({ MIN_PASTED_IMPORT_CHARS: 250 }));
 
 import { decryptFolderManifest, encryptFolderManifest } from './encryptedFolders';
 import { copyOpenWorkspaceFileToWorkspace, moveOpenWorkspaceFileToWorkspace, relocateFiles, creationTemplate, isBlankCreationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
-import { runtimeDocumentAtPath } from './runtimeDocuments';
+import { runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile } from './runtimeDocuments';
+import { appSettingsForStorage } from './appSettingsFiles';
+import { defaultAppSettings } from './backend';
 import { state, type AppState } from './state';
 import { renderNewDocumentDialog } from './ui/render-import';
 import { decryptDocumentEnvelopeBytes, encryptDocumentBytes, isEncryptedDocumentBytes } from '../../heavy-file-format/src/encryption';
@@ -205,6 +209,17 @@ describe('relocateFiles', () => {
     });
 
     expect(runtimeDocumentAtPath('/workspace/notes/plan.hvy')).toMatchObject({ name: 'plan.hvy', extension: '.hvy' });
+  });
+
+  it('saves the settings kept for a moved file again, with its new path', async () => {
+    const file = runtimeDocumentForFile({ path: '/workspace/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' });
+    mainMocks.updateOpenDocumentFile.mockImplementationOnce((_previous: string, next: { path: string; name: string; extension: '.hvy' }) => updateRuntimeDocumentFile(file, next));
+    state.appSettings = { ...defaultAppSettings(), pluginAcceptances: { [file.documentId]: ['galaxy.schedule'] } };
+
+    await relocateFiles([{ previousPath: '/workspace/jobs.hvy', path: '/workspace/notes/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' }]);
+
+    expect(backendMocks.saveAppSettings).toHaveBeenCalled();
+    expect(appSettingsForStorage(state.appSettings).pluginAcceptances).toEqual({ '/workspace/notes/jobs.hvy': ['galaxy.schedule'] });
   });
 
   it('keeps a moved file history with it', async () => {

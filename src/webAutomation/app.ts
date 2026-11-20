@@ -1,7 +1,8 @@
 import { getActiveStateRuntime, getRefreshReaderBlock, getRenderApp, runWithStateRuntime } from '../../../heavy-file-format/src/state';
 import { runPluginDocumentHooks } from '../../../heavy-file-format/src/plugins/hooks';
 import type { VisualDocument } from '../../../heavy-file-format/src/types';
-import { openExternalUrl, saveAppSettings } from '../backend';
+import { openExternalUrl, saveAppSettings, type AppSettings } from '../backend';
+import { NO_FILE, type FileKey, type RuntimeDocument } from '../runtimeDocuments';
 import { state } from '../state';
 import { trace } from '../traceLog';
 import { systemClock } from './clock';
@@ -27,8 +28,14 @@ let runtime: WebAutomationRuntime | null = null;
 // Account summaries are refreshed by the session probe, so they are not persisted.
 let accounts: Record<string, AccountSummary> = {};
 const openedByDocument = new WeakMap<object, DocumentAutomation>();
-// Each open document's path, kept current when a document is renamed or moved.
-const documentPaths = new Map<object, string>();
+// Each open document's file reference: its automation (queues, what its handlers heard, service approvals) is keyed by
+// the reference, so a document renamed or moved keeps it with nothing to update.
+const documentPaths = new Map<object, RuntimeDocument | null>();
+
+// The key a document's automation runs under: its file reference, or none for a document not saved to a file yet.
+function automationKey(file: RuntimeDocument | null | undefined): FileKey {
+  return file?.path ? file.documentId : NO_FILE;
+}
 
 // Each evaluation of this module starts with no host: a second one in the same page explains "needs a browser host".
 trace('webAutomation app module evaluated', import.meta.url);
@@ -44,7 +51,8 @@ const settings: AutomationSettingsStore = {
   update: (change) => {
     const next = change(settings.get());
     accounts = next.accounts;
-    state.appSettings = { ...state.appSettings, webServiceApprovals: next.authorizations };
+    // Keyed by the documents' automation keys, which are their file references.
+    state.appSettings = { ...state.appSettings, webServiceApprovals: next.authorizations as AppSettings['webServiceApprovals'] };
     void saveAppSettings(state.appSettings).then((saved) => {
       state.appSettings = saved;
     });
@@ -141,28 +149,28 @@ export function subscribeWebAutomation(listener: (event: AutomationEvent) => voi
  * A document opened or saved: its schedule block, if it has one, lists it among the scheduled documents (its jobs as the
  * block declares them, each off until the user turns it on); without one, it is no longer listed.
  */
-function syncScheduledDocument(document: VisualDocument, path: string): void {
-  if (!path) return;
+function syncScheduledDocument(document: VisualDocument, file: RuntimeDocument | null | undefined): void {
+  const key = automationKey(file);
+  if (!file || !key) return;
   const schedule = readWebAutomationBlocks(document).schedules[0];
-  const name = path.split(/[\\/]/).pop() || path;
-  updateScheduledDocuments((documents) => (schedule ? withScheduleBlock(documents, path, name, schedule.config) : withoutScheduledDocument(documents, path)));
+  updateScheduledDocuments((documents) => (schedule ? withScheduleBlock(documents, key, file.name, schedule.config) : withoutScheduledDocument(documents, key)));
 }
 
 const openDocumentAutomationLookup = (rawDocument: object) => {
   const document = rawDocument as VisualDocument;
   const stateRuntime = getActiveStateRuntime();
-  const path = state.document?.source.path ?? '';
+  const file = state.document?.source ?? null;
   // Coming back to a saved document's tab reads a fresh copy of it: the copy it replaces closes, so the file has one
-  // automation, and one set of script handlers. Its queues and what its handlers heard are the file's, kept by path.
-  for (const [replaced, replacedPath] of [...documentPaths]) {
-    if (!path || replaced === document || replacedPath !== path) continue;
+  // automation, and one set of script handlers. Its queues and what its handlers heard are the file's, kept by its reference.
+  for (const [replaced, replacedFile] of [...documentPaths]) {
+    if (!automationKey(file) || replaced === document || replacedFile !== file) continue;
     openedByDocument.get(replaced)?.close();
     openedByDocument.delete(replaced);
     documentPaths.delete(replaced);
   }
-  documentPaths.set(document, path);
+  documentPaths.set(document, file);
   const opened = openDocumentAutomation(appRuntime(), {
-    documentPath: () => documentPaths.get(document) ?? '',
+    documentPath: () => automationKey(documentPaths.get(document)),
     document,
     stateRuntime,
     // A record sink wrote items outside any script: redraw just the list it wrote to, as the reader's own controls do,
@@ -189,7 +197,7 @@ const openDocumentAutomationLookup = (rawDocument: object) => {
     openInBrowser: openExternalUrl,
   });
   openedByDocument.set(document, opened);
-  syncScheduledDocument(document, path);
+  syncScheduledDocument(document, file);
   return opened.lookup;
 };
 setDocumentAutomationOpener(openDocumentAutomationLookup);
@@ -213,7 +221,7 @@ export function documentAutomationFor(document: object): DocumentAutomation | nu
 /** Document save: each queue block takes its queue's state, just before the document is serialized. */
 export function saveWebAutomationQueues(document: object): void {
   openedByDocument.get(document)?.saveQueues();
-  syncScheduledDocument(document as VisualDocument, documentPaths.get(document) ?? '');
+  syncScheduledDocument(document as VisualDocument, documentPaths.get(document));
 }
 
 /**
@@ -241,21 +249,13 @@ export function setOpenDocumentCheck(check: (document: object) => boolean): void
 export function releaseWebAutomation(document: object): void {
   setTimeout(() => {
     if (isDocumentOpen(document)) return;
-    const path = documentPaths.get(document);
+    const file = documentPaths.get(document);
     openedByDocument.get(document)?.close();
     openedByDocument.delete(document);
     documentPaths.delete(document);
     // The file's tab closed (no copy of it is open): opening it again starts afresh.
-    if (path && ![...documentPaths.values()].includes(path)) runtime?.forgetDocument(path);
+    if (automationKey(file) && ![...documentPaths.values()].includes(file ?? null)) runtime?.forgetDocument(automationKey(file));
   }, 0);
-}
-
-/** A document moved (renamed, moved between workspaces, or archived): its open automation and its queues follow it. */
-export function relocateWebAutomationDocument(previousPath: string, nextPath: string): void {
-  for (const [document, path] of documentPaths) {
-    if (path === previousPath) documentPaths.set(document, nextPath);
-  }
-  runtime?.relocateDocument(previousPath, nextPath);
 }
 
 // Paused for the user: to sign in, allow the service, or deal with what the service's response said (such as quota).
@@ -269,13 +269,13 @@ const UNATTENDED_PAUSES = new Set(['not_authenticated', 'not_authorized', 'respo
 export function documentsNeedingYou(): string[] {
   if (!host) return [];
   const paths: string[] = [];
-  for (const [document, documentPath] of documentPaths) {
+  for (const [document, file] of documentPaths) {
     const state = openedByDocument.get(document)?.lookup.automation.getState();
     if (!state) continue;
     const runWaits = state.runs.some((run) => run.status === 'needs-attention');
     const queueWaits = Object.values(state.queues).some((queue) => queue.entries.some((entry) => entry.status === 'queued' || entry.status === 'running' || entry.status === 'waiting-retry')
       && (queue.awaitingResume || (queue.paused && UNATTENDED_PAUSES.has(queue.pauseReason ?? ''))));
-    if (runWaits || queueWaits) paths.push(documentPath);
+    if (runWaits || queueWaits) paths.push(file?.path ?? '');
   }
   return paths;
 }
@@ -330,7 +330,8 @@ export function backgroundActivity(): BackgroundActivity {
   const twice = (identity: string) => identities.indexOf(identity) !== identities.lastIndexOf(identity);
   const documents: BackgroundActivity['documents'] = [];
   const attentionWorkers = new Set<string>();
-  for (const [document, path] of documentPaths) {
+  for (const [document, file] of documentPaths) {
+    const path = file?.path ?? '';
     const lookup = openedByDocument.get(document)?.lookup;
     if (!lookup) continue;
     const automationState = lookup.automation.getState();
@@ -388,7 +389,7 @@ export function backgroundWorkRunning(document: object): boolean {
 }
 
 function openDocumentAt(path: string): DocumentAutomation | null {
-  for (const [document, documentPath] of documentPaths) if (documentPath === path) return openedByDocument.get(document) ?? null;
+  for (const [document, file] of documentPaths) if ((file?.path ?? '') === path) return openedByDocument.get(document) ?? null;
   return null;
 }
 

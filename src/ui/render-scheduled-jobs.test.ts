@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import { pluginAcceptanceKey } from '../pluginManager';
 import { renderScheduledJobsDialog, scheduledJobKey } from './render-scheduled-jobs';
+import { fileKeyForPath } from '../runtimeDocuments';
 import type { AppState } from '../state';
 import type { ScheduledDocument } from '../webAutomation/scheduleSettings';
 
@@ -12,10 +13,15 @@ const scheduled = (overrides: Partial<ScheduledDocument> = {}): ScheduledDocumen
   choices: { 'fetch-due': { on: true, timing: { every: 1440 } } }, scheduledFrom: {}, lastResults: {},
   ...overrides,
 });
+// Given by path, held by file reference, as settings are once loaded.
 const dialog = (documents: Record<string, ScheduledDocument>, options: { allowed?: boolean; draft?: Record<string, boolean> } = {}) => renderScheduledJobsDialog({
   scheduledJobsDialogOpen: true,
   scheduledJobsDraft: options.draft ?? {},
-  appSettings: { scheduledDocuments: documents, pluginAcceptances: options.allowed === false ? {} : Object.fromEntries(Object.keys(documents).map((path) => [path, [pluginAcceptanceKey(schedule)]])), pluginPolicies: {} },
+  appSettings: {
+    scheduledDocuments: Object.fromEntries(Object.entries(documents).map(([path, document]) => [fileKeyForPath(path), document])),
+    pluginAcceptances: options.allowed === false ? {} : Object.fromEntries(Object.keys(documents).map((path) => [fileKeyForPath(path), [pluginAcceptanceKey(schedule)]])),
+    pluginPolicies: {},
+  },
 } as unknown as AppState);
 
 describe('Scheduled jobs', () => {
@@ -29,7 +35,7 @@ describe('Scheduled jobs', () => {
   });
 
   it('shows a job turned off and not saved yet still listed, unchecked, and says when its file hasn\'t allowed Schedule', () => {
-    const html = dialog({ '/work/jobs.hvy': scheduled() }, { allowed: false, draft: { [scheduledJobKey('/work/jobs.hvy', 'fetch-due')]: false } });
+    const html = dialog({ '/work/jobs.hvy': scheduled() }, { allowed: false, draft: { [scheduledJobKey(fileKeyForPath('/work/jobs.hvy'), 'fetch-due')]: false } });
     expect(html).toMatch(/data-job="fetch-due">\s*<span>Fetch due pages/);
     expect(html).toContain('Schedule isn’t allowed in this file yet: open it and allow it.');
   });
