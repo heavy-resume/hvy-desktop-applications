@@ -8,7 +8,7 @@ import type { CollectionDefinition, CollectionField, CollectionProblem, Collecti
 import type { AuthorizationReview } from '../webAutomation/authorization';
 import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
 import { cadenceText, duePages } from '../webAutomation/cadence';
-import { runScheduledJobNow, scheduledDocuments, updateScheduledDocuments } from '../webAutomation/scheduleStore';
+import { runScheduledJobNow, scheduledDocuments, scheduledJobWaitsIn, updateScheduledDocuments } from '../webAutomation/scheduleStore';
 import { runtimeDocumentById, type FileKey } from '../runtimeDocuments';
 import { jobTiming, scheduledFor, scheduleStatusText, timingText, withChangesApplied, withJobOn, withJobTiming, withScheduleChange, type ScheduledDocument } from '../webAutomation/scheduleSettings';
 import { LIMIT_BOUNDS, readCollectionBlockConfig, readProfileContextBlockConfig, readQueueBlockConfig, readScheduleBlockConfig, readWebApiBlockConfig, switchToPublishedService, QUEUE_PLUGIN_ID, SCHEDULE_MIN_MINUTES, type ScheduleTiming, SCHEDULE_PLUGIN_ID, SIMILARITY_PLUGIN_ID, WEB_API_PLUGIN_ID, WEB_AUTOMATION_SCHEMA_VERSION, WEB_COLLECTION_PLUGIN_ID, WEB_PROFILE_CONTEXT_PLUGIN_ID } from '../webAutomation/configs';
@@ -1352,10 +1352,27 @@ function openPasteSetupDialog(ctx: HvyPluginContext, collection: CollectionDefin
         : 'The clipboard doesn’t have a site setup. Copy one, then paste again.', 'hvy-web-page-hint'));
       return;
     }
-    const now = currentCollection(ctx, collection);
-    const plans = planSiteSetupPaste(now, setups);
     review.append(paragraph('From your clipboard:', 'hvy-web-page-hint'));
-    for (const plan of plans) review.append(setupPlanText(now, plan));
+    const plansArea = document.createElement('div');
+    // Each page it carries, its address and defaults editable: the same setup for another site on the same platform.
+    const fieldsNow = currentCollection(ctx, collection);
+    const addresses = setups.flatMap((setup, setupIndex) => (setup.pages ?? []).map((page, pageIndex) => {
+      const input = textInput(`address-${setupIndex}-${pageIndex}`, page.url);
+      input.placeholder = 'https://';
+      input.autocomplete = 'off';
+      const hint = paragraph('', 'hvy-web-page-hint');
+      const unread = fieldsNotRead(fieldsNow, setup.patterns);
+      const fields = fieldsNow.fields.filter((field) => unread.includes(field) || page.values?.[field.id] !== undefined);
+      const values = valueInputs(fields, page.values);
+      const element = document.createElement('div');
+      element.className = 'hvy-web-paste-page';
+      const address = labelled('Address', input);
+      address.append(hint);
+      element.append(address, values.element);
+      return { setupIndex, pageIndex, original: page.url, input, hint, values, element };
+    }));
+    const addressesArea = document.createElement('div');
+    for (const address of addresses) addressesArea.append(address.element);
     // Everything it holds, for anyone who wants to read it before adding it.
     const details = document.createElement('details');
     details.className = 'hvy-web-paste-details';
@@ -1363,19 +1380,55 @@ function openPasteSetupDialog(ctx: HvyPluginContext, collection: CollectionDefin
     summary.textContent = 'Show details';
     const raw = document.createElement('pre');
     raw.className = 'hvy-web-json';
-    raw.textContent = JSON.stringify(setups, null, 2);
     details.append(summary, raw);
-    review.append(details);
-    // Checked as saving checks it: all of it is added, or none.
-    const problems = checkCollection(ctx, withSiteSetups(now, setups));
-    if (problems.length) {
-      review.append(paragraph(`This collection can’t take it: ${problems.join(' ')}`, 'hvy-web-error'));
-      return;
-    }
-    const pasted = setups;
-    add.textContent = plans.every((plan) => plan.replaces && !plan.pages.length) ? 'Update' : 'Add';
-    accept = () => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), pasted));
-    add.disabled = false;
+    const problemsArea = document.createElement('div');
+    review.append(plansArea, addressesArea, details, problemsArea);
+    const parsed = setups;
+
+    const refresh = () => {
+      accept = null;
+      add.disabled = true;
+      add.textContent = 'Add';
+      plansArea.replaceChildren();
+      problemsArea.replaceChildren();
+      const urls = addresses.map((address) => trustworthyAddress(address.input.value));
+      const edited = parsed.map((setup, setupIndex) => (setup.pages ? {
+        ...setup,
+        pages: setup.pages.map((page, pageIndex) => {
+          const at = addresses.findIndex((address) => address.setupIndex === setupIndex && address.pageIndex === pageIndex);
+          const url = urls[at] ?? addresses[at].input.value.trim();
+          const { name, values: _values, ...rest } = page;
+          const values = addresses[at].values.read();
+          // Its name is the page it was copied from's: another address goes by its own.
+          return { ...rest, ...(name && url === addresses[at].original ? { name } : {}), url, ...(Object.keys(values).length ? { values } : {}) };
+        }),
+      } : setup));
+      const now = currentCollection(ctx, collection);
+      const plans = planSiteSetupPaste(now, edited);
+      for (const plan of plans) plansArea.append(setupPlanText(now, plan));
+      raw.textContent = JSON.stringify(edited, null, 2);
+      const merged = { ...now, ...withSiteSetups(now, edited) };
+      addresses.forEach((entry, at) => {
+        const url = urls[at];
+        entry.hint.textContent = !url
+          ? 'That isn’t an address.'
+          : now.startPages.some((page) => page.url === url)
+            ? 'Already one of the pages.'
+            : readsWith(merged, url) ? `Reads with: ${readsWith(merged, url)}` : 'This setup doesn’t read this address, so runs will skip it.';
+      });
+      if (urls.some((url) => !url)) return;
+      // Checked as saving checks it: all of it is added, or none.
+      const problems = checkCollection(ctx, withSiteSetups(now, edited));
+      if (problems.length) {
+        problemsArea.append(paragraph(`This collection can’t take it: ${problems.join(' ')}`, 'hvy-web-error'));
+        return;
+      }
+      add.textContent = plans.every((plan) => plan.replaces && !plan.pages.length) ? 'Update' : 'Add';
+      accept = () => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), edited));
+      add.disabled = false;
+    };
+    for (const entry of addresses) entry.element.addEventListener('input', refresh);
+    refresh();
   };
   zone.addEventListener('paste', (event) => {
     event.preventDefault();
@@ -2314,7 +2367,7 @@ const scheduleView: HvyPluginFactory = (ctx) => {
     const saved = scheduledFor(scheduledDocuments(), path, name, result.value);
     const shown: ScheduledDocument = draft ? { ...saved, ...draft } : saved;
     // What is in effect, in the header: the job that runs next, its last turn and its next.
-    const status = scheduleStatusText(saved, Date.now());
+    const status = scheduleStatusText(saved, Date.now(), scheduledJobWaitsIn(path));
     if (status) header.append(paragraph(status, 'hvy-web-page-hint hvy-web-schedule-status'));
     const edit = (next: (document: ScheduledDocument) => ScheduledDocument) => {
       const changed = next(shown);
@@ -2365,7 +2418,6 @@ const scheduleView: HvyPluginFactory = (ctx) => {
     const wait = document.createElement('label');
     wait.className = 'hvy-web-schedule-frequency hvy-web-schedule-idle';
     wait.append(before, idle, after);
-    if (result.value.heavy) root.append(paragraph('Heavy: its jobs wait for the computer to be less busy.', 'hvy-web-page-hint'));
     // Apply keeps the changes (onto what is in effect now: a job's turn may have been recorded meanwhile); Cancel drops them.
     const cancel = button('Cancel');
     cancel.disabled = !draft;

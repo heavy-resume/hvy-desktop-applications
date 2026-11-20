@@ -7,6 +7,9 @@
  * The host tells it what to show (`setBrowserState`, `setInspectionState`, `setSiteInfo`); what is clicked goes to the
  * host as a message (`send`), over the app's IPC. The page's security (its lock and host) stays in view while picking;
  * clicked, it asks the host for the site's information, which the host shows by making the toolbar taller over the page.
+ *
+ * Outside an integration (the sign-in window, and the pop-ups a page opens) it is a plain browser's: no page menu, and
+ * no allowed sites to show.
  */
 
 /** What the toolbar asks of its host. */
@@ -45,6 +48,11 @@ export interface IntegrationToolbarSiteInfo {
   onlySecureContent?: boolean;
   /** The page was refused, and why (its certificate expired, or is for another site): shown first, opened by the host. */
   blocked?: string;
+}
+
+export interface IntegrationToolbarOptions {
+  /** An integration's browser (the default): the page menu, and whether each address is one of its sites. */
+  integration?: boolean;
 }
 
 export interface IntegrationToolbar {
@@ -98,7 +106,7 @@ function typedAddress(value: string): string {
   return /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-export function mountIntegrationToolbar(root: HTMLElement, send: (message: IntegrationToolbarMessage) => void): IntegrationToolbar {
+export function mountIntegrationToolbar(root: HTMLElement, send: (message: IntegrationToolbarMessage) => void, { integration = true }: IntegrationToolbarOptions = {}): IntegrationToolbar {
   const browserCommand = (command: 'back' | 'forward' | 'reload' | 'close', label: string, title: string, className = '') => {
     const created = button(className, label, title);
     created.addEventListener('click', () => send({ kind: 'browser', command }));
@@ -191,7 +199,7 @@ export function mountIntegrationToolbar(root: HTMLElement, send: (message: Integ
     browserCommand('reload', '↻', 'Reload'),
     addressBox,
     inspection,
-    menuWrap,
+    ...(integration ? [menuWrap] : []),
     browserCommand('close', '×', 'Close', 'integration-toolbar-close'),
   );
   root.replaceChildren(bar, siteInfo);
@@ -210,7 +218,8 @@ export function mountIntegrationToolbar(root: HTMLElement, send: (message: Integ
       lock.textContent = secure ? '●' : '▲';
       host.textContent = parsed?.hostname || parsed?.protocol || '';
       if (root.ownerDocument.activeElement !== address) address.value = url;
-      security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${originAllowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
+      const connection = secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted';
+      security.title = integration ? `${connection} · ${originAllowed ? 'Allowed page origin' : 'Outside configured page origins'}` : connection;
     },
     // What picking in the page says, and its buttons: each sends its id back to the page's picker.
     setInspectionState({ active = false, status: text = '', buttons = [], fields = [] } = {}) {
@@ -254,7 +263,7 @@ export function mountIntegrationToolbar(root: HTMLElement, send: (message: Integ
         infoRow('Connection', secure ? 'Secure (HTTPS)' : 'Not secure', secure ? 'is-secure' : 'is-warning'),
         ...(info.onlySecureContent === false ? [infoRow('Content', 'Some of this page loaded without a secure connection', 'is-warning')] : []),
         infoRow('Address', info.url),
-        infoRow('Site', originAllowed ? 'Allowed for this integration' : 'Not one of this integration’s sites', originAllowed ? '' : 'is-warning'),
+        ...(integration ? [infoRow('Site', originAllowed ? 'Allowed for this integration' : 'Not one of this integration’s sites', originAllowed ? '' : 'is-warning')] : []),
         infoRow('Profile', `${info.profileName}: its sign-ins and cookies`),
       );
       const certificateHeading = element('h3', 'integration-toolbar-site-info-subheading', { textContent: 'Certificate' });

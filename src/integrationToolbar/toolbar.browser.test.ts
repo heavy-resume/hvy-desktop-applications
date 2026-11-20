@@ -11,7 +11,7 @@ let page: Page;
 
 declare global {
   interface Window {
-    IntegrationToolbar: { mountIntegrationToolbar: (root: HTMLElement, send: (message: IntegrationToolbarMessage) => void) => { setBrowserState(state?: IntegrationToolbarBrowserState): void; setInspectionState(state?: IntegrationToolbarInspectionState): void; setSiteInfo(info: IntegrationToolbarSiteInfo | null): void } };
+    IntegrationToolbar: { mountIntegrationToolbar: (root: HTMLElement, send: (message: IntegrationToolbarMessage) => void, options?: { integration?: boolean }) => { setBrowserState(state?: IntegrationToolbarBrowserState): void; setInspectionState(state?: IntegrationToolbarInspectionState): void; setSiteInfo(info: IntegrationToolbarSiteInfo | null): void } };
     mountedToolbar: ReturnType<Window['IntegrationToolbar']['mountIntegrationToolbar']>;
     sent: IntegrationToolbarMessage[];
   }
@@ -151,5 +151,19 @@ describe('integration browser toolbar', () => {
     // Escape closes it too.
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.sent.at(-1))).toEqual({ kind: 'site-info', open: false });
+  });
+
+  it('outside an integration (sign-in, a pop-up), shows no page menu and no allowed sites', async () => {
+    await page.evaluate(() => {
+      window.mountedToolbar = window.IntegrationToolbar.mountIntegrationToolbar(document.getElementById('integration-toolbar')!, (message) => window.sent.push(message), { integration: false });
+      window.mountedToolbar.setBrowserState({ url: 'https://accounts.google.com/o/oauth2/auth' });
+    });
+    expect(await page.getByRole('button', { name: 'Page actions' }).count()).toBe(0);
+    expect(await page.locator('.integration-toolbar-host').textContent()).toBe('accounts.google.com');
+    expect(await page.locator('.integration-toolbar-security').getAttribute('title')).toBe('Encrypted HTTPS connection');
+    await page.setViewportSize({ width: 1000, height: 360 });
+    await page.evaluate(() => window.mountedToolbar.setSiteInfo({ url: 'https://accounts.google.com/o/oauth2/auth', allowed: [], profileName: 'Work', certificate: null, certificateNote: 'The certificate couldn’t be read.' }));
+    const rows = await page.locator('.integration-toolbar-site-info-row dt').allTextContents();
+    expect(rows).toEqual(['Connection', 'Address', 'Profile']);
   });
 });

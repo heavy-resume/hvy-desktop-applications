@@ -16,6 +16,8 @@ const send = (message: IntegrationToolbarMessage) => {
   else void invoke('integration_toolbar_message', { message });
 };
 
-const toolbar = mountIntegrationToolbar(document.getElementById('integration-toolbar')!, send);
+// `?mode=browse`: a plain browser's toolbar (the sign-in window, and the pop-ups a page opens).
+const integration = new URLSearchParams(window.location.search).get('mode') !== 'browse';
+const toolbar = mountIntegrationToolbar(document.getElementById('integration-toolbar')!, send, { integration });
 // The host tells the toolbar what to show by calling these.
 Object.assign(window, { hvySetBrowserState: toolbar.setBrowserState, hvySetInspectionState: toolbar.setInspectionState, hvySetSiteInfo: toolbar.setSiteInfo });

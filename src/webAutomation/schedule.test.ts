@@ -20,11 +20,10 @@ const config = (overrides: Record<string, unknown> = {}): ScheduleBlockConfig =>
 
 describe('a schedule block', () => {
   it('reads its jobs, its own scripts, and the pauses its scripts made, keeping only pauses of its jobs', () => {
-    expect(config({ heavy: true, scriptLibraries: ['re'], state: { paused: { 'fetch-due': 'Out of credits', gone: 'old' } } })).toEqual({
+    expect(config({ scriptLibraries: ['re'], state: { paused: { 'fetch-due': 'Out of credits', gone: 'old' } } })).toEqual({
       jobs: [{ id: 'fetch-due', name: 'Fetch due pages', script: 'fetch_due', timing: { every: 360 } }],
       scripts: { fetch_due: 'print("fetching")' },
       scriptLibraries: ['re'],
-      heavy: true,
       paused: { 'fetch-due': 'Out of credits' },
     });
   });
@@ -110,6 +109,7 @@ describe('what the user chose for scheduled documents', () => {
     expect(jobTurnText(scheduled, 'fetch-due', now)).toBe('');
     const on = withJobOn(scheduled, 'fetch-due', true);
     expect(jobTurnText(on, 'fetch-due', now)).toBe('Not triggered yet · next once you’re idle');
+    expect(jobTurnText(on, 'fetch-due', now, 'Fetch to finish')).toBe('Not triggered yet · due, waiting for Fetch to finish');
     const triggered = withJobResult(on, 'fetch-due', { at: now - 120 * MINUTE, outcome: 'triggered' });
     expect(jobTurnText(triggered, 'fetch-due', now)).toBe(`Triggered at ${clockText(now - 120 * MINUTE, now)} · next at ${clockText(now + 240 * MINUTE, now)}`);
     const failed = withJobResult(on, 'fetch-due', { at: now - 3 * MINUTE, outcome: 'failed', message: 'Its script failed.' });

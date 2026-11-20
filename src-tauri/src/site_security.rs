@@ -208,26 +208,24 @@ unsafe extern "C-unwind" fn webkit_did_fail_provisional_navigation(
 }
 
 /// Tells `on_refused` of each page the browser refuses for its certificate or secure connection. WebKit tells a web view's
-/// navigation delegate, and wry's has no method for it: it is added once (unless wry gains its own), and the delegate set
-/// again, as WebKit looks at which methods a delegate has when it is set.
+/// navigation delegate, and wry's has no method for it: it is added to the delegate's own class (wry names its classes
+/// with its version, so they aren't looked up by name), unless wry gains its own, and the delegate set again, as WebKit
+/// looks at which methods a delegate has when it is set.
 #[cfg(target_os = "macos")]
 fn watch_refused_pages(webview: &tauri::Webview, on_refused: OnRefusedPage) -> tauri::Result<()> {
     use objc2_web_kit::WKWebView;
-    static ADD_METHOD: std::sync::Once = std::sync::Once::new();
     webview.with_webview(move |platform| unsafe {
         let view = &*(platform.inner() as *const WKWebView);
-        ADD_METHOD.call_once(|| {
-            if let Some(class) = objc2::runtime::AnyClass::get(c"WryNavigationDelegate") {
-                let method: unsafe extern "C-unwind" fn(_, _, _, _, _) = webkit_did_fail_provisional_navigation;
-                let imp: objc2::runtime::Imp = std::mem::transmute(method);
-                objc2::ffi::class_addMethod(class as *const _ as *mut _, objc2::sel!(webView:didFailProvisionalNavigation:withError:), imp, c"v@:@@@".as_ptr());
-            }
-        });
+        let Some(delegate) = view.navigationDelegate() else { return };
+        let object: &objc2::runtime::AnyObject = delegate.as_ref();
+        let method: unsafe extern "C-unwind" fn(_, _, _, _, _) = webkit_did_fail_provisional_navigation;
+        let imp: objc2::runtime::Imp = std::mem::transmute(method);
+        // Added once: a class that already has it (an earlier browser's) keeps it.
+        objc2::ffi::class_addMethod(object.class() as *const _ as *mut _, objc2::sel!(webView:didFailProvisionalNavigation:withError:), imp, c"v@:@@@".as_ptr());
         if let Ok(mut handlers) = REFUSED_PAGE_HANDLERS.get_or_init(|| Mutex::new(HashMap::new())).lock() {
             handlers.insert(view as *const WKWebView as usize, on_refused);
         }
-        let delegate = view.navigationDelegate();
-        view.setNavigationDelegate(delegate.as_deref());
+        view.setNavigationDelegate(Some(&*delegate));
     })
 }
 

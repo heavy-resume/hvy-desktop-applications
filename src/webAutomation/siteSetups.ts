@@ -15,8 +15,15 @@ export interface SiteSetup extends CollectionSite {
   pages?: SiteSetupPage[];
 }
 
-/** A start page in a setup's text, without the collection's id for it. */
-export type SiteSetupPage = Omit<StartPage, 'id'>;
+/**
+ * A start page in a setup's text, without what is this collection's own: its id, when it was last checked (its due
+ * date's start), and whether it is turned off.
+ */
+export type SiteSetupPage = Omit<StartPage, 'id' | 'checkedAt' | 'disabled'>;
+
+function setupPage({ id: _id, checkedAt: _checkedAt, disabled: _disabled, ...page }: Partial<StartPage>): SiteSetupPage {
+  return page as SiteSetupPage;
+}
 
 /** What marks text as site setups. */
 export const SITE_SETUP_FORMAT = 'site-setup/1';
@@ -29,7 +36,7 @@ export function patternsOf(collection: CollectionDefinition, siteId: string): Si
 
 export function siteSetupOf(collection: CollectionDefinition, siteId: string): SiteSetup | null {
   const site = collection.sites.find((candidate) => candidate.id === siteId);
-  return site ? { ...site, patterns: patternsOf(collection, site.id), pages: startPagesReadBy(collection, site.id).map(({ id: _id, ...page }) => page) } : null;
+  return site ? { ...site, patterns: patternsOf(collection, site.id), pages: startPagesReadBy(collection, site.id).map(setupPage) } : null;
 }
 
 /** What reads an address: the best-matching list pattern (else an item page's), and its site setup when it has one. */
@@ -124,7 +131,7 @@ export function readSiteSetupText(text: string): SiteSetup[] | null {
       ...readSiteSettings(site),
       patterns: (site.patterns as SitePatternDefinition[]).map((pattern) => ({ ...pattern, siteId: id })),
       // Whether they are start pages this collection takes is the integrity check's to say, as for the patterns.
-      ...(Array.isArray(site.pages) ? { pages: site.pages.filter(isRecord).map(({ id: _id, ...page }) => page as unknown as SiteSetupPage) } : {}),
+      ...(Array.isArray(site.pages) ? { pages: site.pages.filter(isRecord).map((page) => setupPage(page as Partial<StartPage>)) } : {}),
     };
   });
 }

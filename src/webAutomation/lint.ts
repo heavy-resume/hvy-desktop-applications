@@ -65,10 +65,10 @@ registerHvyCliPluginCommands({
   pluginId: SCHEDULE_PLUGIN_ID,
   helpTopic: 'hvy plugin galaxy-schedule',
   componentHints: [
-    `This plugin declares jobs Galaxy runs on a timer while it is open, each one of the block's own scripts: "jobs" ([{"id", "name", "script", "everyMinutes"}], every ${SCHEDULE_MIN_MINUTES} minutes at least; or, in place of "everyMinutes", "at": "HH:MM" with optional "days": ["mon", ..., "sun"], none meaning every day), "scripts" ({name: Python source}), "scriptLibraries", and "heavy", as indented JSON in plugin.txt (its pluginConfig in plugin.json stays empty). One per document.`,
+    `This plugin declares jobs Galaxy runs on a timer while it is open, each one of the block's own scripts: "jobs" ([{"id", "name", "script", "everyMinutes"}], every ${SCHEDULE_MIN_MINUTES} minutes at least; or, in place of "everyMinutes", "at": "HH:MM" with optional "days": ["mon", ..., "sun"], none meaning every day), "scripts" ({name: Python source}), and "scriptLibraries", as indented JSON in plugin.txt (its pluginConfig in plugin.json stays empty). One per document.`,
     'A job runs as if a button ran its script: once the user has been idle in Galaxy for a while, in the document\'s tab (opened if it is closed, then saved and closed once idle). The runs it starts are unattended.',
     'A job\'s script is an ordinary script: it calls Galaxy\'s plugins with "on_complete" and "on_error" callbacks, as any script does (doc.plugins.call("galaxy.web-collection", "collect", {"capabilityId": ..., "due": True, "on_complete": handler, "on_error": handler})); a call without them could only be waited on by a power script.',
-    'The user allows the plugin per file, and turns each job on; "everyMinutes" is only its default. "heavy": true makes its jobs wait for the computer to be less busy.',
+    'The user allows the plugin per file, and turns each job on; "everyMinutes" is only its default.',
     'Its "state" (the pauses scripts made) is written by the app, not by hand.',
   ],
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.schedule', description: 'Create a schedule block. Edit plugin.txt (indented JSON) for its jobs and their scripts.' }],

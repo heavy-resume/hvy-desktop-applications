@@ -90,6 +90,14 @@ describe('site setups', () => {
     expect(valid(applied).ok).toBe(true);
   });
 
+  it('copies its pages without when they were last checked or whether they are off, so a pasted page is due as a new one is', () => {
+    const checked = { ...collection(), startPages: collection().startPages.map((page) => ({ ...page, checkedAt: '2026-11-01T00:00:00.000Z', disabled: true as const })) };
+    expect(siteSetupOf(checked, 'boards')!.pages).toEqual([{ url: ACME, values: { company: 'Acme' } }, { url: GLOBEX }]);
+    // Text copied before, with it in: still left out.
+    const text = siteSetupText([{ ...siteSetupOf(checked, 'boards')!, pages: [{ url: ACME, checkedAt: '2026-11-01T00:00:00.000Z', disabled: true } as never] }]);
+    expect(readSiteSetupText(text)![0].pages).toEqual([{ url: ACME }]);
+  });
+
   it('keeps a setup read by clicking through its list so when copied, pasted, and saved', () => {
     const browsed = { ...collection(), sites: collection().sites.map((site) => (site.id === 'boards' ? { ...site, browse: true as const } : site)) };
     const [pasted] = readSiteSetupText(siteSetupText([siteSetupOf(browsed, 'boards')!]))!;

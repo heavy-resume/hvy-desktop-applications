@@ -17,6 +17,7 @@ const scheduled = (overrides: Partial<ScheduledDocument> = {}): ScheduledDocumen
 const dialog = (documents: Record<string, ScheduledDocument>, options: { allowed?: boolean; draft?: Record<string, boolean> } = {}) => renderScheduledJobsDialog({
   scheduledJobsDialogOpen: true,
   scheduledJobsDraft: options.draft ?? {},
+  scheduledJobWaits: {},
   appSettings: {
     scheduledDocuments: Object.fromEntries(Object.entries(documents).map(([path, document]) => [fileKeyForPath(path), document])),
     pluginAcceptances: options.allowed === false ? {} : Object.fromEntries(Object.keys(documents).map((path) => [fileKeyForPath(path), [pluginAcceptanceKey(schedule)]])),

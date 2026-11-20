@@ -263,13 +263,14 @@ export function clockText(at: number, now: number): string {
  * next at 9:37 PM". Its next is said only while it is on; a job off says its last turn, or nothing (its checkbox says it
  * is off).
  */
-export function jobTurnText(document: ScheduledDocument, jobId: string, now: number): string {
+export function jobTurnText(document: ScheduledDocument, jobId: string, now: number, waiting?: string): string {
   const result = document.lastResults[jobId];
   const verb = result?.outcome === 'triggered' ? 'Triggered' : result?.outcome === 'failed' ? 'Failed' : 'Skipped';
   const last = !result ? 'Not triggered yet' : `${verb} at ${clockText(result.at, now)}${result.outcome !== 'triggered' && result.message ? `: ${result.message}` : ''}`;
   if (document.choices[jobId]?.on !== true) return result ? last : '';
   const next = nextTurnAt(document, jobId);
-  return `${last} · ${next === null || next <= now ? 'next once you’re idle' : `next at ${clockText(next, now)}`}`;
+  if (next !== null && next > now) return `${last} · next at ${clockText(next, now)}`;
+  return `${last} · ${waiting ? `due, waiting for ${waiting}` : 'next once you’re idle'}`;
 }
 
 /** How often, in words: "every 6 hours", "every day". */
@@ -307,10 +308,10 @@ export function withChangesApplied(document: ScheduledDocument, next: Pick<Sched
  * A schedule block's status, for its header: the job that runs next (its name too, when the block has several jobs on),
  * its last turn and its next; empty with no job on.
  */
-export function scheduleStatusText(document: ScheduledDocument, now: number): string {
+export function scheduleStatusText(document: ScheduledDocument, now: number, waits: Record<string, string> = {}): string {
   const on = document.jobs.filter((job) => document.choices[job.id]?.on);
   const next = on.map((job) => ({ job, at: nextTurnAt(document, job.id) ?? Number.NEGATIVE_INFINITY })).sort((left, right) => left.at - right.at)[0];
   if (!next) return '';
-  const text = jobTurnText(document, next.job.id, now);
+  const text = jobTurnText(document, next.job.id, now, waits[next.job.id]);
   return on.length > 1 ? `${next.job.name}: ${text}` : text;
 }

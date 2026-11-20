@@ -36,6 +36,12 @@ switch (`mainStartup.ts`) clears; it is left set when the window closes first.
 
 ## The integration browser's address and site information
 
+The toolbar, its layout and Site information are shared (`src-tauri/src/browser_chrome.rs`,
+`src-electron/browser-chrome.cjs`) by the integration browser, web automation's sign-in window, and the pop-ups a
+sign-in page opens. The integration browser adds its page menu, picking's buttons and its allowed sites; the others
+load the toolbar as a plain browser's (`pages/integration-toolbar.html?mode=browse`: no page menu, no Site row). In
+Tauri a toolbar's webview label must match `src-tauri/capabilities/integration-toolbar.json`, or its clicks are refused.
+
 The toolbar's address and lock are a security signal, so only the host sets
 them. A page that moves without loading (a single-page site such as Gmail)
 is followed by Electron's `did-navigate-in-page`, and in Tauri by Galaxy's page
@@ -52,8 +58,9 @@ A page refused for its certificate or secure connection opens Site information
 on it, saying why (`blocked`): Electron's `did-fail-load`, WebView2's
 `NavigationCompleted`, and on macOS WebKit's
 `webView:didFailProvisionalNavigation:withError:`, which wry's navigation
-delegate lacks, so `watch_refused_pages` adds it to `WryNavigationDelegate` at
-runtime and sets the delegate again (WebKit reads a delegate's methods when it
+delegate lacks, so `watch_refused_pages` adds it to the delegate's own class at
+runtime (wry names its classes with its version, e.g.
+`…WryNavigationDelegate0.55.1`, so don't look them up by name) and sets the delegate again (WebKit reads a delegate's methods when it
 is set). After a wry upgrade, check that class still lacks the method. The
 WebView2 hook (`watch_refused_pages` for Windows, in `site_security.rs`) can't
 be type-checked from macOS: `cargo check --target x86_64-pc-windows-msvc` fails
@@ -71,7 +78,17 @@ nothing by itself: the host keeps the address (`on_new_window` in
 `src-electron/web-automation-host.cjs`), and `takeOpenedWindow` opens it in a
 worker of its own, of the same profile. Clicking through a list reads the item
 there and closes it, so the list stays as it was (its search, its scroll) with
-no Back. The sign-in window still opens such pages in itself.
+no Back.
+
+The sign-in window opens them as real pop-ups instead (a "Sign in with Google" button's account picker answers its
+opener, so it can't be loaded in place): Electron's `createWindow` puts the opened page in a window with the toolbar,
+and Tauri answers `NewWindowResponse::Create` with a window built from WebKit's configuration for it
+(`web_automation_popup`), adding the toolbar after, off the main thread. With the toolbar beside it, a Tauri sign-in or
+pop-up window holds two webviews, so `get_webview_window` no longer finds it: look it up with `get_webview` or
+`get_window`. wry's UI delegate has no `webViewDidClose:`, so a page's `window.close()` did nothing:
+`close_window_when_page_closes` (`browser_chrome.rs`) adds it to the UI delegate's own class at runtime and sets the
+delegate again, as `watch_refused_pages` does for the navigation delegate; after a wry upgrade, check that class still
+lacks it. Windows isn't hooked yet (WebView2's `WindowCloseRequested`), so a pop-up stays open there.
 
 ## Scheduled jobs
 

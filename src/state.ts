@@ -326,6 +326,8 @@ export interface AppState {
   scheduledJobsDraft: Record<string, boolean>;
   /** Documents a scheduled job is running in, by file reference: its tab is marked busy (or with its problem). */
   scheduledJobRuns: Record<string, { job: string; problem?: string }>;
+  /** Due scheduled jobs not started yet, and what each waits for ("you to be idle"), by file reference NUL job id. */
+  scheduledJobWaits: Record<string, string>;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -697,6 +699,7 @@ export const state: AppState = {
   scheduledJobsDialogOpen: false,
   scheduledJobsDraft: {},
   scheduledJobRuns: {},
+  scheduledJobWaits: {},
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,

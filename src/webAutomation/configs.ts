@@ -203,8 +203,6 @@ export interface ScheduleBlockConfig {
   scripts: Record<string, string>;
   /** The Python libraries its scripts may import, as a form's `scriptLibraries`. */
   scriptLibraries: string[];
-  /** Its jobs wait for the computer to be under the busy threshold. */
-  heavy: boolean;
   /** The pauses its scripts made, by job id (`*` for every job), with each one's reason. */
   paused: Record<string, string>;
 }
@@ -806,7 +804,6 @@ export function readScheduleBlockConfig(value: unknown): ConfigResult<ScheduleBl
       jobs,
       scripts,
       scriptLibraries: Array.isArray(value.scriptLibraries) ? strings(value.scriptLibraries) : [],
-      heavy: value.heavy === true,
       paused,
     },
   };

@@ -9,7 +9,7 @@
 // (src/webAutomation/nativeHost.ts) turns site patterns into inspector
 // patterns and back.
 
-const { BrowserWindow, session } = require('electron');
+const { BrowserWindow, WebContentsView, session } = require('electron');
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
 const FETCH_FILE_PARTITION = 'hvy-galaxy-web-automation-files';
@@ -47,13 +47,18 @@ function createWebAutomationHost(deps) {
     await deps.profileCookies.save(entry.session, profileId, domains);
   }
 
-  // `opened` keeps what a worker's page asks to open in a new tab or window; without it (the sign-in window), that opens
-  // in the window itself.
-  async function createWindow(profileId, show, opened) {
+  // The browser's own user agent, without the app's tokens ("Electron/…", and "HVYGalaxy/…" or "HVY Galaxy/…"): sites
+  // treat an unfamiliar one as a bot.
+  function browserUserAgent(contents) {
+    return contents.getUserAgent().replace(/\sElectron\/[^\s]+/g, '').replace(/\sHVY(?:[\s-]?Galaxy)?\/[^\s]+/gi, '');
+  }
+
+  // A hidden worker window. `opened` keeps what its page asks to open in a new tab or window.
+  async function createWorkerWindow(profileId, opened) {
     const { session: browserSession, ready } = profileSession(profileId);
     await ready;
     const window = new BrowserWindow({
-      show,
+      show: false,
       width: 1180,
       height: 820,
       title: 'HVY Galaxy',
@@ -68,9 +73,7 @@ function createWebAutomationHost(deps) {
       },
     });
     const contents = window.webContents;
-    // The browser's own user agent, without the app's tokens ("Electron/…", and "HVYGalaxy/…" or "HVY Galaxy/…"): sites
-    // treat an unfamiliar one as a bot.
-    contents.setUserAgent(contents.getUserAgent().replace(/\sElectron\/[^\s]+/g, '').replace(/\sHVY(?:[\s-]?Galaxy)?\/[^\s]+/gi, ''));
+    contents.setUserAgent(browserUserAgent(contents));
     // The inspector reports some results by navigating to hvy-integration:// URLs; workers read return values instead.
     contents.on('will-navigate', (event, url) => {
       if (url.startsWith('hvy-integration://')) event.preventDefault();
@@ -78,10 +81,7 @@ function createWebAutomationHost(deps) {
     // What a page opens in a new tab or window (a list whose rows open their item with window.open, a link with
     // target="_blank"): a worker's is kept for `take-opened-window`, its page left as it is.
     contents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:/i.test(url)) {
-        if (opened) opened.push(url);
-        else void contents.loadURL(url).catch(() => undefined);
-      }
+      if (/^https?:/i.test(url)) opened.push(url);
       return { action: 'deny' };
     });
     return window;
@@ -153,7 +153,7 @@ function createWebAutomationHost(deps) {
   async function createWorker(profileId) {
     const workerId = `worker-${nextWorker++}`;
     const opened = [];
-    workers.set(workerId, { window: await createWindow(profileId, false, opened), profileId, opened });
+    workers.set(workerId, { window: await createWorkerWindow(profileId, opened), profileId, opened });
     return workerId;
   }
 
@@ -205,29 +205,60 @@ function createWebAutomationHost(deps) {
     return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
   }
 
-  // The site's own sign-in page, shown to the user; navigations report back so the renderer sees completion.
-  async function openUserWindow(profileId, url) {
-    let window = userWindows.get(profileId);
-    if (!window || window.isDestroyed()) {
-      window = await createWindow(profileId, true);
-      userWindows.set(profileId, window);
+  // The site's own sign-in page, shown to the user, under a browser's toolbar (browser-chrome.cjs): its address, and its
+  // site's information. Its navigations report back so the renderer sees completion. The pop-ups it opens (a "Sign in
+  // with Google" button's account picker) open as real windows, in its session, so they can answer the page.
+  async function openUserWindow(profileId, url, profileName) {
+    let entry = userWindows.get(profileId);
+    if (!entry || entry.window.isDestroyed()) {
+      const { session: browserSession, ready } = profileSession(profileId);
+      await ready;
+      const window = new BrowserWindow({
+        show: false,
+        width: 1180,
+        height: 820,
+        title: 'HVY Galaxy',
+        autoHideMenuBar: true,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      window.removeMenu();
+      const pageView = new WebContentsView({
+        webPreferences: {
+          session: browserSession,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          webSecurity: true,
+          backgroundThrottling: false,
+        },
+      });
+      const contents = pageView.webContents;
+      contents.setUserAgent(browserUserAgent(contents));
+      const chromeOptions = { loadToolbar: deps.chrome.loadToolbar, icon: deps.chrome.icon, integration: false, name: () => entry.profileName, allowedOrigins: () => [] };
+      const chrome = deps.chrome.attach(window, pageView, chromeOptions);
+      await chrome.loadToolbar();
+      deps.chrome.allowPopups(contents, chromeOptions);
+      entry = { window, contents, profileName };
+      userWindows.set(profileId, entry);
       const report = (_event, navigatedUrl) => deps.sendEvent({ profileId, window: 'user', url: navigatedUrl });
-      window.webContents.on('did-navigate', report);
-      window.webContents.on('did-navigate-in-page', report);
+      contents.on('did-navigate', report);
+      contents.on('did-navigate-in-page', report);
       window.on('closed', () => {
         userWindows.delete(profileId);
+        if (!contents.isDestroyed()) contents.close();
         void saveProfileCookies(profileId);
       });
     }
-    await window.webContents.loadURL(url);
-    window.show();
-    window.focus();
+    entry.profileName = profileName || entry.profileName || profileId;
+    await entry.contents.loadURL(url);
+    entry.window.show();
+    entry.window.focus();
   }
 
   async function hideUserWindow(profileId) {
-    const window = userWindows.get(profileId);
-    if (!window || window.isDestroyed()) return;
-    window.close();
+    const entry = userWindows.get(profileId);
+    if (!entry || entry.window.isDestroyed()) return;
+    entry.window.close();
   }
 
   async function command(name, args) {
@@ -249,7 +280,7 @@ function createWebAutomationHost(deps) {
       case 'run-command': return runCommand(args.workerId, args.payload);
       case 'request': return request(args.workerId, args.request);
       case 'fetch-file': return fetchFile(args.url, args.maxBytes);
-      case 'open-user-window': return openUserWindow(args.profileId, args.url);
+      case 'open-user-window': return openUserWindow(args.profileId, args.url, args.profileName);
       case 'hide-user-window': return hideUserWindow(args.profileId);
       default: throw new Error(`Unknown web automation host command ${name}.`);
     }

@@ -103,6 +103,11 @@ function browserStoreOf(profileId: string): string {
   return state.integrationRegistry.profiles.find((profile) => profile.id === profileId)?.browserStoreId ?? profileId;
 }
 
+/** A profile's name, for the sign-in window's Site information (its sign-ins and cookies). */
+function profileNameOf(profileId: string): string {
+  return state.integrationRegistry.profiles.find((profile) => profile.id === profileId)?.name ?? profileId;
+}
+
 function createNativeBrowserHost(transport: HostTransport): BrowserHost {
   const call = <T>(command: string, args: Record<string, unknown> = {}) => transport.call<T>(command, args);
   return {
@@ -159,7 +164,7 @@ function createNativeBrowserHost(transport: HostTransport): BrowserHost {
     request: (workerId, hostRequest) => call<HostResponse>('request', { workerId, request: hostRequest }),
     fetchFile: async (url, options) => new Uint8Array(await call<ArrayBuffer | Uint8Array>('fetch-file', { url, maxBytes: options.maxBytes })),
     openUserWindow: async (profileId, url) => {
-      await call('open-user-window', { profileId, browserStoreId: browserStoreOf(profileId), url });
+      await call('open-user-window', { profileId, browserStoreId: browserStoreOf(profileId), profileName: profileNameOf(profileId), url });
     },
     hideUserWindow: async (profileId) => {
       await call('hide-user-window', { profileId });

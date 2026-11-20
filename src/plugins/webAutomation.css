@@ -263,6 +263,13 @@
   display: none;
 }
 
+/* Each page a pasted setup carries: its address, then its defaults. */
+.hvy-web-paste-page {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+
 /* What a pasted setup holds, behind "Show details". */
 .hvy-web-paste-details .hvy-web-json {
   max-height: 16rem;

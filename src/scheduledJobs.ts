@@ -6,7 +6,7 @@ import { documentAutomationFor } from './webAutomation/app';
 import { SCHEDULE_PLUGIN_ID } from './webAutomation/configs';
 import { readWebAutomationBlocks } from './webAutomation/documentBlocks';
 import { dueJobs, withJobResult, type ScheduledJobResult } from './webAutomation/scheduleSettings';
-import { scheduledDocuments, setScheduledJobRunner, updateScheduledDocuments } from './webAutomation/scheduleStore';
+import { scheduledDocuments, scheduledJobKey, setScheduledJobRunner, updateScheduledDocuments } from './webAutomation/scheduleStore';
 
 /**
  * Scheduled jobs (docs/job-search/12-scheduled-jobs.md): a document's job is its script, triggered on a timer as if its
@@ -23,20 +23,42 @@ const TICK_MS = 60_000;
 const WATCH_MS = 15_000;
 /** A job's document is idle once nothing has happened in it, and nothing it started is left, for this long. */
 const DOCUMENT_IDLE_MS = 5 * 60_000;
-/** A job waiting this long for the user to be idle is skipped until its next turn. */
-const WAIT_FOR_IDLE_MS = 30 * 60_000;
 /** A job's document that never goes idle is marked with a problem after this long, and left as it is. */
 const NEVER_IDLE_MS = 4 * 60 * 60_000;
 
 /** When the user last typed, clicked, or scrolled in Galaxy. */
 let lastInputAt = Date.now();
 /**
- * What Galaxy is doing with tabs for scheduled jobs now: a job being triggered, or a job's tab being saved and closed.
- * One at a time across the app, so its tab switches never interleave; waiting for a tab to settle holds nothing.
+ * The scheduled jobs lock: held while Galaxy decides whether a job may start (the user idle, fewer than "Jobs at once"
+ * busy) and starts it, until it is marked busy; by Run now while it starts its job; and while a job's tab is saved and
+ * closed. One holder at a time across the app, so no two jobs both decide they may start, and tab switches never
+ * interleave. Waiting for a job's tab to settle holds nothing.
  */
-let running: Promise<void> | null = null;
-/** When each due job started waiting for the user to be idle, by its document's reference and its id. */
-const waitingSince = new Map<string, number>();
+let locked = false;
+const lockWaiters: Array<() => void> = [];
+
+/** A timer check waiting for the lock. */
+let tickWaiting = false;
+
+/** The lock, if it is free now; null if another holds it. */
+function tryLock(): (() => void) | null {
+  if (locked) return null;
+  locked = true;
+  return unlock;
+}
+
+/** The lock, once it is free. */
+function lock(): Promise<() => void> {
+  const release = tryLock();
+  return release ? Promise.resolve(release) : new Promise((resolve) => lockWaiters.push(() => resolve(unlock)));
+}
+
+/** Hands the lock to the next waiter, or frees it. */
+function unlock(): void {
+  const next = lockWaiters.shift();
+  if (next) next();
+  else locked = false;
+}
 /** Galaxy's own tab switches while running a job, which are not the user taking a tab over. */
 let switching = false;
 
@@ -62,6 +84,13 @@ function scheduledFile(key: FileKey): RuntimeDocument {
   return runtimeDocumentById(key)!;
 }
 
+/** What due jobs wait for, shown with each (its next turn's place): drawn again when it changes. */
+function setWaits(waits: Record<string, string>): void {
+  if (JSON.stringify(waits) === JSON.stringify(state.scheduledJobWaits)) return;
+  state.scheduledJobWaits = waits;
+  rerender({ preserveMountedDocument: true });
+}
+
 /** A file's job ended its turn. */
 function record(file: RuntimeDocument, jobId: string, result: ScheduledJobResult): void {
   const key = file.documentId;
@@ -74,32 +103,44 @@ function record(file: RuntimeDocument, jobId: string, result: ScheduledJobResult
  * overdue at once (Galaxy was closed) don't all run together. Each one's next turn counts from when it triggered.
  */
 async function tick(): Promise<void> {
-  const busy = Object.values(state.scheduledJobRuns).filter((run) => !run.problem).length;
-  if (running || busy >= state.appSettings.scheduledJobsAtOnce) return;
-  const now = Date.now();
-  const [next] = dueJobs(scheduledDocuments(), now);
-  if (!next) return;
-  const scheduled = scheduledDocuments()[next.file];
-  const file = scheduledFile(next.file);
-  const key = `${file.documentId}\u0000${next.jobId}`;
-  if (!userIdleFor(scheduled.idleMinutes * 60_000)) {
-    const since = waitingSince.get(key) ?? now;
-    waitingSince.set(key, since);
-    if (now - since >= WAIT_FOR_IDLE_MS) {
-      waitingSince.delete(key);
-      record(file, next.jobId, { at: now, outcome: 'skipped', message: 'You were using Galaxy.' });
-    }
-    return;
+  // A check already waiting for the lock looks at what is due once it has it: one waiting is enough.
+  if (tickWaiting) return;
+  tickWaiting = true;
+  const release = await lock();
+  tickWaiting = false;
+  try {
+    await startDueJob();
+  } finally {
+    release();
   }
-  waitingSince.delete(key);
+}
+
+/**
+ * With the lock held: the most overdue job started, if it may start now. A due job waits, however long, for what it
+ * waits for (jobs still busy, the user to be idle, the job ahead of it), and says so; it is never dropped for waiting.
+ * Waiting past its next turn, it still runs once, then counts from then.
+ */
+async function startDueJob(): Promise<void> {
+  const now = Date.now();
+  const due = dueJobs(scheduledDocuments(), now);
+  const busy = Object.values(state.scheduledJobRuns).filter((run) => !run.problem);
+  const [next] = due;
+  const waitingFor = !next ? null
+    : busy.length >= state.appSettings.scheduledJobsAtOnce ? `${busy.map((run) => run.job).join(', ')} to finish`
+      : !userIdleFor(scheduledDocuments()[next.file].idleMinutes * 60_000) ? 'you to be idle'
+        : null;
+  const nextName = next ? scheduledDocuments()[next.file].jobs.find((job) => job.id === next.jobId)?.name ?? next.jobId : '';
+  setWaits(Object.fromEntries(due
+    .filter((job) => waitingFor || job !== next)
+    .map((job) => [scheduledJobKey(job.file, job.jobId), waitingFor ?? `${nextName} to start`])));
+  if (!next || waitingFor) return;
+  const file = scheduledFile(next.file);
   // Its tab left with a problem (it couldn't be saved, what it started never settled): not pressed again on top of that.
   if (state.scheduledJobRuns[file.documentId]?.problem) {
     record(file, next.jobId, { at: now, outcome: 'skipped', message: 'Its tab has a problem from its last turn.' });
     return;
   }
-  running = runJob(file, next.jobId).finally(() => {
-    running = null;
-  });
+  await runJob(file, next.jobId);
 }
 
 /**
@@ -107,11 +148,12 @@ async function tick(): Promise<void> {
  * pressed; only after any tab switching Galaxy is doing for another job. It is the job's turn: its next counts from it.
  */
 async function runNow(key: FileKey, jobId: string): Promise<void> {
-  while (running) await running;
-  running = runJob(scheduledFile(key), jobId).finally(() => {
-    running = null;
-  });
-  await running;
+  const release = await lock();
+  try {
+    await runJob(scheduledFile(key), jobId);
+  } finally {
+    release();
+  }
 }
 
 /** Switches tabs as Galaxy, not the user: not taken as the user taking a job's tab over. */
@@ -136,6 +178,8 @@ function setBusy(file: RuntimeDocument, busy: { job: string; problem?: string } 
 /** Triggers a document's job: as if its button were pressed in it, then back to the user's tab. Its tab is watched apart. */
 async function runJob(file: RuntimeDocument, jobId: string): Promise<void> {
   const startedAt = Date.now();
+  const { [scheduledJobKey(file.documentId, jobId)]: _started, ...waits } = state.scheduledJobWaits;
+  setWaits(waits);
   const previous = state.document?.versionId ?? null;
   const wasActive = state.document?.documentId === file.documentId;
   const wasOpen = wasActive || [...documentSessions.values()].some((session) => session.documentId === file.documentId);
@@ -240,11 +284,14 @@ async function watchUntilIdle(
     // Saved and closed as the user would, with Save and Close, only while they aren't using Galaxy, and not while Galaxy
     // is switching tabs for another job.
     const scheduled = scheduledDocuments()[file.documentId];
-    if (running || !userIdleFor((scheduled?.idleMinutes ?? 5) * 60_000)) continue;
-    running = saveAndClose(file, versionId, end).finally(() => {
-      running = null;
-    });
-    await running;
+    if (!userIdleFor((scheduled?.idleMinutes ?? 5) * 60_000)) continue;
+    const release = tryLock();
+    if (!release) continue;
+    try {
+      await saveAndClose(file, versionId, end);
+    } finally {
+      release();
+    }
     return;
   }
 }

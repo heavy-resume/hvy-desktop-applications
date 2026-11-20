@@ -4,13 +4,11 @@ import type { AppState } from '../state';
 import { SCHEDULE_PLUGIN_ID } from '../webAutomation/configs';
 import { pathForFileKey, runtimeDocumentById, type FileKey } from '../runtimeDocuments';
 import { jobTiming, jobTurnText, timingText, type ScheduledDocument } from '../webAutomation/scheduleSettings';
+import { scheduledJobKey } from '../webAutomation/scheduleStore';
 import { renderDialog } from './dialog';
 import { escapeAttr, escapeHtml } from './shared';
 
-/** A job's key in the modal's unsaved changes (`AppState.scheduledJobsDraft`): its file's reference and its id. */
-export function scheduledJobKey(file: FileKey, jobId: string): string {
-  return `${file}\u0000${jobId}`;
-}
+export { scheduledJobKey };
 
 /**
  * Scheduled jobs (Plugins menu): the jobs that are on, in every document, each with a link to open its document. A
@@ -46,7 +44,7 @@ export function renderScheduledJobsDialog(state: AppState): string {
             <span>${escapeHtml(job.name)}</span>
           </label>
           <button class="hvy-galaxy-button scheduled-jobs-document-link" type="button" data-action="open-scheduled-document" data-path="${escapeAttr(path)}" title="${escapeAttr(path)}">${escapeHtml(name)}</button>
-          <span class="scheduled-jobs-detail">${escapeHtml(`${timingText(jobTiming(document, job.id))} · ${jobTurnText(document, job.id, now)}`)}</span>
+          <span class="scheduled-jobs-detail">${escapeHtml(`${timingText(jobTiming(document, job.id))} · ${jobTurnText(document, job.id, now, state.scheduledJobWaits[scheduledJobKey(file, job.id)])}`)}</span>
           ${problem ? `<p class="dialog-note scheduled-jobs-not-allowed" data-state="error">${escapeHtml(problem)}</p>` : ''}
         </div>`;
     }).join('')}</div>`

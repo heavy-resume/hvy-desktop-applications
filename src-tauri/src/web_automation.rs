@@ -92,12 +92,19 @@ fn web_automation_profile_label(profile_id: &str) -> String {
 /// A profile's windows share its browser store with the integration browser (its `browserStoreId`), so what was done in
 /// either (a sign-in, a check that you're human passed, cookies accepted) holds in both. `opened` keeps what a worker's
 /// page asks to open in a new tab or window; without it (the sign-in window), that opens in the window itself.
-fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser_store_id: &str, visible: bool, loads: Arc<WebAutomationPageLoads>, user: bool, opened: Option<WebAutomationOpened>) -> AppResult<tauri::WebviewWindow> {
+/// The sign-in window's: its toolbar (browser_chrome.rs), and the profile's name for its Site information.
+#[derive(Clone)]
+struct WebAutomationSignIn {
+    chrome: BrowserChrome,
+    profile_name: String,
+}
+
+fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser_store_id: &str, visible: bool, loads: Arc<WebAutomationPageLoads>, user: Option<WebAutomationSignIn>, opened: Option<WebAutomationOpened>) -> AppResult<tauri::WebviewWindow> {
     let blank = tauri::Url::parse("about:blank").map_err(|error| AppError::Message(error.to_string()))?;
     let event_app = app.clone();
     let event_profile_id = profile_id.to_string();
     let opener_app = app.clone();
-    let opener_label = label.to_string();
+    let opener_user = user.clone();
     let builder = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::External(blank))
         .title("HVY Galaxy")
         .visible(visible)
@@ -110,15 +117,15 @@ fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser
         .on_navigation(|url| !url.as_str().starts_with("hvy-integration://"))
         // What a page opens in a new tab or window (a list whose rows open their item with window.open, a link with
         // target="_blank"): a worker's is kept for `take-opened-window`, its page left as it is. The sign-in window's
-        // opens in it, started apart from this callback, which WebKit calls on the main thread.
-        .on_new_window(move |url, _| {
+        // opens as a real pop-up (a "Sign in with Google" button's account picker), so it can answer the page.
+        .on_new_window(move |url, features| {
             if url.scheme() == "https" || url.scheme() == "http" {
                 if let Some(opened) = &opened {
                     if let Ok(mut opened) = opened.lock() { opened.push(url); }
-                } else if let Some(window) = opener_app.get_webview_window(&opener_label) {
-                    tauri::async_runtime::spawn(async move {
-                        let _ = window.navigate(url);
-                    });
+                } else if let Some(user) = &opener_user {
+                    if let Ok(window) = web_automation_popup(&opener_app, features, user.profile_name.clone()) {
+                        return tauri::webview::NewWindowResponse::Create { window };
+                    }
                 }
             }
             tauri::webview::NewWindowResponse::Deny
@@ -127,9 +134,12 @@ fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser
             let finished = payload.event() == tauri::webview::PageLoadEvent::Finished;
             loads.record(finished);
             // The sign-in window's navigations report back, once each as in Electron, so the renderer sees sign-in
-            // complete.
-            if user && finished {
-                let _ = event_app.emit("web-automation-navigation", serde_json::json!({ "profileId": event_profile_id, "window": "user", "url": payload.url().as_str() }));
+            // complete; and its toolbar follows them.
+            if let Some(user) = &user {
+                user.chrome.page_loaded(&event_app, payload.url(), finished);
+                if finished {
+                    let _ = event_app.emit("web-automation-navigation", serde_json::json!({ "profileId": event_profile_id, "window": "user", "url": payload.url().as_str() }));
+                }
             }
         });
     #[cfg(target_os = "macos")]
@@ -140,6 +150,52 @@ fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser
     let builder = builder.data_directory(app.path().app_local_data_dir().map_err(|error| AppError::Message(error.to_string()))?
         .join("web-automation").join(web_automation_profile_label(profile_id)));
     builder.build().map_err(|error| AppError::Message(error.to_string()))
+}
+
+/// A pop-up the sign-in window's page opens, in a window of its own under a plain browser's toolbar. WebKit gives it the
+/// opener's configuration (`features`), its data store too, so it shares the profile's cookies and can answer its
+/// opener. Made on the main thread, where WebKit asks for it; the toolbar is added after, off it, as adding a webview
+/// waits on the main thread. Its own pop-ups open the same way.
+fn web_automation_popup(app: &AppHandle, features: tauri::webview::NewWindowFeatures, profile_name: String) -> AppResult<tauri::WebviewWindow> {
+    let label = format!("web-automation-popup-{}", web_automation_next_id());
+    let chrome = BrowserChrome::plain(&label);
+    let blank = tauri::Url::parse("about:blank").map_err(|error| AppError::Message(error.to_string()))?;
+    let popup_app = app.clone();
+    let popup_profile_name = profile_name.clone();
+    let load_app = app.clone();
+    let load_chrome = chrome.clone();
+    let window = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(blank))
+        .window_features(features)
+        .title("HVY Galaxy")
+        .on_document_title_changed(|window, title| {
+            let title = title.trim();
+            if !title.is_empty() { let _ = window.set_title(title); }
+        })
+        .on_new_window(move |url, features| {
+            if url.scheme() == "https" || url.scheme() == "http" {
+                if let Ok(window) = web_automation_popup(&popup_app, features, popup_profile_name.clone()) {
+                    return tauri::webview::NewWindowResponse::Create { window };
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_page_load(move |_, payload| load_chrome.page_loaded(&load_app, payload.url(), payload.event() == tauri::webview::PageLoadEvent::Finished))
+        .build()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let attach_app = app.clone();
+    let attach_window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        let host = attach_window.as_ref().window();
+        // Taller by the toolbar, so the page keeps the size it asked for.
+        if let (Ok(scale), Ok(size)) = (host.scale_factor(), host.inner_size()) {
+            let size = size.to_logical::<f64>(scale);
+            let _ = host.set_size(tauri::LogicalSize::new(size.width, size.height + INTEGRATION_TOOLBAR_HEIGHT + INTEGRATION_TOOLBAR_WINDOW_INSET));
+        }
+        let _ = attach_browser_chrome(&attach_app, &host, attach_window.as_ref(), &chrome, BrowserChromeOptions { integration: false, profile_name, on_message: None });
+        // Closed once its page closes itself, as Google's account picker does once it has answered.
+        let _ = close_window_when_page_closes(attach_window.as_ref(), host);
+    });
+    Ok(window)
 }
 
 fn web_automation_worker(app: &AppHandle, worker_id: &str) -> AppResult<(tauri::WebviewWindow, Arc<WebAutomationPageLoads>)> {
@@ -153,7 +209,7 @@ fn web_automation_create_worker(app: &AppHandle, worker_id: &str, profile_id: &s
     let loads = Arc::new(WebAutomationPageLoads::default());
     let opened = WebAutomationOpened::default();
     let label = format!("web-automation-worker-{}", web_automation_next_id());
-    web_automation_window(app, &label, profile_id, browser_store_id, false, loads.clone(), false, Some(opened.clone()))?;
+    web_automation_window(app, &label, profile_id, browser_store_id, false, loads.clone(), None, Some(opened.clone()))?;
     web_automation_workers()?.insert(worker_id.into(), WebAutomationWorker { label, profile_id: profile_id.into(), browser_store_id: browser_store_id.into(), loads, opened });
     Ok(())
 }
@@ -329,21 +385,30 @@ fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json
             loads.wait(started, finished, Some(WEB_AUTOMATION_NAVIGATION_GRACE))?;
             Ok(result)
         }
-        // The site's own sign-in page, shown to the user.
+        // The site's own sign-in page, shown to the user under a browser's toolbar (browser_chrome.rs): its address, and
+        // its site's information. With the toolbar beside it, its window holds two webviews, so it is found by its page.
         "open-user-window" => {
             let profile_id = web_automation_text(args, "profileId")?;
             let label = web_automation_user_label(profile_id);
-            let window = match app.get_webview_window(&label) {
-                Some(window) => window,
-                None => web_automation_window(app, &label, profile_id, web_automation_text(args, "browserStoreId")?, true, Arc::new(WebAutomationPageLoads::default()), true, None)?,
+            let page = match app.get_webview(&label) {
+                Some(page) => page,
+                None => {
+                    let profile_name = args.get("profileName").and_then(serde_json::Value::as_str).unwrap_or(profile_id).to_string();
+                    let chrome = BrowserChrome::plain(&label);
+                    let user = WebAutomationSignIn { chrome: chrome.clone(), profile_name: profile_name.clone() };
+                    let window = web_automation_window(app, &label, profile_id, web_automation_text(args, "browserStoreId")?, true, Arc::new(WebAutomationPageLoads::default()), Some(user), None)?;
+                    attach_browser_chrome(app, &window.as_ref().window(), window.as_ref(), &chrome, BrowserChromeOptions { integration: false, profile_name, on_message: None })?;
+                    window.as_ref().clone()
+                }
             };
-            window.navigate(web_automation_url(args, "url")?).map_err(|error| AppError::Message(error.to_string()))?;
+            page.navigate(web_automation_url(args, "url")?).map_err(|error| AppError::Message(error.to_string()))?;
+            let window = page.window();
             window.show().map_err(|error| AppError::Message(error.to_string()))?;
             window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
             Ok(serde_json::Value::Null)
         }
         "hide-user-window" => {
-            if let Some(window) = app.get_webview_window(&web_automation_user_label(web_automation_text(args, "profileId")?)) {
+            if let Some(window) = app.get_window(&web_automation_user_label(web_automation_text(args, "profileId")?)) {
                 window.close().map_err(|error| AppError::Message(error.to_string()))?;
             }
             Ok(serde_json::Value::Null)

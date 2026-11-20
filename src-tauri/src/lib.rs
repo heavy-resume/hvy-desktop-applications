@@ -212,6 +212,7 @@ include!("state_settings.rs");
 include!("utils.rs");
 include!("web_automation.rs");
 include!("site_security.rs");
+include!("browser_chrome.rs");
 
 #[cfg(test)]
 mod tests {
