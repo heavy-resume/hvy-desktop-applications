@@ -139,6 +139,7 @@ pub fn run() {
             restore_document_file,
             delete_document_file,
             delete_workspace_folder,
+            rename_workspace_folder,
             save_document_to_workspace,
             save_document_to_workspace_raw,
             copy_document_to_workspace,

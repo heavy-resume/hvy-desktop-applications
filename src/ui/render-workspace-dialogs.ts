@@ -211,19 +211,19 @@ export function renderRenameFileDialog(state: AppState): string {
     </div>`;
 }
 
-export function renderRenameEncryptedFolderDialog(state: AppState): string {
-  if (!state.renameEncryptedFolderWorkspacePath || !state.renameEncryptedFolderDirectory || !state.renameEncryptedFolderCurrentName) return '';
+export function renderRenameFolderDialog(state: AppState): string {
+  if (!state.renameFolderWorkspacePath || !state.renameFolderDirectory || !state.renameFolderCurrentName) return '';
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="rename-encrypted-folder">
-        <h2>Rename Encrypted Folder</h2>
-        <p class="dialog-note">Only encrypted folder metadata changes. The opaque filesystem directory name remains the same.</p>
+      <form class="dialog" data-form="rename-folder">
+        <h2>${state.renameFolderEncrypted ? 'Rename Encrypted Folder' : 'Rename Folder'}</h2>
+        ${state.renameFolderEncrypted ? '<p class="dialog-note">Only encrypted folder metadata changes. The opaque filesystem directory name remains the same.</p>' : ''}
         <label>
           <span>Name</span>
-          <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" value="${escapeAttr(state.renameEncryptedFolderCurrentName)}" required>
+          <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" value="${escapeAttr(state.renameFolderCurrentName)}" required>
         </label>
         <div class="dialog-actions">
-          <button class="hvy-galaxy-button" type="button" data-action="cancel-rename-encrypted-folder">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-rename-folder">Cancel</button>
           <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
         </div>
       </form>

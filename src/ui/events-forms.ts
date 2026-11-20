@@ -66,9 +66,9 @@ export function bindFormEvents(root: HTMLElement, handlers: UiHandlers, state: A
         data.get('encrypted') === 'true'
       );
     }
-    if (form.dataset.form === 'rename-encrypted-folder') {
+    if (form.dataset.form === 'rename-folder') {
       const data = new FormData(form);
-      handlers.submitRenameEncryptedFolder(String(data.get('folderName') ?? ''));
+      handlers.submitRenameFolder(String(data.get('folderName') ?? ''));
     }
     if (form.dataset.form === 'import-document') {
       commitImportTagEditorDrafts(form, handlers);

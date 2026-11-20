@@ -19,7 +19,7 @@ import { browserClosed, browserResultRequestId } from './browserRequests';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
 import { runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
-import { loadWorkspaceExpansionState } from './workspaceExpansionState';
+import { loadWorkspaceExpansionState, loadWorkspaceFolderExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
 import { installDevWebAutomationHost } from './webAutomation/devHost';
@@ -47,6 +47,7 @@ export async function boot(): Promise<void> {
     loadZoomSettings();
     loadDismissedRecentTabs();
     state.workspaceExpanded = loadWorkspaceExpansionState();
+    state.workspaceFolderExpanded = loadWorkspaceFolderExpansionState();
     state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme(null);
     setMountRoot(render(state, handlers));

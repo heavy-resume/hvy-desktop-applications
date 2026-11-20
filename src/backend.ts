@@ -363,6 +363,17 @@ export interface WorkspaceFolderRequest {
   };
 }
 
+export interface RenameWorkspaceFolderRequest {
+  workspacePath: string;
+  targetDirectory: string;
+  name: string;
+}
+
+export interface RenamedWorkspaceFolder {
+  workspace: Workspace;
+  relocatedFiles: WorkspaceFileRelocation[];
+}
+
 export interface DeleteWorkspaceFolderRequest {
   workspacePath: string;
   targetDirectory: string;
@@ -1303,6 +1314,11 @@ export async function deleteEncryptedFolderDocument(request: DeleteEncryptedFold
 export async function deleteEncryptedFolderChild(request: DeleteEncryptedFolderChildRequest): Promise<Workspace> {
   const workspace = await invokeDesktop<Workspace>('delete_encrypted_folder_child', { request });
   return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
+}
+
+export async function renameWorkspaceFolder(request: RenameWorkspaceFolderRequest): Promise<RenamedWorkspaceFolder> {
+  const renamed = await invokeDesktop<RenamedWorkspaceFolder>('rename_workspace_folder', { request });
+  return { ...renamed, workspace: await resolveEncryptedWorkspace(renamed.workspace, loadDocumentKeys) };
 }
 
 export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Promise<Workspace> {

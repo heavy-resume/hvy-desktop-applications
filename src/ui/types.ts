@@ -51,9 +51,9 @@ export interface UiHandlers {
   addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
   deleteWorkspaceFolder(workspacePath: string, targetDirectory: string): void;
-  renameEncryptedFolder(workspacePath: string, targetDirectory: string, currentName: string): void;
-  submitRenameEncryptedFolder(name: string): void;
-  cancelRenameEncryptedFolder(): void;
+  renameFolder(workspacePath: string, targetDirectory: string, currentName: string, encrypted: boolean): void;
+  submitRenameFolder(name: string): void;
+  cancelRenameFolder(): void;
   confirmDeleteWorkspaceFolder(workspacePath: string, targetDirectory: string, folderName: string, archivedFiles: string[]): void;
   cancelDeleteWorkspaceFolder(): void;
   openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;

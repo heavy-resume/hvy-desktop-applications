@@ -171,6 +171,21 @@ struct DeleteEncryptedFolderChildRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct RenameWorkspaceFolderRequest {
+    workspace_path: String,
+    target_directory: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenamedWorkspaceFolder {
+    workspace: Workspace,
+    relocated_files: Vec<WorkspaceFileRelocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct DeleteWorkspaceFolderRequest {
     workspace_path: String,
     target_directory: String,

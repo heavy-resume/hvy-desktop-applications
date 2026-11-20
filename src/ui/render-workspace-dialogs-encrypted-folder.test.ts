@@ -15,7 +15,7 @@ vi.mock('../templates', () => ({
   isBlankBundledTemplate: () => true,
 }));
 import type { AppState } from '../state';
-import { renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderSaveAsDialog, saveAsRenamedFileName } from './render-workspace-dialogs';
+import { renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameFolderDialog, renderSaveAsDialog, saveAsRenamedFileName } from './render-workspace-dialogs';
 import { renderNewDocumentDialog } from './render-import';
 import { renderNode } from './render-workspaces';
 
@@ -203,16 +203,30 @@ describe('save as destination', () => {
 
 describe('encrypted folder rename dialog', () => {
   it('explains that logical rename leaves the opaque directory stable', () => {
-    const html = renderRenameEncryptedFolderDialog({
-      renameEncryptedFolderWorkspacePath: '/workspace',
-      renameEncryptedFolderDirectory: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      renameEncryptedFolderCurrentName: 'Private Plans',
+    const html = renderRenameFolderDialog({
+      renameFolderWorkspacePath: '/workspace',
+      renameFolderDirectory: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      renameFolderCurrentName: 'Private Plans',
+      renameFolderEncrypted: true,
       busy: false,
     } as unknown as AppState);
 
     expect(html).toContain('Rename Encrypted Folder');
     expect(html).toContain('opaque filesystem directory name remains the same');
-    expect(html).toContain('data-form="rename-encrypted-folder"');
+    expect(html).toContain('data-form="rename-folder"');
+  });
+
+  it('renames a plain folder without the encrypted note', () => {
+    const html = renderRenameFolderDialog({
+      renameFolderWorkspacePath: '/workspace',
+      renameFolderDirectory: 'notes',
+      renameFolderCurrentName: 'notes',
+      renameFolderEncrypted: false,
+      busy: false,
+    } as unknown as AppState);
+
+    expect(html).toContain('<h2>Rename Folder</h2>');
+    expect(html).not.toContain('opaque filesystem directory name');
   });
 });
 

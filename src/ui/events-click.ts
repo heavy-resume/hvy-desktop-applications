@@ -138,8 +138,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.cancelRenameFile();
           return;
         }
-        if (backdrop.querySelector('form[data-form="rename-encrypted-folder"]')) {
-          handlers.cancelRenameEncryptedFolder();
+        if (backdrop.querySelector('form[data-form="rename-folder"]')) {
+          handlers.cancelRenameFolder();
           return;
         }
         if (backdrop.querySelector('form[data-form="new-folder"]')) {
@@ -627,7 +627,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'select-saved-version' && target.dataset.versionId) handlers.selectSavedVersion(target.dataset.versionId);
     if (action === 'close-version-history') handlers.closeVersionHistory();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
-    if (action === 'cancel-rename-encrypted-folder') handlers.cancelRenameEncryptedFolder();
+    if (action === 'cancel-rename-folder') handlers.cancelRenameFolder();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();

@@ -1,7 +1,9 @@
 import type { HvyDocumentSearchDocument, HvySemanticFilterProvider } from '../../heavy-file-format/src/search/types';
 import { getSemanticResponseDebug } from './aiClient';
-import { readDocumentFile, type Workspace, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { readDocumentFile, type Workspace, type WorkspaceFileNode } from './backend';
 import { logDebugEvent } from './debugLog';
+import { runtimeDocumentAtPath } from './runtimeDocuments';
+import { flattenWorkspaceFiles } from './workspaceFiles';
 import { createWorkspaceEmbeddingCandidatePaths } from './embeddingIndex';
 import { loadWorkspace } from './mainWorkspaceUtils';
 import { createHvyDocumentFilterSnapshot, deserializeHvy, desktopSemanticFilterProvider, setMountedSearchSnapshot, type VisualDocument } from './hvy';
@@ -167,19 +169,8 @@ export async function createWorkspaceFilterSnapshotForDocument(
 }
 
 export function findWorkspaceFilterSnapshot(filter: WorkspaceFilterConfig, path: string) {
-  const direct = filter.snapshots[path];
-  if (direct) return direct;
-  const workspacePath = workspacePathForFileInWorkspaces(state.workspaces, path);
-  const candidates = new Set([
-    normalizeFilePath(path),
-    ...(workspacePath ? [normalizeWorkspaceRelativePath(path, workspacePath)] : []),
-  ]);
-  const match = Object.entries(filter.snapshots).find(([candidatePath]) => {
-    const normalizedCandidate = normalizeFilePath(candidatePath);
-    return candidates.has(normalizedCandidate)
-      || (workspacePath ? candidates.has(normalizeWorkspaceRelativePath(candidatePath, workspacePath)) : false);
-  });
-  return match?.[1] ?? null;
+  const reference = runtimeDocumentAtPath(path);
+  return reference ? filter.snapshots[reference.documentId] ?? null : null;
 }
 
 export function normalizeFilePath(path: string): string {
@@ -238,7 +229,7 @@ export async function createWorkspaceFilterSnapshots(
       scheduleWorkspaceFilterProgressRender();
       try {
         const snapshot = await createWorkspaceFilterSnapshotForSearchDocument(entry, filter, index, documents.length, semanticFilterProvider);
-        snapshots[entry.documentId] = snapshot;
+        snapshots[runtimeDocumentAtPath(entry.documentId)!.documentId] = snapshot;
         completedDocuments += 1;
         state.workspaceFilter.status = `Filtered ${completedDocuments}/${documents.length} files`;
         state.status = state.workspaceFilter.status;
@@ -427,9 +418,7 @@ function workspaceFilterFileRelativePath(file: WorkspaceFileNode, workspacePath:
   return normalizeFolderScope(file.relativePath ?? normalizeWorkspaceRelativePath(file.path, workspacePath));
 }
 
-export function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
-  return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
-}
+export { flattenWorkspaceFiles };
 
 export function workspaceFileAiAccess(path: string): { archived: boolean; locked: boolean; hiddenFromAI: boolean; encryptedAIAllowed: boolean; readOnly: boolean } {
   return workspaceFileAccessInWorkspaces(state.workspaces, path);

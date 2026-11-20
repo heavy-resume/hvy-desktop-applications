@@ -3410,6 +3410,19 @@ fn delete_workspace_folder(app: AppHandle, request: DeleteWorkspaceFolderRequest
     load_workspace_from_path(&workspace_path)
 }
 
+#[tauri::command]
+fn rename_workspace_folder(app: AppHandle, request: RenameWorkspaceFolderRequest) -> AppResult<RenamedWorkspaceFolder> {
+    let workspace_path = PathBuf::from(request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let relocated_files = rename_workspace_folder_at(&workspace_path, &request.target_directory, &request.name)?;
+    relocate_recent_files(&app, &relocated_files)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    Ok(RenamedWorkspaceFolder {
+        workspace: load_workspace_from_path(&workspace_path)?,
+        relocated_files,
+    })
+}
+
 fn workspace_document_files_in_directory(directory: &Path) -> AppResult<Vec<PathBuf>> {
     if !directory.exists() {
         return Ok(Vec::new());

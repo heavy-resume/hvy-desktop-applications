@@ -610,6 +610,48 @@
     }
 
     #[test]
+    fn renames_workspace_folder_and_moves_its_manifest_entries() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        fs::create_dir_all(dir.path().join("notes/drafts")).unwrap();
+        fs::write(dir.path().join("notes/drafts/plan.hvy"), "").unwrap();
+        let manifest_path = workspace_manifest_path(dir.path()).unwrap();
+        let mut manifest = read_manifest(&manifest_path).unwrap();
+        manifest.archived_files = vec!["notes/drafts/plan.hvy".into(), "notesy/other.hvy".into()];
+        manifest.hidden_from_ai_folders = vec!["notes".into(), "notes/drafts".into()];
+        write_json_atomically(&manifest_path, &manifest).unwrap();
+
+        let relocations = rename_workspace_folder_at(dir.path(), "notes", "Journal").unwrap();
+
+        assert!(dir.path().join("Journal/drafts/plan.hvy").is_file());
+        assert!(!dir.path().join("notes").exists());
+        assert_eq!(relocations, vec![WorkspaceFileRelocation {
+            previous_path: path_to_string(&dir.path().join("notes/drafts/plan.hvy")),
+            path: path_to_string(&dir.path().join("Journal/drafts/plan.hvy")),
+            name: "plan.hvy".into(),
+            extension: ".hvy".into(),
+        }]);
+        let manifest = read_manifest(&manifest_path).unwrap();
+        assert_eq!(manifest.archived_files, vec!["Journal/drafts/plan.hvy".to_string(), "notesy/other.hvy".to_string()]);
+        assert_eq!(manifest.hidden_from_ai_folders, vec!["Journal".to_string(), "Journal/drafts".to_string()]);
+    }
+
+    #[test]
+    fn rejects_folder_rename_onto_existing_or_reserved_name() {
+        let dir = tempdir().unwrap();
+        initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();
+        fs::create_dir_all(dir.path().join("notes/inner")).unwrap();
+        fs::write(dir.path().join("plan.hvy"), "").unwrap();
+
+        assert!(rename_workspace_folder_at(dir.path(), "notes", "plan.hvy").is_err());
+        assert!(rename_workspace_folder_at(dir.path(), "notes", "Templates").is_err());
+        assert!(rename_workspace_folder_at(dir.path(), "notes", "hvy-encrypted-folder-x").is_err());
+        assert!(rename_workspace_folder_at(dir.path(), "notes/inner", "templates").is_ok());
+        assert!(create_workspace_folder_at(dir.path(), "", "templates", None).is_err());
+        assert!(dir.path().join("notes").is_dir());
+    }
+
+    #[test]
     fn rejects_invalid_encrypted_folder_identity_before_writing() {
         let dir = tempdir().unwrap();
         initialize_workspace_with_name(dir.path(), Some("Docs")).unwrap();

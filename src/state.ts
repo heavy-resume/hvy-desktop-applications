@@ -324,7 +324,7 @@ export interface AppState {
   scheduledJobsDialogOpen: boolean;
   /** Scheduled jobs' checkboxes changed and not saved yet: on or off, by `path` NUL `job id`. Applied on Save. */
   scheduledJobsDraft: Record<string, boolean>;
-  /** Documents a scheduled job is running in, by path: its tab is marked busy (or with its problem). */
+  /** Documents a scheduled job is running in, by file reference: its tab is marked busy (or with its problem). */
   scheduledJobRuns: Record<string, { job: string; problem?: string }>;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
@@ -372,9 +372,10 @@ export interface AppState {
   };
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
-  renameEncryptedFolderWorkspacePath: string | null;
-  renameEncryptedFolderDirectory: string;
-  renameEncryptedFolderCurrentName: string | null;
+  renameFolderWorkspacePath: string | null;
+  renameFolderDirectory: string;
+  renameFolderCurrentName: string | null;
+  renameFolderEncrypted: boolean;
   archiveFilePath: string | null;
   archiveFileName: string | null;
   archiveFileUnsaved: boolean;
@@ -408,6 +409,7 @@ export interface WorkspaceFilterConfig {
   mode: HvyDocumentSearchMode;
   filterMode: SearchFilterMode;
   targetDirectory: string;
+  /** By file reference (runtimeDocuments.ts), so a file renamed or moved keeps its results. */
   snapshots: Record<string, HvySearchSnapshot>;
 }
 
@@ -474,8 +476,8 @@ export interface WorkspaceTransferState {
 
 export interface WorkspaceClipboardState {
   mode: 'copy' | 'cut';
-  path: string;
-  name: string;
+  /** The file's reference, so a rename or move between cut and paste pastes it from where it is now. */
+  file: RuntimeDocument;
 }
 
 export type PendingWorkspaceFileOperation =
@@ -734,9 +736,10 @@ export const state: AppState = {
   encryptedAIAccessPrompt: null,
   renameFilePath: null,
   renameFileCurrentName: null,
-  renameEncryptedFolderWorkspacePath: null,
-  renameEncryptedFolderDirectory: '',
-  renameEncryptedFolderCurrentName: null,
+  renameFolderWorkspacePath: null,
+  renameFolderDirectory: '',
+  renameFolderCurrentName: null,
+  renameFolderEncrypted: false,
   archiveFilePath: null,
   archiveFileName: null,
   archiveFileUnsaved: false,

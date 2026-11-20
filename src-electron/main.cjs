@@ -741,6 +741,7 @@ async function handleCommand(command, args) {
     case 'restore_document_file': return restoreDocumentFile(args.path);
     case 'delete_document_file': return deleteDocumentFile(args.path);
     case 'delete_workspace_folder': return deleteWorkspaceFolder(args.request);
+    case 'rename_workspace_folder': return renameWorkspaceFolder(args.request);
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
@@ -2740,6 +2741,81 @@ function deleteWorkspaceFolder(request) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
+// Names the app gives meaning to: the workspace's templates folder, and the prefix encrypted folders are stored under.
+function rejectReservedFolderName(workspacePath, parent, name) {
+  const lower = name.toLowerCase();
+  const atRoot = path.resolve(parent) === path.resolve(workspacePath);
+  if ((atRoot && lower === 'templates') || lower.startsWith(ENCRYPTED_FOLDER_PHYSICAL_PREFIX)) {
+    throw new Error(`${name} is a reserved folder name.`);
+  }
+}
+
+function renameWorkspaceFolder(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const targetDirectory = String(request?.targetDirectory || '').trim().replace(/\\/g, '/');
+  const workspaceRoot = path.resolve(workspacePath);
+  const folderPath = path.resolve(workspaceRoot, targetDirectory);
+  if (!targetDirectory || !folderPath.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('Folder path must stay inside the workspace.');
+  }
+  if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) throw new Error('Folder was not found.');
+  if (folderPath === path.resolve(workspaceTemplatesDir(workspacePath))) throw new Error("The templates folder can't be renamed.");
+  if (fs.existsSync(path.join(folderPath, ENCRYPTED_FOLDER_MANIFEST_FILE))) {
+    throw new Error('Encrypted folders are renamed through their manifest.');
+  }
+  const folderName = normalizedFolderName(request?.name);
+  const parent = path.dirname(folderPath);
+  rejectReservedFolderName(workspacePath, parent, folderName);
+  const nextPath = path.join(parent, folderName);
+  let relocatedFiles = [];
+  if (nextPath !== folderPath) {
+    // A different-case name on a case-insensitive disk resolves to this same folder, which isn't a conflict.
+    if (fs.existsSync(nextPath) && fs.realpathSync.native(nextPath) !== fs.realpathSync.native(folderPath)) {
+      throw new Error(`A file or folder named ${folderName} already exists in this folder.`);
+    }
+    const previousFiles = workspaceDocumentFilesInDirectory(workspacePath, folderPath);
+    fs.renameSync(folderPath, nextPath);
+    relocatedFiles = previousFiles.map((previous) => {
+      const next = path.join(nextPath, path.relative(folderPath, previous));
+      return { previousPath: previous, path: next, name: path.basename(next), extension: documentExtension(next) };
+    });
+    const manifestPath = workspaceManifestPath(workspacePath);
+    if (manifestPath) {
+      const manifest = readJson(manifestPath, null);
+      const previous = relativeWorkspacePath(workspacePath, folderPath);
+      const next = relativeWorkspacePath(workspacePath, nextPath);
+      for (const key of ['archivedFiles', 'lockedFiles', 'hiddenFromAIFolders', 'hiddenFromAIFiles']) {
+        if (!Array.isArray(manifest[key])) continue;
+        manifest[key] = [...new Set(manifest[key].map((entry) => (
+          entry === previous ? next : entry.startsWith(`${previous}/`) ? `${next}${entry.slice(previous.length)}` : entry
+        )))].sort();
+      }
+      manifest.updatedAt = new Date().toISOString();
+      writeJson(manifestPath, manifest);
+    }
+    relocateRecentFiles(relocatedFiles);
+  }
+  addRecentWorkspace(workspacePath);
+  return { workspace: loadWorkspaceFromPath(workspacePath), relocatedFiles };
+}
+
+function relocateRecentFiles(relocations) {
+  if (relocations.length === 0) return;
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  for (const { previousPath, path: nextPath } of relocations) {
+    recent.files = (recent.files || []).map((entry) => (entry === previousPath ? nextPath : entry));
+    for (const key of ['documentModes', 'documentColorUses']) {
+      if (recent[key] && previousPath in recent[key]) {
+        recent[key][nextPath] = recent[key][previousPath];
+        delete recent[key][previousPath];
+      }
+    }
+  }
+  writeJson(dataPath(RECENT_STATE), recent);
+  refreshMenu();
+}
+
 function workspaceDocumentFilesInDirectory(workspacePath, directory) {
   if (!fs.existsSync(directory)) return [];
   const files = [];
@@ -3216,6 +3292,7 @@ function createWorkspaceFolder(request) {
       throw new Error('Encrypted folder manifest does not match the folder identity.');
     }
   }
+  if (!encrypted) rejectReservedFolderName(workspacePath, parent, folderName);
   const folderPath = path.join(parent, encrypted ? encryptedFolderPhysicalName(folderId) : folderName);
   const workspaceRoot = path.resolve(workspacePath);
   const resolved = path.resolve(folderPath);

@@ -31,6 +31,10 @@ export function runtimeDocumentForFile(
   return document;
 }
 
+export function runtimeDocumentById(documentId: string): RuntimeDocument | null {
+  return documentsById.get(documentId) ?? null;
+}
+
 export function runtimeDocumentAtPath(path: string): RuntimeDocument | null {
   const documentId = documentIdsByPath.get(path);
   return documentId ? documentsById.get(documentId) ?? null : null;

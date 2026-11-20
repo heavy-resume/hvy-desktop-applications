@@ -15,7 +15,7 @@ import { renderColorThemeDialog } from './render-theme';
 import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
 import { renderPluginApprovalBar, renderPluginApprovalDialog } from './render-plugin-approval';
 import { renderBackgroundActivityDialog } from './render-background-activity';
-import { renderArchiveFileDialog, renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
+import { renderArchiveFileDialog, renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
 import { bindWorkspaceManagerReordering, renderEmptyState, renderNewWorkspaceDialog, renderWorkspaceInitializationDialog, renderWorkspaceManagerDialog, renderWorkspaces, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
 import { UiHandlers } from './types';
@@ -324,7 +324,7 @@ export function renderModals(state: AppState): void {
     ${renderSaveConflictDialog(state)}
     ${renderAppCloseDialog(state)}
     ${renderRenameFileDialog(state)}
-    ${renderRenameEncryptedFolderDialog(state)}
+    ${renderRenameFolderDialog(state)}
     ${renderArchiveFileDialog(state)}
     ${renderDeleteFileDialog(state)}
     ${renderDeleteFolderDialog(state)}

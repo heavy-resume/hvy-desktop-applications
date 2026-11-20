@@ -1,5 +1,7 @@
 import type { VisualDocument } from '../../heavy-file-format/src/types';
 import { closeCurrentDocument, documentSessions, rerender, saveCurrentDocument, selectDocumentTab } from './main';
+import type { DocumentExtension } from './backend';
+import { runtimeDocumentAtPath, runtimeDocumentForFile, type RuntimeDocument } from './runtimeDocuments';
 import { state } from './state';
 import { documentAutomationFor } from './webAutomation/app';
 import { SCHEDULE_PLUGIN_ID } from './webAutomation/configs';
@@ -34,7 +36,7 @@ let lastInputAt = Date.now();
  * One at a time across the app, so its tab switches never interleave; waiting for a tab to settle holds nothing.
  */
 let running: Promise<void> | null = null;
-/** When each due job started waiting for the user to be idle, by its document's path and its id. */
+/** When each due job started waiting for the user to be idle, by its document's reference and its id. */
 const waitingSince = new Map<string, number>();
 /** Galaxy's own tab switches while running a job, which are not the user taking a tab over. */
 let switching = false;
@@ -53,7 +55,22 @@ function userIdleFor(ms: number): boolean {
   return Date.now() - lastInputAt >= ms;
 }
 
-function record(path: string, jobId: string, result: ScheduledJobResult): void {
+/**
+ * A scheduled document's reference: the runner holds this, not its path, so a file renamed or moved while its job runs
+ * is still the one it watches, saves, and records against. Schedules are kept by path in app settings (the load/save
+ * layer); one whose workspace isn't loaded gets its reference here.
+ */
+function scheduledFile(path: string): RuntimeDocument {
+  return runtimeDocumentAtPath(path) ?? runtimeDocumentForFile({
+    path,
+    name: scheduledDocuments()[path]?.name ?? path,
+    extension: path.slice(path.lastIndexOf('.')) as DocumentExtension,
+  });
+}
+
+/** A file's job ended its turn: recorded against the schedule at the file's path now. */
+function record(file: RuntimeDocument, jobId: string, result: ScheduledJobResult): void {
+  const path = file.path;
   updateScheduledDocuments((documents) => (documents[path] ? { ...documents, [path]: withJobResult(documents[path], jobId, result) } : documents));
 }
 
@@ -69,23 +86,24 @@ async function tick(): Promise<void> {
   const [next] = dueJobs(scheduledDocuments(), now);
   if (!next) return;
   const scheduled = scheduledDocuments()[next.path];
-  const key = `${next.path}\u0000${next.jobId}`;
+  const file = scheduledFile(next.path);
+  const key = `${file.documentId}\u0000${next.jobId}`;
   if (!userIdleFor(scheduled.idleMinutes * 60_000)) {
     const since = waitingSince.get(key) ?? now;
     waitingSince.set(key, since);
     if (now - since >= WAIT_FOR_IDLE_MS) {
       waitingSince.delete(key);
-      record(next.path, next.jobId, { at: now, outcome: 'skipped', message: 'You were using Galaxy.' });
+      record(file, next.jobId, { at: now, outcome: 'skipped', message: 'You were using Galaxy.' });
     }
     return;
   }
   waitingSince.delete(key);
   // Its tab left with a problem (it couldn't be saved, what it started never settled): not pressed again on top of that.
-  if (state.scheduledJobRuns[next.path]?.problem) {
-    record(next.path, next.jobId, { at: now, outcome: 'skipped', message: 'Its tab has a problem from its last turn.' });
+  if (state.scheduledJobRuns[file.documentId]?.problem) {
+    record(file, next.jobId, { at: now, outcome: 'skipped', message: 'Its tab has a problem from its last turn.' });
     return;
   }
-  running = runJob(next.path, next.jobId).finally(() => {
+  running = runJob(file, next.jobId).finally(() => {
     running = null;
   });
 }
@@ -96,7 +114,7 @@ async function tick(): Promise<void> {
  */
 async function runNow(path: string, jobId: string): Promise<void> {
   while (running) await running;
-  running = runJob(path, jobId).finally(() => {
+  running = runJob(scheduledFile(path), jobId).finally(() => {
     running = null;
   });
   await running;
@@ -112,33 +130,33 @@ async function switchTo(path: string): Promise<void> {
   }
 }
 
-function setBusy(path: string, busy: { job: string; problem?: string } | null): void {
-  if (busy) state.scheduledJobRuns = { ...state.scheduledJobRuns, [path]: busy };
+function setBusy(file: RuntimeDocument, busy: { job: string; problem?: string } | null): void {
+  if (busy) state.scheduledJobRuns = { ...state.scheduledJobRuns, [file.documentId]: busy };
   else {
-    const { [path]: _done, ...rest } = state.scheduledJobRuns;
+    const { [file.documentId]: _done, ...rest } = state.scheduledJobRuns;
     state.scheduledJobRuns = rest;
   }
   rerender({ preserveMountedDocument: true });
 }
 
 /** Triggers a document's job: as if its button were pressed in it, then back to the user's tab. Its tab is watched apart. */
-async function runJob(path: string, jobId: string): Promise<void> {
+async function runJob(file: RuntimeDocument, jobId: string): Promise<void> {
   const startedAt = Date.now();
   const previous = state.document?.versionId ?? null;
-  const wasActive = state.document?.source.path === path;
-  const wasOpen = wasActive || [...documentSessions.values()].some((session) => session.source.path === path);
-  const fail = (message: string) => record(path, jobId, { at: startedAt, outcome: 'failed', message });
+  const wasActive = state.document?.documentId === file.documentId;
+  const wasOpen = wasActive || [...documentSessions.values()].some((session) => session.documentId === file.documentId);
+  const fail = (message: string) => record(file, jobId, { at: startedAt, outcome: 'failed', message });
   try {
     if (!wasActive) {
-      const open = [...documentSessions.values()].find((session) => session.source.path === path);
-      await switchTo(open?.versionId ?? path);
+      const open = [...documentSessions.values()].find((session) => session.documentId === file.documentId);
+      await switchTo(open?.versionId ?? file.path);
     }
   } catch (error) {
     fail(`Its document couldn’t be opened: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
-  const document = state.document?.source.path === path ? state.document.mounted?.document as VisualDocument | undefined : undefined;
-  const versionId = state.document?.versionId ?? path;
+  const document = state.document?.documentId === file.documentId ? state.document?.mounted?.document as VisualDocument | undefined : undefined;
+  const versionId = state.document?.versionId ?? file.path;
   const back = async () => {
     if (!wasActive && previous && previous !== versionId) await switchTo(previous);
   };
@@ -162,12 +180,12 @@ async function runJob(path: string, jobId: string): Promise<void> {
   }
   const paused = schedule.config.paused[job.id] ?? schedule.config.paused['*'];
   if (paused) {
-    record(path, jobId, { at: startedAt, outcome: 'skipped', message: `Paused: ${paused}` });
+    record(file, jobId, { at: startedAt, outcome: 'skipped', message: `Paused: ${paused}` });
     await back();
     return;
   }
   automation.setUnattended(true);
-  setBusy(path, { job: job.name });
+  setBusy(file, { job: job.name });
   // As a form's trigger runs its script (heavy-file-format's form reader): the block's own script, not started by the user.
   const { runUserScript } = await import('../../heavy-file-format/src/plugins/scripting/wrapper');
   const result = await runUserScript({
@@ -179,9 +197,9 @@ async function runJob(path: string, jobId: string): Promise<void> {
   });
   // Its turn, triggered: what the script started is the document's from here.
   // A failure's one line (heavy-file-format's error, with the script's line), not its traceback.
-  record(path, jobId, result.ok ? { at: startedAt, outcome: 'triggered' } : { at: startedAt, outcome: 'failed', message: result.error ?? 'Its script failed.' });
+  record(file, jobId, result.ok ? { at: startedAt, outcome: 'triggered' } : { at: startedAt, outcome: 'failed', message: result.error ?? 'Its script failed.' });
   await back();
-  void watchUntilIdle(path, versionId, job.name, startedAt, !wasOpen, automation);
+  void watchUntilIdle(file, versionId, job.name, startedAt, !wasOpen, automation);
 }
 
 /**
@@ -190,7 +208,7 @@ async function runJob(path: string, jobId: string): Promise<void> {
  * idle. Only the tab says how that went; the job's turn was over once triggered.
  */
 async function watchUntilIdle(
-  path: string,
+  file: RuntimeDocument,
   versionId: string,
   jobName: string,
   startedAt: number,
@@ -200,13 +218,13 @@ async function watchUntilIdle(
   let takenOver = false;
   const end = (problem?: string) => {
     automation.setUnattended(false);
-    setBusy(path, problem ? { job: jobName, problem } : null);
+    setBusy(file, problem ? { job: jobName, problem } : null);
   };
   for (;;) {
     await new Promise((resolve) => window.setTimeout(resolve, WATCH_MS));
     // The user working in the job's tab takes it over: it is theirs, left as any open document is.
-    if (!switching && state.document?.source.path === path && lastInputAt > startedAt) takenOver = true;
-    const open = state.document?.source.path === path || [...documentSessions.values()].some((session) => session.source.path === path);
+    if (!switching && state.document?.documentId === file.documentId && lastInputAt > startedAt) takenOver = true;
+    const open = state.document?.documentId === file.documentId || [...documentSessions.values()].some((session) => session.documentId === file.documentId);
     // Closed by the user: nothing is left to end.
     if (!open) {
       end();
@@ -227,9 +245,9 @@ async function watchUntilIdle(
     }
     // Saved and closed as the user would, with Save and Close, only while they aren't using Galaxy, and not while Galaxy
     // is switching tabs for another job.
-    const scheduled = scheduledDocuments()[path];
+    const scheduled = scheduledDocuments()[file.path];
     if (running || !userIdleFor((scheduled?.idleMinutes ?? 5) * 60_000)) continue;
-    running = saveAndClose(path, versionId, end).finally(() => {
+    running = saveAndClose(file, versionId, end).finally(() => {
       running = null;
     });
     await running;
@@ -238,12 +256,12 @@ async function watchUntilIdle(
 }
 
 /** A job's tab, idle and not taken over: saved and closed, then back to the tab the user was on. */
-async function saveAndClose(path: string, versionId: string, end: (problem?: string) => void): Promise<void> {
+async function saveAndClose(file: RuntimeDocument, versionId: string, end: (problem?: string) => void): Promise<void> {
   const previous = state.document?.versionId ?? null;
   try {
     await switchTo(versionId);
     await saveCurrentDocument();
-    if (state.document?.source.path === path && !state.document.dirty && !state.saveConflictDialogOpen) {
+    if (state.document?.documentId === file.documentId && !state.document?.dirty && !state.saveConflictDialogOpen) {
       await closeCurrentDocument({ discard: true });
       end();
     } else {

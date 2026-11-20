@@ -1,6 +1,7 @@
 import { groupTemplateExamples, type ExampleTreeNode } from '../templateExamples';
 import { type ArchivedWorkspace, type DocumentCreationType, type SavedTemplate, type TemplateExtension, type TemplateScope, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
-import { type AppState, type WorkspaceClipboardState } from '../state';
+import { runtimeDocumentById } from '../runtimeDocuments';
+import { type AppState, type WorkspaceClipboardState, type WorkspaceFilterConfig } from '../state';
 import { workspaceTemplateVisibility } from '../templates';
 import { revealMenuLabel } from './events-workspace';
 import { funnelIcon } from './render-shell';
@@ -163,9 +164,7 @@ export function renderWorkspace(
   const actionsOpen = workspace.path === openWorkspaceActionsPath;
   const filter = activeFilters[workspace.path];
   const rootFilterActive = filter !== undefined && normalizeTreeRelativePath(filter.targetDirectory) === '';
-  const matchedDocumentIds = filter
-    ? new Set(Object.entries(filter.snapshots).flatMap(([documentId, snapshot]) => snapshot.results.length > 0 ? [documentId] : []))
-    : null;
+  const matchedDocumentIds = filter ? filterMatchedPaths(filter) : null;
   const filterTitle = filter
     ? `Filter ${workspace.manifest.name}: ${filter.query}`
     : `Filter ${workspace.manifest.name}`;
@@ -364,7 +363,7 @@ export function renderNode(
   }
   const selected = node.path === selectedFilePath ? ' is-selected' : '';
   const noFilterMatch = matchedDocumentIds !== null && nodeMatchesFilterScope(node, activeFilter) && !matchedDocumentIds.has(node.path);
-  const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.path === node.path;
+  const cutPending = workspaceClipboard?.mode === 'cut' && workspaceClipboard.file.path === node.path;
   const archived = node.archived === true;
   const locked = node.locked === true;
   const hiddenFromAI = node.hiddenFromAI === true;
@@ -576,4 +575,12 @@ export function isSaveAsScope(value: unknown): value is AppState['saveAsScope'] 
 
 export function isSaveAsKind(value: unknown): value is AppState['saveAsKind'] {
   return value === 'document' || value === 'template';
+}
+
+/** The files a filter matched, at their paths now: its results are held by file reference. */
+function filterMatchedPaths(filter: WorkspaceFilterConfig): Set<string> {
+  return new Set(Object.entries(filter.snapshots).flatMap(([documentId, snapshot]) => {
+    const path = runtimeDocumentById(documentId)?.path;
+    return snapshot.results.length > 0 && path ? [path] : [];
+  }));
 }
