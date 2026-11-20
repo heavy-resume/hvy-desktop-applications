@@ -69,6 +69,7 @@ registerHvyCliPluginCommands({
     'A job runs as if a button ran its script: once the user has been idle in Galaxy for a while, in the document\'s tab (opened if it is closed, then saved and closed once idle). The runs it starts are unattended.',
     'A job\'s script is an ordinary script: it calls Galaxy\'s plugins with "on_complete" and "on_error" callbacks, as any script does (doc.plugins.call("galaxy.web-collection", "collect", {"capabilityId": ..., "due": True, "on_complete": handler, "on_error": handler})); a call without them could only be waited on by a power script.',
     'The user allows the plugin per file, and turns each job on; "everyMinutes" is only its default.',
+    'Scripts pause a job with doc.plugins.call("galaxy.schedule", "pause", {"job": ..., "reason": ...}) (without "job", every job), and resume it with "resume" ({"job": ...}; without it, everything); a paused job\'s turns are skipped, with its reason shown, until then. "status" lists each job: "id", "name", "on", "paused" (its reason, or None), "last" ({"at", "outcome", "message"}, or None), and "next" (ISO times).',
     'Its "state" (the pauses scripts made) is written by the app, not by hand.',
   ],
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.schedule', description: 'Create a schedule block. Edit plugin.txt (indented JSON) for its jobs and their scripts.' }],

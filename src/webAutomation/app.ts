@@ -9,7 +9,7 @@ import { systemClock } from './clock';
 import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLUGINS, type DocumentAutomation } from './documentAutomation';
 import { readWebAutomationBlocks } from './documentBlocks';
 import { withoutScheduledDocument, withScheduleBlock } from './scheduleSettings';
-import { updateScheduledDocuments } from './scheduleStore';
+import { scheduledDocuments, updateScheduledDocuments } from './scheduleStore';
 import type { CollectionDefinition, CollectionRunState, ExtractItem } from './collection';
 import type { SitePatternDefinition } from './sitePatterns';
 import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
@@ -195,6 +195,7 @@ const openDocumentAutomationLookup = (rawDocument: object) => {
       runWithStateRuntime(current, () => getRenderApp()());
     },
     openInBrowser: openExternalUrl,
+    scheduled: () => scheduledDocuments()[automationKey(documentPaths.get(document)) as FileKey] ?? null,
   });
   openedByDocument.set(document, opened);
   syncScheduledDocument(document, file);

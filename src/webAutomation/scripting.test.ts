@@ -4,7 +4,11 @@ import { analysisServiceCapability } from '../test/webAutomation/analysisService
 import { ATS_ORIGIN, listingCollection } from '../test/webAutomation/sites';
 import { createScriptingDbRuntime } from '../../../heavy-file-format/src/plugins/db-table';
 import { deserializeDocument } from '../../../heavy-file-format/src/serialization';
-import { collectionScriptingMethods, queueScriptingMethods, webApiScriptingMethods, type DocumentAutomationResolver } from './scripting';
+import { collectionScriptingMethods, queueScriptingMethods, scheduleScriptingMethods, webApiScriptingMethods, type DocumentAutomationResolver } from './scripting';
+import { insertPluginBlock } from '../test/webAutomation/listingDocument';
+import { executeHvyCliCommandSync } from '../../../heavy-file-format/src/cli-core';
+import { SCHEDULE_PLUGIN_ID } from './configs';
+import { readWebAutomationBlocks } from './documentBlocks';
 import { getDocumentScriptingSession } from '../../../heavy-file-format/src/plugins/scripting/scripting-session';
 
 async function setup() {
@@ -26,6 +30,9 @@ async function setup() {
     databaseChanged: () => undefined,
     openInBrowser: async () => undefined,
     documentPath: () => '',
+    schedule: () => null,
+    setSchedulePauses: () => undefined,
+    scheduled: () => null,
   });
   return { flow, boards, resolve, ctx: { rawDocument: {}, session: getDocumentScriptingSession(document) } };
 }
@@ -115,5 +122,54 @@ describe('scripting methods', () => {
     collection.collect({ capabilityId: 'listings', maxItems: 2, maxPages: 9, on_complete: (result: Record<string, unknown>) => done.push(result) }, ctx);
     await flow.clock.runUntil(() => done.length === 1);
     expect(done[0]).toMatchObject({ status: 'completed', result: { status: 'done', collected: 2, startPages: { 'start-1': { pages: 1 } } } });
+  });
+});
+
+describe('schedule scripting methods', () => {
+  /** The flow's document with a schedule block of two jobs: what its scripts reach, and how often it was changed. */
+  function scheduled() {
+    let changes = 0;
+    const flow = createMockFlow({ document: { changed: () => { changes += 1; } } });
+    insertPluginBlock(flow.document, '/body/setup', 'schedule', SCHEDULE_PLUGIN_ID, {
+      schemaVersion: 1,
+      jobs: [{ id: 'fetch', name: 'Fetch', script: 'fetch', everyMinutes: 60 }, { id: 'tidy', name: 'Tidy', script: 'tidy', everyMinutes: 60 }],
+      scripts: { fetch: '', tidy: '' },
+    });
+    const schedule = scheduleScriptingMethods(() => flow.lookup);
+    const ctx = { rawDocument: flow.document, session: getDocumentScriptingSession(flow.document) };
+    const paused = () => readWebAutomationBlocks(flow.document).schedules[0].config.paused;
+    return { flow, schedule, ctx, paused, changes: () => changes };
+  }
+
+  it('pauses a job or every job into the block, with its reason, and resumes them', () => {
+    const { flow, schedule, ctx, paused, changes } = scheduled();
+    schedule.pause({ job: 'fetch', reason: 'Out of credits' }, ctx);
+    expect(paused()).toEqual({ fetch: 'Out of credits' });
+    // Written into the block's text, so it goes with the file; the document is unsaved until then.
+    expect(executeHvyCliCommandSync(flow.document, 'cat /body/setup/schedule/plugin.txt').output).toContain('"Out of credits"');
+    expect(changes()).toBe(1);
+    // The same pause again changes nothing.
+    schedule.pause({ job: 'fetch', reason: 'Out of credits' }, ctx);
+    expect(changes()).toBe(1);
+
+    schedule.pause({ reason: 'Away' }, ctx);
+    expect(paused()).toEqual({ fetch: 'Out of credits', '*': 'Away' });
+    expect((schedule.status({}, ctx) as Array<{ id: string; paused: string | null; on: boolean; next: string | null }>).map(({ id, paused: reason, on, next }) => ({ id, reason, on, next })))
+      .toEqual([{ id: 'fetch', reason: 'Out of credits', on: false, next: null }, { id: 'tidy', reason: 'Away', on: false, next: null }]);
+
+    // Resuming one job lifts its own pause; a pause of every job still holds it.
+    schedule.resume({ job: 'fetch' }, ctx);
+    expect(paused()).toEqual({ '*': 'Away' });
+    schedule.resume({}, ctx);
+    expect(paused()).toEqual({});
+    expect(executeHvyCliCommandSync(flow.document, 'cat /body/setup/schedule/plugin.txt').output).not.toContain('"state"');
+  });
+
+  it('refuses a pause without a reason, and a job the block doesn\'t have', () => {
+    const { schedule, ctx, paused } = scheduled();
+    expect(() => schedule.pause({ job: 'fetch' }, ctx)).toThrow('pause needs a reason');
+    expect(() => schedule.pause({ job: 'gone', reason: 'x' }, ctx)).toThrow('no job "gone"');
+    expect(() => schedule.resume({ job: 'gone' }, ctx)).toThrow('no job "gone"');
+    expect(paused()).toEqual({});
   });
 });

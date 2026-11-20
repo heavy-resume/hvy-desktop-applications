@@ -22,11 +22,13 @@ import { publishedServices } from './serviceManifests';
 import { createSqlRecordConsumer, useDocumentDatabase, type OpenedDatabase } from './sqlSink';
 import { visitBlocks } from '../../../heavy-file-format/src/block-traversal';
 import { capabilityOrigin } from './webApi';
+import type { ScheduledDocument } from './scheduleSettings';
 // Registers the blocks' checks with hvy lint.
 import './lint';
 import {
   collectionScriptingMethods,
   queueScriptingMethods,
+  scheduleScriptingMethods,
   similarityScriptingMethods,
   webApiScriptingMethods,
   type DocumentAutomationLookup,
@@ -91,6 +93,7 @@ export function createWebAutomationPlugins(readers?: WebAutomationReaders): HvyP
   const schedule: HvyPlugin = {
     ...metadata(SCHEDULE_PLUGIN_ID, 'Schedule'),
     ...(readers ? { create: readers.schedule } : {}),
+    scripting: { methods: scheduleScriptingMethods(resolveDocumentAutomation) },
   };
   return [
     createConditionallyAllowedPlugin({ ...metadata(WEB_API_PLUGIN_ID, 'Web API'), load: async () => webApi }),
@@ -163,6 +166,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   onSettingsChange?(stateRuntime: StateRuntime): void;
   /** The default browser, outside Galaxy (the app's): where an item a script asks to open there is opened. */
   openInBrowser?(url: string): Promise<void>;
+  /** What the user chose for this document's scheduled jobs (app settings), for its scripts' schedule status. */
+  scheduled?(): ScheduledDocument | null;
 }) {
   const { document } = options;
   let stateRuntime = options.stateRuntime;
@@ -228,9 +233,20 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
       dispose: runtime.dispose,
     };
   };
+  const scheduleBlock = () => readWebAutomationBlocks(document).schedules[0] ?? null;
   const lookup: DocumentAutomationLookup = {
     automation,
     documentPath: () => options.documentPath(),
+    schedule: () => scheduleBlock()?.config ?? null,
+    // Kept in the schedule block, as a collection's start pages keep when they were last checked: it goes with the file.
+    setSchedulePauses: (paused) => {
+      const schedule = scheduleBlock();
+      if (!schedule || JSON.stringify(schedule.config.paused) === JSON.stringify(paused)) return;
+      const { state: _previous, ...settings } = storedSettings(schedule.block);
+      schedule.block.text = settingsText(Object.keys(paused).length ? { ...settings, state: { paused } } : settings);
+      options.onSettingsChange?.(stateRuntime);
+    },
+    scheduled: () => options.scheduled?.() ?? null,
     webApi: (capabilityId) => readWebAutomationBlocks(document).webApis.find(({ config }) => config.capabilityId === capabilityId)?.config.capability ?? null,
     collection: (capabilityId) => collectionBlock(capabilityId)?.collection ?? null,
     database: (use) => useDocumentDatabase(document, openDatabase, use),

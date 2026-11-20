@@ -8,6 +8,8 @@ import { servedDocumentSessionKey, type WebApiCapability } from './webApi';
 import type { ScriptingSession } from '../../../heavy-file-format/src/plugins/scripting/scripting-session';
 import { matchRows, rankRows, type EmbeddingSource, type FetchedQuery, type UseDatabase } from './similarity';
 import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
+import type { ScheduleBlockConfig } from './configs';
+import { nextTurnAt, type ScheduledDocument } from './scheduleSettings';
 
 /** The subset of HvyPluginScriptingContext these methods use. */
 export interface ScriptingContext {
@@ -36,6 +38,12 @@ export interface DocumentAutomationLookup {
   openInBrowser(capabilityId: string, url: string, key?: string): Promise<void>;
   /** The document's path, where Galaxy keeps what the user chose for it (its scheduled jobs); empty before it is saved. */
   documentPath(): string;
+  /** The document's schedule block (its jobs, and the pauses its scripts made), if it has one. */
+  schedule(): ScheduleBlockConfig | null;
+  /** Writes the schedule block's pauses: the document draws again, and is unsaved until it is saved. */
+  setSchedulePauses(paused: Record<string, string>): void;
+  /** What the user chose for the document's jobs (app settings): each on or off, its last turn; null if never set up. */
+  scheduled(): ScheduledDocument | null;
 }
 
 export type DocumentAutomationResolver = (ctx: Pick<ScriptingContext, 'rawDocument'>) => DocumentAutomationLookup;
@@ -399,6 +407,61 @@ export function similarityScriptingMethods(resolve: DocumentAutomationResolver):
         });
         lookup.databaseChanged();
         return result;
+      });
+    },
+  };
+}
+
+/**
+ * A schedule block's jobs, for its document's scripts (docs/job-search/12-scheduled-jobs.md): `pause` one job (`job`,
+ * its id) or all of them, with a reason shown with each; `resume` it, or, without `job`, everything; and `status`. Only
+ * scripts pause jobs, Galaxy never does on its own. A pause is written into the block, so it goes with the file: a paused
+ * job's turns are skipped, saying why, until it is resumed.
+ */
+export function scheduleScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  const schedule = (lookup: DocumentAutomationLookup) => required(lookup.schedule(), 'This document has no schedule block.');
+  const jobId = (config: ScheduleBlockConfig, value: unknown): string | null => {
+    if (value === undefined || value === null) return null;
+    const id = String(value);
+    if (!config.jobs.some((job) => job.id === id)) throw new WebAutomationError('invalid_request', `The schedule block has no job "${id}".`);
+    return id;
+  };
+  return {
+    pause: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const config = schedule(lookup);
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
+      if (!reason) throw new WebAutomationError('invalid_request', 'pause needs a reason: it is shown with the job.');
+      lookup.setSchedulePauses({ ...config.paused, [jobId(config, args.job) ?? '*']: reason });
+      return null;
+    },
+    resume: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const config = schedule(lookup);
+      const id = jobId(config, args.job);
+      // One job: its own pause (a pause of every job still holds it). Without a job: every pause.
+      const { [id ?? '*']: _resumed, ...rest } = config.paused;
+      lookup.setSchedulePauses(id ? rest : {});
+      return null;
+    },
+    /** Each job: its id and name, on or off, paused and why, its last turn, and its next (ISO times). */
+    status: (_args, ctx) => {
+      const lookup = resolve(ctx);
+      const config = schedule(lookup);
+      const scheduled = lookup.scheduled();
+      return config.jobs.map((job) => {
+        const on = scheduled?.choices[job.id]?.on === true;
+        const last = scheduled?.lastResults[job.id];
+        const next = scheduled && on ? nextTurnAt(scheduled, job.id) : null;
+        return {
+          id: job.id,
+          name: job.name,
+          on,
+          paused: config.paused[job.id] ?? config.paused['*'] ?? null,
+          last: last ? { at: new Date(last.at).toISOString(), outcome: last.outcome, message: last.message ?? null } : null,
+          // Never turned on: none. On, and never counted from (due now): now.
+          next: on ? new Date(next ?? Date.now()).toISOString() : null,
+        };
       });
     },
   };

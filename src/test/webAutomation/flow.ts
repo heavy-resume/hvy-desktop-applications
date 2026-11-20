@@ -204,6 +204,10 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     get sink() {
       return sink;
     },
+    /** What the document's scripts reach its automation through (doc.plugins.call). */
+    get lookup() {
+      return opened.lookup;
+    },
     /** A collection block's own output, the consumer its runs are given when a script passes no on_record. */
     output(capabilityId: string): RecordConsumer {
       return opened.lookup.sink(capabilityId)!;
