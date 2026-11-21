@@ -399,3 +399,21 @@ export function selectedInspectionContent(value: unknown): string {
   }
   return '';
 }
+
+const CONTROL_KINDS: Record<string, string> = {
+  input: 'input', textarea: 'input', textbox: 'input', searchbox: 'input', combobox: 'input',
+  select: 'dropdown', listbox: 'dropdown',
+  button: 'button', a: 'link', link: 'link',
+  checkbox: 'checkbox', radio: 'option', option: 'option', tab: 'tab', menuitem: 'menu item',
+};
+
+/** A recorded control's name: its text, or else what kind of control it is ("input", "button"). */
+export function inspectedControlName(value: unknown): string {
+  const content = selectedInspectionContent(value);
+  if (content) return content;
+  // A saved step keeps only the element's shape, which has its tag and role.
+  const shape = (value as { selected?: { shape?: { tag?: unknown; role?: unknown } } } | null)?.selected?.shape;
+  const role = typeof shape?.role === 'string' ? CONTROL_KINDS[shape.role] : undefined;
+  const tag = typeof shape?.tag === 'string' ? CONTROL_KINDS[shape.tag] : undefined;
+  return role ?? tag ?? 'control';
+}

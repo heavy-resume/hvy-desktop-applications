@@ -1,4 +1,4 @@
-import { selectedInspectionContent } from '../integrationRegistry';
+import { inspectedControlName, selectedInspectionContent } from '../integrationRegistry';
 import { siteSetupFields, type AppState } from '../state';
 import { isRecord } from './render-ai-mcp';
 import { escapeAttr, escapeHtml } from './shared';
@@ -54,7 +54,7 @@ function renderRecordTypeCard(state: AppState, integrationId: string, action: im
 
 function renderPageCommandCard(integrationId: string, pageId: string, command: import('../integrationRegistry').IntegrationCommandDefinition): string {
   const steps = command.steps.map((step, index) => {
-    const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
+    const target = escapeHtml(inspectedControlName(step.target));
     const input = command.inputs?.find((candidate) => candidate.id === step.inputId);
     const detail = step.gesture === 'type'
       ? `Enter ${escapeHtml(input?.name ?? 'text')} into ${target}`
@@ -418,7 +418,7 @@ export function renderIntegrationActionBuilderDialog(state: AppState): string {
 
 /** A recorded step, as a person reads it: what it does, to what, with what it types or chooses. */
 function recordedStepText(step: { gesture: string; target: unknown; value?: string; valueLabel?: string; inputId?: string }): string {
-  const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
+  const target = escapeHtml(inspectedControlName(step.target));
   if (step.gesture === 'type') return step.inputId ? `Enter a parameter into ${target}` : `Type “${escapeHtml(step.value ?? '')}” into ${target}`;
   if (step.gesture === 'select') return `${step.inputId ? 'Choose a parameter' : `Choose ${escapeHtml(step.valueLabel ?? step.value ?? 'an option')}`} in ${target}`;
   return `${integrationCommandGestureLabel(step.gesture as Parameters<typeof integrationCommandGestureLabel>[0])} ${target}`;
@@ -490,7 +490,7 @@ export function renderIntegrationCommandBuilderDialog(state: AppState): string {
     return `<div class="modal-backdrop" role="presentation"><section class="dialog integration-action-builder-dialog integration-selection-waiting" role="dialog" aria-modal="true" aria-label="Recording command"><div class="modal-header"><div><p class="eyebrow">Add ${state.integrationCommandDraftScope === 'record' ? 'item' : 'page'} command</p><h2>Record and verify the action</h2><p class="dialog-note">Galaxy has switched to the integration browser. Build the complete action there in one pass.</p></div><button type="button" class="hvy-galaxy-button icon-button" data-action="cancel-integration-command-builder" aria-label="Cancel command">×</button></div><div class="integration-selection-waiting-status"><span class="integration-selection-pulse" aria-hidden="true"></span><strong>Recording in the browser…</strong><span>Each step is structurally resolved and performed before you add the next one.</span></div></section></div>`;
   }
   const steps = state.integrationCommandDraftSteps.map((step, index) => {
-    const target = escapeHtml(selectedInspectionContent(step.target) || 'Structural control');
+    const target = escapeHtml(inspectedControlName(step.target));
     const detail = step.gesture === 'type'
       ? `Enter a parameter into ${target}`
       : step.gesture === 'select'
