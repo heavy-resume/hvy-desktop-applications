@@ -278,8 +278,26 @@ fn close_window_when_page_closes(page: &tauri::Webview, window: tauri::Window) -
     })
 }
 
-/// WebView2 and WebKitGTK: not hooked yet, so a pop-up stays open once it has answered.
-#[cfg(not(target_os = "macos"))]
+/// Closes `window` when its page closes itself, as the macOS one does: WebView2 tells it as WindowCloseRequested.
+#[cfg(target_os = "windows")]
+fn close_window_when_page_closes(page: &tauri::Webview, window: tauri::Window) -> tauri::Result<()> {
+    use webview2_com::{Microsoft::Web::WebView2::Win32::ICoreWebView2, WindowCloseRequestedEventHandler};
+    page.with_webview(move |platform| unsafe {
+        let Ok(core_webview): Result<ICoreWebView2, _> = platform.controller().CoreWebView2() else { return };
+        let mut token = 0;
+        let _ = core_webview.add_WindowCloseRequested(
+            &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+                let window = window.clone();
+                tauri::async_runtime::spawn(async move { let _ = window.close(); });
+                Ok(())
+            })),
+            &mut token,
+        );
+    })
+}
+
+/// WebKitGTK: not hooked yet, so a pop-up stays open once it has answered.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn close_window_when_page_closes(_page: &tauri::Webview, _window: tauri::Window) -> tauri::Result<()> {
     Ok(())
 }
